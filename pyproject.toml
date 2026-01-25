@@ -12,7 +12,7 @@ dependencies = [
 
     # AST parsing for code chunking
     "tree-sitter>=0.21.0",
-    "tree-sitter-languages>=1.10.0",
+    "tree-sitter-languages>=1.9.0",
 
     # MCP server
     "mcp>=1.0.0",

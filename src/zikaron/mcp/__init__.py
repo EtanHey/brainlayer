@@ -107,6 +107,12 @@ async def _search(
 ) -> list[TextContent]:
     """Execute a search query."""
     try:
+        # Validate num_results
+        if num_results < 1:
+            num_results = 5
+        elif num_results > 100:
+            num_results = 100
+
         client = get_client()
         collection = get_or_create_collection(client)
 
@@ -156,7 +162,7 @@ async def _search(
         return [TextContent(type="text", text="\n".join(output_parts))]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Search error: {str(e)}")]
+        return [TextContent(type="text", text=f"Search error (query='{query[:50]}...'): {str(e)}")]
 
 
 async def _stats() -> list[TextContent]:
@@ -175,7 +181,7 @@ async def _stats() -> list[TextContent]:
         return [TextContent(type="text", text=output)]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Stats error: {str(e)}")]
+        return [TextContent(type="text", text=f"Stats error (failed to read ChromaDB): {str(e)}")]
 
 
 async def _list_projects() -> list[TextContent]:
@@ -195,7 +201,7 @@ async def _list_projects() -> list[TextContent]:
         return [TextContent(type="text", text=output)]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Error listing projects: {str(e)}")]
+        return [TextContent(type="text", text=f"Error listing projects (failed to read ChromaDB): {str(e)}")]
 
 
 def serve():

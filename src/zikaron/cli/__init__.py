@@ -119,7 +119,7 @@ def index(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search query"),
-    n: int = typer.Option(5, "--num", "-n", help="Number of results"),
+    n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type")
 ):
