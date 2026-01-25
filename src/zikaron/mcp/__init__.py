@@ -123,7 +123,7 @@ async def _search(
             )]
 
         # Generate embedding (run in thread to not block)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         query_embedding = await loop.run_in_executor(None, embed_query, query)
 
         # Build filters

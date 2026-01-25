@@ -4,15 +4,20 @@ version = "0.1.0"
 description = "Local knowledge pipeline for Claude Code conversations - זיכרון (memory)"
 requires-python = ">=3.11"
 dependencies = [
-    # Vector DB
-    "chromadb>=0.4.0",
+    # Vector DB (pinned <0.5.0 to avoid unstable Rust backend crashes)
+    "chromadb>=0.4.0,<0.5.0",
+
+    # NumPy (pinned <2.0 for chromadb 0.4.x compatibility)
+    "numpy>=1.22,<2.0",
+
+    # Posthog (pinned <4.0 to fix chromadb 0.4.x telemetry errors)
+    "posthog>=2.0,<4.0",
 
     # Embeddings (local via Ollama)
     "ollama>=0.1.0",
 
-    # AST parsing for code chunking
+    # AST parsing for code chunking (optional - has fallback)
     "tree-sitter>=0.21.0",
-    "tree-sitter-languages>=1.9.0",
 
     # MCP server
     "mcp>=1.0.0",
@@ -27,6 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ast = [
+    "tree-sitter-languages>=1.9.0",  # Better code chunking (falls back to line-based if unavailable)
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

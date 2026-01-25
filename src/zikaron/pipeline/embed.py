@@ -18,6 +18,10 @@ class EmbeddedChunk:
 # Default embedding model (local via Ollama)
 DEFAULT_MODEL = "nomic-embed-text"
 
+# nomic-embed-text has 8192 token context. Code/special chars can be <1 char/token.
+# Using very conservative 2000 chars to guarantee no failures.
+MAX_EMBEDDING_CHARS = 2000
+
 
 def embed_chunks(
     chunks: list[Chunk],
@@ -45,8 +49,15 @@ def embed_chunks(
         batch = chunks[i:i + batch_size]
 
         for chunk in batch:
+            # Truncate content if too long for embedding model
+            content = chunk.content
+            if len(content) > MAX_EMBEDDING_CHARS:
+                # Keep first and last parts for context
+                half = MAX_EMBEDDING_CHARS // 2 - 50
+                content = content[:half] + "\n\n[... truncated for embedding ...]\n\n" + content[-half:]
+
             # Add prefix for nomic-embed-text
-            text = f"search_document: {chunk.content}"
+            text = f"search_document: {content}"
 
             try:
                 response = ollama.embeddings(model=model, prompt=text)

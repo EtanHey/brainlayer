@@ -1,0 +1,14 @@
+{
+  "id": "US-006",
+  "title": "Wire up zikaron with @context: refs and setup header",
+  "description": "Add claude-golem context system to zikaron. Include @context: refs for relevant contexts (base, skill-index, workflow/interactive) and add setup header to CLAUDE.md.",
+  "priority": "medium",
+  "acceptanceCriteria": [
+    {"text": "Add @context: refs to zikaron/CLAUDE.md for: base, skill-index, workflow/interactive", "checked": false},
+    {"text": "Add '## SETUP (AI: Read This First)' header explaining zikaron's purpose and self-improvement loop", "checked": false},
+    {"text": "Run /golem-powers:context-audit - must show 0 missing contexts", "checked": false},
+    {"text": "Run CodeRabbit review - must pass (or create BUG if unfixable)", "checked": false},
+    {"text": "Commit: feat: US-006 wire up zikaron with context system", "checked": false}
+  ],
+  "passes": false
+}

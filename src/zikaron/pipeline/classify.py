@@ -8,6 +8,7 @@ from typing import Any
 
 class ContentType(Enum):
     """Types of content in Claude Code conversations."""
+    # Conversation content
     AI_CODE = "ai_code"           # Code written by Claude (HIGH VALUE)
     STACK_TRACE = "stack_trace"   # Error traces (HIGH VALUE - preserve exact)
     USER_MESSAGE = "user_message" # Human questions (HIGH VALUE)
@@ -18,6 +19,15 @@ class ContentType(Enum):
     DIRECTORY_LISTING = "dir_listing"  # ls output (LOW - structure only)
     CONFIG = "config"             # Config files (MEDIUM)
     NOISE = "noise"               # progress, queue-operation (SKIP)
+
+    # Markdown content types
+    LEARNING = "learning"         # Curated learnings (HIGH VALUE)
+    SKILL = "skill"               # Skill definitions (HIGH VALUE)
+    PROJECT_CONFIG = "project_config"  # CLAUDE.md files (HIGH VALUE)
+    RESEARCH = "research"         # Research documents (HIGH VALUE)
+    PRD_ARCHIVE = "prd_archive"   # PRD archives (MEDIUM)
+    VERIFICATION = "verification" # Verification rounds (LOW)
+    DOCUMENTATION = "documentation"  # General markdown docs (MEDIUM)
 
 
 class ContentValue(Enum):
@@ -54,6 +64,30 @@ BUILD_LOG_PATTERNS = [
 ]
 
 
+def _extract_text_content(content: Any) -> str:
+    """
+    Extract text from various content formats.
+
+    Content can be:
+    - A plain string
+    - A list of content blocks: [{"type": "text", "text": "..."}, ...]
+    - A dict with a "text" key
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                text_parts.append(item)
+        return "\n".join(text_parts)
+    if isinstance(content, dict) and "text" in content:
+        return content.get("text", "")
+    return str(content) if content else ""
+
+
 def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     Classify a JSONL entry by content type and value.
@@ -67,7 +101,8 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
         return None
 
     if entry_type == "user":
-        content = entry.get("message", {}).get("content", "")
+        raw_content = entry.get("message", {}).get("content", "")
+        content = _extract_text_content(raw_content)
         # Check if it's a system prompt (first message, very long)
         if len(content) > 2000:
             return ClassifiedContent(
@@ -111,7 +146,7 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
 
                 elif block_type == "tool_result":
                     # Tool results need careful classification
-                    result_content = block.get("content", "")
+                    result_content = _extract_text_content(block.get("content", ""))
                     classified = _classify_tool_result(result_content, block)
                     results.append(classified)
 

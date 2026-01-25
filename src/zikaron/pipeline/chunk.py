@@ -261,7 +261,8 @@ def _mask_large_output(classified: ClassifiedContent) -> list[Chunk]:
     first_lines = "\n".join(content.split("\n")[:5])
     last_lines = "\n".join(content.split("\n")[-3:])
 
-    masked = f"{first_lines}\n\n[... {line_count - 8} lines elided ...]\n\n{last_lines}"
+    elided_count = max(0, line_count - 8)
+    masked = f"{first_lines}\n\n[... {elided_count} lines elided ...]\n\n{last_lines}"
 
     return [Chunk(
         content=masked,

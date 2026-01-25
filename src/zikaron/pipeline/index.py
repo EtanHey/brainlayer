@@ -13,6 +13,11 @@ from .embed import EmbeddedChunk
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "chromadb"
 
 
+def get_db_path() -> Path:
+    """Get the database storage path."""
+    return DEFAULT_DB_PATH
+
+
 def get_client(db_path: Path = DEFAULT_DB_PATH) -> chromadb.Client:
     """Get ChromaDB client with persistent storage."""
     db_path.mkdir(parents=True, exist_ok=True)
@@ -35,6 +40,10 @@ def get_or_create_collection(
         name=name,
         metadata={"hnsw:space": "cosine"}  # Use cosine similarity
     )
+
+
+# ChromaDB max batch size
+CHROMADB_BATCH_SIZE = 5000
 
 
 def index_to_chromadb(
@@ -81,13 +90,15 @@ def index_to_chromadb(
             **{k: str(v) for k, v in chunk.metadata.items()}  # Stringify metadata values
         })
 
-    # Upsert to handle re-indexing
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas
-    )
+    # Upsert in batches to respect ChromaDB limits
+    for i in range(0, len(ids), CHROMADB_BATCH_SIZE):
+        batch_end = min(i + CHROMADB_BATCH_SIZE, len(ids))
+        collection.upsert(
+            ids=ids[i:batch_end],
+            embeddings=embeddings[i:batch_end],
+            documents=documents[i:batch_end],
+            metadatas=metadatas[i:batch_end]
+        )
 
     return len(ids)
 
