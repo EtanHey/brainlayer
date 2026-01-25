@@ -29,7 +29,7 @@ def index(
         False, "--force", "-f",
         help="Re-index all files (ignore cache)"
     )
-):
+) -> None:
     """Index Claude Code conversations into the knowledge base."""
     try:
         from ..pipeline import (
@@ -122,7 +122,7 @@ def search(
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type")
-):
+) -> None:
     """Search the knowledge base."""
     try:
         from ..pipeline.embed import embed_query
@@ -185,7 +185,7 @@ def search(
 
 
 @app.command()
-def stats():
+def stats() -> None:
     """Show knowledge base statistics."""
     try:
         from ..pipeline.index import get_client, get_or_create_collection, get_stats
@@ -213,7 +213,7 @@ def stats():
 @app.command()
 def clear(
     confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation")
-):
+) -> None:
     """Clear the entire knowledge base."""
     try:
         from ..pipeline.index import get_client
@@ -234,7 +234,7 @@ def clear(
 
 
 @app.command()
-def serve():
+def serve() -> None:
     """Start the MCP server for Claude Code integration.
 
     Note: MCP uses stdio (stdin/stdout), not network ports.

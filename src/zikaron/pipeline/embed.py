@@ -94,7 +94,14 @@ def check_model_available(model: str = DEFAULT_MODEL) -> bool:
 
 
 def ensure_model(model: str = DEFAULT_MODEL) -> None:
-    """Pull the embedding model if not available."""
+    """Pull the embedding model if not available.
+
+    Raises:
+        RuntimeError: If model pull fails
+    """
     if not check_model_available(model):
         print(f"Pulling embedding model: {model}")
-        ollama.pull(model)
+        try:
+            ollama.pull(model)
+        except Exception as e:
+            raise RuntimeError(f"Failed to pull model '{model}': {e}") from e
