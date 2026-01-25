@@ -116,8 +116,9 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
                     results.append(classified)
 
         # Return the highest-value content from this entry
+        # Priority: HIGH > MEDIUM > LOW (negate index since HIGH=0, MEDIUM=1, LOW=2)
         if results:
-            return max(results, key=lambda x: list(ContentValue).index(x.value))
+            return min(results, key=lambda x: list(ContentValue).index(x.value))
 
     return None
 
