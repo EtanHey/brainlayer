@@ -1,0 +1,20 @@
+{
+  "id": "US-004",
+  "title": "MCP server integration with Claude Code",
+  "description": "Wire up the MCP server so Claude Code can query the knowledge base directly. Add to ~/.claude/settings.json and verify tools work.",
+  "priority": "high",
+  "dependsOn": ["US-001"],
+  "acceptanceCriteria": [
+    { "text": "Running 'zikaron serve' starts MCP server without errors", "checked": false },
+    { "text": "MCP server responds to list_tools request with 3 tools", "checked": false },
+    { "text": "zikaron_search tool returns results for valid queries", "checked": false },
+    { "text": "zikaron_stats tool returns knowledge base statistics", "checked": false },
+    { "text": "zikaron_list_projects tool returns indexed project names", "checked": false },
+    { "text": "Add MCP config entry to ~/.claude/settings.json", "checked": false },
+    { "text": "Verify Claude Code can call zikaron tools in a conversation", "checked": false },
+    { "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)", "checked": false },
+    { "text": "Commit: feat: US-004 MCP server integration", "checked": false }
+  ],
+  "passes": false,
+  "failedAttempts": 0
+}

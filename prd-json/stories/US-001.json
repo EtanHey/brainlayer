@@ -1,0 +1,19 @@
+{
+  "id": "US-001",
+  "title": "Basic indexing pipeline works end-to-end",
+  "description": "Verify the full pipeline (extract → classify → chunk → embed → index) works with real Claude Code conversations. Fix any import errors, missing dependencies, or runtime issues.",
+  "priority": "critical",
+  "acceptanceCriteria": [
+    { "text": "Running 'uv pip install -e .' installs all dependencies without errors", "checked": false },
+    { "text": "Running 'ollama pull nomic-embed-text' succeeds", "checked": false },
+    { "text": "Running 'zikaron index --help' shows help text", "checked": false },
+    { "text": "Running 'zikaron index ~/.claude/projects' processes at least 10 files", "checked": false },
+    { "text": "Running 'zikaron stats' shows non-zero chunk count", "checked": false },
+    { "text": "Running 'zikaron search \"test query\"' returns results", "checked": false },
+    { "text": "Fix any import errors or missing __init__.py files discovered", "checked": false },
+    { "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)", "checked": false },
+    { "text": "Commit: feat: US-001 basic indexing pipeline", "checked": false }
+  ],
+  "passes": false,
+  "failedAttempts": 0
+}

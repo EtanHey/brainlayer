@@ -1,0 +1,20 @@
+{
+  "id": "US-005",
+  "title": "System prompt deduplication",
+  "description": "Implement content-addressable storage for system prompts. The first user message often contains 5000+ tokens of repeated CLAUDE.md content - deduplicate this across all conversations.",
+  "priority": "medium",
+  "dependsOn": ["US-002"],
+  "acceptanceCriteria": [
+    { "text": "Create ~/.local/share/zikaron/prompts/ directory for prompt storage", "checked": false },
+    { "text": "Hash system prompts with SHA-256 for content-addressable storage", "checked": false },
+    { "text": "Store unique prompts as {hash}.txt files", "checked": false },
+    { "text": "Replace system prompt content in chunks with reference: [System Prompt: {hash}]", "checked": false },
+    { "text": "Test: Two conversations with same CLAUDE.md produce same hash", "checked": false },
+    { "text": "Test: Different projects with different CLAUDE.md produce different hashes", "checked": false },
+    { "text": "Add 'zikaron prompts' CLI command to list stored prompts", "checked": false },
+    { "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)", "checked": false },
+    { "text": "Commit: feat: US-005 system prompt deduplication", "checked": false }
+  ],
+  "passes": false,
+  "failedAttempts": 0
+}

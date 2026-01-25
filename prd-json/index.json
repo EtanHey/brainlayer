@@ -1,0 +1,10 @@
+{
+  "$schema": "https://ralph.dev/schemas/prd-index.schema.json",
+  "generatedAt": "2026-01-25T19:00:00Z",
+  "nextStory": "US-001",
+  "storyOrder": ["US-001", "US-002", "US-003", "US-004", "US-005"],
+  "pending": ["US-001", "US-002", "US-003", "US-004", "US-005"],
+  "blocked": [],
+  "completed": [],
+  "newStories": []
+}
