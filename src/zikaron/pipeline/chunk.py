@@ -1,5 +1,6 @@
 """Stage 3: Chunk content using AST-aware splitting for code."""
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -273,8 +274,6 @@ def _mask_large_output(classified: ClassifiedContent) -> list[Chunk]:
 
 def _extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
     """Extract code blocks from markdown-formatted text."""
-    import re
-
     pattern = r"```(\w+)?\n(.*?)```"
     matches = re.findall(pattern, text, re.DOTALL)
 
@@ -283,6 +282,4 @@ def _extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
 
 def _extract_non_code(text: str) -> str:
     """Extract text that's not inside code blocks."""
-    import re
-
     return re.sub(r"```\w*\n.*?```", "", text, flags=re.DOTALL).strip()

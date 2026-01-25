@@ -68,11 +68,19 @@ def embed_query(query: str, model: str = DEFAULT_MODEL) -> list[float]:
     Generate embedding for a search query.
 
     Uses "search_query: " prefix for nomic-embed-text.
+
+    Raises:
+        RuntimeError: If embedding fails
     """
     text = f"search_query: {query}"
 
-    response = ollama.embeddings(model=model, prompt=text)
-    return response["embedding"]
+    try:
+        response = ollama.embeddings(model=model, prompt=text)
+        if "embedding" not in response:
+            raise RuntimeError(f"Unexpected response format: {response}")
+        return response["embedding"]
+    except Exception as e:
+        raise RuntimeError(f"Failed to embed query: {e}") from e
 
 
 def check_model_available(model: str = DEFAULT_MODEL) -> bool:

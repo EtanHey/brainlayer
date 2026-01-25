@@ -198,10 +198,12 @@ async def _list_projects() -> list[TextContent]:
         return [TextContent(type="text", text=f"Error listing projects: {str(e)}")]
 
 
-def serve(port: int = 8765):
-    """Start the MCP server."""
-    import sys
+def serve():
+    """Start the MCP server using stdio.
 
+    Note: MCP uses stdin/stdout for communication, not network ports.
+    This is designed for integration with Claude Code via mcpServers config.
+    """
     async def main():
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())
