@@ -70,3 +70,20 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - Skill inputs show bimodal distribution: simple invocations worthless, complex ones extremely valuable
 - KillShell inputs are pure infrastructure with no search value - should be stripped entirely
 - Decision context (questions + options) more valuable than just final implementation choices
+
+
+## Iteration 6 - RESEARCH-006: Research data quality: Read-result, Bash-result, Grep-result
+- Model: kiro
+- Extracted and analyzed 5+ samples each of Read-result, Bash-result, and Grep-result from JSONL files
+- Created 3 research papers in docs.local/research/RESEARCH-006/
+- Key findings:
+  - Read-result: Score 3.2/5 - TRANSFORM (bimodal: high-value code files vs low-value operational messages)
+  - Bash-result: Score 3.8/5 - TRANSFORM (excellent for debugging, rich error context, but many empty outputs)
+  - Grep-result: Score 2.8/5 - TRANSFORM (powerful when successful with line numbers, but 80% empty results)
+
+### Learnings
+- Tool results show clear bimodal distributions: high semantic value vs operational noise
+- Read-result contains the richest file content but needs filtering of confirmations/empty results
+- Bash-result is invaluable for debugging scenarios - captures real-world error patterns and solutions
+- Grep-result provides excellent code discovery when successful, but failed searches dominate the dataset
+- All three types benefit from TRANSFORM approach: keep semantic content, strip operational noise, enhance with metadata
