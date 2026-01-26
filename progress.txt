@@ -87,3 +87,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - Bash-result is invaluable for debugging scenarios - captures real-world error patterns and solutions
 - Grep-result provides excellent code discovery when successful, but failed searches dominate the dataset
 - All three types benefit from TRANSFORM approach: keep semantic content, strip operational noise, enhance with metadata
+
+## Iteration 7 - RESEARCH-007: Research data quality: Glob-result, Task-result, WebFetch-result
+- Model: kiro
+- Extracted and analyzed 5+ samples each of Glob-result, Task-result, and WebFetch-result
+- Created 3 research papers in docs.local/research/RESEARCH-007/
+- Key findings:
+  - Glob-result: Score 3.4/5 - TRANSFORM (high value for architecture discovery, filter node_modules)
+  - Task-result: Score 4.6/5 - KEEP + STRUCTURE (highest value! contains problem-solving processes)
+  - WebFetch-result: Score 3.0/5 - TRANSFORM + SELECTIVE KEEP (variable quality, filter errors)
+
+### Learnings
+- Task results contain the most valuable content for search - actual reasoning and decision-making processes
+- Glob results reveal project architecture but need node_modules filtering
+- WebFetch results require content-aware processing due to high variability in quality
+- All three types benefit from metadata extraction for enhanced searchability
+
