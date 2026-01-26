@@ -103,3 +103,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - WebFetch results require content-aware processing due to high variability in quality
 - All three types benefit from metadata extraction for enhanced searchability
 
+
+
+## Iteration 8 - RESEARCH-008: Research data quality: WebSearch-result, LSP-result, Error-result
+- Model: kiro
+- Extracted and analyzed samples of WebSearch-result, LSP-result, and Error-result from JSONL files
+- Created 3 research papers in docs.local/research/RESEARCH-008/
+- Key findings:
+  - WebSearch-result: Score 4.0/5 - TRANSFORM (rich structured data with queries, titles, URLs - goldmine for search)
+  - LSP-result: Score 4.2/5 - TRANSFORM (bimodal: errors low value, successful results extremely high semantic value)
+  - Error-result: Score 4.0/5 - TRANSFORM (debugging gold mine with error messages, file paths, solutions)
+
+### Learnings
+- WebSearch results capture user intent and technical solutions perfectly - query strings are search gold
+- LSP results when successful contain richest semantic code information (locations, types, relationships)
+- Error results are invaluable for debugging - preserve exact error text and actionable hints
+- All three types benefit from TRANSFORM approach: keep semantic content, strip operational noise
