@@ -1,0 +1,72 @@
+Zikaron Data Quality Research PRD
+=================================
+Generated: 2026-01-26T02:12:11Z
+
+Stories: 95 (75 RESEARCH + 20 AUDIT)
+Status: Ready for Ralph execution
+
+Model: kiro (configured in ~/.config/ralphtools/config.json)
+
+## Iteration 1 - RESEARCH-001: Research data quality: Read-input, Edit-input, Write-input
+- Model: opus
+- Extracted 5+ samples each of Read-input, Edit-input, Write-input from JSONL files
+- Analyzed searchability value of each content type
+- Created 3 research papers in docs.local/research/RESEARCH-001/
+- Key findings:
+  - Read-input: Score 2.6/5 - MINIMIZE (just metadata, keep file paths as metadata)
+  - Edit-input: Score 4.0/5 - TRANSFORM (highest value! contains problem-solving patterns)
+  - Write-input: Score 2.5/5 - MINIMIZE + DEDUPLICATE (mostly boilerplate configs)
+
+### Learnings
+- Edit-input contains the richest content for search (actual code changes with context)
+- Write-input has high redundancy (batch file creation, repeated configs)
+- Content-addressable storage pattern works well for deduplication
+
+
+## Iteration 2 - RESEARCH-002: Research data quality: Bash-input, Grep-input, Glob-input
+- Model: opus
+- Completed Paper 3 (Glob-input) - the remaining work from a partial iteration
+- Analyzed 8 unique Glob-input samples from JSONL files
+- Key findings:
+  - Glob-input: Score 2.5/5 - MINIMIZE (metadata only)
+  - Patterns are structural (file search), not semantic content
+  - Low embedding value - better stored as metadata fields
+  - Navigation breadcrumbs, not primary search content
+
+### Learnings
+- Glob patterns show WHERE Claude was looking, not WHAT was found
+- Extract component/file names from patterns for searchable concepts
+- Link to Glob-output for richer context (results are more valuable than inputs)
+
+
+## Iteration 3 - RESEARCH-003: Research data quality: Task-input, WebFetch-input, WebSearch-input
+- Model: opus
+- Extracted and analyzed samples of Task-input, WebFetch-input, WebSearch-input
+- Created 3 research papers in docs.local/research/RESEARCH-003/
+- Key findings:
+  - Task-input: Score 4.8/5 - KEEP + STRUCTURE (rich intent, subagent prompts, verification criteria)
+  - WebFetch-input: Score 3.6/5 - MINIMIZE + SELECTIVE KEEP (URL classification matters)
+  - WebSearch-input: Score 4.7/5 - KEEP + CATEGORIZE (pure intent, compact, highly searchable)
+
+### Learnings
+- Task prompts show *intent* not just results - very valuable for "what was Claude trying to find?"
+- WebFetch URLs are often ephemeral (preview links, private docs) - classify and selectively keep
+- WebSearch queries are highest value - compact, full of concepts, show investigation threads
+- Subagent types (Explore vs general-purpose) are searchable metadata
+- Debugging searches ("not working", "fix") are particularly valuable patterns
+
+
+## Iteration 4 - RESEARCH-005: Research data quality: AskUserQuestion-input, Skill-input, KillShell-input
+- Model: kiro
+- Extracted and analyzed samples of AskUserQuestion-input, Skill-input, KillShell-input
+- Created 3 research papers in docs.local/research/RESEARCH-005/
+- Key findings:
+  - AskUserQuestion-input: Score 4.0/5 - KEEP + STRUCTURE (rich decision context, technical depth)
+  - Skill-input: Score 3.3/5 - MINIMIZE + SELECTIVE KEEP (simple calls low value, detailed args high value)
+  - KillShell-input: Score 1.0/5 - STRIP (zero semantic content, just random shell IDs)
+
+### Learnings
+- AskUserQuestion inputs capture decision-making processes - what options were considered and why
+- Skill inputs show bimodal distribution: simple invocations worthless, complex ones extremely valuable
+- KillShell inputs are pure infrastructure with no search value - should be stripped entirely
+- Decision context (questions + options) more valuable than just final implementation choices
