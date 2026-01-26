@@ -5,40 +5,43 @@
   "acceptanceCriteria": [
     {
       "text": "Paper 1 (Task-input): Extract 5+ samples of 'Task-input' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 1 (Task-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 1 (Task-input): Write recommendation to docs.local/research/RESEARCH-003/paper-1-Task-input.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (WebFetch-input): Extract 5+ samples of 'WebFetch-input' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (WebFetch-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (WebFetch-input): Write recommendation to docs.local/research/RESEARCH-003/paper-2-WebFetch-input.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (WebSearch-input): Extract 5+ samples of 'WebSearch-input' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (WebSearch-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (WebSearch-input): Write recommendation to docs.local/research/RESEARCH-003/paper-3-WebSearch-input.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     }
   ],
-  "storyType": "research"
+  "storyType": "research",
+  "passes": true,
+  "completedAt": "2026-01-26T02:45:00.000Z",
+  "completedBy": "opus"
 }
