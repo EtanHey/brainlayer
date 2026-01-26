@@ -5,40 +5,43 @@
   "acceptanceCriteria": [
     {
       "text": "Paper 1 (progress-message): Extract 5+ samples of 'progress-message' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 1 (progress-message): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 1 (progress-message): Write recommendation to docs.local/research/RESEARCH-012/paper-1-progress-message.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (summary-message): Extract 5+ samples of 'summary-message' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (summary-message): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 2 (summary-message): Write recommendation to docs.local/research/RESEARCH-012/paper-2-summary-message.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (empty-content): Extract 5+ samples of 'empty-content' from ~/.claude/projects/ JSONL files",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (empty-content): Analyze each sample - is it useful for search? Score 1-5 relevance",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Paper 3 (empty-content): Write recommendation to docs.local/research/RESEARCH-012/paper-3-empty-content.md (keep/strip/minimize/transform)",
-      "checked": false
+      "checked": true
     }
   ],
-  "storyType": "research"
+  "storyType": "research",
+  "passes": true,
+  "completedAt": "2026-01-26T10:52:56.957Z",
+  "completedBy": "kiro"
 }

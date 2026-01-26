@@ -168,3 +168,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - System-reminder content varies greatly: session continuity summaries are valuable, but simple status messages are noise
 - All three types benefit from content-based filtering and metadata extraction for enhanced searchability
 - Error messages with stack traces and file paths are particularly valuable for finding similar technical issues
+
+
+## Iteration 12 - RESEARCH-012: Research data quality: progress-message, summary-message, empty-content
+- Model: kiro
+- Analyzed 3 content types: progress-message, summary-message, empty-content
+- Created 3 research papers in docs.local/research/RESEARCH-012/
+- Key findings:
+  - progress-message: Score 1.4/5 - STRIP (operational metadata with no semantic value)
+  - summary-message: Score 4.6/5 - KEEP + STRUCTURE (highest value! condensed problem-solution patterns)
+  - empty-content: Score 1.0/5 - STRIP (pure noise, degrades index quality)
+
+### Learnings
+- Summary messages are goldmine content - already curated and contain rich semantic patterns
+- Progress and empty content should be aggressively filtered to maintain index quality
+- Content-based filtering is essential for meaningful search results
+- Bimodal distribution: high-value curated content vs low-value operational noise
