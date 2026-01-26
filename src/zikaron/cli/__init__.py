@@ -1,6 +1,9 @@
 """Zikaron CLI - Command line interface for the knowledge pipeline."""
 
 import os
+import sys
+import time
+
 # Disable ChromaDB telemetry before any imports
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 
@@ -80,13 +83,11 @@ def index(
             rprint(f"  Found [bold]{len(system_prompts)}[/] unique system prompts")
 
         # Ignore stdin to prevent accidental keypress from killing long-running job
-        import sys
-        import os
-        sys.stdin = open(os.devnull)
+        # Close stdin rather than redirecting to avoid file descriptor leak
+        sys.stdin.close()
 
         # Process each file with detailed progress tracking
         total_chunks = 0
-        import time
         start_time = time.time()
 
         with Progress(
