@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-005",
+  "title": "Research data quality: AskUserQuestion-input, Skill-input, KillShell-input",
+  "description": "Analyze samples of AskUserQuestion-input, Skill-input, KillShell-input. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (AskUserQuestion-input): Extract 5+ samples of 'AskUserQuestion-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (AskUserQuestion-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (AskUserQuestion-input): Write recommendation to docs.local/research/RESEARCH-005/paper-1-AskUserQuestion-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Skill-input): Extract 5+ samples of 'Skill-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Skill-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Skill-input): Write recommendation to docs.local/research/RESEARCH-005/paper-2-Skill-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (KillShell-input): Extract 5+ samples of 'KillShell-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (KillShell-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (KillShell-input): Write recommendation to docs.local/research/RESEARCH-005/paper-3-KillShell-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-031",
+  "title": "Research data quality: Read-input, Edit-input, Write-input",
+  "description": "Analyze samples of Read-input, Edit-input, Write-input. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (Read-input): Extract 5+ samples of 'Read-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Read-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Read-input): Write recommendation to docs.local/research/RESEARCH-031/paper-1-Read-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Edit-input): Extract 5+ samples of 'Edit-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Edit-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Edit-input): Write recommendation to docs.local/research/RESEARCH-031/paper-2-Edit-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Write-input): Extract 5+ samples of 'Write-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Write-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Write-input): Write recommendation to docs.local/research/RESEARCH-031/paper-3-Write-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

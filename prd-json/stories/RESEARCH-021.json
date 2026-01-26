@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-021",
+  "title": "Research data quality: Read-result, Bash-result, Grep-result",
+  "description": "Analyze samples of Read-result, Bash-result, Grep-result. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (Read-result): Extract 5+ samples of 'Read-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Read-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Read-result): Write recommendation to docs.local/research/RESEARCH-021/paper-1-Read-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Bash-result): Extract 5+ samples of 'Bash-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Bash-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Bash-result): Write recommendation to docs.local/research/RESEARCH-021/paper-2-Bash-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Grep-result): Extract 5+ samples of 'Grep-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Grep-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Grep-result): Write recommendation to docs.local/research/RESEARCH-021/paper-3-Grep-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

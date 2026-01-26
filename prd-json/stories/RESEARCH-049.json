@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-049",
+  "title": "Research data quality: LSP-input, NotebookEdit-input, TodoWrite-input",
+  "description": "Analyze samples of LSP-input, NotebookEdit-input, TodoWrite-input. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (LSP-input): Extract 5+ samples of 'LSP-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (LSP-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (LSP-input): Write recommendation to docs.local/research/RESEARCH-049/paper-1-LSP-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (NotebookEdit-input): Extract 5+ samples of 'NotebookEdit-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (NotebookEdit-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (NotebookEdit-input): Write recommendation to docs.local/research/RESEARCH-049/paper-2-NotebookEdit-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (TodoWrite-input): Extract 5+ samples of 'TodoWrite-input' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (TodoWrite-input): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (TodoWrite-input): Write recommendation to docs.local/research/RESEARCH-049/paper-3-TodoWrite-input.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

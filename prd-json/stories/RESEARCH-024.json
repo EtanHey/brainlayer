@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-024",
+  "title": "Research data quality: Truncated-result, assistant-explanation, assistant-code",
+  "description": "Analyze samples of Truncated-result, assistant-explanation, assistant-code. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (Truncated-result): Extract 5+ samples of 'Truncated-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Truncated-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Truncated-result): Write recommendation to docs.local/research/RESEARCH-024/paper-1-Truncated-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (assistant-explanation): Extract 5+ samples of 'assistant-explanation' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (assistant-explanation): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (assistant-explanation): Write recommendation to docs.local/research/RESEARCH-024/paper-2-assistant-explanation.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (assistant-code): Extract 5+ samples of 'assistant-code' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (assistant-code): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (assistant-code): Write recommendation to docs.local/research/RESEARCH-024/paper-3-assistant-code.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "AUDIT-018",
+  "title": "Audit 18/20: Debate and consensus",
+  "description": "Auditor 18: Read previous 17 audit(s), debate conclusions, update consensus tracker for all 45 types.",
+  "acceptanceCriteria": [
+    {
+      "text": "Read ALL previous audit essays: AUDIT-001 + AUDIT-002 + AUDIT-003 + AUDIT-004 + AUDIT-005 + AUDIT-006 + AUDIT-007 + AUDIT-008 + AUDIT-009 + AUDIT-010 + AUDIT-011 + AUDIT-012 + AUDIT-013 + AUDIT-014 + AUDIT-015 + AUDIT-016 + AUDIT-017",
+      "checked": false
+    },
+    {
+      "text": "Create docs.local/audit/AUDIT-018-debate.md",
+      "checked": false
+    },
+    {
+      "text": "For EACH of the 45 sample types: agree or disagree with previous consensus",
+      "checked": false
+    },
+    {
+      "text": "If disagreeing, provide counter-arguments with evidence from research papers",
+      "checked": false
+    },
+    {
+      "text": "Update consensus tracker: docs.local/audit/consensus-tracker.md with current vote counts",
+      "checked": false
+    }
+  ],
+  "storyType": "audit"
+}

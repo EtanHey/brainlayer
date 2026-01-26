@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-042",
+  "title": "Research data quality: progress-message, summary-message, empty-content",
+  "description": "Analyze samples of progress-message, summary-message, empty-content. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (progress-message): Extract 5+ samples of 'progress-message' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (progress-message): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (progress-message): Write recommendation to docs.local/research/RESEARCH-042/paper-1-progress-message.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (summary-message): Extract 5+ samples of 'summary-message' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (summary-message): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (summary-message): Write recommendation to docs.local/research/RESEARCH-042/paper-2-summary-message.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (empty-content): Extract 5+ samples of 'empty-content' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (empty-content): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (empty-content): Write recommendation to docs.local/research/RESEARCH-042/paper-3-empty-content.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

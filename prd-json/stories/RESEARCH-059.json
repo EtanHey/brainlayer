@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-059",
+  "title": "Research data quality: non-english, emoji-heavy, url-only",
+  "description": "Analyze samples of non-english, emoji-heavy, url-only. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (non-english): Extract 5+ samples of 'non-english' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (non-english): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (non-english): Write recommendation to docs.local/research/RESEARCH-059/paper-1-non-english.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (emoji-heavy): Extract 5+ samples of 'emoji-heavy' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (emoji-heavy): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (emoji-heavy): Write recommendation to docs.local/research/RESEARCH-059/paper-2-emoji-heavy.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (url-only): Extract 5+ samples of 'url-only' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (url-only): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (url-only): Write recommendation to docs.local/research/RESEARCH-059/paper-3-url-only.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

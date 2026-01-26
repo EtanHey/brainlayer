@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-028",
+  "title": "Research data quality: single-word, very-long, binary-encoded",
+  "description": "Analyze samples of single-word, very-long, binary-encoded. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (single-word): Extract 5+ samples of 'single-word' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (single-word): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (single-word): Write recommendation to docs.local/research/RESEARCH-028/paper-1-single-word.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (very-long): Extract 5+ samples of 'very-long' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (very-long): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (very-long): Write recommendation to docs.local/research/RESEARCH-028/paper-2-very-long.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (binary-encoded): Extract 5+ samples of 'binary-encoded' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (binary-encoded): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (binary-encoded): Write recommendation to docs.local/research/RESEARCH-028/paper-3-binary-encoded.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

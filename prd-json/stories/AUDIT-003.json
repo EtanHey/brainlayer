@@ -1,0 +1,28 @@
+{
+  "id": "AUDIT-003",
+  "title": "Audit 3/20: Debate and consensus",
+  "description": "Auditor 3: Read previous 2 audit(s), debate conclusions, update consensus tracker for all 45 types.",
+  "acceptanceCriteria": [
+    {
+      "text": "Read ALL previous audit essays: AUDIT-001 + AUDIT-002",
+      "checked": false
+    },
+    {
+      "text": "Create docs.local/audit/AUDIT-003-debate.md",
+      "checked": false
+    },
+    {
+      "text": "For EACH of the 45 sample types: agree or disagree with previous consensus",
+      "checked": false
+    },
+    {
+      "text": "If disagreeing, provide counter-arguments with evidence from research papers",
+      "checked": false
+    },
+    {
+      "text": "Update consensus tracker: docs.local/audit/consensus-tracker.md with current vote counts",
+      "checked": false
+    }
+  ],
+  "storyType": "audit"
+}

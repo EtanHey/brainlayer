@@ -1,85 +1,113 @@
-# Ralph Agent Instructions - Zikaron
+# AI Agent Instructions for Zikaron Data Quality PRD
 
-You are executing PRD stories for **Zikaron** (זיכרון), a local knowledge pipeline for Claude Code conversations.
+## Overview
 
-## Project Context
+This PRD contains 95 stories:
+- **75 RESEARCH stories**: Analyze 45 sample types, 5 researchers per type
+- **20 AUDIT stories**: Build consensus on data handling recommendations
 
-This is a **Python project** using:
-- **uv** for package management
-- **ChromaDB** for vector storage
-- **Ollama** for local embeddings (nomic-embed-text)
-- **tree-sitter** for AST-aware code chunking
-- **MCP** (Model Context Protocol) for Claude Code integration
+## Folder Structure
 
-## Working Directory
-
-All work happens in: `~/Gits/zikaron`
-
-## Before Starting
-
-1. Activate virtual environment: `source .venv/bin/activate`
-2. Ensure Ollama is running: `ollama list`
-3. Check dependencies: `uv pip list`
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/zikaron/pipeline/*.py` | Processing stages |
-| `src/zikaron/cli/__init__.py` | CLI commands |
-| `src/zikaron/mcp/__init__.py` | MCP server |
-| `tests/` | Test files |
-| `CLAUDE.md` | Project documentation |
-
-## Testing Commands
-
-```bash
-# Run tests
-pytest
-
-# Run specific test
-pytest tests/test_classify.py -v
-
-# Test CLI
-zikaron --help
-zikaron index --help
-zikaron search "test"
-
-# Test MCP server
-zikaron serve
+```
+docs.local/
+├── research/
+│   ├── RESEARCH-001/
+│   │   ├── paper-1-{type}.md
+│   │   ├── paper-2-{type}.md
+│   │   └── paper-3-{type}.md
+│   └── ... (75 folders)
+└── audit/
+    ├── AUDIT-001-essay.md        # First auditor - fresh analysis
+    ├── AUDIT-002-debate.md       # Debates 001
+    ├── ...
+    ├── AUDIT-020-debate.md       # Final debate
+    └── consensus-tracker.md      # Vote counts for each type
 ```
 
-## Git Rules
+## RESEARCH Story Guidelines
 
-- Commit after each story completes
-- Use conventional commits: `feat:`, `fix:`, `test:`
-- Include story ID in commit message
+Each RESEARCH story covers 3 sample types with 3 criteria each (9 total):
 
-## Context Wiring (US-006, US-007)
+1. **Extract samples**: Find 5+ examples from ~/.claude/projects/ JSONL files
+2. **Analyze relevance**: Score each sample 1-5 for search usefulness
+3. **Recommend handling**: Write to docs.local/research/{STORY-ID}/paper-{N}-{type}.md
 
-These stories wire zikaron into the claude-golem context system:
+### Paper Format
 
-**Required contexts:**
-- `base` - Universal rules
-- `skill-index` - Available skills
-- `workflow/interactive` - CLAUDE_COUNTER, git safety
+```markdown
+# {Type} Analysis
 
-**Available skills:**
-| Skill | When to Use |
-|-------|-------------|
-| `/golem-powers:context-audit` | Diagnose missing contexts |
-| `/golem-powers:ralph-commit` | For "Commit:" criteria |
-| `/golem-powers:coderabbit` | Code review before commits |
+## Samples Found
 
-## CodeRabbit Iteration Rule
+### Sample 1
+- **Source**: {file path}
+- **Content**: ```{actual content}```
+- **Relevance Score**: X/5
+- **Reasoning**: {why this score}
 
-For "Run CodeRabbit review" criteria:
-1. Run: `cr review --prompt-only --type uncommitted`
-2. If issues found → Fix them
-3. Repeat until clean
+... (5+ samples)
 
-## Research Reference
+## Recommendation
 
-The pipeline is based on research findings in `~/Gits/claude-golem/docs.local/`:
-- `compass_artifact_wf-92919407-*.md` - Main research on code RAG
-- Key finding: Observation masking often beats LLM summarization
+**Verdict**: KEEP | STRIP | MINIMIZE | TRANSFORM
+
+**Reasoning**: {detailed explanation}
+
+**If TRANSFORM**: {describe transformation}
+```
+
+## AUDIT Story Guidelines
+
+### AUDIT-001 (First Auditor)
+- Read ALL research papers
+- Write fresh analysis to docs.local/audit/AUDIT-001-essay.md
+- Cover all 45 types with recommendations
+
+### AUDIT-002 to AUDIT-020 (Debaters)
+- Read ALL previous audits
+- Write debate to docs.local/audit/AUDIT-{N}-debate.md
+- Agree or disagree for each of 45 types
+- Update consensus-tracker.md
+
+### Consensus Tracker Format
+
+```markdown
+# Consensus Tracker
+
+| Type | KEEP | STRIP | MINIMIZE | TRANSFORM | Current Winner |
+|------|------|-------|----------|-----------|----------------|
+| Read-input | 2 | 15 | 3 | 0 | STRIP |
+| ... | ... | ... | ... | ... | ... |
+```
+
+## The 45 Sample Types
+
+### Tool Inputs (1-15)
+1. Read-input, 2. Edit-input, 3. Write-input, 4. Bash-input, 5. Grep-input,
+6. Glob-input, 7. Task-input, 8. WebFetch-input, 9. WebSearch-input, 10. LSP-input,
+11. NotebookEdit-input, 12. TodoWrite-input, 13. AskUserQuestion-input, 14. Skill-input, 15. KillShell-input
+
+### Tool Results (16-25)
+16. Read-result, 17. Bash-result, 18. Grep-result, 19. Glob-result, 20. Task-result,
+21. WebFetch-result, 22. WebSearch-result, 23. LSP-result, 24. Error-result, 25. Truncated-result
+
+### Content Types (26-35)
+26. assistant-explanation, 27. assistant-code, 28. assistant-json, 29. user-question,
+30. user-code, 31. user-error, 32. system-prompt, 33. system-reminder, 34. progress-message, 35. summary-message
+
+### Fringe Cases (36-45)
+36. empty-content, 37. single-word, 38. very-long, 39. binary-encoded, 40. non-english,
+41. emoji-heavy, 42. url-only, 43. path-only, 44. timestamp-only, 45. duplicate-content
+
+## Data Sources
+
+- **JSONL conversations**: ~/.claude/projects/
+- **Current index backup**: ~/.local/share/zikaron-backup-*
+- **Pipeline code**: src/zikaron/pipeline/ (extract.py, classify.py, chunk.py)
+
+## DO NOT
+
+- Do NOT edit index.json directly (use update.json)
+- Do NOT mix research data between stories
+- Do NOT skip samples - we need comprehensive coverage
+- Do NOT commit after RESEARCH stories (only after AUDIT-020)

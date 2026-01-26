@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-053",
+  "title": "Research data quality: WebSearch-result, LSP-result, Error-result",
+  "description": "Analyze samples of WebSearch-result, LSP-result, Error-result. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (WebSearch-result): Extract 5+ samples of 'WebSearch-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (WebSearch-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (WebSearch-result): Write recommendation to docs.local/research/RESEARCH-053/paper-1-WebSearch-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (LSP-result): Extract 5+ samples of 'LSP-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (LSP-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (LSP-result): Write recommendation to docs.local/research/RESEARCH-053/paper-2-LSP-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Error-result): Extract 5+ samples of 'Error-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Error-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (Error-result): Write recommendation to docs.local/research/RESEARCH-053/paper-3-Error-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

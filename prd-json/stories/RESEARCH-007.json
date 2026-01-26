@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-007",
+  "title": "Research data quality: Glob-result, Task-result, WebFetch-result",
+  "description": "Analyze samples of Glob-result, Task-result, WebFetch-result. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (Glob-result): Extract 5+ samples of 'Glob-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Glob-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (Glob-result): Write recommendation to docs.local/research/RESEARCH-007/paper-1-Glob-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Task-result): Extract 5+ samples of 'Task-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Task-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (Task-result): Write recommendation to docs.local/research/RESEARCH-007/paper-2-Task-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (WebFetch-result): Extract 5+ samples of 'WebFetch-result' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (WebFetch-result): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (WebFetch-result): Write recommendation to docs.local/research/RESEARCH-007/paper-3-WebFetch-result.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

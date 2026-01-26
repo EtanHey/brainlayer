@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-056",
+  "title": "Research data quality: user-error, system-prompt, system-reminder",
+  "description": "Analyze samples of user-error, system-prompt, system-reminder. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (user-error): Extract 5+ samples of 'user-error' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (user-error): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (user-error): Write recommendation to docs.local/research/RESEARCH-056/paper-1-user-error.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (system-prompt): Extract 5+ samples of 'system-prompt' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (system-prompt): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (system-prompt): Write recommendation to docs.local/research/RESEARCH-056/paper-2-system-prompt.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (system-reminder): Extract 5+ samples of 'system-reminder' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (system-reminder): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (system-reminder): Write recommendation to docs.local/research/RESEARCH-056/paper-3-system-reminder.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

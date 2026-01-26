@@ -1,0 +1,28 @@
+{
+  "id": "AUDIT-001",
+  "title": "Audit 1/20: Initial analysis",
+  "description": "First auditor: Read all research papers and write initial essay with recommendations for all 45 sample types.",
+  "acceptanceCriteria": [
+    {
+      "text": "Read ALL docs.local/research/RESEARCH-*/paper-*.md files",
+      "checked": false
+    },
+    {
+      "text": "Create docs.local/audit/AUDIT-001-essay.md with your analysis",
+      "checked": false
+    },
+    {
+      "text": "For each of the 45 sample types, state your recommendation: KEEP/STRIP/MINIMIZE/TRANSFORM",
+      "checked": false
+    },
+    {
+      "text": "Provide reasoning for each recommendation",
+      "checked": false
+    },
+    {
+      "text": "Summarize overall data quality strategy",
+      "checked": false
+    }
+  ],
+  "storyType": "audit"
+}

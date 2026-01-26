@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-040",
+  "title": "Research data quality: assistant-json, user-question, user-code",
+  "description": "Analyze samples of assistant-json, user-question, user-code. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (assistant-json): Extract 5+ samples of 'assistant-json' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (assistant-json): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (assistant-json): Write recommendation to docs.local/research/RESEARCH-040/paper-1-assistant-json.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (user-question): Extract 5+ samples of 'user-question' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (user-question): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (user-question): Write recommendation to docs.local/research/RESEARCH-040/paper-2-user-question.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (user-code): Extract 5+ samples of 'user-code' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (user-code): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (user-code): Write recommendation to docs.local/research/RESEARCH-040/paper-3-user-code.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}

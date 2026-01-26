@@ -1,0 +1,44 @@
+{
+  "id": "RESEARCH-060",
+  "title": "Research data quality: path-only, timestamp-only, duplicate-content",
+  "description": "Analyze samples of path-only, timestamp-only, duplicate-content. For each type: extract samples, score relevance, recommend handling strategy.",
+  "acceptanceCriteria": [
+    {
+      "text": "Paper 1 (path-only): Extract 5+ samples of 'path-only' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (path-only): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 1 (path-only): Write recommendation to docs.local/research/RESEARCH-060/paper-1-path-only.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (timestamp-only): Extract 5+ samples of 'timestamp-only' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (timestamp-only): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 2 (timestamp-only): Write recommendation to docs.local/research/RESEARCH-060/paper-2-timestamp-only.md (keep/strip/minimize/transform)",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (duplicate-content): Extract 5+ samples of 'duplicate-content' from ~/.claude/projects/ JSONL files",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (duplicate-content): Analyze each sample - is it useful for search? Score 1-5 relevance",
+      "checked": false
+    },
+    {
+      "text": "Paper 3 (duplicate-content): Write recommendation to docs.local/research/RESEARCH-060/paper-3-duplicate-content.md (keep/strip/minimize/transform)",
+      "checked": false
+    }
+  ],
+  "storyType": "research"
+}
