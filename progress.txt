@@ -152,3 +152,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - Assistant-json shows tool usage patterns but needs filtering of metadata vs semantic content
 - All three types benefit from structural preservation rather than simple transformation
 - Code content has highest search value due to complete implementations and technical patterns
+
+## Iteration 11 - RESEARCH-011: Research data quality: user-error, system-prompt, system-reminder
+- Model: kiro
+- Extracted and analyzed 5+ samples each of user-error, system-prompt, and system-reminder from JSONL files
+- Created 3 research papers in docs.local/research/RESEARCH-011/
+- Key findings:
+  - user-error: Score 4.2/5 - KEEP + STRUCTURE (excellent debugging value with error codes, stack traces, solutions)
+  - system-prompt: Score 4.2/5 - KEEP + STRUCTURE (high value agent configurations, workflows, task specifications)
+  - system-reminder: Score 3.0/5 - MINIMIZE + SELECTIVE KEEP (bimodal: high-value session summaries vs low-value status messages)
+
+### Learnings
+- User-error content is invaluable for debugging scenarios - contains specific error codes, stack traces, and system details
+- System-prompt content captures agent roles, workflows, and validation criteria - highly searchable for similar configurations
+- System-reminder content varies greatly: session continuity summaries are valuable, but simple status messages are noise
+- All three types benefit from content-based filtering and metadata extraction for enhanced searchability
+- Error messages with stack traces and file paths are particularly valuable for finding similar technical issues
