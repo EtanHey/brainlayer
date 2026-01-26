@@ -119,3 +119,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - LSP results when successful contain richest semantic code information (locations, types, relationships)
 - Error results are invaluable for debugging - preserve exact error text and actionable hints
 - All three types benefit from TRANSFORM approach: keep semantic content, strip operational noise
+
+
+## Iteration 9 - RESEARCH-009: Research data quality: Truncated-result, assistant-explanation, assistant-code
+- Model: kiro
+- Extracted and analyzed samples of Truncated-result, assistant-explanation, assistant-code from JSONL files
+- Created 3 research papers in docs.local/research/RESEARCH-009/
+- Key findings:
+  - Truncated-result: Score 2.4/5 - TRANSFORM (bimodal: high-value partial content vs pure truncation notices)
+  - assistant-explanation: Score 3.6/5 - KEEP + STRUCTURE (curated reasoning, problem-solving processes)
+  - assistant-code: Score 4.2/5 - KEEP + STRUCTURE (highest value! concrete implementations and solutions)
+
+### Learnings
+- Truncated results often contain valuable content before truncation point - preserve partial content
+- Assistant explanations are "thinking out loud" - preserve conversational reasoning flow
+- Assistant code is curated and contextual - shows actual solutions rather than just descriptions
+- All three types benefit from structural preservation rather than transformation
