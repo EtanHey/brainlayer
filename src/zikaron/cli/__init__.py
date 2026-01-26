@@ -1,10 +1,14 @@
 """Zikaron CLI - Command line interface for the knowledge pipeline."""
 
+import os
+# Disable ChromaDB telemetry before any imports
+os.environ["ANONYMIZED_TELEMETRY"] = "false"
+
 import typer
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn, MofNCompleteColumn
 from rich import print as rprint
 
 app = typer.Typer(
@@ -75,17 +79,32 @@ def index(
             system_prompts = extract_system_prompts(source)
             rprint(f"  Found [bold]{len(system_prompts)}[/] unique system prompts")
 
-        # Process each file
+        # Ignore stdin to prevent accidental keypress from killing long-running job
+        import sys
+        import os
+        sys.stdin = open(os.devnull)
+
+        # Process each file with detailed progress tracking
         total_chunks = 0
+        import time
+        start_time = time.time()
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            console=console
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=console,
+            refresh_per_second=2
         ) as progress:
-            task = progress.add_task("Processing files...", total=len(jsonl_files))
+            task = progress.add_task("Indexing...", total=len(jsonl_files))
 
-            for jsonl_file in jsonl_files:
-                progress.update(task, description=f"Processing {jsonl_file.name[:40]}...")
+            for i, jsonl_file in enumerate(jsonl_files):
+                file_start = time.time()
 
                 # Determine project from path and normalize
                 proj_name = jsonl_file.parent.name
@@ -101,19 +120,42 @@ def index(
                         file_chunks = chunk_content(classified)
                         chunks_for_file.extend(file_chunks)
 
+                file_chunks_count = 0
                 if chunks_for_file:
-                    embedded = embed_chunks(chunks_for_file)
+                    # Progress callback to update display during embedding
+                    def on_embed_progress(embedded_count, file_total):
+                        current_total = total_chunks + embedded_count
+                        elapsed = time.time() - start_time
+                        chunks_per_min = (current_total / elapsed) * 60 if elapsed > 0 else 0
+                        progress.update(
+                            task,
+                            description=f"[cyan]{jsonl_file.name[:30]}[/] • {current_total:,} chunks • {chunks_per_min:.0f} c/m • embedding {embedded_count}/{file_total}"
+                        )
+
+                    embedded = embed_chunks(chunks_for_file, on_progress=on_embed_progress)
                     indexed = index_to_chromadb(
                         embedded,
                         collection,
                         source_file=str(jsonl_file),
                         project=proj_name
                     )
+                    file_chunks_count = indexed
                     total_chunks += indexed
 
-                progress.advance(task)
+                # Update progress with stats after file completes
+                elapsed = time.time() - start_time
+                files_done = i + 1
+                rate_per_min = (files_done / elapsed) * 60 if elapsed > 0 else 0
+                chunks_per_min = (total_chunks / elapsed) * 60 if elapsed > 0 else 0
 
-        rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks}[/] chunks from [bold]{len(jsonl_files)}[/] files")
+                progress.update(
+                    task,
+                    completed=files_done,
+                    description=f"[cyan]{jsonl_file.name[:30]}[/] • {total_chunks:,} chunks • {rate_per_min:.1f} f/m • {chunks_per_min:.0f} c/m"
+                )
+
+        elapsed_total = time.time() - start_time
+        rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total/60:.1f}[/] minutes")
 
     except typer.Exit:
         raise

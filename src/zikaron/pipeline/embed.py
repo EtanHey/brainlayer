@@ -26,7 +26,8 @@ MAX_EMBEDDING_CHARS = 2000
 def embed_chunks(
     chunks: list[Chunk],
     model: str = DEFAULT_MODEL,
-    batch_size: int = 32
+    batch_size: int = 32,
+    on_progress: callable = None
 ) -> list[EmbeddedChunk]:
     """
     Generate embeddings for chunks using Ollama.
@@ -39,11 +40,13 @@ def embed_chunks(
         chunks: List of chunks to embed
         model: Ollama model name (default: nomic-embed-text)
         batch_size: Number of chunks to embed at once
+        on_progress: Optional callback(embedded_count, total) called after each chunk
 
     Returns:
         List of chunks with embeddings
     """
     results = []
+    total = len(chunks)
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
@@ -67,6 +70,11 @@ def embed_chunks(
                     chunk=chunk,
                     embedding=embedding
                 ))
+
+                # Call progress callback if provided
+                if on_progress:
+                    on_progress(len(results), total)
+
             except Exception as e:
                 print(f"Warning: Failed to embed chunk: {e}")
                 continue
