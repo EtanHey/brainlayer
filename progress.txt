@@ -184,3 +184,19 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - Progress and empty content should be aggressively filtered to maintain index quality
 - Content-based filtering is essential for meaningful search results
 - Bimodal distribution: high-value curated content vs low-value operational noise
+
+
+## Iteration 13 - RESEARCH-013: Research data quality: single-word, very-long, binary-encoded
+- Model: kiro
+- Analyzed 3 content types: single-word, very-long, binary-encoded
+- Created 3 research papers in docs.local/research/RESEARCH-013/
+- Key findings:
+  - single-word: Score 1.2/5 - STRIP (operational confirmations with no semantic value)
+  - very-long: Score 3.8/5 - TRANSFORM (bimodal: rich content vs size constraints, needs intelligent chunking)
+  - binary-encoded: Score 1.7/5 - MINIMIZE (visual/binary data, extract metadata only)
+
+### Learnings
+- Single-word responses are predominantly operational noise that should be stripped entirely
+- Very-long content contains the richest information but requires sophisticated processing strategies
+- Binary-encoded content needs metadata extraction while removing unsearchable encoded data
+- Content size and format significantly impact search value and processing requirements
