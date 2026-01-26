@@ -135,3 +135,20 @@ Model: kiro (configured in ~/.config/ralphtools/config.json)
 - Assistant explanations are "thinking out loud" - preserve conversational reasoning flow
 - Assistant code is curated and contextual - shows actual solutions rather than just descriptions
 - All three types benefit from structural preservation rather than transformation
+
+
+## Iteration 10 - RESEARCH-010: Research data quality: assistant-json, user-question, user-code
+- Model: kiro
+- Extracted and analyzed 5+ samples each of assistant-json, user-question, and user-code from JSONL files
+- Created 3 research papers in docs.local/research/RESEARCH-010/
+- Key findings:
+  - assistant-json: Score 3.2/5 - TRANSFORM (selective preservation with enhancement)
+  - user-question: Score 3.8/5 - KEEP + STRUCTURE (preserve high-value questions with enhanced structure)
+  - user-code: Score 4.2/5 - KEEP + STRUCTURE (preserve high-value code with enhanced semantic structure)
+
+### Learnings
+- User-code contains the richest semantic content for search (implementations, patterns, architecture)
+- User-questions capture requirements, constraints, and decision-making processes
+- Assistant-json shows tool usage patterns but needs filtering of metadata vs semantic content
+- All three types benefit from structural preservation rather than simple transformation
+- Code content has highest search value due to complete implementations and technical patterns
