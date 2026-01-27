@@ -105,7 +105,7 @@ def index_to_chromadb(
 
 def search(
     collection: chromadb.Collection,
-    query_embedding: list[float],
+    query_embedding: list[float] | None = None,
     n_results: int = 10,
     where: dict[str, Any] | None = None,
     where_document: dict[str, Any] | None = None
@@ -115,21 +115,86 @@ def search(
 
     Args:
         collection: ChromaDB collection
-        query_embedding: Query embedding vector
+        query_embedding: Query embedding vector (optional, for semantic search)
         n_results: Number of results to return
         where: Metadata filter
-        where_document: Document content filter (for BM25-style)
+        where_document: Document content filter (for text search with $contains)
 
     Returns:
         Search results with documents, metadatas, and distances
     """
-    return collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results,
-        where=where,
-        where_document=where_document,
-        include=["documents", "metadatas", "distances"]
-    )
+    if query_embedding is None and where_document is None:
+        raise ValueError("Either query_embedding or where_document must be provided")
+    
+    if query_embedding is not None:
+        # Semantic search with embeddings
+        return collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where=where,
+            where_document=where_document,
+            include=["documents", "metadatas", "distances"]
+        )
+    else:
+        # Text-only search using where_document
+        # ChromaDB requires query_texts for text search
+        # Extract the search term from where_document if it's a $contains filter
+        query_text = None
+        if where_document and "$contains" in where_document:
+            query_text = where_document["$contains"]
+        
+        if query_text:
+            try:
+                # Try query_texts first (requires ChromaDB with text search support)
+                result = collection.query(
+                    query_texts=[query_text],
+                    n_results=n_results,
+                    where=where,
+                    where_document=where_document,
+                    include=["documents", "metadatas", "distances"]
+                )
+                return result
+            except Exception:
+                # Fallback: use get() with where_document filter and filter in Python
+                all_results = collection.get(
+                    where=where,
+                    where_document=where_document,
+                    limit=min(n_results * 10, 10000),  # Get more to filter
+                    include=["documents", "metadatas"]
+                )
+                
+                # Filter documents that contain the query text
+                filtered_docs = []
+                filtered_metas = []
+                query_lower = query_text.lower()
+                
+                for doc, meta in zip(all_results.get("documents", []), all_results.get("metadatas", [])):
+                    if doc and query_lower in doc.lower():
+                        filtered_docs.append(doc)
+                        filtered_metas.append(meta)
+                        if len(filtered_docs) >= n_results:
+                            break
+                
+                # Return in same format as query()
+                return {
+                    "documents": [filtered_docs],
+                    "metadatas": [filtered_metas],
+                    "distances": [[None] * len(filtered_docs)]  # No distances for text search
+                }
+        else:
+            # Fallback: use get() with where_document filter
+            all_results = collection.get(
+                where=where,
+                where_document=where_document,
+                limit=n_results,
+                include=["documents", "metadatas"]
+            )
+            # Return in same format as query()
+            return {
+                "documents": [all_results.get("documents", [])],
+                "metadatas": [all_results.get("metadatas", [])],
+                "distances": [[None] * len(all_results.get("documents", []))]  # No distances
+            }
 
 
 def get_stats(collection: chromadb.Collection) -> dict:

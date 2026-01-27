@@ -108,9 +108,20 @@ def index(
                 file_start = time.time()
 
                 # Determine project from path and normalize
-                proj_name = jsonl_file.parent.name
-                if proj_name == "subagents":
-                    proj_name = jsonl_file.parent.parent.name
+                # Walk up the path to find the project folder (skip UUID conversation folders)
+                import re
+                uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+                
+                current_path = jsonl_file.parent
+                proj_name = current_path.name
+                
+                # If parent is a UUID or "subagents", go up one level
+                while uuid_pattern.match(proj_name) or proj_name == "subagents":
+                    current_path = current_path.parent
+                    if current_path == current_path.parent:  # Reached root
+                        break
+                    proj_name = current_path.name
+                
                 proj_name = _normalize_project_name(proj_name)
 
                 chunks_for_file = []
@@ -288,14 +299,22 @@ def search(
     query: str = typer.Argument(..., help="Search query"),
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
-    content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type")
+    content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
+    text: bool = typer.Option(False, "--text", help="Use text-based search (exact string match) instead of semantic search")
 ) -> None:
     """Search the knowledge base."""
     try:
         from ..pipeline.embed import embed_query
         from ..pipeline.index import get_client, get_or_create_collection, search as db_search
 
-        rprint(f"[bold blue]זיכרון[/] - Searching: [italic]{query}[/]")
+        # Auto-detect domain-like queries (containing dots) and use text search
+        # This prevents false matches on "unified" when searching for "unified.to"
+        if not text and ("." in query or query.startswith("http") or "/" in query):
+            text = True
+            rprint(f"[dim]Auto-detected domain/URL query, using text search[/]")
+
+        search_type = "text" if text else "semantic"
+        rprint(f"[bold blue]זיכרון[/] - Searching ({search_type}): [italic]{query}[/]")
 
         client = get_client()
         collection = get_or_create_collection(client)
@@ -305,10 +324,6 @@ def search(
             rprint("[yellow]Knowledge base is empty. Run 'zikaron index' first.[/]")
             raise typer.Exit(1)
 
-        # Generate query embedding
-        with console.status("[bold green]Generating query embedding..."):
-            query_embedding = embed_query(query)
-
         # Build filters
         where = {}
         if project:
@@ -316,29 +331,60 @@ def search(
         if content_type:
             where["content_type"] = content_type
 
-        # Search
-        results = db_search(
-            collection,
-            query_embedding,
-            n_results=n,
-            where=where if where else None
-        )
+        # Choose search method
+        if text:
+            # Text-based search using where_document with $contains
+            where_document = {"$contains": query}
+            results = db_search(
+                collection,
+                query_embedding=None,
+                n_results=n,
+                where=where if where else None,
+                where_document=where_document
+            )
+        else:
+            # Semantic search with embeddings
+            try:
+                with console.status("[bold green]Generating query embedding..."):
+                    query_embedding = embed_query(query)
+            except Exception as e:
+                rprint(f"[yellow]Warning:[/] Failed to generate embedding: {e}")
+                rprint("[yellow]Falling back to text-based search...[/]")
+                where_document = {"$contains": query}
+                results = db_search(
+                    collection,
+                    query_embedding=None,
+                    n_results=n,
+                    where=where if where else None,
+                    where_document=where_document
+                )
+            else:
+                results = db_search(
+                    collection,
+                    query_embedding,
+                    n_results=n,
+                    where=where if where else None
+                )
 
         # Display results
         if not results["documents"][0]:
             rprint("[yellow]No results found[/]")
             return
 
+        # Handle results - distances may be None for text search
+        distances = results.get("distances", [[]])[0] if results.get("distances") else [None] * len(results["documents"][0])
+        
         for i, (doc, meta, dist) in enumerate(zip(
             results["documents"][0],
             results["metadatas"][0],
-            results["distances"][0]
+            distances
         )):
-            score = 1 - dist  # Convert distance to similarity
+            score = 1 - dist if dist is not None else None
+            score_str = f"[dim](score: {score:.3f})[/]" if score is not None else "[dim](text match)[/]"
             proj = _clean_project_name(meta.get('project', 'unknown'))
             content_type = meta.get('content_type', 'unknown')
 
-            rprint(f"\n[bold cyan]─── Result {i+1} ───[/] [dim](score: {score:.3f})[/]")
+            rprint(f"\n[bold cyan]─── Result {i+1} ───[/] {score_str}")
             rprint(f"[bold]{proj}[/] · [dim]{content_type}[/]")
             rprint()
 
@@ -541,6 +587,171 @@ def clear(
 
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def fix_projects() -> None:
+    """Fix project names in the database by remapping UUID project names to correct projects."""
+    try:
+        from ..pipeline.index import get_client, get_or_create_collection
+        import re
+        from pathlib import Path
+
+        rprint("[bold blue]זיכרון[/] - Fixing project names in database")
+
+        client = get_client()
+        collection = get_or_create_collection(client)
+
+        if collection.count() == 0:
+            rprint("[yellow]Knowledge base is empty.[/]")
+            return
+
+        # UUID pattern
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
+        # Get all chunks with UUID project names
+        rprint("Scanning for chunks with UUID project names...")
+        
+        # Get ALL chunks - ChromaDB get() without ids returns all chunks
+        total_count = collection.count()
+        rprint(f"Total chunks in database: {total_count:,}")
+        
+        # Get all chunks (ChromaDB get() without parameters returns all chunks)
+        # We'll process in batches to avoid memory issues
+        batch_size = 10000
+        all_ids = []
+        all_metadatas = []
+        
+        # ChromaDB get() might have limits, so we'll use limit/offset if needed
+        # But first try getting all at once
+        try:
+            all_results = collection.get(limit=total_count, include=["metadatas"])
+            all_ids = all_results.get("ids", [])
+            all_metadatas = all_results.get("metadatas", [])
+        except Exception as e:
+            rprint(f"[yellow]Warning:[/] Could not get all chunks at once: {e}")
+            rprint("Trying to get chunks in batches...")
+            # Fallback: get in batches
+            for offset in range(0, total_count, batch_size):
+                batch_results = collection.get(limit=batch_size, offset=offset, include=["metadatas"])
+                all_ids.extend(batch_results.get("ids", []))
+                all_metadatas.extend(batch_results.get("metadatas", []))
+        
+        if not all_metadatas or not all_ids:
+            rprint("[yellow]No metadata found.[/]")
+            return
+        
+        rprint(f"Retrieved [bold]{len(all_ids):,}[/] chunks for scanning (expected {total_count:,})")
+        
+        if len(all_ids) != total_count:
+            rprint(f"[yellow]Warning:[/] Retrieved {len(all_ids):,} chunks but database has {total_count:,}. Some chunks may be missed.")
+
+        # Build mapping of UUID -> correct project name based on source_file paths
+        uuid_to_project: dict[str, str] = {}
+        chunks_to_update: list[tuple[str, dict]] = []  # (id, new_metadata)
+
+        for i, metadata in enumerate(all_metadatas):
+            if not metadata:
+                continue
+            
+            project = metadata.get("project", "")
+            source_file = metadata.get("source_file", "")
+            
+            # If project is a UUID, we need to fix it
+            if uuid_pattern.match(project):
+                # Extract correct project from source_file path
+                try:
+                    source_path = Path(source_file)
+                    # Walk up from the file to find the project folder
+                    current_path = source_path.parent
+                    proj_name = current_path.name
+                    
+                    # Skip UUID directories
+                    while uuid_pattern.match(proj_name) or proj_name == "subagents":
+                        current_path = current_path.parent
+                        if current_path == current_path.parent:  # Reached root
+                            break
+                        proj_name = current_path.name
+                    
+                    # Normalize the project name
+                    correct_project = _normalize_project_name(proj_name)
+                    
+                    # Store mapping
+                    if project not in uuid_to_project:
+                        uuid_to_project[project] = correct_project
+                    
+                    # If this chunk needs updating
+                    if correct_project != project:
+                        chunk_id = all_ids[i]
+                        new_metadata = metadata.copy()
+                        new_metadata["project"] = correct_project
+                        chunks_to_update.append((chunk_id, new_metadata))
+                        
+                except Exception as e:
+                    rprint(f"[yellow]Warning:[/] Could not process {source_file}: {e}")
+                    continue
+
+        if not chunks_to_update:
+            rprint("[green]No chunks need fixing![/]")
+            return
+
+        rprint(f"Found [bold]{len(chunks_to_update)}[/] chunks to update")
+        rprint(f"UUID project mappings:")
+        for uuid, proj in sorted(uuid_to_project.items()):
+            rprint(f"  {uuid} -> {proj}")
+
+        # Update chunks in batches using upsert (which updates existing records)
+        # Close and reopen client to ensure we have write access
+        batch_size = 1000
+        updated = 0
+        
+        # Close the current client and collection
+        del collection
+        del client
+        
+        with console.status("[bold green]Updating project names..."):
+            # Reopen client for write operations
+            client = get_client()
+            collection = get_or_create_collection(client)
+            
+            for i in range(0, len(chunks_to_update), batch_size):
+                batch = chunks_to_update[i:i + batch_size]
+                ids_to_update = [item[0] for item in batch]
+                metadatas_to_update = [item[1] for item in batch]
+                
+                # ChromaDB upsert requires embeddings and documents too, so we need to get them
+                existing = collection.get(ids=ids_to_update, include=["embeddings", "documents", "metadatas"])
+                
+                if not existing.get("ids"):
+                    continue
+                
+                # Update with new metadata using update() method
+                try:
+                    collection.update(
+                        ids=ids_to_update,
+                        metadatas=metadatas_to_update
+                    )
+                except Exception as update_error:
+                    # Fallback to upsert if update doesn't work
+                    rprint(f"[yellow]Update failed, trying upsert:[/] {update_error}")
+                    collection.upsert(
+                        ids=ids_to_update,
+                        embeddings=existing["embeddings"],
+                        documents=existing["documents"],
+                        metadatas=metadatas_to_update
+                    )
+                
+                updated += len(batch)
+                if (i + batch_size) % 5000 == 0:
+                    rprint(f"  Updated {updated:,} chunks...")
+
+        rprint(f"[bold green]✓[/] Updated [bold]{updated}[/] chunks")
+
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        import traceback
+        traceback.print_exc()
         raise typer.Exit(1)
 
 

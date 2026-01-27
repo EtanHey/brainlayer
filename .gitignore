@@ -50,3 +50,8 @@ data/
 # Ralph/Claude
 docs.local/
 progress.txt
+
+# Recovery tools (temporary files)
+photorec.log
+photorec.se2
+*.log
