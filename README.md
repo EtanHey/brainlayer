@@ -10,7 +10,7 @@ Zikaron is a local knowledge pipeline designed for Claude Code conversations. It
 *   Provides a command-line interface for easy interaction.
 
 ## The Memory Layer
-Zikaron was built to serve as the long-term memory for [https://github.com/EtanHey/claude-golem](Claude Golem). While the Golem executes autonomous coding loops in the terminal, Zikaron ensures that the resulting conversation logs and architectural decisions are indexed locally via Ollama, preventing "context rot" and allowing you to clean up your workspace without losing insights.
+Zikaron was built to serve as the long-term memory for [Claude-Golem](https://github.com/EtanHey/claude-golem) . While the Golem executes autonomous coding loops in the terminal, Zikaron ensures that the resulting conversation logs and architectural decisions are indexed locally via Ollama, preventing "context rot" and allowing you to clean up your workspace without losing insights.
 
 
 ## Getting Started
