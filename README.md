@@ -74,5 +74,3 @@ Once both servers are running, you can interact with Zikaron using its CLI. For 
 ```bash
 zikaron search "your query here"
 ```
-
-Pro-Tip: Run zikaron --sync before cleaning up your temp/ or logs/ directories to ensure your local brain stays up to date.
