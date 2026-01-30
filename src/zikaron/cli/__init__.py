@@ -756,6 +756,275 @@ def fix_projects() -> None:
 
 
 @app.command()
+def analyze_style(
+    whatsapp_limit: int = typer.Option(
+        1000, "--whatsapp-limit", "-w",
+        help="Number of WhatsApp messages to analyze"
+    ),
+    claude_export: Path = typer.Option(
+        None, "--claude-export", "-c",
+        help="Path to Claude chat export JSON (optional)"
+    ),
+    output: Path = typer.Option(
+        Path.home() / ".cursor/rules/communication-style.md",
+        "--output", "-o",
+        help="Output path for generated rules"
+    ),
+    export_analysis: bool = typer.Option(
+        False, "--export-json",
+        help="Also export full analysis as JSON"
+    )
+) -> None:
+    """Analyze communication patterns from WhatsApp and Claude chats.
+    
+    Extracts your writing style and Claude's response patterns to generate
+    personalized rules for desktop apps that help with text interactions.
+    """
+    try:
+        from ..pipeline.extract_whatsapp import extract_whatsapp_messages, analyze_writing_style
+        from ..pipeline.extract_claude_desktop import extract_claude_chats
+        from ..pipeline.analyze_communication import CommunicationAnalyzer
+        
+        rprint("[bold blue]זיכרון[/] - Analyzing communication patterns\n")
+        
+        analyzer = CommunicationAnalyzer()
+        
+        # Extract WhatsApp messages
+        with console.status("[bold green]Extracting WhatsApp messages..."):
+            try:
+                messages = list(extract_whatsapp_messages(
+                    limit=whatsapp_limit,
+                    only_from_me=False,  # Get both sides for context
+                    exclude_groups=True
+                ))
+                analyzer.add_whatsapp_messages(messages)
+                rprint(f"[green]✓[/] Extracted {len(messages)} WhatsApp messages")
+            except FileNotFoundError as e:
+                rprint(f"[yellow]Warning:[/] WhatsApp database not found")
+                rprint(f"[dim]  {e}[/]")
+            except Exception as e:
+                rprint(f"[yellow]Warning:[/] Failed to extract WhatsApp: {e}")
+        
+        # Extract Claude chats if export provided
+        if claude_export and claude_export.exists():
+            with console.status("[bold green]Extracting Claude conversations..."):
+                try:
+                    conversations = list(extract_claude_chats(method="manual"))
+                    analyzer.add_claude_conversations(conversations)
+                    rprint(f"[green]✓[/] Extracted {len(conversations)} Claude conversations")
+                except Exception as e:
+                    rprint(f"[yellow]Warning:[/] Failed to extract Claude chats: {e}")
+        else:
+            rprint("[dim]No Claude export provided (use --claude-export)[/]")
+            rprint("[dim]To export from Claude.ai:[/]")
+            rprint("[dim]  1. Go to Settings > Data & Privacy[/]")
+            rprint("[dim]  2. Click 'Export my data'[/]")
+            rprint("[dim]  3. Pass the file with --claude-export PATH[/]\n")
+        
+        # Check if we have enough data
+        if not analyzer.user_messages:
+            rprint("[bold red]Error:[/] No messages found to analyze")
+            rprint("Make sure WhatsApp database is accessible or provide Claude export")
+            raise typer.Exit(1)
+        
+        # Generate analysis
+        with console.status("[bold green]Analyzing communication patterns..."):
+            writing_style = analyzer.analyze_writing_style()
+            response_patterns = analyzer.analyze_claude_response_patterns()
+            clarifications = analyzer.extract_common_clarifications()
+        
+        # Display summary
+        rprint("\n[bold]Analysis Summary:[/]\n")
+        rprint(f"Messages analyzed: [bold]{writing_style.get('total_messages_analyzed', 0)}[/]")
+        rprint(f"Avg message length: [bold]{writing_style.get('avg_message_length', 0):.0f}[/] chars")
+        rprint(f"Formality score: [bold]{writing_style.get('formality_score', 0):.2f}[/] (0=informal, 1=formal)")
+        rprint(f"Emoji rate: [bold]{writing_style.get('emoji_rate', 0):.2f}[/] per message")
+        
+        if response_patterns.get('total_responses_analyzed', 0) > 0:
+            rprint(f"\nClaude responses analyzed: [bold]{response_patterns['total_responses_analyzed']}[/]")
+            rprint(f"Common clarifications found: [bold]{len(clarifications)}[/]")
+        
+        # Generate rules
+        with console.status("[bold green]Generating rules..."):
+            rules = analyzer.generate_rules(output)
+        
+        rprint(f"\n[bold green]✓[/] Rules generated: [cyan]{output}[/]")
+        
+        # Export full analysis if requested
+        if export_analysis:
+            json_path = output.with_suffix('.json')
+            analyzer.export_analysis(json_path)
+            rprint(f"[bold green]✓[/] Analysis exported: [cyan]{json_path}[/]")
+        
+        # Show preview
+        rprint("\n[bold]Preview of generated rules:[/]\n")
+        preview_lines = rules.split('\n')[:25]
+        for line in preview_lines:
+            rprint(f"[dim]{line}[/]")
+        if len(rules.split('\n')) > 25:
+            rprint(f"[dim]... ({len(rules.split('\n')) - 25} more lines)[/]")
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
+@app.command("analyze-evolution")
+def analyze_evolution(
+    claude_export: Path = typer.Option(
+        None, "--claude-export", "-c",
+        help="Path to Claude.ai export (conversations.json)"
+    ),
+    instagram_export: Path = typer.Option(
+        None, "--instagram", "-i",
+        help="Path to Instagram export directory"
+    ),
+    gemini_export: Path = typer.Option(
+        None, "--gemini", "-g",
+        help="Path to Gemini/Google Takeout export"
+    ),
+    output_dir: Path = typer.Option(
+        Path("/tmp/style-analysis"),
+        "--output", "-o",
+        help="Output directory for analysis files"
+    ),
+    granularity: str = typer.Option(
+        "half",
+        "--granularity",
+        help="Time period granularity: year, half, quarter, month"
+    ),
+    model: str = typer.Option(
+        "qwen3-coder-64k",
+        "--model", "-m",
+        help="Ollama model for analysis"
+    ),
+) -> None:
+    """Analyze communication style evolution over time.
+    
+    Loads messages from WhatsApp, Claude, Instagram, and Gemini,
+    batches them by time period, analyzes each batch with LLM,
+    and generates evolution analysis with weighted master guide.
+    """
+    try:
+        from ..pipeline.unified_timeline import UnifiedTimeline
+        from ..pipeline.time_batcher import create_time_batches, format_batches_summary
+        from ..pipeline.longitudinal_analyzer import run_full_analysis
+        
+        rprint("[bold blue]זיכרון[/] - Longitudinal Style Analysis\n")
+        
+        # Create unified timeline
+        timeline = UnifiedTimeline()
+        
+        # Load WhatsApp
+        with console.status("[bold green]Loading WhatsApp messages..."):
+            try:
+                wa_count = timeline.load_whatsapp()
+                rprint(f"[green]✓[/] WhatsApp: {wa_count:,} messages")
+            except FileNotFoundError as e:
+                rprint(f"[yellow]⚠[/] WhatsApp not found: {e}")
+        
+        # Load Claude if provided
+        if claude_export and claude_export.exists():
+            with console.status("[bold green]Loading Claude conversations..."):
+                try:
+                    cl_count = timeline.load_claude(claude_export)
+                    rprint(f"[green]✓[/] Claude: {cl_count:,} messages")
+                except Exception as e:
+                    rprint(f"[yellow]⚠[/] Claude error: {e}")
+        
+        # Load Instagram if provided
+        if instagram_export and instagram_export.exists():
+            with console.status("[bold green]Loading Instagram data..."):
+                try:
+                    ig_count = timeline.load_instagram(instagram_export)
+                    rprint(f"[green]✓[/] Instagram: {ig_count:,} messages")
+                except Exception as e:
+                    rprint(f"[yellow]⚠[/] Instagram error: {e}")
+        
+        # Load Gemini if provided
+        if gemini_export and gemini_export.exists():
+            with console.status("[bold green]Loading Gemini data..."):
+                try:
+                    ge_count = timeline.load_gemini(gemini_export)
+                    rprint(f"[green]✓[/] Gemini: {ge_count:,} messages")
+                except Exception as e:
+                    rprint(f"[yellow]⚠[/] Gemini error: {e}")
+        
+        # Check if we have data
+        if not timeline.messages:
+            rprint("[bold red]Error:[/] No messages loaded")
+            raise typer.Exit(1)
+        
+        # Sort by time
+        timeline.sort_by_time()
+        
+        # Show stats
+        stats = timeline.get_stats()
+        rprint(f"\n[bold]Timeline Stats:[/]")
+        rprint(f"  Total messages: {stats['total_messages']:,}")
+        rprint(f"  Sources: {', '.join(stats['sources'])}")
+        rprint(f"  Languages: {stats['by_language']}")
+        if stats['date_range']:
+            rprint(f"  Date range: {stats['date_range']['start'][:10]} to {stats['date_range']['end'][:10]}")
+        
+        # Create time batches
+        rprint(f"\n[bold]Creating time batches (granularity: {granularity})...[/]")
+        batches = create_time_batches(timeline, granularity=granularity)
+        rprint(f"Created {len(batches)} batches")
+        
+        # Show batch summary
+        rprint("\n" + format_batches_summary(batches))
+        
+        # Confirm before running LLM analysis
+        rprint(f"\n[bold]Ready to analyze with {model}[/]")
+        rprint(f"This will take approximately {len(batches) * 2} minutes.")
+        
+        if not typer.confirm("Continue with analysis?"):
+            rprint("[yellow]Cancelled[/]")
+            raise typer.Exit(0)
+        
+        # Run full analysis
+        def progress_callback(msg, current, total):
+            rprint(f"[dim][{current+1}/{total}] {msg}[/]")
+        
+        rprint(f"\n[bold]Running analysis...[/]\n")
+        results = run_full_analysis(
+            batches,
+            output_dir,
+            languages=["hebrew", "english"],
+            model=model,
+            progress_callback=progress_callback,
+        )
+        
+        rprint(f"\n[bold green]✓ Analysis complete![/]")
+        rprint(f"\nOutput files:")
+        for name, path in results.items():
+            rprint(f"  [cyan]{path}[/]")
+        
+        # Show human summary
+        rprint(f"\n[bold]Human Summary:[/]\n")
+        summary_path = Path(results['summary_file'])
+        if summary_path.exists():
+            with open(summary_path) as f:
+                summary = f.read()
+            # Show first 30 lines
+            for line in summary.split('\n')[:30]:
+                rprint(f"[dim]{line}[/]")
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
+@app.command()
 def serve() -> None:
     """Start the MCP server for Claude Code integration.
 
