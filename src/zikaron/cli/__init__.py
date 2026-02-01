@@ -873,6 +873,80 @@ def analyze_style(
         raise typer.Exit(1)
 
 
+@app.command("list-chats")
+def list_chats(
+    output: Path = typer.Option(
+        None, "--output", "-o",
+        help="Save to CSV file (default: print only)"
+    ),
+    source: str = typer.Option(
+        "whatsapp", "--source", "-s",
+        help="Filter by source: whatsapp, claude, or all"
+    ),
+    claude_export: Path = typer.Option(
+        None, "--claude-export", "-c",
+        help="Path to Claude export (for source=claude or all)"
+    ),
+) -> None:
+    """List chats with message counts for tagging (family, friends, co-workers)."""
+    try:
+        from ..pipeline.unified_timeline import UnifiedTimeline
+        
+        rprint("[bold blue]זיכרון[/] - Listing chats\n")
+        
+        timeline = UnifiedTimeline()
+        src_filter = None if source == "all" else source
+        
+        if source in ("whatsapp", "all"):
+            with console.status("[bold green]Loading WhatsApp..."):
+                try:
+                    timeline.load_whatsapp()
+                except FileNotFoundError as e:
+                    rprint(f"[yellow]WhatsApp:[/] {e}")
+        
+        if source in ("claude", "all"):
+            claude_path = claude_export or Path("/tmp/claude-export/conversations.json")
+            if claude_path.exists():
+                with console.status("[bold green]Loading Claude..."):
+                    timeline.load_claude(claude_path)
+            else:
+                rprint("[yellow]Claude:[/] No export at /tmp/claude-export/")
+        
+        chats = timeline.get_chat_list(source=src_filter)
+        if not chats:
+            rprint("[yellow]No chats found[/]")
+            raise typer.Exit(0)
+        
+        # Print table
+        table = Table(title=f"Chats ({len(chats)} total)")
+        table.add_column("chat_id", style="dim")
+        table.add_column("contact_name")
+        table.add_column("messages", justify="right")
+        for chat_id, contact_name, count in chats[:30]:
+            table.add_row(chat_id[:40] + "..." if len(str(chat_id)) > 43 else str(chat_id), str(contact_name)[:30], str(count))
+        if len(chats) > 30:
+            table.add_row("...", f"... and {len(chats) - 30} more", "")
+        console.print(table)
+        
+        # Save CSV if requested
+        if output:
+            output = Path(output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            import csv
+            with open(output, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["chat_id", "contact_name", "message_count"])
+                w.writerows(chats)
+            rprint(f"\n[green]Saved to[/] {output}")
+            rprint("[dim]Add a 'tag' column (family|friends|co-workers) and use for chat-tags.yaml[/]")
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
 @app.command("analyze-evolution")
 def analyze_evolution(
     claude_export: Path = typer.Option(
@@ -901,6 +975,18 @@ def analyze_evolution(
         "qwen3-coder-64k",
         "--model", "-m",
         help="Ollama model for analysis"
+    ),
+    chat_tags: Path = typer.Option(
+        None, "--chat-tags",
+        help="Path to chat-tags.yaml (default: ~/.config/zikaron/chat-tags.yaml)"
+    ),
+    use_embeddings: bool = typer.Option(
+        False, "--use-embeddings", "-e",
+        help="Use StyleDistance for style-aware cluster sampling (best for style analysis)"
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Skip confirmation prompt (for background/scripted runs)"
     ),
 ) -> None:
     """Analyze communication style evolution over time.
@@ -945,11 +1031,21 @@ def analyze_evolution(
                 except Exception as e:
                     rprint(f"[yellow]⚠[/] Instagram error: {e}")
         
-        # Load Gemini if provided
-        if gemini_export and gemini_export.exists():
+        # Load Gemini if provided or auto-detect in data/google-takeout
+        gemini_path = gemini_export
+        if not gemini_path or not gemini_path.exists():
+            takeout_dir = Path(__file__).resolve().parents[3] / "data" / "google-takeout"
+            if takeout_dir.exists():
+                for z in sorted(takeout_dir.glob("*.zip")):
+                    if "-11-" in z.name:
+                        gemini_path = z
+                        break
+                if not gemini_path:
+                    gemini_path = next(takeout_dir.glob("*.zip"), None)
+        if gemini_path and gemini_path.exists():
             with console.status("[bold green]Loading Gemini data..."):
                 try:
-                    ge_count = timeline.load_gemini(gemini_export)
+                    ge_count = timeline.load_gemini(gemini_path)
                     rprint(f"[green]✓[/] Gemini: {ge_count:,} messages")
                 except Exception as e:
                     rprint(f"[yellow]⚠[/] Gemini error: {e}")
@@ -959,8 +1055,46 @@ def analyze_evolution(
             rprint("[bold red]Error:[/] No messages loaded")
             raise typer.Exit(1)
         
+        # Apply chat tags if config exists
+        tagged = timeline.apply_chat_tags(chat_tags)
+        if tagged:
+            rprint(f"[green]✓[/] Applied relationship tags to {tagged:,} messages")
+        
         # Sort by time
         timeline.sort_by_time()
+        
+        # Embed and index if requested
+        style_collection = None
+        if use_embeddings:
+            from ..pipeline.style_embed import embed_messages, ensure_model
+            from ..pipeline.style_index import (
+                get_style_client,
+                get_style_collection,
+                index_style_messages,
+                clear_style_collection,
+            )
+            try:
+                ensure_model()
+            except ImportError as e:
+                rprint(f"[bold red]Error:[/] {e}")
+                rprint("[dim]Install: pip install sentence-transformers[/]")
+                raise typer.Exit(1)
+            def embed_progress(n, t):
+                if n > 0 and n % 5000 == 0:
+                    rprint(f"  [dim]Embedded {n:,} / {t:,}[/]")
+
+            with console.status("[bold green]Embedding messages with StyleDistance..."):
+                msg_embs = embed_messages(
+                    timeline.messages,
+                    on_progress=embed_progress,
+                )
+            rprint(f"[green]✓[/] Embedded {len(msg_embs):,} messages")
+            client = get_style_client()
+            coll = get_style_collection(client)
+            clear_style_collection(coll)
+            indexed = index_style_messages(msg_embs, coll)
+            rprint(f"[green]✓[/] Indexed {indexed:,} messages to vector store")
+            style_collection = coll
         
         # Show stats
         stats = timeline.get_stats()
@@ -983,7 +1117,7 @@ def analyze_evolution(
         rprint(f"\n[bold]Ready to analyze with {model}[/]")
         rprint(f"This will take approximately {len(batches) * 2} minutes.")
         
-        if not typer.confirm("Continue with analysis?"):
+        if not yes and not typer.confirm("Continue with analysis?"):
             rprint("[yellow]Cancelled[/]")
             raise typer.Exit(0)
         
@@ -998,6 +1132,7 @@ def analyze_evolution(
             languages=["hebrew", "english"],
             model=model,
             progress_callback=progress_callback,
+            style_collection=style_collection,
         )
         
         rprint(f"\n[bold green]✓ Analysis complete![/]")

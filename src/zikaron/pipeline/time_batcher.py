@@ -31,6 +31,18 @@ class TimeBatch:
     def english_messages(self) -> list[UnifiedMessage]:
         return [m for m in self.messages if m.language == "english"]
     
+    def get_relationship_context(self) -> str:
+        """Get relationship mix for prompt enrichment (e.g. '~60% family, ~30% friends')."""
+        tagged = [m for m in self.messages if m.relationship_tag]
+        if not tagged:
+            return ""
+        from collections import Counter
+        counts = Counter(m.relationship_tag for m in tagged)
+        total = len(tagged)
+        parts = [f"~{100 * c // total}% {tag}" for tag, c in counts.most_common(5)]
+        contacts = list({m.contact_name for m in tagged if m.contact_name})[:8]
+        return f"Relationship context: {', '.join(parts)}. Contacts: {', '.join(contacts)}."
+    
     def get_stats(self) -> dict:
         """Get statistics for this batch."""
         if not self.messages:

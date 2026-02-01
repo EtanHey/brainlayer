@@ -52,7 +52,8 @@ def analyze_batch_with_llm(
     batch: TimeBatch,
     language: str = "all",
     model: str = "qwen3-coder-64k",
-    max_samples: int = 200,
+    max_samples: int = 250,
+    style_collection=None,
 ) -> PeriodAnalysis:
     """
     Analyze a time batch using LLM.
@@ -91,9 +92,28 @@ def analyze_batch_with_llm(
             raw_analysis="",
         )
     
-    # Sample messages for prompt
-    samples = messages[:max_samples]
-    samples_text = "\n".join([f"- {m.text[:200]}" for m in samples])
+    # Sample messages for prompt: cluster-based if style_collection, else first N
+    if style_collection:
+        from .style_index import get_embeddings_for_batch
+        from .cluster_sampling import cluster_sample_messages
+
+        start_epoch = batch.start_date.timestamp()
+        end_epoch = batch.end_date.timestamp()
+        embs, docs = get_embeddings_for_batch(
+            style_collection, start_epoch, end_epoch, language
+        )
+        if embs and docs:
+            class _TextDoc:
+                def __init__(self, text): self.text = text
+            items = [_TextDoc(d) for d in docs]
+            samples = cluster_sample_messages(items, embs, max_total=max_samples)
+            samples_text = "\n".join([f"- {m.text[:200]}" for m in samples])
+        else:
+            samples = messages[:max_samples]
+            samples_text = "\n".join([f"- {m.text[:200]}" for m in samples])
+    else:
+        samples = messages[:max_samples]
+        samples_text = "\n".join([f"- {m.text[:200]}" for m in samples])
     
     # Calculate basic metrics
     total_length = sum(len(m.text) for m in messages)
@@ -105,9 +125,17 @@ def analyze_batch_with_llm(
     emoji_count = sum(len(emoji_pattern.findall(m.text)) for m in messages)
     emoji_rate = emoji_count / len(messages)
     
+    relationship_ctx = batch.get_relationship_context()
+    relationship_block = f"\n{relationship_ctx}\nConsider how tone may shift by relationship.\n" if relationship_ctx else ""
+    
     prompt = f"""Analyze this person's communication style from {len(samples)} messages in the period {batch.period}.
 
 Language focus: {language.upper()}
+{relationship_block}
+CRITICAL RULES:
+- Every phrase, example, and quote MUST appear verbatim in the sample messages below. Do NOT invent or paraphrase.
+- Be specific. Cite exact text from the messages.
+- If a phrase appears only once, note it as "occasional" not "frequent."
 
 Sample messages:
 {samples_text}
@@ -115,24 +143,22 @@ Sample messages:
 Provide a structured analysis:
 
 ## 1. FORMALITY SCORE (0-10)
-Rate from 0 (very casual) to 10 (very formal). Provide the number and brief justification.
+Rate from 0 (very casual) to 10 (very formal). Provide the number and brief justification. Reference specific messages.
 
 ## 2. TONE DESCRIPTION
-Describe the overall tone in 1-2 sentences.
+Describe the overall tone in 1-2 sentences. Base this on actual message content.
 
 ## 3. KEY CHARACTERISTICS
-List 3-5 key characteristics of their writing style.
+List 3-5 distinct characteristics. Each must be different—no overlap (e.g., don't list both "short messages" and "concise" as separate items).
 
 ## 4. COMMON PHRASES
-List 5-10 phrases or expressions they frequently use (quote exactly from the messages).
+List 5-10 phrases they use. Copy them EXACTLY from the messages—character for character. Include nothing invented.
 
 ## 5. COMMUNICATION PATTERNS
-- How do they start messages?
-- How do they make requests?
-- How do they express emotions?
+- How do they start messages? (quote real examples)
+- How do they make requests? (quote real examples)
+- How do they express emotions? (quote real examples)
 - Use of punctuation and capitalization
-
-Be specific and cite examples from the messages.
 """
 
     response = ollama.generate(
@@ -140,7 +166,7 @@ Be specific and cite examples from the messages.
         prompt=prompt,
         options={
             'num_ctx': 16000,
-            'temperature': 0.2,
+            'temperature': 0.1,
         }
     )
     
@@ -247,11 +273,28 @@ Be specific and reference the data from each period.
         prompt=prompt,
         options={
             'num_ctx': 16000,
-            'temperature': 0.3,
+            'temperature': 0.1,
         }
     )
     
     return response['response']
+
+
+def _collect_grounded_phrases(analyses: list[PeriodAnalysis]) -> list[str]:
+    """Collect unique phrases from analyses (recent-weighted) for grounded examples."""
+    seen = set()
+    phrases = []
+    current_year = datetime.now().year
+    for a in reversed(analyses):  # Recent first
+        weight = get_period_weight(a.period, current_year)
+        for p in a.common_phrases:
+            key = p.strip().lower()[:50]
+            if key and key not in seen and len(p) > 2:
+                seen.add(key)
+                phrases.append(p)
+                if len(phrases) >= 30:
+                    return phrases
+    return phrases
 
 
 def generate_weighted_master_guide(
@@ -260,21 +303,16 @@ def generate_weighted_master_guide(
     model: str = "qwen3-coder-64k",
 ) -> str:
     """
-    Generate a master style guide with recent periods weighted more heavily.
-    
-    Args:
-        analyses: List of period analyses
-        evolution_analysis: The evolution analysis text
-        model: Ollama model to use
-    
-    Returns:
-        Master style guide as markdown
+    Generate a master style guide using two-pass approach:
+    Pass 1: Extract raw rules (grounded in actual phrases)
+    Pass 2: Consolidate, deduplicate, validate
     """
     if not HAS_OLLAMA:
         raise ImportError("ollama package required: pip install ollama")
     
-    # Weight recent analyses more heavily
     current_year = datetime.now().year
+    grounded_phrases = _collect_grounded_phrases(analyses)
+    phrases_block = "\n".join(f'- "{p}"' for p in grounded_phrases[:25])
     
     weighted_summaries = []
     for a in analyses:
@@ -287,51 +325,67 @@ def generate_weighted_master_guide(
 - Common phrases: {', '.join(a.common_phrases[:5])}
 """)
     
-    prompt = f"""Create a comprehensive communication style guide based on this person's writing patterns.
+    # Pass 1: Extract with strict grounding
+    pass1_prompt = f"""Create a communication style guide based on this person's writing patterns.
 
-Recent periods are weighted more heavily (100% for current year, decreasing for older).
+PHRASES you MAY use as examples (quote exactly—do not invent):
+{phrases_block}
 
 Period analyses:
 {"".join(weighted_summaries)}
 
 Evolution context:
-{evolution_analysis[:2000]}
+{evolution_analysis[:1500]}
 
-Generate a MASTER STYLE GUIDE with:
+Generate a MASTER STYLE GUIDE. CRITICAL RULES:
+1. Every example in DO's and DON'Ts MUST be a direct quote from the phrases above or clearly derived from the period analyses. No invented examples.
+2. Each DO rule must be DISTINCT—if two rules say the same thing, merge them.
+3. Each DON'T rule must be DISTINCT—same principle.
+4. Aim for 8-10 DO's and 8-10 DON'Ts. Quality over quantity.
 
+Structure:
 ## 1. CURRENT VOICE (Who They Are Now)
-Describe their current communication style based on most recent, heavily-weighted periods.
-
-## 2. DO's - Rules for AI to Follow
-List 10 specific, actionable rules. Be concrete with examples.
-
-## 3. DON'Ts - What to Avoid
-List 10 things AI should NOT do when writing for this person.
-
+## 2. DO's - Rules for AI to Follow (with real examples)
+## 3. DON'Ts - What to Avoid (with real counter-examples)
 ## 4. LANGUAGE-SPECIFIC NOTES
-Any differences between Hebrew and English communication.
-
-## 5. CONTEXT-SPECIFIC ADJUSTMENTS
-How to adjust for different contexts (social media, professional, casual).
-
-## 6. EXAMPLE TRANSFORMATIONS
-Show 3 examples of:
-- Generic/AI text
-- Transformed to match this person's voice
-
-Make this guide practical and directly usable by any AI assistant.
+## 5. EXAMPLE TRANSFORMATIONS (use phrases from the list above)
 """
 
-    response = ollama.generate(
+    response1 = ollama.generate(
         model=model,
-        prompt=prompt,
-        options={
-            'num_ctx': 24000,
-            'temperature': 0.3,
-        }
+        prompt=pass1_prompt,
+        options={'num_ctx': 24000, 'temperature': 0.15}
+    )
+    raw_guide = response1['response']
+    
+    # Pass 2: Consolidate and validate
+    pass2_prompt = f"""You have a draft style guide. Your task: consolidate and validate it.
+
+GROUNDED PHRASES (these are real—use only these for examples):
+{phrases_block}
+
+DRAFT GUIDE:
+{raw_guide}
+
+REVISION RULES:
+1. Merge any DO rules that convey the same principle (e.g., "short messages" + "be concise" = one rule).
+2. Merge any DON'T rules that overlap.
+3. Replace any invented example with a phrase from the GROUNDED PHRASES list. If no match exists, remove the example.
+4. Ensure each rule is actionable and distinct.
+5. Remove redundancy—every rule should add new information.
+6. Keep the same structure (CURRENT VOICE, DO's, DON'Ts, LANGUAGE-SPECIFIC, TRANSFORMATIONS).
+7. Final output: 8-10 DO's, 8-10 DON'Ts.
+
+Output the revised, consolidated guide. No preamble.
+"""
+
+    response2 = ollama.generate(
+        model=model,
+        prompt=pass2_prompt,
+        options={'num_ctx': 24000, 'temperature': 0.1}
     )
     
-    return response['response']
+    return response2['response']
 
 
 def generate_human_summary(
@@ -381,8 +435,8 @@ def generate_human_summary(
 ## Who You Are Now ({recent.period if recent else 'N/A'})
 
 - **Formality**: {recent.formality_score if recent else 'N/A'}/10
-- **Average message length**: {recent.avg_length:.0f if recent else 0} characters
-- **Emoji usage**: {recent.emoji_rate:.2f if recent else 0} per message
+- **Average message length**: {(recent.avg_length if recent else 0):.0f} characters
+- **Emoji usage**: {(recent.emoji_rate if recent else 0):.2f} per message
 - **Tone**: {recent.tone_description if recent else 'Unknown'}
 
 ## Key Characteristics
@@ -402,7 +456,7 @@ def generate_human_summary(
 ## Quick Rules for AI
 
 1. Match formality level: {recent.formality_score if recent else 5}/10
-2. Keep messages around {recent.avg_length:.0f if recent else 100} characters
+2. Keep messages around {(recent.avg_length if recent else 100):.0f} characters
 3. {'Use emojis sparingly' if (recent and recent.emoji_rate < 0.5) else 'Emojis are acceptable'}
 4. Be direct and get to the point
 5. Match the {recent.tone_description.lower() if recent else 'neutral'} tone
@@ -421,6 +475,7 @@ def run_full_analysis(
     languages: list[str] = ["hebrew", "english"],
     model: str = "qwen3-coder-64k",
     progress_callback: Optional[callable] = None,
+    style_collection=None,
 ) -> dict:
     """
     Run complete longitudinal analysis and save all outputs.
@@ -455,7 +510,9 @@ def run_full_analysis(
             if lang == "english" and not batch.english_messages:
                 continue
             
-            analysis = analyze_batch_with_llm(batch, language=lang, model=model)
+            analysis = analyze_batch_with_llm(
+                batch, language=lang, model=model, style_collection=style_collection
+            )
             all_analyses.append(analysis)
             
             # Save individual period analysis
