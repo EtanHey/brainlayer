@@ -7,8 +7,8 @@ Zikaron is a local knowledge pipeline designed for Claude Code conversations. It
 *   **Local, privacy-first knowledge management** - All data stays on your machine
 *   **Indexes and searches AI conversation history** - Never lose context from past conversations
 *   **Leverages local LLMs via Ollama** - Powerful semantic search without cloud dependencies
-*   **Communication pattern analysis** - Extract your writing style from WhatsApp and Claude chats
-*   **Personalized AI rules** - Generate Cursor rules that match your communication preferences
+*   **Communication pattern analysis** - Extract your writing style from WhatsApp, Claude, YouTube, and Gemini
+*   **Personalized AI rules** - Generate Cursor rules, plus Claude.ai and Gemini casual-instruction sets for texts/DMs
 *   **Command-line interface** - Easy interaction and automation
 
 ## The Memory Layer
@@ -109,41 +109,32 @@ zikaron stats
 
 ## Communication Pattern Analysis
 
-Zikaron can analyze your communication patterns from WhatsApp and Claude chats to generate personalized rules for AI assistants.
+Zikaron analyzes your communication patterns from WhatsApp, Claude, YouTube, and Gemini to generate personalized rules for AI assistants.
 
 ### Quick Start
 
 ```bash
-# Analyze your WhatsApp messages (most recent 1000)
+# Basic style analysis (WhatsApp + optional Claude)
 zikaron analyze-style
 
-# The tool will:
-# 1. Extract messages from WhatsApp's local database
-# 2. Analyze your writing style (tone, length, emoji usage, etc.)
-# 3. Generate Cursor rules at ~/.cursor/rules/communication-style.md
+# Full longitudinal analysis with embeddings (recommended)
+zikaron analyze-evolution --use-embeddings -c /path/to/claude-export/conversations.json -o data/archives/style-$(date +%Y-%m-%d-%H%M) -y
 ```
 
 ### What It Analyzes
 
-**From WhatsApp:**
-- Your writing tone (casual vs formal)
-- Average message length
-- Emoji and punctuation patterns
-- Common phrases you use
-- Greeting patterns
+**From WhatsApp:** Tone, length, emoji, common phrases, greetings (local SQLite).
 
-**From Claude Chats (optional):**
-- Response structures that work well for you
-- Common clarifying questions
-- Preferred explanation styles
+**From Claude:** Response structures, clarifying questions (export from claude.ai).
 
-### Generated Rules
+**From YouTube:** Comments from Google Takeout (`data/youtube-comments/comments.csv`).
 
-The tool creates a Cursor rule file that helps AI assistants:
-- Match your natural writing style
-- Ask clarifying questions you typically need
-- Structure responses the way you prefer
-- Draft messages in your voice
+**From Gemini:** Chat history (when included in Google Takeout).
+
+### Generated Output
+
+- **Cursor rules** – For coding assistants
+- **Claude.ai / Gemini instructions** – For casual texts and DMs; copy from `claude-ai-casual-instructions.md` and `gemini-casual-instructions.md` in the archive output into each app’s Settings → Personalization
 
 ### Privacy
 
@@ -155,21 +146,13 @@ All analysis happens locally on your machine. No data is sent anywhere.
 
 ## Data Sources
 
-### Claude Code Conversations
-
-Location: `~/.claude/projects/`
-
-Zikaron automatically indexes your Claude Code conversation history stored as JSONL files.
-
-### WhatsApp Messages
-
-Location: `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`
-
-WhatsApp messages are read directly from the local database (macOS only). Used for communication pattern analysis.
-
-### Claude Desktop/Web Chats
-
-Claude chat transcripts can be imported via manual export from claude.ai (Settings → Data & Privacy → Export my data).
+| Source | Location | Use |
+|--------|----------|-----|
+| **Claude Code** | `~/.claude/projects/` | Indexing (JSONL) |
+| **Claude.ai chats** | Export from claude.ai | Style analysis |
+| **WhatsApp** | `~/Library/.../ChatStorage.sqlite` (macOS) | Style analysis |
+| **YouTube** | `data/youtube-comments/comments.csv` or Takeout zip | Style analysis |
+| **Gemini** | Google Takeout (My Activity/Gemini Apps) | Style analysis |
 
 ---
 
@@ -187,8 +170,8 @@ zikaron search "bug fix" --project app # Search within project
 
 # Communication analysis
 zikaron analyze-style                  # Analyze WhatsApp messages
-zikaron analyze-style --whatsapp-limit 5000  # Analyze more messages
-zikaron analyze-style --claude-export ~/claude.json  # Include Claude chats
+zikaron analyze-evolution --use-embeddings -c ~/claude.json -y  # Full longitudinal analysis
+zikaron list-chats -o chats.csv        # List chats for relationship tagging
 
 # Statistics
 zikaron stats                          # Show knowledge base stats
@@ -196,6 +179,8 @@ zikaron stats                          # Show knowledge base stats
 # Maintenance
 zikaron clear --yes                    # Clear database
 zikaron fix-projects                   # Fix project names
+bash scripts/archive-style-analysis.sh # Archive /tmp runs to data/archives/
+bash scripts/extract-youtube-and-cleanup.sh  # Extract YouTube from Takeout, delete zips
 
 # MCP Server
 zikaron serve                          # Start MCP server (for Claude Code)

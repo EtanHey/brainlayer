@@ -29,6 +29,9 @@ dependencies = [
     # Utils
     "pydantic>=2.0.0",
     "orjson>=3.9.0",  # Fast JSON for JSONL parsing
+    "pyyaml>=6.0",  # Chat-tags config
+    "scikit-learn>=1.0.0",  # K-means for cluster-based sampling
+    "sentence-transformers>=2.2.0",  # StyleDistance, mStyleDistance (style embeddings)
 ]
 
 [project.optional-dependencies]

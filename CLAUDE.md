@@ -216,11 +216,47 @@ ruff format src/
 
 ---
 
+## Communication Style Analysis
+
+Zikaron includes **communication pattern analysis** that extracts your writing style from WhatsApp, Claude, YouTube, and Gemini chats.
+
+### Latest Analysis Location
+```
+data/archives/style-2026-01-31-2121/
+├── master-style-guide.md      # ← Main style rules
+├── per-period/                # Style evolution over time
+│   ├── 2026-H1-english-style.md
+│   ├── 2026-H1-hebrew-style.md
+│   └── ...
+```
+
+### Key Style Traits (Your Profile)
+- **Formality: 2/10** - Extremely casual
+- **Code-switching:** Hebrew ↔ English frequently
+- **Laughter:** "חחח" / "חח" for humor
+- **Emojis:** 🫶 sparingly but meaningfully
+- **Length:** Brief, direct messages
+- **Tone:** Friendly, sometimes playful sarcasm
+
+### Usage
+```bash
+# Run full analysis with embeddings
+zikaron analyze-evolution --use-embeddings -c ~/claude-export.json -o data/archives/style-$(date +%Y-%m-%d-%H%M) -y
+
+# Quick WhatsApp-only analysis
+zikaron analyze-style
+```
+
+### Integration with GolemsZikaron
+The style analysis is used by GolemsZikaron bot to match your communication patterns when posting to Moltbook. See `~/Gits/golems-zikaron/SOUL.md` for the bot persona.
+
+---
+
 ## Future Enhancements
 
 - [ ] Watch mode for real-time indexing
 - [ ] Project-specific knowledge separation
-- [ ] Learning extraction (patterns, preferences)
+- [x] Learning extraction (communication patterns) ✅
 - [ ] Integration with Obsidian for knowledge export
 - [ ] Conversation summarization for long-term memory
 
