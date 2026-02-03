@@ -108,10 +108,12 @@ def search(
     query_embedding: list[float] | None = None,
     n_results: int = 10,
     where: dict[str, Any] | None = None,
-    where_document: dict[str, Any] | None = None
+    where_document: dict[str, Any] | None = None,
+    hybrid: bool = False,
+    query_text: str | None = None
 ) -> dict:
     """
-    Search the collection using hybrid retrieval.
+    Search the collection using hybrid retrieval or traditional methods.
 
     Args:
         collection: ChromaDB collection
@@ -119,10 +121,19 @@ def search(
         n_results: Number of results to return
         where: Metadata filter
         where_document: Document content filter (for text search with $contains)
+        hybrid: Use hybrid BM25 + semantic search
+        query_text: Original query text (required for hybrid search)
 
     Returns:
         Search results with documents, metadatas, and distances
     """
+    if hybrid and query_text:
+        # Use hybrid search
+        from ..dashboard.search import HybridSearchEngine
+        engine = HybridSearchEngine()
+        return engine.search(collection, query_text, n_results, where)
+    
+    # Original search logic
     if query_embedding is None and where_document is None:
         raise ValueError("Either query_embedding or where_document must be provided")
     

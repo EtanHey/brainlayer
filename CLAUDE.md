@@ -8,23 +8,23 @@
 
 ```bash
 # Install dependencies
-cd ~/Gits/zikaron
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+cd ~/Gits/golems/packages/zikaron
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 
-# Pull embedding model
-ollama pull nomic-embed-text
+# Migration (if upgrading from ChromaDB)
+zikaron migrate  # One-time, ~4-6 hours for 200k chunks (bge-large)
 
-# Index conversations
-zikaron index
+# Fast search (<2s)
+zikaron search-fast "how did I implement authentication"
 
-# Search
-zikaron search "how did I implement authentication"
+# Interactive dashboard
+zikaron dashboard
 ```
 
 ---
 
-## Architecture
+## Architecture (Feb 2026 - sqlite-vec)
 
 ```
 ~/.claude/projects/          # Source: Claude Code conversations (JSONL)
@@ -34,16 +34,19 @@ zikaron search "how did I implement authentication"
 │  ┌─────────┐  ┌──────────┐  ┌───────┐  ┌───────┐  ┌───────┐│
 │  │ Extract │→ │ Classify │→ │ Chunk │→ │ Embed │→ │ Index ││
 │  └─────────┘  └──────────┘  └───────┘  └───────┘  └───────┘│
+│                                         bge-large sqlite-vec│
+│                                         1024 dims   fast DB │
 └─────────────────────────────────────────────────────────────┘
         ↓
-~/.local/share/zikaron/chromadb/   # Storage: Vector DB
+~/.local/share/zikaron/zikaron.db   # Storage: sqlite-vec
         ↓
 ┌─────────────────────────────────────────────────────────────┐
 │  INTERFACES                                                  │
-│  ┌─────────────┐              ┌─────────────────┐           │
-│  │ CLI         │              │ MCP Server      │           │
-│  │ zikaron     │              │ zikaron-mcp     │           │
-│  └─────────────┘              └─────────────────┘           │
+│  ┌─────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │ CLI (fast)  │  │ FastAPI Daemon  │  │ MCP Server      │ │
+│  │ search-fast │  │ /tmp/zikaron.sock│  │ zikaron-mcp    │ │
+│  │ dashboard   │  │ (<2s queries)   │  │                 │ │
+│  └─────────────┘  └─────────────────┘  └─────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,15 +80,15 @@ Content types with preservation rules:
 - **Observation masking** for large tool outputs (`[N lines elided]`)
 - Turn-based chunking for conversation with 10-20% overlap
 
-### Stage 4: Embed (`pipeline/embed.py`)
-- **nomic-embed-text** via Ollama (local, private)
-- CRITICAL: Use prefixes for optimal results:
-  - `search_document: ` for indexing
-  - `search_query: ` for querying
+### Stage 4: Embed (`embeddings.py`)
+- **bge-large-en-v1.5** via sentence-transformers (local, private)
+- 1024 dimensions, 63.5 MTEB score
+- ~8s model load (vs 30s with Ollama)
+- MPS acceleration on Apple Silicon
 
-### Stage 5: Index (`pipeline/index.py`)
-- **ChromaDB** with persistent storage
-- Cosine similarity for vector search
+### Stage 5: Index (`vector_store.py`)
+- **sqlite-vec** with APSW (macOS compatible)
+- Fast vector similarity search
 - Metadata: project, content_type, source_file, char_count
 
 ---
@@ -136,24 +139,32 @@ zikaron/
 
 ## CLI Commands
 
+### Fast Commands (Recommended)
 ```bash
-# Index all conversations
-zikaron index
+# Search (<2s with daemon)
+zikaron search-fast "authentication middleware"
+zikaron search-fast "config.py" --text  # Exact match
 
-# Index specific project
-zikaron index --project domica
-
-# Search
-zikaron search "authentication middleware"
-zikaron search "React hooks" --project union --num 10
+# Index with sqlite-vec
+zikaron index-fast
+zikaron index-fast --project domica
 
 # Stats
+zikaron stats-fast
+
+# Interactive dashboard
+zikaron dashboard
+
+# Migration (one-time)
+zikaron migrate
+```
+
+### Legacy Commands (ChromaDB)
+```bash
+zikaron index
+zikaron search "query"
 zikaron stats
-
-# Clear database
 zikaron clear --yes
-
-# Start MCP server
 zikaron serve
 ```
 
@@ -193,8 +204,10 @@ Add to `~/.claude/settings.json`:
 | Path | Purpose |
 |------|---------|
 | `~/.claude/projects/` | Source conversations (read-only) |
-| `~/.local/share/zikaron/chromadb/` | Vector database |
+| `~/.local/share/zikaron/zikaron.db` | sqlite-vec vector database |
+| `~/.local/share/zikaron/chromadb.backup/` | Old ChromaDB (after migration) |
 | `~/.local/share/zikaron/prompts/` | Deduplicated system prompts |
+| `/tmp/zikaron.sock` | Daemon Unix socket |
 
 ---
 
