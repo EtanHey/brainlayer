@@ -23,7 +23,7 @@ def search_command(
         # Auto-detect domain-like queries and use text search
         if not text and ("." in query or query.startswith("http") or "/" in query):
             text = True
-            rprint(f"[dim]Auto-detected domain/URL query, using text search[/]")
+            rprint("[dim]Auto-detected domain/URL query, using text search[/]")
 
         search_type = "text" if text else "semantic"
         rprint(f"[bold blue]זיכרון[/] - Searching ({search_type}): [italic]{query}[/]")

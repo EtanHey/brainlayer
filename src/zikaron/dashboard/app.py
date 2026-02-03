@@ -166,7 +166,7 @@ class DashboardApp:
                 if not self.handle_input(user_input):
                     break
                     
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             pass
         
         self.console.print("\n[dim]Dashboard closed.[/]")

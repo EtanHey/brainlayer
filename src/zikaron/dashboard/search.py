@@ -51,22 +51,27 @@ class BM25:
         """Calculate BM25 score for query against document."""
         if doc_idx >= len(self.doc_freqs):
             return 0.0
-        
+
+        # Guard against divide-by-zero
+        if self.avg_doc_length == 0:
+            return 0.0
+
         query_words = query.lower().split()
         doc_freq = self.doc_freqs[doc_idx]
         doc_length = self.doc_lengths[doc_idx]
-        
+
         score = 0.0
         for word in query_words:
             if word in doc_freq:
                 tf = doc_freq[word]
                 idf = self.idf.get(word, 0)
-                
+
                 numerator = tf * (self.k1 + 1)
                 denominator = tf + self.k1 * (1 - self.b + self.b * (doc_length / self.avg_doc_length))
-                
-                score += idf * (numerator / denominator)
-        
+
+                if denominator > 0:
+                    score += idf * (numerator / denominator)
+
         return score
     
     def search(self, query: str, n_results: int = 10) -> List[Tuple[int, float]]:
@@ -144,7 +149,6 @@ class HybridSearchEngine:
         try:
             # 1. BM25 keyword search
             bm25_results = self.bm25.search(query, n_results * 2)  # Get more for fusion
-            bm25_scores = {idx: score for idx, score in bm25_results}
             
             # 2. Semantic search
             query_embedding = embed_query(query)

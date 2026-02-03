@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Install launchd service for zikaron daemon."""
 
-import os
 import subprocess
 import sys
 from pathlib import Path
-import shutil
 
 PLIST_CONTENT = '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,7 +38,7 @@ PLIST_CONTENT = '''<?xml version="1.0" encoding="UTF-8"?>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:~/.local/bin:/opt/homebrew/bin</string>
     </dict>
 </dict>
 </plist>'''
@@ -110,7 +108,7 @@ def install_service():
         subprocess.run(["launchctl", "start", "com.zikaron.daemon"], check=True)
         print("Service started successfully")
         
-        print(f"\nLogs available at:")
+        print("\nLogs available at:")
         print(f"  Output: {log_dir}/zikaron-daemon.log")
         print(f"  Errors: {log_dir}/zikaron-daemon.error.log")
         
@@ -127,22 +125,22 @@ def uninstall_service():
         print("Service not installed")
         return
     
-    try:
-        # Stop service
-        subprocess.run(["launchctl", "stop", "com.zikaron.daemon"], 
-                      capture_output=True)
-        
-        # Unload service
-        subprocess.run(["launchctl", "unload", str(plist_path)], 
-                      capture_output=True)
-        
-        # Remove plist
-        plist_path.unlink()
-        
-        print("Service uninstalled successfully")
-        
-    except Exception as e:
-        print(f"Error during uninstall: {e}")
+    # Stop service (ignore errors - might not be running)
+    subprocess.run(["launchctl", "stop", "com.zikaron.daemon"],
+                  capture_output=True)
+
+    # Unload service
+    result = subprocess.run(["launchctl", "unload", str(plist_path)],
+                          capture_output=True, text=True)
+
+    if result.returncode != 0 and "Could not find" not in result.stderr:
+        print(f"Warning: Failed to unload service: {result.stderr}")
+        print("Plist file will not be removed. Please unload manually.")
+        sys.exit(1)
+
+    # Remove plist
+    plist_path.unlink()
+    print("Service uninstalled successfully")
 
 
 def main():
