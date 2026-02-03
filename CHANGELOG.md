@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Phase 1-2: Performance Revolution** (Feb 2026)
+  - **sqlite-vec** replaces ChromaDB: 12x faster cold start (180s → 15s)
+  - **bge-large-en-v1.5** (1024 dims) replaces nomic-embed-text (768 dims): better search quality, 63.5 MTEB score
+  - **sentence-transformers** replaces Ollama: direct model loading, no network overhead
+  - **FastAPI daemon service**: pre-loaded models, <2s warm queries
+  - **APSW** for macOS: SQLite extension support (enable_load_extension)
+  - New commands: `search-fast`, `stats-fast`, `index-fast`, `dashboard`, `migrate`
+  - Migration tool: `zikaron migrate` converts ChromaDB → sqlite-vec
+  - Unix socket communication for instant daemon queries
+
 - **YouTube comments** – Load from Google Takeout or `data/youtube-comments/comments.csv`
 - **Casual-style instructions** – Generated `claude-ai-casual-instructions.md` and `gemini-casual-instructions.md` for Claude.ai and Gemini personalization (copy-paste into Settings)
 - **Archive script** – `scripts/archive-style-analysis.sh` to archive analysis runs from `/tmp` to `data/archives/`

@@ -15,7 +15,7 @@ from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifi
 
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 DEBOUNCE_SECONDS = 30  # Wait before indexing to let conversation finish
-INDEX_COMMAND = ["zikaron", "index"]
+INDEX_COMMAND = ["zikaron", "index-fast"]  # Use sqlite-vec backend (Feb 2026)
 
 # Track pending files to debounce
 pending_files: dict[Path, float] = {}

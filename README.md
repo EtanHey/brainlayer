@@ -2,11 +2,11 @@
 
 > **Memory** for Claude Code — Index, search, and retrieve knowledge from past AI coding sessions.
 
-Zikaron is a local knowledge pipeline that indexes your Claude Code conversations, making them searchable via semantic embeddings. All processing happens locally using Ollama, ensuring complete privacy.
+Zikaron is a local knowledge pipeline that indexes your Claude Code conversations, making them searchable via semantic embeddings. All processing happens locally using sentence-transformers and sqlite-vec, ensuring complete privacy.
 
 ## Features
 
-- **Local, privacy-first** — All data stays on your machine, embeddings via Ollama
+- **Local, privacy-first** — All data stays on your machine, embeddings via sentence-transformers
 - **Semantic search** — Find past solutions by meaning, not just keywords
 - **AST-aware chunking** — Code is split at function/class boundaries using tree-sitter
 - **Smart classification** — Content is categorized (code, errors, explanations) for better retrieval
@@ -25,17 +25,17 @@ Zikaron is a local knowledge pipeline that indexes your Claude Code conversation
           │               │  │ Extract │→ │ Classify │→ │ Chunk │→ │ Embed │→ │ Index │ │
           └──────────────→│  └─────────┘  └──────────┘  └───────┘  └───────┘  └───────┘ │
                           │       │             │            │          │          │     │
-                          │   Parse JSONL    Categorize   AST-aware   Ollama    ChromaDB │
-                          │   Dedupe prompts  by type     splitting   vectors   storage  │
+                          │   Parse JSONL    Categorize   AST-aware   bge-large sqlite-vec│
+                          │   Dedupe prompts  by type     splitting   1024 dims  storage  │
                           └──────────────────────────────────────────────────────────────┘
                                                                              │
                                                                              ▼
                           ┌──────────────────────────────────────────────────────────────┐
                           │                        STORAGE                               │
                           │                                                              │
-                          │  ~/.local/share/zikaron/chromadb/   ← Vector database        │
+                          │  ~/.local/share/zikaron/zikaron.db  ← Vector database        │
                           │  ~/.local/share/zikaron/prompts/    ← Deduplicated prompts   │
-                          │                                                              │
+                          │  /tmp/zikaron.sock                  ← Daemon socket          │
                           └──────────────────────────────────────────────────────────────┘
                                                                              │
                           ┌──────────────────────────────────────────────────────────────┐
@@ -106,36 +106,36 @@ MIN_CHUNK_SIZE = 200
 MAX_CHUNK_SIZE = 4000
 ```
 
-### Stage 4: Embed (`pipeline/embed.py`)
+### Stage 4: Embed (`embeddings.py`)
 
-Generates vector embeddings using Ollama.
+Generates vector embeddings using sentence-transformers (direct, no Ollama needed).
 
 | Setting | Value |
 |---------|-------|
-| **Model** | `nomic-embed-text` (768 dimensions) |
-| **Context** | 8192 tokens (conservative 2000 char limit) |
-| **Index prefix** | `search_document: ` |
-| **Query prefix** | `search_query: ` |
+| **Model** | `bge-large-en-v1.5` (1024 dimensions, 63.5 MTEB score) |
+| **Context** | 512 tokens (~2000 chars) |
+| **Hardware** | MPS (Apple Silicon) or CPU |
 
-**Important**: nomic-embed-text requires task-specific prefixes for optimal results. The pipeline handles this automatically.
+**Note**: bge-large-en-v1.5 provides better search quality than nomic-embed-text, with ~8s model loading vs 30s via Ollama.
 
-### Stage 5: Index (`pipeline/index.py`)
+### Stage 5: Index (`vector_store.py`)
 
-Stores embeddings in ChromaDB with metadata.
+Stores embeddings in sqlite-vec with metadata.
 
 ```python
 # Storage location
-~/.local/share/zikaron/chromadb/
+~/.local/share/zikaron/zikaron.db
 
-# Collection settings
-metadata={"hnsw:space": "cosine"}  # Cosine similarity
+# Schema
+chunks: id, content, metadata, source_file, project, content_type, value_type, char_count
+chunk_vectors: chunk_id, embedding FLOAT[1024]
 
 # Metadata per chunk
 {
     "source_file": "/path/to/conversation.jsonl",
     "project": "my-project",
     "content_type": "ai_code",
-    "value": "high",
+    "value_type": "high",
     "char_count": 1847,
     "language": "python"  # For code chunks
 }
@@ -143,44 +143,44 @@ metadata={"hnsw:space": "cosine"}  # Cosine similarity
 
 ---
 
-## ChromaDB Storage Structure
+## sqlite-vec Storage Structure
 
-Zikaron uses ChromaDB with persistent SQLite storage:
+Zikaron uses sqlite-vec for fast vector storage:
 
 ```
-~/.local/share/zikaron/chromadb/
-├── chroma.sqlite3          # Main database (metadata, chunk mappings)
-└── <collection-id>/
-    └── data/
-        └── *.bin           # HNSW index files (vector storage)
+~/.local/share/zikaron/
+├── zikaron.db              # Main database (chunks + vectors)
+├── prompts/                # Deduplicated system prompts
+└── chromadb.backup/        # Old ChromaDB (after migration)
 ```
 
-### Collection Schema
+### Schema
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | `{source_file}:{chunk_index}` |
-| `embedding` | float[768] | nomic-embed-text vector |
-| `document` | string | Chunk text content |
-| `metadata` | object | project, content_type, value, char_count |
+| Table | Fields | Description |
+|-------|--------|-------------|
+| `chunks` | id, content, metadata, source_file, project, content_type, value_type, char_count | Chunk metadata |
+| `chunk_vectors` | chunk_id, embedding FLOAT[1024] | bge-large-en-v1.5 vectors |
 
 ### Querying the Database Directly
 
 ```python
-from zikaron.pipeline.index import get_client, get_or_create_collection
+from zikaron.vector_store import VectorStore
+from zikaron.embeddings import embed_query
+from pathlib import Path
 
-client = get_client()
-collection = get_or_create_collection(client)
+db_path = Path.home() / ".local/share/zikaron/zikaron.db"
+store = VectorStore(db_path)
 
 # Get stats
-print(f"Total chunks: {collection.count()}")
+print(f"Total chunks: {store.count()}")
+print(store.get_stats())
 
-# Query by metadata
-results = collection.get(
-    where={"project": "my-project"},
-    include=["documents", "metadatas"],
-    limit=10
-)
+# Vector search
+query_embedding = embed_query("authentication")
+results = store.search(query_embedding=query_embedding, n_results=10)
+
+# Text search
+results = store.search(query_text="config.py", n_results=10)
 ```
 
 ---
@@ -190,7 +190,7 @@ results = collection.get(
 ### Prerequisites
 
 - **Python 3.11+**
-- **Ollama** — [ollama.com](https://ollama.com/)
+- **~4GB RAM** for embedding model
 
 ### Installation
 
@@ -200,37 +200,54 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Pull the embedding model
-ollama pull nomic-embed-text
+# First run will download bge-large-en-v1.5 model (~1.2GB)
+```
+
+### Migration (if upgrading from ChromaDB)
+
+```bash
+zikaron migrate  # One-time conversion
+# ~4-6 hours for 200k chunks with bge-large-en-v1.5
+# ~1-2 hours for 50k chunks
 ```
 
 ### Index Your Conversations
 
 ```bash
-# Index all Claude Code conversations
-zikaron index
+# Index all Claude Code conversations (fast backend)
+zikaron index-fast
 
 # Index specific project only
-zikaron index --project domica
+zikaron index-fast --project domica
 
 # Index markdown files (learnings, skills, CLAUDE.md)
 zikaron index-md ~/.claude/ --pattern "**/*.md"
+
+# Legacy commands still work (use original ChromaDB backend)
+zikaron index
 ```
 
 ### Search
 
 ```bash
-# Semantic search
-zikaron search "how did I implement authentication"
+# Fast semantic search (<2s with daemon running)
+zikaron search-fast "how did I implement authentication"
 
 # Text-based exact match
-zikaron search "config.py" --text
+zikaron search-fast "config.py" --text
 
 # Filter by project
-zikaron search "React hooks" --project union --num 10
+zikaron search-fast "React hooks" --project union --num 10
 
-# Filter by content type
-zikaron search "deployment error" --type stack_trace
+# Legacy search (slower, uses ChromaDB)
+zikaron search "query"
+```
+
+### Dashboard
+
+```bash
+# Interactive TUI dashboard
+zikaron dashboard
 ```
 
 ### View Stats
@@ -261,9 +278,22 @@ Content Types: 8
 
 ## CLI Reference
 
+### Fast Commands (sqlite-vec backend, recommended)
+
 | Command | Description |
 |---------|-------------|
-| `zikaron index [PATH]` | Index JSONL conversations (default: ~/.claude/projects/) |
+| `zikaron search-fast QUERY` | Fast semantic search (<2s) |
+| `zikaron search-fast QUERY --text` | Fast text search |
+| `zikaron stats-fast` | Instant statistics |
+| `zikaron index-fast [PATH]` | Index with sqlite-vec + bge-large |
+| `zikaron dashboard` | Interactive TUI dashboard |
+| `zikaron migrate` | Migrate ChromaDB → sqlite-vec |
+
+### Legacy Commands (ChromaDB backend)
+
+| Command | Description |
+|---------|-------------|
+| `zikaron index [PATH]` | Index JSONL conversations |
 | `zikaron index-md PATH` | Index markdown files |
 | `zikaron search QUERY` | Search the knowledge base |
 | `zikaron stats` | Show database statistics |
@@ -383,58 +413,41 @@ Claude will call `zikaron_search` and use the results to inform its response.
 
 ---
 
-## File Watcher (Auto-Index)
+## Daemon Service (Recommended)
 
-For always-on indexing, use the watcher script with launchd.
+For instant queries (<2s), run the FastAPI daemon that keeps models pre-loaded.
 
 ### Manual Run
 
 ```bash
-python scripts/watcher.py
+zikaron-daemon
 ```
 
-Output:
-```
-[Watcher] Watching: ~/.claude/projects
-[Watcher] Debounce: 30s
-[Watcher] Press Ctrl+C to stop
+### Auto-Start Setup (launchd)
 
-[Watcher] Queued: conversation-abc123.jsonl
-[Watcher] Indexing 1 conversation(s)...
-[Watcher] ✓ Indexed successfully
-```
-
-### LaunchAgent Setup
-
-Create `~/Library/LaunchAgents/com.zikaron.watcher.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.zikaron.watcher</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Users/YOUR_USERNAME/Gits/golems/packages/zikaron/.venv/bin/python</string>
-        <string>/Users/YOUR_USERNAME/Gits/golems/packages/zikaron/scripts/watcher.py</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/zikaron-watcher.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/zikaron-watcher.error.log</string>
-</dict>
-</plist>
-```
-
-Load:
 ```bash
-launchctl load ~/Library/LaunchAgents/com.zikaron.watcher.plist
+# Install the service
+python scripts/install_service.py install
+
+# Or manually create ~/Library/LaunchAgents/com.zikaron.daemon.plist
+```
+
+The daemon listens on `/tmp/zikaron.sock` and provides instant search via pre-loaded models.
+
+### Daemon Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `POST /search` | Vector or text search |
+| `GET /stats` | Database statistics |
+
+## File Watcher (Legacy)
+
+For always-on indexing with the old ChromaDB backend, use the watcher script.
+
+```bash
+python scripts/watcher.py
 ```
 
 ---
@@ -496,9 +509,12 @@ Copy to your AI apps' personalization settings:
 | Path | Purpose |
 |------|---------|
 | `~/.claude/projects/` | Source: Claude Code conversations (JSONL) |
-| `~/.local/share/zikaron/chromadb/` | Vector database storage |
+| `~/.local/share/zikaron/zikaron.db` | sqlite-vec vector database |
+| `~/.local/share/zikaron/chromadb/` | Legacy ChromaDB (before migration) |
+| `~/.local/share/zikaron/chromadb.backup/` | ChromaDB backup (after migration) |
 | `~/.local/share/zikaron/prompts/` | Deduplicated system prompts |
 | `~/.config/zikaron/chat-tags.yaml` | Relationship tags for style analysis |
+| `/tmp/zikaron.sock` | FastAPI daemon Unix socket |
 
 ---
 

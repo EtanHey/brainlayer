@@ -295,12 +295,29 @@ def index_md(
 
 
 @app.command()
+def dashboard() -> None:
+    """Launch interactive dashboard for memory search and management."""
+    try:
+        from ..dashboard import DashboardApp
+        
+        app = DashboardApp()
+        app.run()
+        
+    except ImportError as e:
+        rprint(f"[red]Dashboard dependencies missing: {e}[/]")
+        rprint("[yellow]Install with: pip install -e .[dev][/]")
+    except Exception as e:
+        rprint(f"[red]Dashboard error: {e}[/]")
+
+
+@app.command()
 def search(
     query: str = typer.Argument(..., help="Search query"),
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
-    text: bool = typer.Option(False, "--text", help="Use text-based search (exact string match) instead of semantic search")
+    text: bool = typer.Option(False, "--text", help="Use text-based search (exact string match) instead of semantic search"),
+    hybrid: bool = typer.Option(False, "--hybrid", help="Use hybrid BM25 + semantic search for better relevance")
 ) -> None:
     """Search the knowledge base."""
     try:
@@ -309,11 +326,11 @@ def search(
 
         # Auto-detect domain-like queries (containing dots) and use text search
         # This prevents false matches on "unified" when searching for "unified.to"
-        if not text and ("." in query or query.startswith("http") or "/" in query):
+        if not text and not hybrid and ("." in query or query.startswith("http") or "/" in query):
             text = True
             rprint(f"[dim]Auto-detected domain/URL query, using text search[/]")
 
-        search_type = "text" if text else "semantic"
+        search_type = "hybrid" if hybrid else ("text" if text else "semantic")
         rprint(f"[bold blue]זיכרון[/] - Searching ({search_type}): [italic]{query}[/]")
 
         client = get_client()
@@ -332,7 +349,42 @@ def search(
             where["content_type"] = content_type
 
         # Choose search method
-        if text:
+        if hybrid:
+            # Hybrid BM25 + semantic search
+            try:
+                with console.status("[bold green]Running hybrid search..."):
+                    results = db_search(
+                        collection,
+                        query_embedding=None,
+                        n_results=n,
+                        where=where if where else None,
+                        hybrid=True,
+                        query_text=query
+                    )
+            except Exception as e:
+                rprint(f"[yellow]Warning:[/] Hybrid search failed: {e}")
+                rprint("[yellow]Falling back to semantic search...[/]")
+                # Fallback to semantic search
+                try:
+                    query_embedding = embed_query(query)
+                    results = db_search(
+                        collection,
+                        query_embedding,
+                        n_results=n,
+                        where=where if where else None
+                    )
+                except Exception as e2:
+                    rprint(f"[yellow]Warning:[/] Semantic search also failed: {e2}")
+                    rprint("[yellow]Falling back to text search...[/]")
+                    where_document = {"$contains": query}
+                    results = db_search(
+                        collection,
+                        query_embedding=None,
+                        n_results=n,
+                        where=where if where else None,
+                        where_document=where_document
+                    )
+        elif text:
             # Text-based search using where_document with $contains
             where_document = {"$contains": query}
             results = db_search(
@@ -1171,6 +1223,139 @@ def serve() -> None:
         rprint("[bold blue]זיכרון[/] - Starting MCP server (stdio mode)")
         mcp_serve()
 
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("search-fast")
+def search_fast(
+    query: str = typer.Argument(..., help="Search query"),
+    n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
+    project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
+    content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
+    text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search")
+) -> None:
+    """Search using fast daemon service (<2s vs 3+ minutes)."""
+    from ..cli_new import search_command
+    search_command(query, n, project, content_type, text)
+
+
+@app.command("stats-fast")
+def stats_fast() -> None:
+    """Show knowledge base statistics using fast daemon."""
+    from ..cli_new import stats_command
+    stats_command()
+
+
+@app.command("migrate")
+def migrate() -> None:
+    """Migrate from ChromaDB to sqlite-vec for 10x faster search."""
+    from ..cli_new import migrate_command
+    migrate_command()
+
+
+@app.command("index-fast")
+def index_fast(
+    source: Path = typer.Argument(
+        Path.home() / ".claude" / "projects",
+        help="Source directory containing JSONL conversations"
+    ),
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Only index specific project (folder name)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Re-index all files (ignore cache)"
+    )
+) -> None:
+    """Index using new fast sqlite-vec backend."""
+    try:
+        from ..pipeline import (
+            extract_system_prompts,
+            classify_content,
+            chunk_content
+        )
+        from ..index_new import index_chunks_to_sqlite
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn, MofNCompleteColumn
+        import time
+        
+        if not source.exists():
+            rprint(f"[bold red]Error:[/] Source directory not found: {source}")
+            raise typer.Exit(1)
+
+        # Find JSONL files
+        if project:
+            project_dir = source / project
+            if not project_dir.exists():
+                rprint(f"[bold red]Error:[/] Project directory not found: {project_dir}")
+                raise typer.Exit(1)
+            jsonl_files = list(project_dir.glob("*.jsonl"))
+            if not jsonl_files:
+                rprint(f"[bold red]Error:[/] No JSONL files found in project: {project_dir}")
+                raise typer.Exit(1)
+        else:
+            jsonl_files = list(source.rglob("*.jsonl"))
+            if not jsonl_files:
+                rprint(f"[bold red]Error:[/] No JSONL files found in: {source}")
+                raise typer.Exit(1)
+
+        rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
+
+        total_chunks = 0
+        start_time = time.time()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            task = progress.add_task("Processing files...", total=len(jsonl_files))
+
+            for i, jsonl_file in enumerate(jsonl_files):
+                proj_name = jsonl_file.parent.name if jsonl_file.parent != source else None
+
+                # Extract and process
+                conversations = extract_system_prompts(jsonl_file)
+                classified = classify_content(conversations)
+                chunks = chunk_content(classified)
+
+                if chunks:
+                    # Index with progress callback
+                    def progress_callback(embedded_count, total_embed):
+                        pass  # Could update sub-progress here
+                    
+                    indexed = index_chunks_to_sqlite(
+                        chunks,
+                        source_file=str(jsonl_file),
+                        project=proj_name,
+                        on_progress=progress_callback
+                    )
+                    total_chunks += indexed
+
+                # Update progress
+                elapsed = time.time() - start_time
+                files_done = i + 1
+                rate_per_min = (files_done / elapsed) * 60 if elapsed > 0 else 0
+                chunks_per_min = (total_chunks / elapsed) * 60 if elapsed > 0 else 0
+
+                progress.update(
+                    task,
+                    completed=files_done,
+                    description=f"[cyan]{jsonl_file.name[:30]}[/] • {total_chunks:,} chunks • {rate_per_min:.1f} f/m • {chunks_per_min:.0f} c/m"
+                )
+
+        elapsed_total = time.time() - start_time
+        rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total/60:.1f}[/] minutes")
+
+    except typer.Exit:
+        raise
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
