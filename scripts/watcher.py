@@ -13,9 +13,16 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
 
+# Force unbuffered output for launchd logging
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 DEBOUNCE_SECONDS = 30  # Wait before indexing to let conversation finish
-INDEX_COMMAND = ["zikaron", "index-fast"]  # Use sqlite-vec backend (Feb 2026)
+
+# Use full path to venv zikaron CLI (launchd has minimal PATH)
+ZIKARON_VENV = Path.home() / "Gits" / "golems" / "packages" / "zikaron" / ".venv"
+INDEX_COMMAND = [str(ZIKARON_VENV / "bin" / "zikaron"), "index-fast"]
 
 # Track pending files to debounce
 pending_files: dict[Path, float] = {}
@@ -53,20 +60,33 @@ def process_pending():
             del pending_files[path]
 
         try:
+            print(f"[Watcher] Running: {' '.join(INDEX_COMMAND)}")
             result = subprocess.run(
                 INDEX_COMMAND,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 min timeout
+                env={**dict(__import__('os').environ), "PYTHONUNBUFFERED": "1"},
             )
             if result.returncode == 0:
-                print(f"[Watcher] ✓ Indexed successfully")
+                # Extract chunk count from output if present
+                output = result.stdout.strip()
+                if "chunks" in output.lower():
+                    print(f"[Watcher] ✓ {output.split(chr(10))[-1]}")
+                else:
+                    print("[Watcher] ✓ Indexed successfully")
             else:
-                print(f"[Watcher] ✗ Index failed: {result.stderr}")
+                print(f"[Watcher] ✗ Index failed (exit {result.returncode})")
+                if result.stderr:
+                    print(f"[Watcher] stderr: {result.stderr[:500]}")
+                if result.stdout:
+                    print(f"[Watcher] stdout: {result.stdout[:500]}")
         except subprocess.TimeoutExpired:
-            print("[Watcher] ✗ Index timed out")
+            print("[Watcher] ✗ Index timed out (5 min)")
+        except FileNotFoundError as e:
+            print(f"[Watcher] ✗ Command not found: {e}")
         except Exception as e:
-            print(f"[Watcher] ✗ Error: {e}")
+            print(f"[Watcher] ✗ Error: {type(e).__name__}: {e}")
 
 
 def main():

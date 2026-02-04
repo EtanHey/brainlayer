@@ -5,9 +5,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.columns import Columns
+from rich.console import Group
 from rich.align import Align
 from rich import box
-import chromadb
 
 from .search import HybridSearchEngine
 
@@ -74,9 +74,9 @@ class HomeView:
         
         status_panel = Panel(Align.center(status_msg), box=box.ROUNDED, style="dim")
         
-        # Combine all elements
-        main_content = Text.assemble(columns, "\n\n", status_panel)
-        
+        # Combine all elements using Group (Text.assemble only works with text)
+        main_content = Group(columns, Text(""), status_panel)
+
         return Panel(
             main_content,
             title="Home",
@@ -86,10 +86,10 @@ class HomeView:
 
 class MemoryView:
     """Memory view with search interface and filtering."""
-    
-    def __init__(self, search_engine: HybridSearchEngine, collection: chromadb.Collection, stats: Dict[str, Any]):
+
+    def __init__(self, search_engine: HybridSearchEngine, vector_store, stats: Dict[str, Any]):
         self.search_engine = search_engine
-        self.collection = collection
+        self.vector_store = vector_store  # sqlite-vec VectorStore (or None)
         self.stats = stats
         self.current_query = ""
         self.current_filter = None
@@ -106,11 +106,11 @@ class MemoryView:
         # Results
         results_panel = self._render_results()
         
-        # Combine into layout
+        # Combine into layout using Group (Text.assemble only works with text)
         top_row = Columns([search_panel, filters_panel], equal=True)
-        
-        main_content = Text.assemble(top_row, "\n\n", results_panel)
-        
+
+        main_content = Group(top_row, Text(""), results_panel)
+
         return Panel(
             main_content,
             title="Memory Search",
@@ -188,17 +188,13 @@ class MemoryView:
         if not query.strip():
             self.search_results = []
             return []
-        
+
         try:
-            where = {}
-            if project_filter:
-                where["project"] = project_filter
-            
             results = self.search_engine.search(
-                self.collection,
+                self.vector_store,
                 query,
                 n_results=10,
-                where=where if where else None
+                project_filter=project_filter
             )
             
             # Convert to display format

@@ -86,9 +86,10 @@ class VectorStore:
                 chunk.get("char_count", 0)
             ))
 
-            # Upsert vector (serialize to bytes)
+            # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
+            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
             cursor.execute("""
-                INSERT OR REPLACE INTO chunk_vectors (chunk_id, embedding)
+                INSERT INTO chunk_vectors (chunk_id, embedding)
                 VALUES (?, ?)
             """, (chunk_id, serialize_f32(embedding)))
 
@@ -124,15 +125,15 @@ class VectorStore:
             if where_clauses:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
+            # sqlite-vec requires k = ? in WHERE clause for KNN queries
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
-                WHERE v.embedding MATCH ? {where_sql}
+                WHERE v.embedding MATCH ? AND k = ? {where_sql}
                 ORDER BY v.distance
-                LIMIT ?
             """
 
             results = list(cursor.execute(query, params))
@@ -224,6 +225,27 @@ class VectorStore:
             "projects": list(projects),
             "content_types": list(content_types)
         }
+
+    def get_all_chunks(self, limit: int = 10000) -> List[Dict[str, Any]]:
+        """Get all chunks for BM25 fitting (limited for performance)."""
+        cursor = self.conn.cursor()
+        results = list(cursor.execute("""
+            SELECT id, content, metadata, source_file, project, content_type
+            FROM chunks
+            LIMIT ?
+        """, (limit,)))
+
+        return [
+            {
+                "id": row[0],
+                "content": row[1],
+                "metadata": json.loads(row[2]) if row[2] else {},
+                "source_file": row[3],
+                "project": row[4],
+                "content_type": row[5]
+            }
+            for row in results
+        ]
 
     def close(self) -> None:
         """Close database connection."""
