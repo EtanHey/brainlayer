@@ -1,8 +1,19 @@
-"""Stage 3: Chunk content using AST-aware splitting for code."""
+"""Stage 3: Chunk content using AST-aware splitting for code.
 
+Content-type-aware chunking with different minimum sizes:
+- user_message: 15 chars (short questions can be valuable)
+- assistant_text: 50 chars (technical explanations can be concise)
+- ai_code: 30 chars (code can be short but meaningful)
+- stack_trace: 0 (always keep)
+- tool outputs: 50 chars
+"""
+
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # tree-sitter for AST parsing
 try:
@@ -26,8 +37,27 @@ class Chunk:
 
 # Target chunk size in characters (research suggests ~500 tokens ≈ 2000 chars)
 TARGET_CHUNK_SIZE = 2000
-MIN_CHUNK_SIZE = 200
 MAX_CHUNK_SIZE = 4000
+
+# Content-type-aware minimum chunk sizes
+# Note: Most filtering happens in classify.py, but this is a safety net
+MIN_CHUNK_SIZES = {
+    ContentType.USER_MESSAGE: 15,       # Short questions can be valuable
+    ContentType.ASSISTANT_TEXT: 80,     # Explanations need context
+    ContentType.AI_CODE: 30,            # Code can be short but meaningful
+    ContentType.STACK_TRACE: 0,         # Always keep stack traces
+    ContentType.FILE_READ: 50,          # Tool outputs need context
+    ContentType.BUILD_LOG: 50,
+    ContentType.DIRECTORY_LISTING: 50,
+    ContentType.GIT_DIFF: 50,
+    ContentType.CONFIG: 30,
+}
+DEFAULT_MIN_CHUNK_SIZE = 50
+
+
+def _get_min_chunk_size(content_type: ContentType) -> int:
+    """Get minimum chunk size for a content type."""
+    return MIN_CHUNK_SIZES.get(content_type, DEFAULT_MIN_CHUNK_SIZE)
 
 
 def chunk_content(classified: ClassifiedContent) -> list[Chunk]:
@@ -38,12 +68,17 @@ def chunk_content(classified: ClassifiedContent) -> list[Chunk]:
     - Stack traces: Never split (preserve exact)
     - Conversation: Turn-based with overlap
     - Large tool outputs: Observation masking or summarization marker
+
+    Uses content-type-aware minimum sizes to preserve short but valuable content.
     """
     content = classified.content
     content_type = classified.content_type
 
-    # Skip content that's too short to be useful
-    if len(content.strip()) < MIN_CHUNK_SIZE:
+    # Get content-type-aware minimum size
+    min_size = _get_min_chunk_size(content_type)
+
+    # Skip content that's too short for its type
+    if len(content.strip()) < min_size:
         return []
 
     # Never split stack traces
@@ -175,7 +210,8 @@ def _ast_chunk(code: str, language: str) -> list[str] | None:
 
         return chunks if chunks else None
 
-    except Exception:
+    except Exception as e:
+        logger.debug(f"AST parsing failed for {language}: {e}")
         return None
 
 
