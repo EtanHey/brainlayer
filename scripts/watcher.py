@@ -74,7 +74,7 @@ def process_pending():
                 if "chunks" in output.lower():
                     print(f"[Watcher] ✓ {output.split(chr(10))[-1]}")
                 else:
-                    print(f"[Watcher] ✓ Indexed successfully")
+                    print("[Watcher] ✓ Indexed successfully")
             else:
                 print(f"[Watcher] ✗ Index failed (exit {result.returncode})")
                 if result.stderr:
