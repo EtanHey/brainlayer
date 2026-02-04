@@ -8,7 +8,6 @@ from rich.columns import Columns
 from rich.console import Group
 from rich.align import Align
 from rich import box
-import chromadb
 
 from .search import HybridSearchEngine
 
@@ -87,10 +86,10 @@ class HomeView:
 
 class MemoryView:
     """Memory view with search interface and filtering."""
-    
-    def __init__(self, search_engine: HybridSearchEngine, collection: chromadb.Collection, stats: Dict[str, Any]):
+
+    def __init__(self, search_engine: HybridSearchEngine, vector_store, stats: Dict[str, Any]):
         self.search_engine = search_engine
-        self.collection = collection
+        self.vector_store = vector_store  # sqlite-vec VectorStore (or None)
         self.stats = stats
         self.current_query = ""
         self.current_filter = None
@@ -189,17 +188,13 @@ class MemoryView:
         if not query.strip():
             self.search_results = []
             return []
-        
+
         try:
-            where = {}
-            if project_filter:
-                where["project"] = project_filter
-            
             results = self.search_engine.search(
-                self.collection,
+                self.vector_store,
                 query,
                 n_results=10,
-                where=where if where else None
+                project_filter=project_filter
             )
             
             # Convert to display format

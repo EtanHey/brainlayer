@@ -226,6 +226,27 @@ class VectorStore:
             "content_types": list(content_types)
         }
 
+    def get_all_chunks(self, limit: int = 10000) -> List[Dict[str, Any]]:
+        """Get all chunks for BM25 fitting (limited for performance)."""
+        cursor = self.conn.cursor()
+        results = list(cursor.execute("""
+            SELECT id, content, metadata, source_file, project, content_type
+            FROM chunks
+            LIMIT ?
+        """, (limit,)))
+
+        return [
+            {
+                "id": row[0],
+                "content": row[1],
+                "metadata": json.loads(row[2]) if row[2] else {},
+                "source_file": row[3],
+                "project": row[4],
+                "content_type": row[5]
+            }
+            for row in results
+        ]
+
     def close(self) -> None:
         """Close database connection."""
         if hasattr(self, 'conn'):

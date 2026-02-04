@@ -42,6 +42,10 @@ def chunk_content(classified: ClassifiedContent) -> list[Chunk]:
     content = classified.content
     content_type = classified.content_type
 
+    # Skip content that's too short to be useful
+    if len(content.strip()) < MIN_CHUNK_SIZE:
+        return []
+
     # Never split stack traces
     if content_type == ContentType.STACK_TRACE:
         return [Chunk(

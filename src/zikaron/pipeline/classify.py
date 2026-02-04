@@ -103,6 +103,9 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     if entry_type == "user":
         raw_content = entry.get("message", {}).get("content", "")
         content = _extract_text_content(raw_content)
+        # Skip empty or very short messages (not useful for search)
+        if len(content.strip()) < 20:
+            return None
         # Check if it's a system prompt (first message, very long)
         if len(content) > 2000:
             return ClassifiedContent(
@@ -130,28 +133,28 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
 
                 if block_type == "text":
                     text = block.get("text", "")
+                    # Skip very short text (not useful for search)
+                    if len(text.strip()) < 50:
+                        continue
                     classified = _classify_text(text)
                     results.append(classified)
 
                 elif block_type == "tool_use":
-                    # Tool calls themselves are metadata
-                    tool_name = block.get("name", "")
-                    tool_input = block.get("input", {})
-                    results.append(ClassifiedContent(
-                        content=str(tool_input),
-                        content_type=ContentType.ASSISTANT_TEXT,
-                        value=ContentValue.LOW,
-                        metadata={"tool_name": tool_name}
-                    ))
+                    # Skip tool_use - these are just API calls, not useful content
+                    # The tool_result contains the actual content
+                    continue
 
                 elif block_type == "tool_result":
                     # Tool results need careful classification
                     result_content = _extract_text_content(block.get("content", ""))
+                    # Skip very short results
+                    if len(result_content.strip()) < 50:
+                        continue
                     classified = _classify_tool_result(result_content, block)
                     results.append(classified)
 
         # Return the highest-value content from this entry
-        # Priority: HIGH > MEDIUM > LOW (negate index since HIGH=0, MEDIUM=1, LOW=2)
+        # Priority: HIGH > MEDIUM > LOW
         if results:
             return min(results, key=lambda x: list(ContentValue).index(x.value))
 

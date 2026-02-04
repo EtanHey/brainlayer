@@ -83,8 +83,7 @@ class DashboardApp:
     
     def run_memory_view(self) -> Panel:
         """Render memory view with search interface."""
-        # TODO: MemoryView search needs migration to sqlite-vec (uses ChromaDB collection)
-        view = MemoryView(self.search_engine, None, self.stats)
+        view = MemoryView(self.search_engine, self.vector_store, self.stats)
         return view.render()
     
     def run_jobs_view(self) -> Panel:
