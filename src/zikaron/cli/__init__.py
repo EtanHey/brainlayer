@@ -1272,11 +1272,9 @@ def index_fast(
 ) -> None:
     """Index using new fast sqlite-vec backend."""
     try:
-        from ..pipeline import (
-            extract_system_prompts,
-            classify_content,
-            chunk_content
-        )
+        from ..pipeline.extract import parse_jsonl
+        from ..pipeline.classify import classify_content
+        from ..pipeline.chunk import chunk_content
         from ..index_new import index_chunks_to_sqlite
         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn, MofNCompleteColumn
         import time
@@ -1321,18 +1319,21 @@ def index_fast(
             for i, jsonl_file in enumerate(jsonl_files):
                 proj_name = jsonl_file.parent.name if jsonl_file.parent != source else None
 
-                # Extract and process
-                conversations = extract_system_prompts(jsonl_file)
-                classified = classify_content(conversations)
-                chunks = chunk_content(classified)
+                # Parse, classify, and chunk each entry
+                all_chunks = []
+                for entry in parse_jsonl(jsonl_file):
+                    classified = classify_content(entry)
+                    if classified is not None:  # Skip noise entries
+                        chunks = chunk_content(classified)
+                        all_chunks.extend(chunks)
 
-                if chunks:
+                if all_chunks:
                     # Index with progress callback
                     def progress_callback(embedded_count, total_embed):
                         pass  # Could update sub-progress here
-                    
+
                     indexed = index_chunks_to_sqlite(
-                        chunks,
+                        all_chunks,
                         source_file=str(jsonl_file),
                         project=proj_name,
                         on_progress=progress_callback

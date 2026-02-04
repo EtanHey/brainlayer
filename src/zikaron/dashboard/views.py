@@ -5,6 +5,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.columns import Columns
+from rich.console import Group
 from rich.align import Align
 from rich import box
 import chromadb
@@ -74,9 +75,9 @@ class HomeView:
         
         status_panel = Panel(Align.center(status_msg), box=box.ROUNDED, style="dim")
         
-        # Combine all elements
-        main_content = Text.assemble(columns, "\n\n", status_panel)
-        
+        # Combine all elements using Group (Text.assemble only works with text)
+        main_content = Group(columns, Text(""), status_panel)
+
         return Panel(
             main_content,
             title="Home",
@@ -106,11 +107,11 @@ class MemoryView:
         # Results
         results_panel = self._render_results()
         
-        # Combine into layout
+        # Combine into layout using Group (Text.assemble only works with text)
         top_row = Columns([search_panel, filters_panel], equal=True)
-        
-        main_content = Text.assemble(top_row, "\n\n", results_panel)
-        
+
+        main_content = Group(top_row, Text(""), results_panel)
+
         return Panel(
             main_content,
             title="Memory Search",
