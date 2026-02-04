@@ -86,9 +86,10 @@ class VectorStore:
                 chunk.get("char_count", 0)
             ))
 
-            # Upsert vector (serialize to bytes)
+            # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
+            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
             cursor.execute("""
-                INSERT OR REPLACE INTO chunk_vectors (chunk_id, embedding)
+                INSERT INTO chunk_vectors (chunk_id, embedding)
                 VALUES (?, ?)
             """, (chunk_id, serialize_f32(embedding)))
 
