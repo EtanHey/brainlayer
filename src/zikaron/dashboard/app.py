@@ -13,28 +13,28 @@ from rich.align import Align
 from rich.columns import Columns
 from rich import box
 
-from ..pipeline.index import get_client, get_or_create_collection, get_stats
+from ..vector_store import VectorStore
 from .search import HybridSearchEngine
 from .views import HomeView, MemoryView
+
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
 
 class DashboardApp:
     """Interactive dashboard for zikaron memory management."""
-    
+
     def __init__(self):
         self.console = Console()
         self.current_view = "home"
         self.search_engine = HybridSearchEngine()
-        self.client = None
-        self.collection = None
+        self.vector_store = None
         self.stats = {}
-        
+
     def setup_database(self):
-        """Initialize database connection."""
+        """Initialize database connection using sqlite-vec."""
         try:
-            self.client = get_client()
-            self.collection = get_or_create_collection(self.client)
-            self.stats = get_stats(self.collection)
+            self.vector_store = VectorStore(DEFAULT_DB_PATH)
+            self.stats = self.vector_store.get_stats()
         except Exception as e:
             self.console.print(f"[red]Database error: {e}[/]")
             self.stats = {"total_chunks": 0, "projects": [], "content_types": []}
@@ -83,7 +83,8 @@ class DashboardApp:
     
     def run_memory_view(self) -> Panel:
         """Render memory view with search interface."""
-        view = MemoryView(self.search_engine, self.collection, self.stats)
+        # TODO: MemoryView search needs migration to sqlite-vec (uses ChromaDB collection)
+        view = MemoryView(self.search_engine, None, self.stats)
         return view.render()
     
     def run_jobs_view(self) -> Panel:
