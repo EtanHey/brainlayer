@@ -124,15 +124,15 @@ class VectorStore:
             if where_clauses:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
+            # sqlite-vec requires k = ? in WHERE clause for KNN queries
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
-                WHERE v.embedding MATCH ? {where_sql}
+                WHERE v.embedding MATCH ? AND k = ? {where_sql}
                 ORDER BY v.distance
-                LIMIT ?
             """
 
             results = list(cursor.execute(query, params))
