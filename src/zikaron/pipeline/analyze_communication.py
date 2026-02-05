@@ -85,14 +85,72 @@ class CommunicationAnalyzer:
         sentences_per_message = [text.count('.') + text.count('!') + text.count('?') for text in texts]
         avg_sentences = sum(sentences_per_message) / len(sentences_per_message)
         
-        # Formality analysis
-        informal_markers = ['lol', 'haha', 'btw', 'idk', 'tbh', 'ngl']
+        # Formality analysis - comprehensive markers
+        # English informal markers
+        informal_markers_en = [
+            'lol', 'haha', 'hahaha', 'btw', 'idk', 'tbh', 'ngl', 'omg', 'wtf',
+            'gonna', 'wanna', 'gotta', 'kinda', 'sorta', 'dunno', 'lemme',
+            'yeah', 'yep', 'nope', 'nah', 'yup', 'ok', 'okay', 'k',
+            'cool', 'awesome', 'dude', 'guys', 'hey', 'yo', 'sup',
+            'lmao', 'lmfao', 'rofl', 'brb', 'ttyl', 'imo', 'imho', 'fyi',
+            'thx', 'ty', 'np', 'pls', 'plz', 'rn', 'asap', 'afaik',
+        ]
+        # Hebrew informal markers
+        informal_markers_he = [
+            'חח', 'חחח', 'חחחח', 'לול', 'אוקי', 'יאללה', 'סבבה',
+            'וואלה', 'אחלה', 'יופי', 'בסדר', 'טוב', 'נו', 'מה',
+            'כן', 'לא', 'אז', 'רגע', 'שניה', 'בקיצור',
+        ]
+        informal_markers = informal_markers_en + informal_markers_he
+
+        # Count informal markers
         informal_count = sum(
-            1 for text in texts 
-            for marker in informal_markers 
+            1 for text in texts
+            for marker in informal_markers
             if marker in text.lower()
         )
-        formality_score = 1 - (informal_count / len(texts))
+
+        # Also check for formal indicators (increase formality score)
+        formal_markers = [
+            'dear', 'sincerely', 'regards', 'respectfully', 'hereby',
+            'pursuant', 'kindly', 'please find', 'attached herewith',
+            'i am writing to', 'to whom it may concern',
+        ]
+        formal_count = sum(
+            1 for text in texts
+            for marker in formal_markers
+            if marker in text.lower()
+        )
+
+        # Check for casual style indicators (count messages with casual traits)
+        casual_messages = 0
+        for text in texts:
+            is_casual = False
+            # Short messages are casual
+            if len(text) < 30:
+                is_casual = True
+            # Messages without proper capitalization
+            if text and text[0].islower():
+                is_casual = True
+            # Messages ending without punctuation
+            if text and text[-1] not in '.!?':
+                is_casual = True
+            # Contractions
+            if any(c in text.lower() for c in ["don't", "won't", "can't", "i'm", "it's", "that's", "what's"]):
+                is_casual = True
+            if is_casual:
+                casual_messages += 1
+
+        # Calculate ratios (all 0-1 range now, clamped for consistency)
+        informal_marker_ratio = min(1.0, informal_count / max(len(texts), 1))
+        casual_style_ratio = casual_messages / max(len(texts), 1)
+        formal_marker_ratio = min(1.0, formal_count / max(len(texts), 1))
+
+        # Formality score: 0 = very casual, 1 = very formal
+        # Start at 0.5, subtract for informal/casual indicators, add for formal
+        # Tuned weights: casual=0.15, informal=0.1 (lighter touch to avoid extremes)
+        raw_score = 0.5 - (casual_style_ratio * 0.15) - (informal_marker_ratio * 0.1) + (formal_marker_ratio * 0.3)
+        formality_score = max(0.1, min(0.9, raw_score))  # Clamp to 0.1-0.9 range
         
         # Punctuation patterns
         exclamation_rate = sum(text.count('!') for text in texts) / len(texts)
