@@ -4,6 +4,7 @@ Extracts patterns from:
 1. User's writing style (from WhatsApp, Claude chats)
 2. Claude's response patterns that work well for the user
 3. Common clarifying questions and their answers
+4. Semantic topic-based style analysis (optional, requires ML dependencies)
 
 Generates rules for desktop apps to help with text interactions.
 """
@@ -11,9 +12,16 @@ Generates rules for desktop apps to help with text interactions.
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import re
+
+# Optional semantic analysis (requires sentence-transformers, sklearn)
+try:
+    from .semantic_style import SemanticStyleAnalyzer, SemanticStyleAnalysis
+    HAS_SEMANTIC = True
+except ImportError:
+    HAS_SEMANTIC = False
 
 
 class CommunicationAnalyzer:
@@ -361,9 +369,85 @@ Use these naturally when appropriate to match their voice.
             'sample_user_messages': [msg['text'] for msg in self.user_messages[:20]],
             'sample_assistant_messages': [msg['text'] for msg in self.assistant_messages[:20]],
         }
-        
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, 'w') as f:
             json.dump(analysis, f, indent=2)
-        
+
         return analysis
+
+    def analyze_semantic_style(
+        self,
+        min_cluster_size: int = 10,
+    ) -> Optional["SemanticStyleAnalysis"]:
+        """Run semantic style analysis on user messages.
+
+        Clusters messages by topic and analyzes style patterns per topic.
+        Requires sentence-transformers and scikit-learn.
+
+        Args:
+            min_cluster_size: Minimum messages per topic cluster
+
+        Returns:
+            SemanticStyleAnalysis or None if dependencies unavailable
+        """
+        if not HAS_SEMANTIC:
+            print("[SemanticStyle] Dependencies not available. Install: pip install sentence-transformers scikit-learn")
+            return None
+
+        if not self.user_messages:
+            print("[SemanticStyle] No user messages to analyze")
+            return None
+
+        texts = [msg['text'] for msg in self.user_messages if msg.get('text')]
+        if len(texts) < min_cluster_size * 2:
+            print(f"[SemanticStyle] Need at least {min_cluster_size * 2} messages, have {len(texts)}")
+            return None
+
+        analyzer = SemanticStyleAnalyzer()
+        return analyzer.analyze(texts, min_cluster_size=min_cluster_size)
+
+    def generate_semantic_rules(
+        self,
+        output_dir: Path,
+        min_cluster_size: int = 10,
+    ) -> Optional[Path]:
+        """Generate semantic style rules and save to directory.
+
+        Args:
+            output_dir: Directory to save semantic-style-rules.md and JSON
+            min_cluster_size: Minimum messages per topic cluster
+
+        Returns:
+            Path to markdown file or None if analysis failed
+        """
+        analysis = self.analyze_semantic_style(min_cluster_size=min_cluster_size)
+        if analysis is None:
+            return None
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save markdown rules
+        rules_path = output_dir / "semantic-style-rules.md"
+        rules_path.write_text(analysis.style_rules_markdown)
+
+        # Save JSON data
+        data = {
+            "topics": {
+                name: {
+                    "message_count": len(cluster.messages),
+                    "avg_length": cluster.avg_length,
+                    "formality": cluster.formality,
+                    "emoji_rate": cluster.emoji_rate,
+                    "language_mix": cluster.language_mix,
+                    "common_phrases": cluster.common_phrases,
+                }
+                for name, cluster in analysis.topic_clusters.items()
+            },
+            "insights": analysis.cross_topic_insights,
+        }
+        json_path = output_dir / "semantic-style-data.json"
+        json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+        print(f"[SemanticStyle] Saved rules to {rules_path}")
+        return rules_path

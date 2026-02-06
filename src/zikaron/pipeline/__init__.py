@@ -11,6 +11,12 @@ from .extract_markdown import (
     classify_by_path,
     extract_markdown_content,
 )
+from .semantic_style import (
+    SemanticStyleAnalyzer,
+    SemanticStyleAnalysis,
+    TopicCluster,
+    analyze_semantic_style,
+)
 
 __all__ = [
     "extract_system_prompts",
@@ -23,4 +29,9 @@ __all__ = [
     "parse_markdown",
     "classify_by_path",
     "extract_markdown_content",
+    # Semantic style analysis
+    "SemanticStyleAnalyzer",
+    "SemanticStyleAnalysis",
+    "TopicCluster",
+    "analyze_semantic_style",
 ]

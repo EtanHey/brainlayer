@@ -852,7 +852,7 @@ def analyze_style(
                 analyzer.add_whatsapp_messages(messages)
                 rprint(f"[green]✓[/] Extracted {len(messages)} WhatsApp messages")
             except FileNotFoundError as e:
-                rprint(f"[yellow]Warning:[/] WhatsApp database not found")
+                rprint("[yellow]Warning:[/] WhatsApp database not found")
                 rprint(f"[dim]  {e}[/]")
             except Exception as e:
                 rprint(f"[yellow]Warning:[/] Failed to extract WhatsApp: {e}")
@@ -1359,6 +1359,112 @@ def index_fast(
         raise
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("analyze-semantic")
+def analyze_semantic(
+    whatsapp_limit: int = typer.Option(
+        5000, "--whatsapp-limit", "-w",
+        help="Number of WhatsApp messages to analyze"
+    ),
+    claude_export: Path = typer.Option(
+        None, "--claude-export", "-c",
+        help="Path to Claude chat export JSON (optional)"
+    ),
+    output_dir: Path = typer.Option(
+        Path.home() / ".golems-zikaron/style",
+        "--output", "-o",
+        help="Output directory for semantic style rules"
+    ),
+    min_cluster: int = typer.Option(
+        10, "--min-cluster", "-m",
+        help="Minimum messages per topic cluster"
+    ),
+) -> None:
+    """Analyze communication style by topic using semantic clustering.
+
+    Clusters your messages by topic (technical, casual, professional, etc.)
+    and analyzes writing style patterns within each context. Generates
+    context-aware rules for better cover letters and outreach.
+
+    Requires: sentence-transformers, scikit-learn
+    """
+    try:
+        from ..pipeline.extract_whatsapp import extract_whatsapp_messages
+        from ..pipeline.analyze_communication import CommunicationAnalyzer
+
+        rprint("[bold blue]זיכרון[/] - Semantic Style Analysis\n")
+
+        analyzer = CommunicationAnalyzer()
+
+        # Extract WhatsApp messages
+        with console.status("[bold green]Extracting WhatsApp messages..."):
+            try:
+                messages = list(extract_whatsapp_messages(
+                    limit=whatsapp_limit,
+                    only_from_me=True,  # Only user's messages
+                    exclude_groups=True
+                ))
+                analyzer.add_whatsapp_messages(messages)
+                rprint(f"[green]✓[/] Extracted {len(messages)} WhatsApp messages")
+            except FileNotFoundError as e:
+                rprint("[yellow]Warning:[/] WhatsApp database not found")
+                rprint(f"[dim]  {e}[/]")
+            except Exception as e:
+                rprint(f"[yellow]Warning:[/] Failed to extract WhatsApp: {e}")
+
+        # Extract Claude chats if provided
+        if claude_export and claude_export.exists():
+            with console.status("[bold green]Extracting Claude conversations..."):
+                try:
+                    import json
+                    with open(claude_export) as f:
+                        data = json.load(f)
+                    conversations = data if isinstance(data, list) else data.get("conversations", [])
+                    analyzer.add_claude_conversations(conversations)
+                    rprint(f"[green]✓[/] Extracted {len(conversations)} Claude conversations")
+                except Exception as e:
+                    rprint(f"[yellow]Warning:[/] Failed to extract Claude chats: {e}")
+        else:
+            rprint("[dim]No Claude export provided (use --claude-export)[/]")
+
+        # Check if we have enough data
+        if len(analyzer.user_messages) < min_cluster * 2:
+            rprint(f"[bold red]Error:[/] Need at least {min_cluster * 2} messages, have {len(analyzer.user_messages)}")
+            raise typer.Exit(1)
+
+        rprint(f"\n[bold]Analyzing {len(analyzer.user_messages)} messages...[/]\n")
+
+        # Run semantic analysis
+        rules_path = analyzer.generate_semantic_rules(
+            output_dir=output_dir,
+            min_cluster_size=min_cluster,
+        )
+
+        if rules_path is None:
+            rprint("[bold red]Error:[/] Semantic analysis failed")
+            rprint("[dim]Install dependencies: pip install sentence-transformers scikit-learn[/]")
+            raise typer.Exit(1)
+
+        rprint("\n[bold green]✓[/] Semantic style rules generated!")
+        rprint(f"  Markdown: [cyan]{rules_path}[/]")
+        rprint(f"  JSON: [cyan]semantic-style-data.json[/]")
+
+        # Show preview
+        rprint("\n[bold]Preview:[/]\n")
+        preview = rules_path.read_text()
+        for line in preview.split('\n')[:30]:
+            rprint(f"[dim]{line}[/]")
+        if len(preview.split('\n')) > 30:
+            rprint(f"[dim]... ({len(preview.split(chr(10))) - 30} more lines)[/]")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        import traceback
+        traceback.print_exc()
         raise typer.Exit(1)
 
 
