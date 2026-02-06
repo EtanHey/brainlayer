@@ -11,15 +11,23 @@ Key concepts:
 - Per-topic style metrics: formality, length, emoji, phrases
 - Cross-context comparisons: "more formal when discussing work"
 """
+from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 import re
 
-import numpy as np
+logger = logging.getLogger(__name__)
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -39,7 +47,7 @@ except ImportError:
 SEMANTIC_MODEL = "BAAI/bge-large-en-v1.5"
 MAX_CHARS = 2000
 
-# Predefined topic seeds for guided clustering
+# Predefined topic seeds for guided clustering (English + Hebrew)
 TOPIC_SEEDS = {
     "technical": [
         "debugging the code",
@@ -48,6 +56,9 @@ TOPIC_SEEDS = {
         "database query",
         "git commit",
         "pull request review",
+        "לתקן את הבאג",
+        "לממש את הפיצ'ר",
+        "לעשות דיפלוי",
     ],
     "casual": [
         "haha that's funny",
@@ -55,6 +66,11 @@ TOPIC_SEEDS = {
         "see you later",
         "good morning",
         "how was your day",
+        "מה קורה",
+        "מה נשמע",
+        "חחח",
+        "יאללה ביי",
+        "בוקר טוב",
     ],
     "professional": [
         "meeting scheduled",
@@ -62,6 +78,10 @@ TOPIC_SEEDS = {
         "quarterly review",
         "client presentation",
         "follow up on the proposal",
+        "פגישה נקבעה",
+        "דדליין של הפרויקט",
+        "לעקוב אחרי",
+        "לסגור את הנושא",
     ],
     "emotional": [
         "I'm so excited",
@@ -69,6 +89,10 @@ TOPIC_SEEDS = {
         "really happy about",
         "worried about",
         "love this",
+        "אני כל כך שמח",
+        "זה מתסכל",
+        "אוהב את זה",
+        "דואג לגבי",
     ],
     "explanatory": [
         "let me explain",
@@ -76,6 +100,10 @@ TOPIC_SEEDS = {
         "basically what happens is",
         "think of it like",
         "for example",
+        "תן לי להסביר",
+        "הסיבה היא",
+        "בעצם מה שקורה",
+        "לדוגמה",
     ],
 }
 
@@ -110,6 +138,10 @@ class SemanticStyleAnalyzer:
     """Analyze writing style patterns by topic/context."""
 
     def __init__(self, model_name: str = SEMANTIC_MODEL):
+        if not HAS_NUMPY:
+            raise ImportError(
+                "numpy required. Install: pip install numpy"
+            )
         if not HAS_SENTENCE_TRANSFORMERS:
             raise ImportError(
                 "sentence-transformers required. Install: pip install sentence-transformers"
@@ -126,7 +158,7 @@ class SemanticStyleAnalyzer:
     def model(self) -> SentenceTransformer:
         """Lazy load the embedding model."""
         if self._model is None:
-            print(f"[SemanticStyle] Loading {self.model_name}...")
+            logger.info("Loading %s...", self.model_name)
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
@@ -309,18 +341,18 @@ class SemanticStyleAnalyzer:
         Returns:
             SemanticStyleAnalysis with topic clusters and insights
         """
-        print(f"[SemanticStyle] Analyzing {len(messages)} messages...")
+        logger.info("Analyzing %d messages...", len(messages))
 
         # Embed all messages
-        print("[SemanticStyle] Computing embeddings...")
+        logger.info("Computing embeddings...")
         embeddings = self.embed_messages(messages)
 
         # Assign to topics
-        print("[SemanticStyle] Assigning topics...")
+        logger.info("Assigning topics...")
         topic_assignments = self.assign_topics(messages, embeddings)
 
         # Analyze each topic cluster
-        print("[SemanticStyle] Analyzing topic clusters...")
+        logger.info("Analyzing topic clusters...")
         topic_clusters: dict[str, TopicCluster] = {}
 
         for topic, indices in topic_assignments.items():
@@ -343,7 +375,7 @@ class SemanticStyleAnalyzer:
                 language_mix=style.get("language_mix", {}),
             )
             topic_clusters[topic] = cluster
-            print(f"  • {topic}: {len(indices)} messages, formality={cluster.formality:.2f}")
+            logger.info("  %s: %d messages, formality=%.2f", topic, len(indices), cluster.formality)
 
         # Generate cross-topic insights
         insights = self._generate_insights(topic_clusters)
@@ -485,7 +517,7 @@ class SemanticStyleAnalyzer:
         # Save markdown rules
         rules_path = output_dir / "semantic-style-rules.md"
         rules_path.write_text(analysis.style_rules_markdown)
-        print(f"[SemanticStyle] Saved rules to {rules_path}")
+        logger.info("Saved rules to %s", rules_path)
 
         # Save JSON data for programmatic use
         data = {
@@ -507,7 +539,7 @@ class SemanticStyleAnalyzer:
 
         json_path = output_dir / "semantic-style-data.json"
         json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        print(f"[SemanticStyle] Saved data to {json_path}")
+        logger.info("Saved data to %s", json_path)
 
 
 def analyze_semantic_style(
