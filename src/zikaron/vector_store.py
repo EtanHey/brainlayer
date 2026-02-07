@@ -1,12 +1,13 @@
 """SQLite-vec based vector store for fast search."""
 
+import json
+import struct
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import apsw
 import apsw.bestpractice
 import sqlite_vec
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-import json
-import struct
 
 # Apply APSW best practices
 apsw.bestpractice.apply(apsw.bestpractice.recommended)
@@ -44,9 +45,33 @@ class VectorStore:
                 project TEXT,
                 content_type TEXT,
                 value_type TEXT,
-                char_count INTEGER
+                char_count INTEGER,
+                source TEXT,
+                sender TEXT,
+                language TEXT,
+                conversation_id TEXT,
+                position INTEGER,
+                context_summary TEXT
             )
         """)
+
+        # Add columns if upgrading existing DB
+        for col, typ in [
+            ("source", "TEXT"), ("sender", "TEXT"), ("language", "TEXT"),
+            ("conversation_id", "TEXT"), ("position", "INTEGER"), ("context_summary", "TEXT"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
+            except apsw.SQLError:
+                pass  # column already exists
+
+        # Indexes for filtering
+        for idx, col in [
+            ("idx_chunks_source", "source"),
+            ("idx_chunks_sender", "sender"),
+            ("idx_chunks_conversation", "conversation_id"),
+        ]:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
         # Create vector table with 1024 dimensions for bge-large-en-v1.5
         cursor.execute("""
@@ -73,8 +98,9 @@ class VectorStore:
             # Upsert chunk
             cursor.execute("""
                 INSERT OR REPLACE INTO chunks
-                (id, content, metadata, source_file, project, content_type, value_type, char_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, content, metadata, source_file, project,
+                 content_type, value_type, char_count, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 chunk_id,
                 chunk["content"],
@@ -83,7 +109,8 @@ class VectorStore:
                 chunk.get("project"),
                 chunk.get("content_type"),
                 chunk.get("value_type"),
-                chunk.get("char_count", 0)
+                chunk.get("char_count", 0),
+                chunk.get("source", "claude_code")
             ))
 
             # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
@@ -101,7 +128,10 @@ class VectorStore:
         query_text: Optional[str] = None,
         n_results: int = 10,
         project_filter: Optional[str] = None,
-        content_type_filter: Optional[str] = None
+        content_type_filter: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        sender_filter: Optional[str] = None,
+        language_filter: Optional[str] = None
     ) -> Dict[str, List]:
         """Search chunks by embedding or text."""
 
@@ -120,6 +150,15 @@ class VectorStore:
             if content_type_filter:
                 where_clauses.append("c.content_type = ?")
                 params.insert(-1, content_type_filter)
+            if source_filter:
+                where_clauses.append("c.source = ?")
+                params.insert(-1, source_filter)
+            if sender_filter:
+                where_clauses.append("c.sender = ?")
+                params.insert(-1, sender_filter)
+            if language_filter:
+                where_clauses.append("c.language = ?")
+                params.insert(-1, language_filter)
 
             where_sql = ""
             if where_clauses:
@@ -149,6 +188,15 @@ class VectorStore:
             if content_type_filter:
                 where_clauses.append("content_type = ?")
                 params.append(content_type_filter)
+            if source_filter:
+                where_clauses.append("source = ?")
+                params.append(source_filter)
+            if sender_filter:
+                where_clauses.append("sender = ?")
+                params.append(sender_filter)
+            if language_filter:
+                where_clauses.append("language = ?")
+                params.append(language_filter)
 
             params.append(n_results)
 

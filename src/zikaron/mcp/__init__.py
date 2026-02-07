@@ -6,10 +6,10 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
-from ..vector_store import VectorStore
 from ..embeddings import get_embedding_model
+from ..vector_store import VectorStore
 
 # Default paths
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
@@ -74,6 +74,14 @@ The knowledge base contains indexed conversations organized by:
                         "type": "integer",
                         "default": 5,
                         "description": "Number of results to return (default: 5)"
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["claude_code", "whatsapp", "youtube", "all"],
+                        "description": (
+                            "Filter by data source (default: claude_code)."
+                            " Use 'all' to search everything."
+                        )
                     }
                 },
                 "required": ["query"]
@@ -107,7 +115,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             query=arguments["query"],
             project=arguments.get("project"),
             content_type=arguments.get("content_type"),
-            num_results=arguments.get("num_results", 5)
+            num_results=arguments.get("num_results", 5),
+            source=arguments.get("source")
         )
 
     elif name == "zikaron_stats":
@@ -124,7 +133,8 @@ async def _search(
     query: str,
     project: str | None = None,
     content_type: str | None = None,
-    num_results: int = 5
+    num_results: int = 5,
+    source: str | None = None
 ) -> list[TextContent]:
     """Execute a search query."""
     try:
@@ -146,12 +156,21 @@ async def _search(
         model = _get_embedding_model()
         query_embedding = await loop.run_in_executor(None, model.embed_query, query)
 
+        # Default to claude_code unless explicitly set to 'all'
+        if source == "all":
+            source_filter = None
+        elif source:
+            source_filter = source
+        else:
+            source_filter = "claude_code"
+
         # Search
         results = store.search(
             query_embedding=query_embedding,
             n_results=num_results,
             project_filter=project,
-            content_type_filter=content_type
+            content_type_filter=content_type,
+            source_filter=source_filter
         )
 
         if not results["documents"][0]:
