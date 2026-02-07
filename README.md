@@ -218,13 +218,16 @@ zikaron migrate  # One-time conversion
 zikaron index-fast
 
 # Index specific project only
-zikaron index-fast --project domica
+zikaron index-fast --project my-app
 
 # Index markdown files (learnings, skills, CLAUDE.md)
 zikaron index-md ~/.claude/ --pattern "**/*.md"
 
 # Legacy commands still work (use original ChromaDB backend)
 zikaron index
+
+# Index a specific project
+zikaron index-fast --project my-project
 ```
 
 ### Search
@@ -237,7 +240,7 @@ zikaron search-fast "how did I implement authentication"
 zikaron search-fast "config.py" --text
 
 # Filter by project
-zikaron search-fast "React hooks" --project union --num 10
+zikaron search-fast "React hooks" --project my-project --num 10
 
 # Legacy search (slower, uses ChromaDB)
 zikaron search "query"
@@ -268,8 +271,8 @@ Content Types: 8
 ┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
 ┃ Project             ┃ Chunks  ┃
 ┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
-│ domica              │ 12,456  │
-│ union               │ 8,234   │
+│ my-project          │ 12,456  │
+│ another-project     │ 8,234   │
 │ claude-golem        │ 6,123   │
 └─────────────────────┴─────────┘
 ```
@@ -377,7 +380,7 @@ Search through past conversations and learnings.
 ```json
 {
   "query": "how did I implement authentication",
-  "project": "domica",           // optional
+  "project": "my-app",           // optional
   "content_type": "ai_code",     // optional
   "num_results": 5               // optional, default 5
 }

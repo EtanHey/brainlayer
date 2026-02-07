@@ -99,8 +99,8 @@ def _clean_project_name(name: str) -> str:
     """Clean up project names by extracting the repo name from path-style names.
 
     Examples:
-        -Users-etanheyman-Gits-rudy-monorepo -> rudy-monorepo
-        -Users-etanheyman-Desktop-Gits-domica -> domica
+        -Users-etanheyman-Gits-my-project -> my-project
+        -Users-etanheyman-Desktop-Gits-another-project -> another-project
         -Users-etanheyman-Gits-etanheyman-com -> etanheyman-com
         -Users-etanheyman--config-ralph -> ralph
     """
