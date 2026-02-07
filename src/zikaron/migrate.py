@@ -22,7 +22,7 @@ from .embeddings import get_embedding_model
 logger = logging.getLogger(__name__)
 
 # Paths
-CHROMADB_PATH = Path.home() / ".local" / "share" / "zikaron" / "chromadb"
+CHROMADB_PATH = Path.home() / ".local" / "share" / "zikaron" / "chromadb.backup"
 SQLITE_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
 
@@ -45,122 +45,116 @@ def migrate_from_chromadb() -> bool:
             settings=Settings(anonymized_telemetry=False)
         )
         
-        # Get existing collection
-        try:
-            collection = client.get_collection("conversations")
-        except Exception:
-            print("No 'conversations' collection found in ChromaDB")
+        # Get all collections
+        collections = client.list_collections()
+        if not collections:
+            print("No collections found in ChromaDB")
             return False
-        
-        # Get all data
-        print("Fetching all data from ChromaDB...")
-        all_data = collection.get(include=["documents", "metadatas", "embeddings"])
-        
-        if not all_data["ids"]:
-            print("No data found in ChromaDB")
-            return False
-        
-        total_chunks = len(all_data["ids"])
-        print(f"Found {total_chunks} chunks to migrate")
-        
-        # Prepare data for sqlite-vec
-        chunks = []
-        embeddings = []
-        
-        for i, chunk_id in enumerate(all_data["ids"]):
-            document = all_data["documents"][i]
-            metadata = all_data["metadatas"][i] or {}
-            embedding = all_data["embeddings"][i] if all_data["embeddings"] else None
-            
-            chunk_data = {
-                "id": chunk_id,
-                "content": document,
-                "metadata": {k: v for k, v in metadata.items() 
-                           if k not in ["source_file", "project", "content_type", "value_type", "char_count"]},
-                "source_file": metadata.get("source_file", "unknown"),
-                "project": metadata.get("project"),
-                "content_type": metadata.get("content_type"),
-                "value_type": metadata.get("value_type"),
-                "char_count": metadata.get("char_count", len(document))
-            }
-            
-            chunks.append(chunk_data)
-            
-            # Handle embedding dimension mismatch
-            if embedding:
-                if len(embedding) == 768:  # nomic-embed-text dimension
-                    # Need to re-embed with bge-small-en-v1.5 (384 dim)
-                    embedding = None
-                elif len(embedding) == 384:  # Already correct dimension
-                    embeddings.append(embedding)
-                else:
-                    # Unknown dimension, re-embed
-                    embedding = None
-            
-            if embedding is None:
-                embeddings.append(None)  # Will re-embed later
-        
+
+        collection_names = [c.name for c in collections]
+        total_all = sum(c.count() for c in collections)
+        print(f"Found {len(collections)} collections with {total_all} total chunks: {collection_names}")
+
         # Create sqlite-vec store
         print(f"Creating sqlite-vec database at {SQLITE_PATH}")
         vector_store = VectorStore(SQLITE_PATH)
-        
-        # Re-embed chunks that need it
-        need_embedding = [i for i, emb in enumerate(embeddings) if emb is None]
-        
-        if need_embedding:
-            print(f"Re-embedding {len(need_embedding)} chunks with bge-small-en-v1.5...")
-            embedding_model = get_embedding_model()
-            
-            # Re-embed in batches
-            batch_size = 32
-            for i in range(0, len(need_embedding), batch_size):
-                batch_indices = need_embedding[i:i + batch_size]
-                batch_texts = [chunks[idx]["content"] for idx in batch_indices]
-                
-                try:
-                    batch_embeddings = embedding_model._load_model().encode(
-                        batch_texts,
-                        convert_to_numpy=True,
-                        show_progress_bar=False
-                    )
-                    
-                    for j, idx in enumerate(batch_indices):
-                        embeddings[idx] = batch_embeddings[j].tolist()
-                    
-                    print(f"Re-embedded {min(i + batch_size, len(need_embedding))}/{len(need_embedding)} chunks")
-                    
-                except Exception as e:
-                    logger.error(f"Failed to re-embed batch: {e}")
-                    # Use zero vector as fallback
-                    for idx in batch_indices:
-                        embeddings[idx] = [0.0] * 384
-        
-        # Insert data in batches
-        batch_size = 1000
-        for i in range(0, len(chunks), batch_size):
-            batch_chunks = chunks[i:i + batch_size]
-            batch_embeddings = embeddings[i:i + batch_size]
-            
-            vector_store.upsert_chunks(batch_chunks, batch_embeddings)
-            print(f"Migrated {min(i + batch_size, len(chunks))}/{len(chunks)} chunks")
-        
+
+        # Lazy-load embedding model only if needed
+        embedding_model = None
+        grand_total = 0
+
+        for collection in collections:
+            total_count = collection.count()
+            print(f"\n--- Migrating collection '{collection.name}' ({total_count} chunks) ---")
+
+            # Fetch and insert in batches to avoid OOM
+            FETCH_BATCH = 5000
+            migrated = 0
+            need_reembed_total = 0
+
+            for offset in range(0, total_count, FETCH_BATCH):
+                batch_data = collection.get(
+                    include=["documents", "metadatas", "embeddings"],
+                    limit=FETCH_BATCH,
+                    offset=offset,
+                )
+
+                if not batch_data["ids"]:
+                    break
+
+                chunks = []
+                embeddings_batch = []
+                need_reembed = []
+
+                for i, chunk_id in enumerate(batch_data["ids"]):
+                    document = batch_data["documents"][i]
+                    metadata = batch_data["metadatas"][i] or {}
+                    embedding = batch_data["embeddings"][i] if batch_data["embeddings"] else None
+
+                    chunk_data = {
+                        "id": chunk_id,
+                        "content": document,
+                        "metadata": {k: v for k, v in metadata.items()
+                                     if k not in ["source_file", "project", "content_type", "value_type", "char_count"]},
+                        "source_file": metadata.get("source_file", "unknown"),
+                        "project": metadata.get("project"),
+                        "content_type": metadata.get("content_type"),
+                        "value_type": metadata.get("value_type"),
+                        "char_count": metadata.get("char_count", len(document))
+                    }
+                    chunks.append(chunk_data)
+
+                    if embedding and len(embedding) == 1024:
+                        embeddings_batch.append(embedding)
+                    else:
+                        embeddings_batch.append(None)
+                        need_reembed.append(i)
+
+                # Re-embed chunks with wrong/missing dimensions
+                if need_reembed:
+                    need_reembed_total += len(need_reembed)
+                    if embedding_model is None:
+                        print("Loading bge-large-en-v1.5 for re-embedding...")
+                        embedding_model = get_embedding_model()
+
+                    for rb_start in range(0, len(need_reembed), 32):
+                        rb_indices = need_reembed[rb_start:rb_start + 32]
+                        rb_texts = [chunks[idx]["content"] for idx in rb_indices]
+                        try:
+                            rb_embs = embedding_model._load_model().encode(
+                                rb_texts, convert_to_numpy=True, show_progress_bar=False
+                            )
+                            for j, idx in enumerate(rb_indices):
+                                embeddings_batch[idx] = rb_embs[j].tolist()
+                        except Exception as e:
+                            logger.error(f"Failed to re-embed batch: {e}")
+                            for idx in rb_indices:
+                                embeddings_batch[idx] = [0.0] * 1024
+
+                # Insert this batch into sqlite-vec
+                INSERT_BATCH = 1000
+                for ins_start in range(0, len(chunks), INSERT_BATCH):
+                    ins_chunks = chunks[ins_start:ins_start + INSERT_BATCH]
+                    ins_embs = embeddings_batch[ins_start:ins_start + INSERT_BATCH]
+                    vector_store.upsert_chunks(ins_chunks, ins_embs)
+
+                migrated += len(chunks)
+                reembed_note = f" ({len(need_reembed)} re-embedded)" if need_reembed else ""
+                print(f"  {migrated}/{total_count} chunks{reembed_note}")
+
+            grand_total += migrated
+            if need_reembed_total:
+                print(f"  ({need_reembed_total} total re-embedded in this collection)")
+
         vector_store.close()
-        
+
         # Verify migration
         vector_store = VectorStore(SQLITE_PATH)
         final_count = vector_store.count()
         vector_store.close()
-        
-        print(f"Migration complete: {final_count} chunks in sqlite-vec")
-        
-        # Backup ChromaDB
-        backup_path = CHROMADB_PATH.parent / "chromadb.backup"
-        if not backup_path.exists():
-            print(f"Backing up ChromaDB to {backup_path}")
-            import shutil
-            shutil.move(str(CHROMADB_PATH), str(backup_path))
-            print("ChromaDB backed up successfully")
-        
+
+        print(f"\nMigration complete: {final_count} chunks in sqlite-vec (from {total_all} in ChromaDB)")
+
         return True
         
     except Exception as e:
@@ -173,7 +167,7 @@ def main():
     """Main migration entry point."""
     logging.basicConfig(level=logging.INFO)
     
-    print("Zikaron Migration Tool")
+    print("זיכרון - Migration Tool")
     print("=" * 50)
     
     if SQLITE_PATH.exists():
@@ -182,8 +176,12 @@ def main():
             print("Migration cancelled")
             return
         
-        # Remove existing database
+        # Remove existing database and WAL/SHM files
         SQLITE_PATH.unlink()
+        for suffix in ["-shm", "-wal"]:
+            p = SQLITE_PATH.parent / (SQLITE_PATH.name + suffix)
+            if p.exists():
+                p.unlink()
     
     success = migrate_from_chromadb()
     
