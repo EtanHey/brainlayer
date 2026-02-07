@@ -11,7 +11,7 @@ dependencies = [
     "numpy>=1.22,<3.0",
 
     # Posthog (pinned <4.0 to fix chromadb 0.4.x telemetry errors)
-    "posthog>=2.0,<4.0",
+    "posthog>=2.0,<8.0",
 
     # Embeddings (local via Ollama)
     "ollama>=0.1.0",
