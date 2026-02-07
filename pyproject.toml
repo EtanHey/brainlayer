@@ -8,7 +8,7 @@ dependencies = [
     "chromadb>=0.4.0,<0.5.0",
 
     # NumPy (pinned <2.0 for chromadb 0.4.x compatibility)
-    "numpy>=1.22,<2.0",
+    "numpy>=1.22,<3.0",
 
     # Posthog (pinned <4.0 to fix chromadb 0.4.x telemetry errors)
     "posthog>=2.0,<4.0",
