@@ -4,17 +4,17 @@ version = "0.1.0"
 description = "Local knowledge pipeline for Claude Code conversations - זיכרון (memory)"
 requires-python = ">=3.11"
 dependencies = [
-    # Vector DB (pinned <0.5.0 to avoid unstable Rust backend crashes)
-    "chromadb>=0.4.0,<0.5.0",
+    # Vector DB (sqlite-vec via APSW)
+    "apsw>=3.45.0",
+    "sqlite-vec>=0.1.0",
 
-    # NumPy (pinned <2.0 for chromadb 0.4.x compatibility)
-    "numpy>=1.22,<3.0",
+    # Embeddings (local bge-large-en-v1.5)
+    "sentence-transformers>=2.2.0",
 
-    # Posthog (pinned <4.0 to fix chromadb 0.4.x telemetry errors)
-    "posthog>=2.0,<8.0",
-
-    # Embeddings (local via Ollama)
-    "ollama>=0.1.0",
+    # Daemon (FastAPI + Unix socket)
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "httpx>=0.24.0",
 
     # AST parsing for code chunking (optional - has fallback)
     "tree-sitter>=0.21.0",
@@ -30,8 +30,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "orjson>=3.9.0",  # Fast JSON for JSONL parsing
     "pyyaml>=6.0",  # Chat-tags config
+    "numpy>=1.22,<3.0",  # For sentence-transformers
     "scikit-learn>=1.0.0",  # K-means for cluster-based sampling
-    "sentence-transformers>=2.2.0",  # StyleDistance, mStyleDistance (style embeddings)
 ]
 
 [project.optional-dependencies]
@@ -47,6 +47,7 @@ dev = [
 [project.scripts]
 zikaron = "zikaron.cli:app"
 zikaron-mcp = "zikaron.mcp:serve"
+zikaron-daemon = "zikaron.daemon:main"
 
 [build-system]
 requires = ["hatchling"]

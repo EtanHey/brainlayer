@@ -1,18 +1,39 @@
 """Zikaron MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from ..pipeline.embed import embed_query
-from ..pipeline.index import get_client, get_or_create_collection, search as db_search, get_stats
+from ..vector_store import VectorStore
+from ..embeddings import get_embedding_model
 
+# Default paths
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
 # Create MCP server
 server = Server("zikaron")
+
+# Lazy-loaded globals
+_vector_store = None
+_embedding_model = None
+
+
+def _get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore(DEFAULT_DB_PATH)
+    return _vector_store
+
+
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = get_embedding_model()
+    return _embedding_model
 
 
 @server.list_tools()
@@ -107,16 +128,14 @@ async def _search(
 ) -> list[TextContent]:
     """Execute a search query."""
     try:
-        # Validate num_results
         if num_results < 1:
             num_results = 5
         elif num_results > 100:
             num_results = 100
 
-        client = get_client()
-        collection = get_or_create_collection(client)
+        store = _get_vector_store()
 
-        if collection.count() == 0:
+        if store.count() == 0:
             return [TextContent(
                 type="text",
                 text="Knowledge base is empty. Run 'zikaron index' to populate it."
@@ -124,21 +143,15 @@ async def _search(
 
         # Generate embedding (run in thread to not block)
         loop = asyncio.get_running_loop()
-        query_embedding = await loop.run_in_executor(None, embed_query, query)
-
-        # Build filters
-        where = {}
-        if project:
-            where["project"] = project
-        if content_type:
-            where["content_type"] = content_type
+        model = _get_embedding_model()
+        query_embedding = await loop.run_in_executor(None, model.embed_query, query)
 
         # Search
-        results = db_search(
-            collection,
-            query_embedding,
+        results = store.search(
+            query_embedding=query_embedding,
             n_results=num_results,
-            where=where if where else None
+            project_filter=project,
+            content_type_filter=content_type
         )
 
         if not results["documents"][0]:
@@ -152,7 +165,7 @@ async def _search(
             results["metadatas"][0],
             results["distances"][0]
         )):
-            score = 1 - dist
+            score = 1 - dist if dist is not None else 0
             output_parts.append(f"\n### Result {i+1} (score: {score:.3f})")
             output_parts.append(f"**Project:** {meta.get('project', 'unknown')} | **Type:** {meta.get('content_type', 'unknown')}")
             output_parts.append(f"**Source:** `{meta.get('source_file', 'unknown')}`\n")
@@ -168,9 +181,8 @@ async def _search(
 async def _stats() -> list[TextContent]:
     """Get knowledge base statistics."""
     try:
-        client = get_client()
-        collection = get_or_create_collection(client)
-        stats = get_stats(collection)
+        store = _get_vector_store()
+        stats = store.get_stats()
 
         output = f"""## Zikaron Knowledge Base Stats
 
@@ -181,15 +193,14 @@ async def _stats() -> list[TextContent]:
         return [TextContent(type="text", text=output)]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Stats error (failed to read ChromaDB): {str(e)}")]
+        return [TextContent(type="text", text=f"Stats error: {str(e)}")]
 
 
 async def _list_projects() -> list[TextContent]:
     """List all projects."""
     try:
-        client = get_client()
-        collection = get_or_create_collection(client)
-        stats = get_stats(collection)
+        store = _get_vector_store()
+        stats = store.get_stats()
 
         if not stats['projects']:
             return [TextContent(type="text", text="No projects indexed yet.")]
@@ -201,7 +212,7 @@ async def _list_projects() -> list[TextContent]:
         return [TextContent(type="text", text=output)]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Error listing projects (failed to read ChromaDB): {str(e)}")]
+        return [TextContent(type="text", text=f"Error listing projects: {str(e)}")]
 
 
 def serve():

@@ -38,17 +38,19 @@ zikaron dashboard
 │                                         1024 dims   fast DB │
 └─────────────────────────────────────────────────────────────┘
         ↓
-~/.local/share/zikaron/zikaron.db   # Storage: sqlite-vec
+~/.local/share/zikaron/zikaron.db   # Storage: sqlite-vec (~1GB)
         ↓
 ┌─────────────────────────────────────────────────────────────┐
 │  INTERFACES                                                  │
 │  ┌─────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │ CLI (fast)  │  │ FastAPI Daemon  │  │ MCP Server      │ │
-│  │ search-fast │  │ /tmp/zikaron.sock│  │ zikaron-mcp    │ │
+│  │ CLI         │  │ FastAPI Daemon  │  │ MCP Server      │ │
+│  │ search      │  │ /tmp/zikaron.sock│  │ zikaron-mcp    │ │
 │  │ dashboard   │  │ (<2s queries)   │  │                 │ │
 │  └─────────────┘  └─────────────────┘  └─────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** ChromaDB has been fully removed. All search, indexing, and MCP use sqlite-vec.
 
 ---
 
@@ -139,33 +141,26 @@ zikaron/
 
 ## CLI Commands
 
-### Fast Commands (Recommended)
 ```bash
 # Search (<2s with daemon)
-zikaron search-fast "authentication middleware"
-zikaron search-fast "config.py" --text  # Exact match
+zikaron search "authentication middleware"
+zikaron search "config.py" --text  # Exact match
 
-# Index with sqlite-vec
-zikaron index-fast
-zikaron index-fast --project domica
+# Index conversations
+zikaron index
+zikaron index --project domica
 
 # Stats
-zikaron stats-fast
+zikaron stats
 
 # Interactive dashboard
 zikaron dashboard
 
-# Migration (one-time)
-zikaron migrate
-```
-
-### Legacy Commands (ChromaDB)
-```bash
-zikaron index
-zikaron search "query"
-zikaron stats
+# Clear database
 zikaron clear --yes
-zikaron serve
+
+# Migration from ChromaDB (one-time, already done)
+zikaron migrate
 ```
 
 ---
@@ -204,8 +199,7 @@ Add to `~/.claude/settings.json`:
 | Path | Purpose |
 |------|---------|
 | `~/.claude/projects/` | Source conversations (read-only) |
-| `~/.local/share/zikaron/zikaron.db` | sqlite-vec vector database |
-| `~/.local/share/zikaron/chromadb.backup/` | Old ChromaDB (after migration) |
+| `~/.local/share/zikaron/zikaron.db` | sqlite-vec vector database (~1GB) |
 | `~/.local/share/zikaron/prompts/` | Deduplicated system prompts |
 | `/tmp/zikaron.sock` | Daemon Unix socket |
 

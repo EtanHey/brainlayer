@@ -4,9 +4,6 @@ import os
 import sys
 import time
 
-# Disable ChromaDB telemetry before any imports
-os.environ["ANONYMIZED_TELEMETRY"] = "false"
-
 import typer
 from pathlib import Path
 from rich.console import Console
@@ -37,261 +34,16 @@ def index(
         help="Re-index all files (ignore cache)"
     )
 ) -> None:
-    """Index Claude Code conversations into the knowledge base."""
-    try:
-        from ..pipeline import (
-            extract_system_prompts,
-            classify_content,
-            chunk_content,
-            embed_chunks,
-            index_to_chromadb
-        )
-        from ..pipeline.embed import ensure_model
-        from ..pipeline.index import get_client, get_or_create_collection
-        from ..pipeline.extract import parse_jsonl
-
-        rprint(f"[bold blue]זיכרון[/] - Indexing conversations from {source}")
-
-        # Validate source directory exists
-        if not source.exists():
-            rprint(f"[bold red]Error:[/] Source directory does not exist: {source}")
-            raise typer.Exit(1)
-
-        # Ensure embedding model is available
-        with console.status("[bold green]Checking embedding model..."):
-            ensure_model()
-
-        # Get ChromaDB client
-        client = get_client()
-        collection = get_or_create_collection(client)
-
-        # Find all JSONL files
-        if project:
-            jsonl_files = list((source / project).rglob("*.jsonl")) if (source / project).exists() else []
-        else:
-            jsonl_files = list(source.rglob("*.jsonl"))
-
-        if not jsonl_files:
-            rprint("[yellow]No JSONL files found[/]")
-            raise typer.Exit(1)
-
-        rprint(f"Found [bold]{len(jsonl_files)}[/] conversation files")
-
-        # Extract system prompts first (for deduplication)
-        with console.status("[bold green]Extracting system prompts..."):
-            system_prompts = extract_system_prompts(source)
-            rprint(f"  Found [bold]{len(system_prompts)}[/] unique system prompts")
-
-        # Ignore stdin to prevent accidental keypress from killing long-running job
-        # Close stdin rather than redirecting to avoid file descriptor leak
-        sys.stdin.close()
-
-        # Process each file with detailed progress tracking
-        total_chunks = 0
-        start_time = time.time()
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            TextColumn("•"),
-            TimeRemainingColumn(),
-            console=console,
-            refresh_per_second=2
-        ) as progress:
-            task = progress.add_task("Indexing...", total=len(jsonl_files))
-
-            for i, jsonl_file in enumerate(jsonl_files):
-                file_start = time.time()
-
-                # Determine project from path and normalize
-                # Walk up the path to find the project folder (skip UUID conversation folders)
-                import re
-                uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
-                
-                current_path = jsonl_file.parent
-                proj_name = current_path.name
-                
-                # If parent is a UUID or "subagents", go up one level
-                while uuid_pattern.match(proj_name) or proj_name == "subagents":
-                    current_path = current_path.parent
-                    if current_path == current_path.parent:  # Reached root
-                        break
-                    proj_name = current_path.name
-                
-                proj_name = _normalize_project_name(proj_name)
-
-                chunks_for_file = []
-
-                for entry in parse_jsonl(jsonl_file):
-                    classified = classify_content(entry)
-                    if classified:
-                        file_chunks = chunk_content(classified)
-                        chunks_for_file.extend(file_chunks)
-
-                file_chunks_count = 0
-                if chunks_for_file:
-                    # Progress callback to update display during embedding
-                    def on_embed_progress(embedded_count, file_total):
-                        current_total = total_chunks + embedded_count
-                        elapsed = time.time() - start_time
-                        chunks_per_min = (current_total / elapsed) * 60 if elapsed > 0 else 0
-                        progress.update(
-                            task,
-                            description=f"[cyan]{jsonl_file.name[:30]}[/] • {current_total:,} chunks • {chunks_per_min:.0f} c/m • embedding {embedded_count}/{file_total}"
-                        )
-
-                    embedded = embed_chunks(chunks_for_file, on_progress=on_embed_progress)
-                    indexed = index_to_chromadb(
-                        embedded,
-                        collection,
-                        source_file=str(jsonl_file),
-                        project=proj_name
-                    )
-                    file_chunks_count = indexed
-                    total_chunks += indexed
-
-                # Update progress with stats after file completes
-                elapsed = time.time() - start_time
-                files_done = i + 1
-                rate_per_min = (files_done / elapsed) * 60 if elapsed > 0 else 0
-                chunks_per_min = (total_chunks / elapsed) * 60 if elapsed > 0 else 0
-
-                progress.update(
-                    task,
-                    completed=files_done,
-                    description=f"[cyan]{jsonl_file.name[:30]}[/] • {total_chunks:,} chunks • {rate_per_min:.1f} f/m • {chunks_per_min:.0f} c/m"
-                )
-
-        elapsed_total = time.time() - start_time
-        rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total/60:.1f}[/] minutes")
-
-    except typer.Exit:
-        raise
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    """Index Claude Code conversations into the knowledge base (sqlite-vec)."""
+    # Delegate to the sqlite-vec index implementation
+    index_fast(source, project, force)
 
 
-@app.command("index-md")
-def index_md(
-    source: Path = typer.Argument(
-        ...,
-        help="Source directory containing markdown files"
-    ),
-    patterns: list[str] = typer.Option(
-        ["**/*.md"],
-        "--pattern", "-p",
-        help="Glob patterns to match (can specify multiple)"
-    ),
-    exclude: list[str] = typer.Option(
-        ["node_modules", ".git", "dist", "__pycache__", ".venv", "venv"],
-        "--exclude", "-e",
-        help="Directory names to exclude"
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f",
-        help="Re-index all files (ignore cache)"
-    )
-) -> None:
-    """Index markdown files into the knowledge base.
-
-    Supports learnings, skills, CLAUDE.md files, research docs, and more.
-    Files are classified by path and chunked by header sections.
-    """
-    try:
-        from ..pipeline import (
-            find_markdown_files,
-            extract_markdown_content,
-            chunk_content,
-            embed_chunks,
-            index_to_chromadb
-        )
-        from ..pipeline.embed import ensure_model
-        from ..pipeline.index import get_client, get_or_create_collection
-
-        rprint(f"[bold blue]זיכרון[/] - Indexing markdown files from {source}")
-
-        # Validate source directory exists
-        if not source.exists():
-            rprint(f"[bold red]Error:[/] Source directory does not exist: {source}")
-            raise typer.Exit(1)
-
-        # Ensure embedding model is available
-        with console.status("[bold green]Checking embedding model..."):
-            ensure_model()
-
-        # Get ChromaDB client
-        client = get_client()
-        collection = get_or_create_collection(client)
-
-        # Find markdown files
-        md_files = list(find_markdown_files(source, patterns, exclude))
-
-        if not md_files:
-            rprint(f"[yellow]No markdown files found matching patterns: {patterns}[/]")
-            raise typer.Exit(1)
-
-        rprint(f"Found [bold]{len(md_files)}[/] markdown files")
-
-        # Process each file
-        total_chunks = 0
-        type_counts: dict[str, int] = {}
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Processing files...", total=len(md_files))
-
-            for md_file in md_files:
-                progress.update(task, description=f"Processing {md_file.name[:40]}...")
-
-                try:
-                    # Extract and classify content sections
-                    classified_sections = extract_markdown_content(md_file)
-
-                    chunks_for_file = []
-                    for classified in classified_sections:
-                        file_chunks = chunk_content(classified)
-                        chunks_for_file.extend(file_chunks)
-
-                        # Track content types
-                        ct = classified.content_type.value
-                        type_counts[ct] = type_counts.get(ct, 0) + 1
-
-                    if chunks_for_file:
-                        embedded = embed_chunks(chunks_for_file)
-                        indexed = index_to_chromadb(
-                            embedded,
-                            collection,
-                            source_file=str(md_file),
-                            project=source.name  # Use source dir name as project
-                        )
-                        total_chunks += indexed
-
-                except Exception as e:
-                    rprint(f"[yellow]Warning:[/] Failed to process {md_file.name}: {e}")
-
-                progress.advance(task)
-
-        # Summary
-        rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks}[/] chunks from [bold]{len(md_files)}[/] files")
-
-        if type_counts:
-            rprint("\n[bold]Content types indexed:[/]")
-            for ct, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-                rprint(f"  {ct}: {count}")
-
-    except typer.Exit:
-        raise
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+@app.command("index-md", hidden=True)
+def index_md() -> None:
+    """[Deprecated] Use 'zikaron index' instead."""
+    rprint("[yellow]index-md is deprecated. Use 'zikaron index' instead.[/]")
+    raise typer.Exit(1)
 
 
 @app.command()
@@ -316,159 +68,11 @@ def search(
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
-    text: bool = typer.Option(False, "--text", help="Use text-based search (exact string match) instead of semantic search"),
-    hybrid: bool = typer.Option(False, "--hybrid", help="Use hybrid BM25 + semantic search for better relevance")
+    text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search")
 ) -> None:
-    """Search the knowledge base."""
-    try:
-        from ..pipeline.embed import embed_query
-        from ..pipeline.index import get_client, get_or_create_collection, search as db_search
-
-        # Auto-detect domain-like queries (containing dots) and use text search
-        # This prevents false matches on "unified" when searching for "unified.to"
-        if not text and not hybrid and ("." in query or query.startswith("http") or "/" in query):
-            text = True
-            rprint(f"[dim]Auto-detected domain/URL query, using text search[/]")
-
-        search_type = "hybrid" if hybrid else ("text" if text else "semantic")
-        rprint(f"[bold blue]זיכרון[/] - Searching ({search_type}): [italic]{query}[/]")
-
-        client = get_client()
-        collection = get_or_create_collection(client)
-
-        # Check if collection has data
-        if collection.count() == 0:
-            rprint("[yellow]Knowledge base is empty. Run 'zikaron index' first.[/]")
-            raise typer.Exit(1)
-
-        # Build filters
-        where = {}
-        if project:
-            where["project"] = project
-        if content_type:
-            where["content_type"] = content_type
-
-        # Choose search method
-        if hybrid:
-            # Hybrid BM25 + semantic search
-            try:
-                with console.status("[bold green]Running hybrid search..."):
-                    results = db_search(
-                        collection,
-                        query_embedding=None,
-                        n_results=n,
-                        where=where if where else None,
-                        hybrid=True,
-                        query_text=query
-                    )
-            except Exception as e:
-                rprint(f"[yellow]Warning:[/] Hybrid search failed: {e}")
-                rprint("[yellow]Falling back to semantic search...[/]")
-                # Fallback to semantic search
-                try:
-                    query_embedding = embed_query(query)
-                    results = db_search(
-                        collection,
-                        query_embedding,
-                        n_results=n,
-                        where=where if where else None
-                    )
-                except Exception as e2:
-                    rprint(f"[yellow]Warning:[/] Semantic search also failed: {e2}")
-                    rprint("[yellow]Falling back to text search...[/]")
-                    where_document = {"$contains": query}
-                    results = db_search(
-                        collection,
-                        query_embedding=None,
-                        n_results=n,
-                        where=where if where else None,
-                        where_document=where_document
-                    )
-        elif text:
-            # Text-based search using where_document with $contains
-            where_document = {"$contains": query}
-            results = db_search(
-                collection,
-                query_embedding=None,
-                n_results=n,
-                where=where if where else None,
-                where_document=where_document
-            )
-        else:
-            # Semantic search with embeddings
-            try:
-                with console.status("[bold green]Generating query embedding..."):
-                    query_embedding = embed_query(query)
-            except Exception as e:
-                rprint(f"[yellow]Warning:[/] Failed to generate embedding: {e}")
-                rprint("[yellow]Falling back to text-based search...[/]")
-                where_document = {"$contains": query}
-                results = db_search(
-                    collection,
-                    query_embedding=None,
-                    n_results=n,
-                    where=where if where else None,
-                    where_document=where_document
-                )
-            else:
-                results = db_search(
-                    collection,
-                    query_embedding,
-                    n_results=n,
-                    where=where if where else None
-                )
-
-        # Display results
-        if not results["documents"][0]:
-            rprint("[yellow]No results found[/]")
-            return
-
-        # Handle results - distances may be None for text search
-        distances = results.get("distances", [[]])[0] if results.get("distances") else [None] * len(results["documents"][0])
-        
-        for i, (doc, meta, dist) in enumerate(zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            distances
-        )):
-            score = 1 - dist if dist is not None else None
-            score_str = f"[dim](score: {score:.3f})[/]" if score is not None else "[dim](text match)[/]"
-            proj = _clean_project_name(meta.get('project', 'unknown'))
-            content_type = meta.get('content_type', 'unknown')
-
-            rprint(f"\n[bold cyan]─── Result {i+1} ───[/] {score_str}")
-            rprint(f"[bold]{proj}[/] · [dim]{content_type}[/]")
-            rprint()
-
-            # Clean up content display - skip raw dict representations
-            content = doc
-            if content.startswith("{'") or content.startswith('{"'):
-                # Try to extract meaningful text from dict-like content
-                try:
-                    import ast
-                    parsed = ast.literal_eval(content)
-                    if isinstance(parsed, dict):
-                        # Extract command/description if present
-                        if 'command' in parsed:
-                            content = f"[dim]Command:[/] {parsed['command']}"
-                            if 'description' in parsed:
-                                content += f"\n[dim]Description:[/] {parsed['description']}"
-                        elif 'text' in parsed:
-                            content = parsed['text']
-                        else:
-                            content = str(parsed)
-                except:
-                    pass
-
-            # Truncate and display
-            content = content[:600] + "..." if len(content) > 600 else content
-            rprint(content)
-
-    except typer.Exit:
-        raise
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    """Search the knowledge base (sqlite-vec)."""
+    from ..cli_new import search_command
+    search_command(query, n, project, content_type, text)
 
 
 # Known project renames/aliases - map old names to canonical names
@@ -529,94 +133,9 @@ def _clean_project_name(name: str) -> str:
 
 @app.command()
 def stats() -> None:
-    """Show knowledge base statistics."""
-    try:
-        from ..pipeline.index import get_client, get_or_create_collection, get_db_path
-        import sqlite3
-
-        client = get_client()
-        collection = get_or_create_collection(client)
-
-        count = collection.count()
-        if count == 0:
-            rprint("[yellow]Knowledge base is empty. Run 'zikaron index' first.[/]")
-            return
-
-        # Query SQLite directly for accurate stats (avoids ChromaDB peek limitations)
-        db_path = get_db_path() / "chroma.sqlite3"
-
-        projects: dict[str, int] = {}
-        content_types: dict[str, int] = {}
-        unique_files = 0
-
-        if db_path.exists():
-            conn = sqlite3.connect(str(db_path))
-            cur = conn.cursor()
-
-            # Get project counts
-            cur.execute("""
-                SELECT string_value, COUNT(*) as cnt
-                FROM embedding_metadata
-                WHERE key='project'
-                GROUP BY string_value
-                ORDER BY cnt DESC
-            """)
-            for proj, cnt in cur.fetchall():
-                clean_name = _clean_project_name(proj)
-                projects[clean_name] = projects.get(clean_name, 0) + cnt
-
-            # Get content type counts
-            cur.execute("""
-                SELECT string_value, COUNT(*) as cnt
-                FROM embedding_metadata
-                WHERE key='content_type'
-                GROUP BY string_value
-                ORDER BY cnt DESC
-            """)
-            for ct, cnt in cur.fetchall():
-                content_types[ct] = cnt
-
-            # Get unique source files count
-            cur.execute("""
-                SELECT COUNT(DISTINCT string_value)
-                FROM embedding_metadata
-                WHERE key='source_file'
-            """)
-            unique_files = cur.fetchone()[0]
-
-            conn.close()
-
-        # Summary table
-        rprint(f"\n[bold blue]זיכרון Knowledge Base[/]\n")
-        rprint(f"[bold]Total Chunks:[/] {count:,}")
-        rprint(f"[bold]Source Files:[/] {unique_files:,}")
-        rprint(f"[bold]Projects:[/] {len(projects)}")
-        rprint(f"[bold]Content Types:[/] {len(content_types)}\n")
-
-        # Projects table (sorted by count)
-        proj_table = Table(title="Projects (top 15)")
-        proj_table.add_column("Project", style="cyan")
-        proj_table.add_column("Chunks", style="green", justify="right")
-
-        for proj, cnt in sorted(projects.items(), key=lambda x: -x[1])[:15]:
-            proj_table.add_row(proj, f"{cnt:,}")
-
-        console.print(proj_table)
-
-        # Content types table
-        rprint()
-        type_table = Table(title="Content Types")
-        type_table.add_column("Type", style="cyan")
-        type_table.add_column("Chunks", style="green", justify="right")
-
-        for ct, cnt in sorted(content_types.items(), key=lambda x: -x[1]):
-            type_table.add_row(ct, f"{cnt:,}")
-
-        console.print(type_table)
-
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    """Show knowledge base statistics (sqlite-vec)."""
+    from ..cli_new import stats_command
+    stats_command()
 
 
 @app.command()
@@ -625,14 +144,19 @@ def clear(
 ) -> None:
     """Clear the entire knowledge base."""
     try:
-        from ..pipeline.index import get_client
+        from pathlib import Path
+        db_path = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
         if not confirm:
             confirm = typer.confirm("Are you sure you want to clear the knowledge base?")
 
         if confirm:
-            client = get_client()
-            client.reset()
+            if db_path.exists():
+                db_path.unlink()
+                for suffix in ["-shm", "-wal"]:
+                    p = db_path.parent / (db_path.name + suffix)
+                    if p.exists():
+                        p.unlink()
             rprint("[bold green]✓[/] Knowledge base cleared")
         else:
             rprint("[yellow]Cancelled[/]")
@@ -642,9 +166,9 @@ def clear(
         raise typer.Exit(1)
 
 
-@app.command()
+@app.command(hidden=True)
 def fix_projects() -> None:
-    """Fix project names in the database by remapping UUID project names to correct projects."""
+    """[Legacy/ChromaDB] Fix project names in the database."""
     try:
         from ..pipeline.index import get_client, get_or_create_collection
         import re
@@ -1228,34 +752,14 @@ def serve() -> None:
         raise typer.Exit(1)
 
 
-@app.command("search-fast")
-def search_fast(
-    query: str = typer.Argument(..., help="Search query"),
-    n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
-    project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
-    content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
-    text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search")
-) -> None:
-    """Search using fast daemon service (<2s vs 3+ minutes)."""
-    from ..cli_new import search_command
-    search_command(query, n, project, content_type, text)
-
-
-@app.command("stats-fast")
-def stats_fast() -> None:
-    """Show knowledge base statistics using fast daemon."""
-    from ..cli_new import stats_command
-    stats_command()
-
-
 @app.command("migrate")
 def migrate() -> None:
-    """Migrate from ChromaDB to sqlite-vec for 10x faster search."""
+    """Migrate from ChromaDB to sqlite-vec (one-time)."""
     from ..cli_new import migrate_command
     migrate_command()
 
 
-@app.command("index-fast")
+@app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
         Path.home() / ".claude" / "projects",
