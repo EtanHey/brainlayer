@@ -107,7 +107,7 @@ Content types with preservation rules:
 
 3. **Hybrid Retrieval**
    - BM25 + semantic search together
-   - ChromaDB supports both
+   - sqlite-vec supports both (FTS5 for BM25, vector for semantic)
 
 4. **Content-Addressable System Prompts**
    - First user message often 5000+ tokens of system prompt
@@ -125,8 +125,7 @@ zikaron/
 │   │   ├── extract.py      # Stage 1: Parse JSONL, extract prompts
 │   │   ├── classify.py     # Stage 2: Content classification
 │   │   ├── chunk.py        # Stage 3: AST-aware chunking
-│   │   ├── embed.py        # Stage 4: Ollama embeddings
-│   │   └── index.py        # Stage 5: ChromaDB storage
+│   │   └── semantic_style.py  # Style analysis
 │   ├── cli/                # CLI interface (typer)
 │   │   └── __init__.py
 │   └── mcp/                # MCP server for Claude
@@ -255,7 +254,7 @@ zikaron analyze-style
 ```
 
 ### Integration with GolemsZikaron
-The style analysis is used by GolemsZikaron bot to match your communication patterns when posting to Moltbook. See `~/Gits/golems-zikaron/SOUL.md` for the bot persona.
+The style analysis is used by GolemsZikaron bot to match your communication patterns when posting to Soltome. See `~/Gits/golems/packages/autonomous/SOUL.md` for the bot persona.
 
 ---
 

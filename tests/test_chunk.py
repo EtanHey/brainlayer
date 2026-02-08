@@ -32,7 +32,7 @@ class TestChunkContent:
 
     def test_small_content_single_chunk(self):
         """Content smaller than target size stays as single chunk."""
-        small_content = "This is a small piece of content."
+        small_content = "This is a small piece of content that should be kept as a single chunk for the assistant text type."
         classified = ClassifiedContent(
             content=small_content,
             content_type=ContentType.ASSISTANT_TEXT,

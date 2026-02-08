@@ -68,11 +68,47 @@ def search(
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
-    text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search")
+    text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search"),
+    hybrid: bool = typer.Option(True, "--hybrid/--no-hybrid", help="Use hybrid search (semantic + keyword). Default: hybrid")
 ) -> None:
-    """Search the knowledge base (sqlite-vec)."""
+    """Search the knowledge base (sqlite-vec). Uses hybrid search by default."""
     from ..cli_new import search_command
-    search_command(query, n, project, content_type, text)
+    search_command(query, n, project, content_type, text, hybrid)
+
+
+@app.command()
+def context(
+    chunk_id: str = typer.Argument(..., help="Chunk ID from a search result"),
+    before: int = typer.Option(3, "--before", "-b", help="Chunks before target"),
+    after: int = typer.Option(3, "--after", "-a", help="Chunks after target"),
+) -> None:
+    """Show surrounding conversation context for a search result."""
+    try:
+        from ..client import get_client
+
+        rprint(f"[bold blue]זיכרון[/] - Context for chunk: [dim]{chunk_id[:40]}...[/]")
+
+        client = get_client()
+
+        with console.status("[bold green]Fetching context..."):
+            result = client.get_context(chunk_id, before=before, after=after)
+
+        if not result.get("context"):
+            rprint("[yellow]No context available for this chunk.[/]")
+            return
+
+        for chunk in result["context"]:
+            marker = " [bold green]<< TARGET >>[/]" if chunk.get("is_target") else ""
+            ctype = chunk.get("content_type", "unknown")
+            pos = chunk.get("position", "?")
+            rprint(f"\n[bold cyan]Position {pos}[/] [dim]({ctype})[/]{marker}")
+            content = chunk.get("content", "")
+            rprint(content[:1500] + ("..." if len(content) > 1500 else ""))
+            rprint("[dim]---[/]")
+
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
 
 
 # Known project renames/aliases - map old names to canonical names
@@ -93,6 +129,67 @@ def _normalize_project_name(raw_name: str) -> str:
 
     # Then apply aliases for renamed projects
     return PROJECT_ALIASES.get(cleaned, cleaned)
+
+
+@app.command()
+def review(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of low-confidence chunks to review"),
+    threshold: float = typer.Option(0.6, "--threshold", "-t", help="Confidence threshold"),
+) -> None:
+    """Review low-confidence auto-tagged chunks and correct labels."""
+    try:
+        from ..vector_store import VectorStore
+        from pathlib import Path
+        import json
+
+        db_path = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
+        store = VectorStore(db_path)
+        cursor = store.conn.cursor()
+
+        # Count tagged chunks
+        total = store.count()
+        tagged = list(cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != '[]'"
+        ))[0][0]
+        low_conf = list(cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE tag_confidence IS NOT NULL AND tag_confidence < ?",
+            (threshold,)
+        ))[0][0]
+
+        rprint(f"[bold blue]זיכרון[/] - Tag Review Queue")
+        rprint(f"Total: {total:,} | Tagged: {tagged:,} | Low confidence (<{threshold}): {low_conf:,}")
+
+        if tagged == 0:
+            rprint("[yellow]No chunks tagged yet. Run: python scripts/classify-all.py[/]")
+            return
+
+        # Show worst chunks
+        rows = list(cursor.execute("""
+            SELECT id, content, tags, tag_confidence, project, content_type
+            FROM chunks
+            WHERE tag_confidence IS NOT NULL AND tag_confidence < ?
+            ORDER BY tag_confidence ASC
+            LIMIT ?
+        """, (threshold, limit)))
+
+        if not rows:
+            rprint(f"[green]No chunks below {threshold} confidence![/]")
+            return
+
+        for i, row in enumerate(rows):
+            chunk_id, content, tags_json, conf, proj, ct = row
+            tags = json.loads(tags_json) if tags_json else []
+            rprint(f"\n[bold cyan]{i+1}.[/] [dim]({proj}/{ct})[/] conf={conf:.2f}")
+            rprint(f"  Tags: {', '.join(tags) if tags else '[none]'}")
+            rprint(f"  Content: {content[:200]}...")
+            rprint(f"  [dim]ID: {chunk_id}[/]")
+
+        rprint(f"\n[dim]Use label-chunks.py for interactive correction, then retrain.[/]")
+        store.close()
+
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
 
 
 def _clean_project_name(name: str) -> str:

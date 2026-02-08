@@ -3,8 +3,6 @@
 from .extract import extract_system_prompts
 from .classify import classify_content
 from .chunk import chunk_content
-from .embed import embed_chunks
-# Legacy: index_to_chromadb removed — use vector_store.VectorStore directly
 from .extract_markdown import (
     find_markdown_files,
     parse_markdown,
@@ -22,7 +20,6 @@ __all__ = [
     "extract_system_prompts",
     "classify_content",
     "chunk_content",
-    "embed_chunks",
     # Markdown extraction
     "find_markdown_files",
     "parse_markdown",

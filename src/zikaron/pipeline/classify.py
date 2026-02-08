@@ -251,17 +251,18 @@ def _should_keep_assistant_text(content: str) -> bool:
     if _is_tool_json(stripped):
         return False
 
-    # Skip transitional filler
-    if _is_transitional(stripped):
-        return False
-
-    # Keep if has code blocks (valuable)
+    # Keep if has code blocks (valuable) — check before transitional filter
+    # because "Here's the code: ```python..." starts transitional but has real code
     if "```" in stripped:
         return True
 
     # Keep if has high-value signals
     if _has_high_value_signal(stripped):
         return True
+
+    # Skip transitional filler (after code/signal checks)
+    if _is_transitional(stripped):
+        return False
 
     # Otherwise, apply length threshold
     min_len = MIN_LENGTH_THRESHOLDS.get("assistant_text", DEFAULT_MIN_LENGTH)

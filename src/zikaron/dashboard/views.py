@@ -190,12 +190,22 @@ class MemoryView:
             return []
 
         try:
-            results = self.search_engine.search(
-                self.vector_store,
-                query,
-                n_results=10,
-                project_filter=project_filter
-            )
+            # Use core hybrid search (FTS5 + semantic via RRF) if available
+            if self.vector_store and hasattr(self.vector_store, 'hybrid_search'):
+                query_embedding = self.search_engine.embedding_model.embed_query(query)
+                results = self.vector_store.hybrid_search(
+                    query_embedding=query_embedding,
+                    query_text=query,
+                    n_results=10,
+                    project_filter=project_filter
+                )
+            else:
+                results = self.search_engine.search(
+                    self.vector_store,
+                    query,
+                    n_results=10,
+                    project_filter=project_filter
+                )
             
             # Convert to display format
             documents = results.get("documents", [[]])[0]

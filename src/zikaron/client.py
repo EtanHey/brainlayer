@@ -79,12 +79,14 @@ class DaemonClient:
         n_results: int = 10,
         project_filter: Optional[str] = None,
         content_type_filter: Optional[str] = None,
-        use_semantic: bool = True
+        source_filter: Optional[str] = None,
+        use_semantic: bool = True,
+        hybrid: bool = True
     ) -> Dict[str, Any]:
         """Search the knowledge base."""
         if not self._ensure_daemon():
             raise RuntimeError("Failed to start daemon")
-        
+
         try:
             client = self._get_client()
             response = client.post("/search", json={
@@ -92,15 +94,41 @@ class DaemonClient:
                 "n_results": n_results,
                 "project_filter": project_filter,
                 "content_type_filter": content_type_filter,
-                "use_semantic": use_semantic
+                "source_filter": source_filter,
+                "use_semantic": use_semantic,
+                "hybrid": hybrid
             })
             response.raise_for_status()
             return response.json()
-            
+
         except httpx.RequestError as e:
             raise RuntimeError(f"Failed to communicate with daemon: {e}")
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Search failed: {e.response.text}")
+
+    def get_context(
+        self,
+        chunk_id: str,
+        before: int = 3,
+        after: int = 3
+    ) -> Dict[str, Any]:
+        """Get surrounding conversation context for a chunk."""
+        if not self._ensure_daemon():
+            raise RuntimeError("Failed to start daemon")
+
+        try:
+            client = self._get_client()
+            response = client.get(f"/context/{chunk_id}", params={
+                "before": before,
+                "after": after
+            })
+            response.raise_for_status()
+            return response.json()
+
+        except httpx.RequestError as e:
+            raise RuntimeError(f"Failed to communicate with daemon: {e}")
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"Context request failed: {e.response.text}")
     
     def get_stats(self) -> Dict[str, Any]:
         """Get collection statistics."""

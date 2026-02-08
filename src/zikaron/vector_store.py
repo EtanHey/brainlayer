@@ -59,6 +59,7 @@ class VectorStore:
         for col, typ in [
             ("source", "TEXT"), ("sender", "TEXT"), ("language", "TEXT"),
             ("conversation_id", "TEXT"), ("position", "INTEGER"), ("context_summary", "TEXT"),
+            ("tags", "TEXT"), ("tag_confidence", "REAL"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -80,6 +81,40 @@ class VectorStore:
                 embedding FLOAT[1024]
             )
         """)
+
+        # FTS5 full-text search table for hybrid search
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                content, chunk_id UNINDEXED
+            )
+        """)
+
+        # Triggers to keep FTS5 in sync with chunks table
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(content, chunk_id) VALUES (new.content, new.id);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE OF content ON chunks BEGIN
+                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                INSERT INTO chunks_fts(content, chunk_id) VALUES (new.content, new.id);
+            END
+        """)
+
+        # Check if FTS5 needs backfill (existing DB without FTS5 data)
+        fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
+        chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
+        if chunk_count > 0 and fts_count == 0:
+            cursor.execute("""
+                INSERT INTO chunks_fts(content, chunk_id)
+                SELECT content, id FROM chunks
+            """)
 
     def upsert_chunks(
         self,
@@ -215,11 +250,13 @@ class VectorStore:
             raise ValueError("Either query_embedding or query_text must be provided")
 
         # Format results
+        ids = []
         documents = []
         metadatas = []
         distances = []
 
         for row in results:
+            ids.append(row[0])  # chunk id
             documents.append(row[1])  # content
             metadata = json.loads(row[2])  # metadata
             metadata.update({
@@ -233,6 +270,7 @@ class VectorStore:
             distances.append(row[8])  # distance (None for text search)
 
         return {
+            "ids": [ids],
             "documents": [documents],
             "metadatas": [metadatas],
             "distances": [distances]
@@ -294,6 +332,190 @@ class VectorStore:
             }
             for row in results
         ]
+
+    def hybrid_search(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        n_results: int = 10,
+        project_filter: Optional[str] = None,
+        content_type_filter: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        sender_filter: Optional[str] = None,
+        language_filter: Optional[str] = None,
+        k: int = 60
+    ) -> Dict[str, List]:
+        """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
+
+        # 1. Semantic search — get more results for fusion
+        semantic = self.search(
+            query_embedding=query_embedding,
+            n_results=n_results * 3,
+            project_filter=project_filter,
+            content_type_filter=content_type_filter,
+            source_filter=source_filter,
+            sender_filter=sender_filter,
+            language_filter=language_filter,
+        )
+
+        # Build semantic rank map: chunk_content -> rank
+        semantic_ranks = {}
+        for i, (doc, meta) in enumerate(zip(
+            semantic["documents"][0], semantic["metadatas"][0]
+        )):
+            key = meta.get("source_file", "") + "|" + doc[:100]
+            semantic_ranks[key] = i
+
+        # 2. FTS5 keyword search
+        cursor = self.conn.cursor()
+        fts_results = list(cursor.execute("""
+            SELECT f.chunk_id, f.rank,
+                   c.content, c.metadata, c.source_file, c.project,
+                   c.content_type, c.value_type, c.char_count
+            FROM chunks_fts f
+            JOIN chunks c ON f.chunk_id = c.id
+            WHERE chunks_fts MATCH ?
+            ORDER BY f.rank
+            LIMIT ?
+        """, (query_text, n_results * 3)))
+
+        # Build FTS rank map
+        fts_ranks = {}
+        fts_data = {}
+        for i, row in enumerate(fts_results):
+            chunk_id = row[0]
+            fts_ranks[chunk_id] = i
+            fts_data[chunk_id] = {
+                "content": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "source_file": row[4],
+                "project": row[5],
+                "content_type": row[6],
+                "value_type": row[7],
+                "char_count": row[8],
+            }
+
+        # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
+        # Build semantic rank map keyed by actual chunk_id
+        semantic_by_id = {}
+        for i in range(len(semantic["ids"][0])):
+            cid = semantic["ids"][0][i]
+            if cid and cid not in semantic_by_id:
+                semantic_by_id[cid] = {
+                    "rank": i,
+                    "doc": semantic["documents"][0][i],
+                    "meta": semantic["metadatas"][0][i],
+                    "dist": semantic["distances"][0][i],
+                }
+
+        # Union of all chunk_ids from both sources
+        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys())
+
+        scored = []
+        for cid in all_chunk_ids:
+            score = 0.0
+            sem_entry = semantic_by_id.get(cid)
+            fts_rank = fts_ranks.get(cid)
+
+            if sem_entry is not None:
+                score += 1.0 / (k + sem_entry["rank"])
+            if fts_rank is not None:
+                score += 1.0 / (k + fts_rank)
+
+            # Get data — prefer semantic (has distance)
+            if sem_entry is not None:
+                doc = sem_entry["doc"]
+                meta = sem_entry["meta"]
+                dist = sem_entry["dist"]
+            elif cid in fts_data:
+                data = fts_data[cid]
+                doc = data["content"]
+                meta = data["metadata"].copy()
+                meta.update({
+                    "source_file": data["source_file"],
+                    "project": data["project"],
+                    "content_type": data["content_type"],
+                    "value_type": data["value_type"],
+                    "char_count": data["char_count"],
+                })
+                dist = None
+            else:
+                continue
+
+            # Apply filters to FTS-only results
+            if fts_rank is not None and sem_entry is None:
+                if source_filter and meta.get("source") != source_filter:
+                    continue
+                if project_filter and meta.get("project") != project_filter:
+                    continue
+
+            scored.append((score, cid, doc, meta, dist))
+
+        # Sort by RRF score descending
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        ids = [s[1] for s in scored[:n_results]]
+        documents = [s[2] for s in scored[:n_results]]
+        metadatas = [s[3] for s in scored[:n_results]]
+        distances = [s[4] for s in scored[:n_results]]
+
+        return {
+            "ids": [ids],
+            "documents": [documents],
+            "metadatas": [metadatas],
+            "distances": [distances],
+        }
+
+    def get_context(
+        self,
+        chunk_id: str,
+        before: int = 3,
+        after: int = 3
+    ) -> Dict[str, Any]:
+        """Get surrounding chunks from the same conversation."""
+        cursor = self.conn.cursor()
+
+        # Get the target chunk's conversation_id and position
+        target = list(cursor.execute("""
+            SELECT conversation_id, position, content, metadata
+            FROM chunks WHERE id = ?
+        """, (chunk_id,)))
+
+        if not target:
+            return {"target": None, "context": [], "error": "Chunk not found"}
+
+        conv_id, position, content, metadata = target[0]
+
+        if not conv_id or position is None:
+            return {
+                "target": {"id": chunk_id, "content": content, "position": None},
+                "context": [],
+                "error": "Chunk has no conversation context (conversation_id/position not set)"
+            }
+
+        # Get surrounding chunks
+        context_rows = list(cursor.execute("""
+            SELECT id, content, position, content_type
+            FROM chunks
+            WHERE conversation_id = ?
+              AND position BETWEEN ? AND ?
+            ORDER BY position
+        """, (conv_id, position - before, position + after)))
+
+        context = []
+        for row in context_rows:
+            context.append({
+                "id": row[0],
+                "content": row[1],
+                "position": row[2],
+                "content_type": row[3],
+                "is_target": row[0] == chunk_id,
+            })
+
+        return {
+            "target": {"id": chunk_id, "content": content, "position": position},
+            "context": context,
+        }
 
     def close(self) -> None:
         """Close database connection."""

@@ -33,11 +33,14 @@ class SearchRequest(BaseModel):
     n_results: int = 10
     project_filter: Optional[str] = None
     content_type_filter: Optional[str] = None
+    source_filter: Optional[str] = None
     use_semantic: bool = True
+    hybrid: bool = True
 
 
 class SearchResponse(BaseModel):
     """Search response model."""
+    ids: List[Optional[str]] = []
     documents: List[str]
     metadatas: List[Dict[str, Any]]
     distances: List[Optional[float]]
@@ -116,14 +119,26 @@ async def search(request: SearchRequest):
     start_time = time.time()
     
     try:
-        if request.use_semantic:
-            # Semantic search with embeddings
+        if request.hybrid and request.use_semantic:
+            # Hybrid search: semantic + FTS5 keyword via RRF
+            query_embedding = embedding_model.embed_query(request.query)
+            results = vector_store.hybrid_search(
+                query_embedding=query_embedding,
+                query_text=request.query,
+                n_results=request.n_results,
+                project_filter=request.project_filter,
+                content_type_filter=request.content_type_filter,
+                source_filter=request.source_filter
+            )
+        elif request.use_semantic:
+            # Semantic-only search
             query_embedding = embedding_model.embed_query(request.query)
             results = vector_store.search(
                 query_embedding=query_embedding,
                 n_results=request.n_results,
                 project_filter=request.project_filter,
-                content_type_filter=request.content_type_filter
+                content_type_filter=request.content_type_filter,
+                source_filter=request.source_filter
             )
         else:
             # Text-only search
@@ -131,12 +146,14 @@ async def search(request: SearchRequest):
                 query_text=request.query,
                 n_results=request.n_results,
                 project_filter=request.project_filter,
-                content_type_filter=request.content_type_filter
+                content_type_filter=request.content_type_filter,
+                source_filter=request.source_filter
             )
         
         total_time_ms = (time.time() - start_time) * 1000
         
         return SearchResponse(
+            ids=results.get("ids", [[]])[0],
             documents=results["documents"][0],
             metadatas=results["metadatas"][0],
             distances=results["distances"][0],
@@ -145,6 +162,24 @@ async def search(request: SearchRequest):
         
     except Exception as e:
         logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/context/{chunk_id}")
+async def get_context(chunk_id: str, before: int = 3, after: int = 3):
+    """Get surrounding conversation context for a chunk."""
+    if not vector_store:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+
+    try:
+        result = vector_store.get_context(chunk_id, before=before, after=after)
+        if result.get("error"):
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Context lookup failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

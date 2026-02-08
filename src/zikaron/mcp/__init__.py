@@ -102,6 +102,33 @@ The knowledge base contains indexed conversations organized by:
                 "type": "object",
                 "properties": {}
             }
+        ),
+        Tool(
+            name="zikaron_context",
+            description="""Get surrounding conversation context for a search result.
+
+Given a chunk ID from a search result, returns the chunks before and after it
+from the same conversation. Useful for understanding isolated search results.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "The chunk ID from a search result"
+                    },
+                    "before": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Number of chunks before the target to include"
+                    },
+                    "after": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Number of chunks after the target to include"
+                    }
+                },
+                "required": ["chunk_id"]
+            }
         )
     ]
 
@@ -125,6 +152,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     elif name == "zikaron_list_projects":
         return await _list_projects()
 
+    elif name == "zikaron_context":
+        return await _context(
+            chunk_id=arguments["chunk_id"],
+            before=arguments.get("before", 3),
+            after=arguments.get("after", 3)
+        )
+
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -136,7 +170,7 @@ async def _search(
     num_results: int = 5,
     source: str | None = None
 ) -> list[TextContent]:
-    """Execute a search query."""
+    """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
         if num_results < 1:
             num_results = 5
@@ -164,9 +198,10 @@ async def _search(
         else:
             source_filter = "claude_code"
 
-        # Search
-        results = store.search(
+        # Use hybrid search (semantic + FTS5 keyword via RRF)
+        results = store.hybrid_search(
             query_embedding=query_embedding,
+            query_text=query,
             n_results=num_results,
             project_filter=project,
             content_type_filter=content_type,
@@ -232,6 +267,39 @@ async def _list_projects() -> list[TextContent]:
 
     except Exception as e:
         return [TextContent(type="text", text=f"Error listing projects: {str(e)}")]
+
+
+async def _context(
+    chunk_id: str,
+    before: int = 3,
+    after: int = 3
+) -> list[TextContent]:
+    """Get surrounding conversation context for a chunk."""
+    try:
+        store = _get_vector_store()
+        result = store.get_context(chunk_id, before=before, after=after)
+
+        if result.get("error"):
+            return [TextContent(type="text", text=f"Context error: {result['error']}")]
+
+        if not result.get("context"):
+            return [TextContent(type="text", text="No context available for this chunk.")]
+
+        output_parts = [f"## Conversation Context\n"]
+
+        for chunk in result["context"]:
+            marker = " **[TARGET]**" if chunk.get("is_target") else ""
+            ctype = chunk.get("content_type", "unknown")
+            pos = chunk.get("position", "?")
+            output_parts.append(f"\n### Position {pos} ({ctype}){marker}\n")
+            content = chunk.get("content", "")
+            output_parts.append(content[:1500] + ("..." if len(content) > 1500 else ""))
+            output_parts.append("\n---")
+
+        return [TextContent(type="text", text="\n".join(output_parts))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Context error: {str(e)}")]
 
 
 def serve():
