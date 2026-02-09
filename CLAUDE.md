@@ -12,9 +12,6 @@ cd ~/Gits/golems/packages/zikaron
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Migration (if upgrading from ChromaDB)
-zikaron migrate  # One-time, ~4-6 hours for 200k chunks (bge-large)
-
 # Fast search (<2s)
 zikaron search-fast "how did I implement authentication"
 
@@ -50,7 +47,7 @@ zikaron dashboard
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **Note:** ChromaDB has been fully removed. All search, indexing, and MCP use sqlite-vec.
+> **Storage:** sqlite-vec with bge-large-en-v1.5 embeddings (1024 dims).
 
 ---
 
@@ -158,8 +155,8 @@ zikaron dashboard
 # Clear database
 zikaron clear --yes
 
-# Migration from ChromaDB (one-time, already done)
-zikaron migrate
+# Reindex all conversations
+zikaron index
 ```
 
 ---
