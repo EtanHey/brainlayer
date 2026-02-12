@@ -896,7 +896,8 @@ class VectorStore:
         if not operations:
             return 0
         cursor = self.conn.cursor()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from datetime import timezone
+        now = datetime.now(timezone.utc).isoformat()
         count = 0
         for op in operations:
             chunk_ids_json = json.dumps(
@@ -980,7 +981,8 @@ class VectorStore:
             "total_operations": total,
             "sessions_with_operations": sessions,
             "by_type": {
-                row[0]: row[1] for row in by_type
+                (row[0] or "unknown"): row[1]
+                for row in by_type
             },
         }
 

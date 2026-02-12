@@ -23,12 +23,13 @@ OP_DEBUG = "debug"                  # error → read → try fix → test
 OP_CONFIG = "config"                # write/edit config files
 OP_REVIEW = "review"               # read multiple files, no edits
 
-# Tool action categories
-SEARCH_TOOLS = {"Grep", "Glob"}
-READ_TOOLS = {"Read"}
-EDIT_TOOLS = {"Edit", "Write"}
-TEST_TOOLS = {"Bash"}  # detected by content patterns
-ALL_FILE_TOOLS = SEARCH_TOOLS | READ_TOOLS | EDIT_TOOLS
+# Tool action categories (tuples for deterministic order)
+SEARCH_TOOLS = ("Grep", "Glob")
+READ_TOOLS = ("Read",)
+EDIT_TOOLS = ("Edit", "Write")
+TEST_TOOLS = ("Bash",)  # detected by content patterns
+# Ordered: Edit/Write first so they take priority over Read
+ALL_FILE_TOOLS = EDIT_TOOLS + SEARCH_TOOLS + READ_TOOLS
 
 # Max time gap between chunks in same operation (seconds)
 MAX_GAP_SECONDS = 300  # 5 minutes
@@ -39,11 +40,11 @@ def _parse_timestamp(ts: Optional[str]) -> Optional[float]:
     if not ts:
         return None
     try:
-        from datetime import datetime
+        from datetime import datetime as dt_cls
 
         # Handle various ISO formats
         ts_clean = ts.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(ts_clean)
+        dt = dt_cls.fromisoformat(ts_clean)
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
@@ -102,13 +103,17 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
             info["file_path"] = bare_match.group(1)
 
     # Detect tool calls from content patterns
+    # Use word-boundary matching to avoid false positives
+    # (e.g., "Read" matching "README")
     has_tool_marker = (
         "tool_use" in content
         or "Tool:" in content
     )
     if has_tool_marker or content_type == "assistant_text":
         for tool in ALL_FILE_TOOLS:
-            if tool in content:
+            # Match tool name as a whole word
+            pattern = r'\b' + re.escape(tool) + r'\b'
+            if re.search(pattern, content):
                 info["tool"] = tool
                 if tool in SEARCH_TOOLS:
                     info["action"] = "search"
@@ -137,13 +142,21 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
         info["is_test"] = True
         info["action"] = "test"
 
-    # Detect errors
+    # Detect errors (avoid false positives from test summaries)
+    content_lower = content.lower()
     if any(
-        kw in content.lower()
+        kw in content_lower
         for kw in [
             "error:", "exception:", "traceback",
-            "failed", "exit code 1",
+            "exit code 1",
         ]
+    ):
+        info["is_error"] = True
+    # "failed" only counts as error if not in test summary
+    if (
+        "failed" in content_lower
+        and "0 fail" not in content_lower
+        and "pass" not in content_lower
     ):
         info["is_error"] = True
 
