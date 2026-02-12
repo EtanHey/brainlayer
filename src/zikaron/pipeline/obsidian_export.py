@@ -19,10 +19,20 @@ DEFAULT_VAULT = Path.home() / ".golems-brain" / "Zikaron"
 
 def _sanitize_filename(name: str) -> str:
     """Make a string safe for use as a filename."""
+    # Strip common extensions to avoid double .md.md
+    for ext in (".md", ".ts", ".tsx", ".js", ".py", ".json",
+                ".css", ".svg", ".txt", ".yaml", ".toml"):
+        if name.endswith(ext):
+            name = name[:-len(ext)]
+            break
     bad = '<>:"/\\|?*'
     for c in bad:
         name = name.replace(c, "-")
-    return name.strip(". ")
+    name = name.strip(". ")
+    # Clean up ugly directory names
+    if name == "__tests__":
+        name = "tests"
+    return name or "unnamed"
 
 
 def _format_date(ts: Optional[str]) -> str:
@@ -35,15 +45,24 @@ def _format_date(ts: Optional[str]) -> str:
 def _session_title(ctx: Dict[str, Any]) -> str:
     """Generate a human-readable session title."""
     date = _format_date(ctx.get("started_at"))
-    branch = ctx.get("branch") or ""
+    plan = ctx.get("plan_name") or ""
+    phase = ctx.get("plan_phase") or ""
     sid = (ctx.get("session_id") or "")[:8]
-    # Extract meaningful part from branch
-    parts = branch.replace("feature/", "").replace(
-        "llm-", ""
-    ).replace("componentize-", "")
-    if parts:
-        return f"{date}-{_sanitize_filename(parts)}-{sid}"
-    return f"{date}-{sid}"
+
+    # Use plan+phase if available, otherwise branch
+    if plan and phase:
+        label = f"{plan}-{phase}"
+    elif plan:
+        label = plan
+    else:
+        branch = ctx.get("branch") or ""
+        label = branch.replace("feature/", "").replace(
+            "llm-", ""
+        ).replace("componentize-", "")
+
+    if label:
+        return f"{date} {_sanitize_filename(label)} ({sid})"
+    return f"{date} session ({sid})"
 
 
 def generate_session_note(
@@ -207,7 +226,7 @@ def generate_file_note(
     lines.append("")
     lines.append("```dataview")
     lines.append("TABLE date, tags, plan, phase")
-    lines.append('FROM "Zikaron/Sessions"')
+    lines.append('FROM "Sessions"')
     lines.append(f'WHERE contains(files, "{fname}")')
     lines.append("SORT date DESC")
     lines.append("```")
@@ -252,7 +271,7 @@ def generate_plan_note(
     lines.append("")
     lines.append("```dataview")
     lines.append("TABLE date, phase, branch, tags")
-    lines.append('FROM "Zikaron/Sessions"')
+    lines.append('FROM "Sessions"')
     lines.append(f'WHERE plan = "{plan_name}"')
     lines.append("SORT date ASC")
     lines.append("```")
@@ -273,7 +292,7 @@ def generate_dashboard(dashboard_type: str) -> str:
             "",
             "```dataview",
             "TABLE date, tags, plan, phase, operations",
-            'FROM "Zikaron/Sessions"',
+            'FROM "Sessions"',
             "WHERE date >= date(today) - dur(7 days)",
             "SORT date DESC",
             "```",
@@ -289,7 +308,7 @@ def generate_dashboard(dashboard_type: str) -> str:
             "",
             "```dataview",
             "TABLE interactions, last_modified",
-            'FROM "Zikaron/Files"',
+            'FROM "Files"',
             "SORT interactions DESC",
             "LIMIT 20",
             "```",
@@ -305,7 +324,7 @@ def generate_dashboard(dashboard_type: str) -> str:
             "",
             "```dataview",
             "TABLE sessions, plan",
-            'FROM "Zikaron/Plans"',
+            'FROM "Plans"',
             "SORT sessions DESC",
             "```",
             "",
