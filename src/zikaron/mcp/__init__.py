@@ -190,6 +190,35 @@ ordered chronologically. Useful for understanding a file's history.""",
                 },
                 "required": ["session_id"]
             }
+        ),
+        Tool(
+            name="zikaron_regression",
+            description=(
+                "Analyze a file for regressions."
+                " Shows the last successful operation"
+                " and all changes after it."
+                " Useful for debugging: 'what changed"
+                " since this file last worked?'"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": (
+                            "File path or partial path"
+                            " to analyze"
+                        )
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Optional: filter by project"
+                        )
+                    },
+                },
+                "required": ["file_path"]
+            }
         )
     ]
 
@@ -233,6 +262,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     elif name == "zikaron_operations":
         return await _operations(
             session_id=arguments["session_id"],
+        )
+
+    elif name == "zikaron_regression":
+        return await _regression(
+            file_path=arguments["file_path"],
+            project=arguments.get("project"),
         )
 
     else:
@@ -469,6 +504,72 @@ async def _operations(
         return [TextContent(
             type="text",
             text=f"Operations error: {str(e)}",
+        )]
+
+
+async def _regression(
+    file_path: str,
+    project: str | None = None,
+) -> list[TextContent]:
+    """Analyze a file for regressions."""
+    try:
+        store = _get_vector_store()
+        result = store.get_file_regression(
+            file_path, project=project
+        )
+
+        if not result["timeline"]:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"No interactions found"
+                    f" for '{file_path}'."
+                ),
+            )]
+
+        parts = [
+            f"## Regression Analysis: {file_path}\n",
+            f"Timeline: {len(result['timeline'])}"
+            f" interactions\n",
+        ]
+
+        if result["last_success"]:
+            ls = result["last_success"]
+            parts.append(
+                f"**Last success:** {ls['timestamp']}"
+                f" (session {ls['session_id'][:8]},"
+                f" branch {ls.get('branch', '?')})\n"
+            )
+        else:
+            parts.append(
+                "**No successful operations found**\n"
+            )
+
+        if result["changes_after"]:
+            parts.append(
+                f"**Changes after last success:**"
+                f" {len(result['changes_after'])}\n"
+            )
+            for i, c in enumerate(
+                result["changes_after"][:15]
+            ):
+                ts = (c["timestamp"] or "?")[:19]
+                branch = c.get("branch") or "?"
+                parts.append(
+                    f"{i+1}. {c['action']}"
+                    f" at {ts}"
+                    f" (branch: {branch})"
+                )
+
+        return [TextContent(
+            type="text",
+            text="\n".join(parts),
+        )]
+
+    except Exception as e:
+        return [TextContent(
+            type="text",
+            text=f"Regression error: {str(e)}",
         )]
 
 

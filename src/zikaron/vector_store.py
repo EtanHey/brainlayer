@@ -183,6 +183,30 @@ class VectorStore:
             " ON operations(operation_type)"
         )
 
+        # Phase 8d: Topic chains table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS topic_chains (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                session_a TEXT NOT NULL,
+                session_b TEXT NOT NULL,
+                shared_actions INTEGER DEFAULT 0,
+                time_delta_hours REAL,
+                project TEXT,
+                created_at TEXT
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_topic_chains_file"
+            " ON topic_chains(file_path)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_topic_chains_session"
+            " ON topic_chains(session_a)"
+        )
+
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
@@ -995,6 +1019,194 @@ class VectorStore:
             "DELETE FROM operations WHERE session_id = ?",
             (session_id,),
         )
+
+    def store_topic_chains(
+        self,
+        chains: List[Dict[str, Any]],
+    ) -> int:
+        """Store topic chain entries."""
+        if not chains:
+            return 0
+        cursor = self.conn.cursor()
+        from datetime import timezone
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for chain in chains:
+            cursor.execute(
+                """INSERT INTO topic_chains
+                (file_path, session_a, session_b,
+                 shared_actions, time_delta_hours,
+                 project, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    chain["file_path"],
+                    chain["session_a"],
+                    chain["session_b"],
+                    chain.get("shared_actions", 0),
+                    chain.get("time_delta_hours"),
+                    chain.get("project"),
+                    now,
+                ),
+            )
+            count += 1
+        return count
+
+    def get_file_chains(
+        self,
+        file_path: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get topic chains for a file (sessions linked by file)."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            """SELECT tc.file_path, tc.session_a,
+                      tc.session_b, tc.shared_actions,
+                      tc.time_delta_hours, tc.project,
+                      sa.branch AS branch_a,
+                      sb.branch AS branch_b
+               FROM topic_chains tc
+               LEFT JOIN session_context sa
+                   ON tc.session_a = sa.session_id
+               LEFT JOIN session_context sb
+                   ON tc.session_b = sb.session_id
+               WHERE tc.file_path LIKE ?
+               ORDER BY tc.time_delta_hours
+               LIMIT ?""",
+            (f"%{file_path}%", limit),
+        ))
+        return [
+            {
+                "file_path": row[0],
+                "session_a": row[1],
+                "session_b": row[2],
+                "shared_actions": row[3],
+                "time_delta_hours": row[4],
+                "project": row[5],
+                "branch_a": row[6],
+                "branch_b": row[7],
+            }
+            for row in rows
+        ]
+
+    def get_file_regression(
+        self,
+        file_path: str,
+        project: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get regression info for a file.
+
+        Finds the last successful operation involving the file,
+        then shows all changes after that point.
+
+        Returns:
+            Dict with last_success, changes_after, and timeline.
+        """
+        cursor = self.conn.cursor()
+
+        # Get all interactions for this file, ordered by time
+        query = """
+            SELECT fi.file_path, fi.timestamp,
+                   fi.session_id, fi.action,
+                   fi.project,
+                   sc.branch, sc.pr_number
+            FROM file_interactions fi
+            LEFT JOIN session_context sc
+                ON fi.session_id = sc.session_id
+            WHERE fi.file_path LIKE ?
+        """
+        params: list = [f"%{file_path}%"]
+        if project:
+            query += " AND fi.project = ?"
+            params.append(project)
+        query += " ORDER BY fi.timestamp"
+
+        interactions = list(cursor.execute(query, params))
+
+        if not interactions:
+            return {
+                "file_path": file_path,
+                "timeline": [],
+                "last_success": None,
+                "changes_after": [],
+            }
+
+        # Build timeline
+        timeline = []
+        for row in interactions:
+            timeline.append({
+                "file_path": row[0],
+                "timestamp": row[1],
+                "session_id": row[2],
+                "action": row[3],
+                "project": row[4],
+                "branch": row[5],
+                "pr_number": row[6],
+            })
+
+        # Find last successful operation for this file
+        # Check operations table for success outcomes
+        last_success = None
+        changes_after = []
+
+        # Get operations that involved this file
+        for entry in reversed(timeline):
+            sid = entry["session_id"]
+            if not sid:
+                continue
+            ops = list(cursor.execute(
+                """SELECT outcome FROM operations
+                   WHERE session_id = ?
+                   AND outcome = 'success'
+                   LIMIT 1""",
+                (sid,),
+            ))
+            if ops:
+                last_success = entry
+                break
+
+        # Get all entries after last success
+        if last_success and last_success.get("timestamp"):
+            changes_after = [
+                e for e in timeline
+                if (e.get("timestamp") or "")
+                > last_success["timestamp"]
+            ]
+
+        return {
+            "file_path": file_path,
+            "timeline": timeline,
+            "last_success": last_success,
+            "changes_after": changes_after,
+        }
+
+    def get_topic_chain_stats(self) -> Dict[str, Any]:
+        """Get topic chain statistics."""
+        cursor = self.conn.cursor()
+        total = list(cursor.execute(
+            "SELECT COUNT(*) FROM topic_chains"
+        ))[0][0]
+        files = list(cursor.execute(
+            """SELECT COUNT(DISTINCT file_path)
+               FROM topic_chains"""
+        ))[0][0]
+        return {
+            "total_chains": total,
+            "unique_files": files,
+        }
+
+    def clear_topic_chains(
+        self, project: Optional[str] = None
+    ) -> None:
+        """Clear topic chains, optionally for a project."""
+        cursor = self.conn.cursor()
+        if project:
+            cursor.execute(
+                "DELETE FROM topic_chains"
+                " WHERE project = ?",
+                (project,),
+            )
+        else:
+            cursor.execute("DELETE FROM topic_chains")
 
     def close(self) -> None:
         """Close database connection."""
