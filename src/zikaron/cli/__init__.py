@@ -1091,6 +1091,186 @@ def group_operations(
         store.close()
 
 
+@app.command("topic-chains")
+def topic_chains(
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Filter by project name"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Clear and rebuild chains"
+    ),
+    stats_only: bool = typer.Option(
+        False, "--stats", help="Show stats and exit"
+    ),
+    file_query: str = typer.Option(
+        None, "--file",
+        help="Show chains for a specific file"
+    ),
+    regression: str = typer.Option(
+        None, "--regression",
+        help="Show regression analysis for a file"
+    ),
+) -> None:
+    """Build topic chains + regression detection (Phase 8d)."""
+    from ..vector_store import VectorStore
+
+    db_path = (
+        Path.home() / ".local" / "share"
+        / "zikaron" / "zikaron.db"
+    )
+    store = VectorStore(db_path)
+
+    try:
+        if regression:
+            result = store.get_file_regression(
+                regression, project=project
+            )
+            if not result["timeline"]:
+                console.print(
+                    f"[dim]No interactions for"
+                    f" '{regression}'[/]"
+                )
+                return
+
+            console.print(
+                f"[bold]Regression: {regression}[/]"
+            )
+            console.print(
+                f"Timeline entries:"
+                f" {len(result['timeline'])}"
+            )
+
+            if result["last_success"]:
+                ls = result["last_success"]
+                console.print(
+                    f"[green]Last success:[/]"
+                    f" {ls['timestamp']}"
+                    f" (session {ls['session_id'][:8]},"
+                    f" branch {ls.get('branch', '?')})"
+                )
+            else:
+                console.print(
+                    "[yellow]No successful operations"
+                    " found[/]"
+                )
+
+            if result["changes_after"]:
+                table = Table(
+                    title="Changes After Last Success"
+                )
+                table.add_column(
+                    "Timestamp", style="cyan"
+                )
+                table.add_column(
+                    "Action", style="yellow"
+                )
+                table.add_column(
+                    "Branch", style="magenta"
+                )
+                table.add_column(
+                    "Session", style="dim"
+                )
+                for c in result["changes_after"][:20]:
+                    ts = (c["timestamp"] or "")[:19]
+                    table.add_row(
+                        ts,
+                        c["action"] or "?",
+                        c.get("branch") or "",
+                        (c["session_id"] or "")[:8],
+                    )
+                console.print(table)
+            return
+
+        if file_query:
+            chains = store.get_file_chains(file_query)
+            if not chains:
+                console.print(
+                    f"[dim]No chains for"
+                    f" '{file_query}'[/]"
+                )
+                return
+
+            table = Table(
+                title=f"Topic Chains: {file_query}"
+            )
+            table.add_column(
+                "Session A", style="cyan"
+            )
+            table.add_column(
+                "Session B", style="green"
+            )
+            table.add_column(
+                "Delta (hrs)", style="yellow"
+            )
+            table.add_column(
+                "Shared", style="magenta"
+            )
+            table.add_column(
+                "Branch A", style="dim"
+            )
+            table.add_column(
+                "Branch B", style="dim"
+            )
+            for c in chains:
+                delta = (
+                    f"{c['time_delta_hours']:.1f}"
+                    if c["time_delta_hours"] is not None
+                    else "?"
+                )
+                table.add_row(
+                    (c["session_a"] or "")[:8],
+                    (c["session_b"] or "")[:8],
+                    delta,
+                    str(c["shared_actions"]),
+                    c.get("branch_a") or "",
+                    c.get("branch_b") or "",
+                )
+            console.print(table)
+            return
+
+        if stats_only:
+            s = store.get_topic_chain_stats()
+            console.print(
+                f"[bold]Total chains:[/]"
+                f" {s['total_chains']}"
+            )
+            console.print(
+                f"[bold]Unique files:[/]"
+                f" {s['unique_files']}"
+            )
+            return
+
+        import logging
+        logging.basicConfig(
+            level=logging.INFO, format="%(message)s"
+        )
+
+        from ..pipeline.temporal_chains import (
+            run_temporal_chains as _run,
+        )
+
+        console.print(
+            "[bold]Building topic chains...[/]"
+        )
+        result = _run(
+            vector_store=store,
+            project=project,
+            force=force,
+        )
+        console.print(
+            f"[green]Done![/] Files:"
+            f" {result['files_analyzed']},"
+            f" Chains: {result['chains_created']}"
+        )
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
