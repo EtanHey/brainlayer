@@ -115,6 +115,35 @@ class VectorStore:
             END
         """)
 
+        # Phase 8b: Git overlay tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_context (
+                session_id TEXT PRIMARY KEY,
+                project TEXT,
+                branch TEXT,
+                pr_number INTEGER,
+                commit_shas TEXT,
+                files_changed TEXT,
+                started_at TEXT,
+                ended_at TEXT,
+                created_at TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                timestamp TEXT,
+                session_id TEXT,
+                action TEXT,
+                chunk_id TEXT,
+                project TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_path ON file_interactions(file_path)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_session ON file_interactions(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_context_project ON session_context(project)")
+
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
@@ -685,6 +714,131 @@ class VectorStore:
             "percent": round(enriched / total * 100, 1) if total > 0 else 0,
             "by_intent": {row[0]: row[1] for row in by_intent},
         }
+
+    # ─── Phase 8b: Git Overlay Methods ──────────────────────────────
+
+    def store_session_context(
+        self,
+        session_id: str,
+        project: str,
+        branch: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        commit_shas: Optional[List[str]] = None,
+        files_changed: Optional[List[str]] = None,
+        started_at: Optional[str] = None,
+        ended_at: Optional[str] = None,
+    ) -> None:
+        """Store git context for a session (upsert)."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO session_context
+            (session_id, project, branch, pr_number, commit_shas,
+             files_changed, started_at, ended_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """, (
+            session_id, project, branch, pr_number,
+            json.dumps(commit_shas) if commit_shas else None,
+            json.dumps(files_changed) if files_changed else None,
+            started_at, ended_at,
+        ))
+
+    def store_file_interactions(
+        self, interactions: List[Dict[str, Any]]
+    ) -> int:
+        """Store file interaction records. Returns count stored."""
+        if not interactions:
+            return 0
+        cursor = self.conn.cursor()
+        count = 0
+        for i in interactions:
+            cursor.execute("""
+                INSERT INTO file_interactions
+                (file_path, timestamp, session_id, action, chunk_id, project)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                i["file_path"], i.get("timestamp"), i["session_id"],
+                i.get("action", "unknown"), i.get("chunk_id"),
+                i.get("project"),
+            ))
+            count += 1
+        return count
+
+    def get_file_timeline(
+        self,
+        file_path: str,
+        project: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Get ordered timeline of interactions with a file."""
+        cursor = self.conn.cursor()
+        query = """
+            SELECT fi.file_path, fi.timestamp, fi.session_id, fi.action,
+                   fi.project, sc.branch, sc.pr_number
+            FROM file_interactions fi
+            LEFT JOIN session_context sc ON fi.session_id = sc.session_id
+            WHERE fi.file_path LIKE ?
+        """
+        params: list = [f"%{file_path}%"]
+        if project:
+            query += " AND fi.project = ?"
+            params.append(project)
+        query += " ORDER BY fi.timestamp ASC LIMIT ?"
+        params.append(limit)
+
+        results = []
+        for row in cursor.execute(query, params):
+            results.append({
+                "file_path": row[0],
+                "timestamp": row[1],
+                "session_id": row[2],
+                "action": row[3],
+                "project": row[4],
+                "branch": row[5],
+                "pr_number": row[6],
+            })
+        return results
+
+    def get_session_context(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get git context for a session."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            "SELECT * FROM session_context WHERE session_id = ?",
+            (session_id,)
+        ))
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "session_id": row[0],
+            "project": row[1],
+            "branch": row[2],
+            "pr_number": row[3],
+            "commit_shas": json.loads(row[4]) if row[4] else [],
+            "files_changed": json.loads(row[5]) if row[5] else [],
+            "started_at": row[6],
+            "ended_at": row[7],
+            "created_at": row[8],
+        }
+
+    def get_git_overlay_stats(self) -> Dict[str, Any]:
+        """Get git overlay statistics."""
+        cursor = self.conn.cursor()
+        sessions = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
+        interactions = list(cursor.execute("SELECT COUNT(*) FROM file_interactions"))[0][0]
+        unique_files = list(cursor.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM file_interactions"
+        ))[0][0]
+        return {
+            "sessions_with_context": sessions,
+            "file_interactions": interactions,
+            "unique_files": unique_files,
+        }
+
+    def clear_session_git_data(self, session_id: str) -> None:
+        """Clear git overlay data for a session (for re-processing)."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM session_context WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM file_interactions WHERE session_id = ?", (session_id,))
 
     def close(self) -> None:
         """Close database connection."""

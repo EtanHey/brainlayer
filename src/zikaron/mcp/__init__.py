@@ -142,6 +142,32 @@ from the same conversation. Useful for understanding isolated search results."""
                 },
                 "required": ["chunk_id"]
             }
+        ),
+        Tool(
+            name="zikaron_file_timeline",
+            description="""Get the interaction timeline for a specific file across sessions.
+
+Shows all Claude Code sessions that read, edited, or wrote to a file,
+ordered chronologically. Useful for understanding a file's history.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "File path or partial path to search for (e.g., 'telegram-bot.ts')"
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional: filter by project name"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Maximum number of interactions to return"
+                    }
+                },
+                "required": ["file_path"]
+            }
         )
     ]
 
@@ -173,6 +199,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             chunk_id=arguments["chunk_id"],
             before=arguments.get("before", 3),
             after=arguments.get("after", 3)
+        )
+
+    elif name == "zikaron_file_timeline":
+        return await _file_timeline(
+            file_path=arguments["file_path"],
+            project=arguments.get("project"),
+            limit=arguments.get("limit", 50)
         )
 
     else:
@@ -334,6 +367,36 @@ async def _context(
 
     except Exception as e:
         return [TextContent(type="text", text=f"Context error: {str(e)}")]
+
+
+async def _file_timeline(
+    file_path: str,
+    project: str | None = None,
+    limit: int = 50,
+) -> list[TextContent]:
+    """Get interaction timeline for a file."""
+    try:
+        store = _get_vector_store()
+        interactions = store.get_file_timeline(file_path, project=project, limit=limit)
+
+        if not interactions:
+            return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
+
+        output_parts = [f"## File Timeline: {file_path}\n"]
+        output_parts.append(f"Found {len(interactions)} interactions:\n")
+
+        for i, row in enumerate(interactions):
+            ts = row.get("timestamp", "?")
+            action = row.get("action", "?")
+            session = row.get("session_id", "?")[:8]
+            proj = row.get("project", "?")
+            fp = row.get("file_path", file_path)
+            output_parts.append(f"{i+1}. **{action}** `{fp}` at {ts} (session: {session}, project: {proj})")
+
+        return [TextContent(type="text", text="\n".join(output_parts))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"File timeline error: {str(e)}")]
 
 
 def serve():

@@ -890,6 +890,89 @@ def enrich(
         raise typer.Exit(1)
 
 
+@app.command("git-overlay")
+def git_overlay(
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Only process specific project slug"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Re-process sessions that already have context"
+    ),
+    max_sessions: int = typer.Option(
+        0, "--max", "-m",
+        help="Max sessions to process (0=all)"
+    ),
+    stats_only: bool = typer.Option(
+        False, "--stats", help="Show stats and exit"
+    ),
+    file_timeline: str = typer.Option(
+        None, "--file", help="Show timeline for a specific file"
+    ),
+) -> None:
+    """Build git overlay: cross-reference sessions with git history (Phase 8b)."""
+    from ..vector_store import VectorStore
+
+    db_path = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
+    store = VectorStore(db_path)
+
+    try:
+        if file_timeline:
+            results = store.get_file_timeline(file_timeline, project=project)
+            if not results:
+                console.print(f"[dim]No interactions found for '{file_timeline}'[/]")
+                return
+
+            table = Table(title=f"File Timeline: {file_timeline}")
+            table.add_column("Timestamp", style="cyan")
+            table.add_column("Action", style="yellow")
+            table.add_column("Project", style="green")
+            table.add_column("Branch", style="magenta")
+            table.add_column("PR", style="blue")
+            table.add_column("Session", style="dim")
+
+            for r in results:
+                ts = (r["timestamp"] or "")[:19]
+                table.add_row(
+                    ts,
+                    r["action"],
+                    r["project"] or "",
+                    r["branch"] or "",
+                    f"#{r['pr_number']}" if r["pr_number"] else "",
+                    (r["session_id"] or "")[:8],
+                )
+            console.print(table)
+            return
+
+        if stats_only:
+            s = store.get_git_overlay_stats()
+            console.print(f"[bold]Sessions with context:[/] {s['sessions_with_context']}")
+            console.print(f"[bold]File interactions:[/] {s['file_interactions']}")
+            console.print(f"[bold]Unique files tracked:[/] {s['unique_files']}")
+            return
+
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+        from ..pipeline.git_overlay import run_git_overlay as _run
+
+        console.print("[bold]Running git overlay...[/]")
+        result = _run(
+            vector_store=store,
+            project=project,
+            force=force,
+            max_sessions=max_sessions,
+        )
+        console.print(f"[green]Done![/] Sessions: {result['sessions_processed']}, "
+                      f"File interactions: {result['file_interactions_added']}")
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
