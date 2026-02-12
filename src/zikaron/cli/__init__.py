@@ -1271,6 +1271,186 @@ def topic_chains(
         store.close()
 
 
+@app.command("plan-linking")
+def plan_linking(
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Filter by project name"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Clear and rebuild plan links"
+    ),
+    stats_only: bool = typer.Option(
+        False, "--stats", help="Show stats and exit"
+    ),
+    plan_query: str = typer.Option(
+        None, "--plan",
+        help="Show sessions for a specific plan"
+    ),
+    session_query: str = typer.Option(
+        None, "--session",
+        help="Show plan info for a session ID"
+    ),
+    repo_root: str = typer.Option(
+        None, "--repo",
+        help="Repo root path (auto-detected)"
+    ),
+) -> None:
+    """Link sessions to active plans (Phase 8c)."""
+    from ..vector_store import VectorStore
+
+    db_path = (
+        Path.home() / ".local" / "share"
+        / "zikaron" / "zikaron.db"
+    )
+    store = VectorStore(db_path)
+
+    try:
+        if session_query:
+            ctx = store.get_session_context(session_query)
+            if not ctx:
+                # Try prefix match
+                cursor = store.conn.cursor()
+                rows = list(cursor.execute(
+                    "SELECT session_id FROM session_context"
+                    " WHERE session_id LIKE ?",
+                    (f"{session_query}%",),
+                ))
+                if len(rows) == 1:
+                    ctx = store.get_session_context(rows[0][0])
+                elif len(rows) > 1:
+                    console.print(
+                        f"[yellow]Multiple sessions"
+                        f" match '{session_query}':[/]"
+                    )
+                    for r in rows[:10]:
+                        console.print(f"  {r[0]}")
+                    return
+            if not ctx:
+                console.print(
+                    f"[dim]No context for session"
+                    f" '{session_query[:8]}'[/]"
+                )
+                return
+            console.print(
+                f"[bold]Session:[/] {ctx['session_id'][:8]}"
+            )
+            console.print(
+                f"  Branch: {ctx.get('branch') or '?'}"
+            )
+            console.print(
+                f"  PR: #{ctx.get('pr_number') or '?'}"
+            )
+            console.print(
+                f"  Plan: {ctx.get('plan_name') or '(none)'}"
+            )
+            console.print(
+                f"  Phase: {ctx.get('plan_phase') or '(none)'}"
+            )
+            console.print(
+                f"  Story: {ctx.get('story_id') or '(none)'}"
+            )
+            return
+
+        if plan_query:
+            sessions = store.get_sessions_by_plan(
+                plan_name=plan_query, project=project
+            )
+            if not sessions:
+                console.print(
+                    f"[dim]No sessions for plan"
+                    f" '{plan_query}'[/]"
+                )
+                return
+
+            table = Table(
+                title=f"Sessions: {plan_query}"
+            )
+            table.add_column(
+                "Session", style="cyan"
+            )
+            table.add_column(
+                "Branch", style="green"
+            )
+            table.add_column(
+                "PR", style="yellow"
+            )
+            table.add_column(
+                "Phase", style="magenta"
+            )
+            table.add_column(
+                "Started", style="dim"
+            )
+            for s in sessions:
+                table.add_row(
+                    (s["session_id"] or "")[:8],
+                    s.get("branch") or "",
+                    f"#{s['pr_number']}"
+                    if s.get("pr_number") else "",
+                    s.get("plan_phase") or "",
+                    (s.get("started_at") or "")[:19],
+                )
+            console.print(table)
+            return
+
+        if stats_only:
+            s = store.get_plan_linking_stats()
+            console.print(
+                f"[bold]Total sessions:[/]"
+                f" {s['total_sessions']}"
+            )
+            console.print(
+                f"[bold]Linked:[/]"
+                f" {s['linked_sessions']}"
+            )
+            console.print(
+                f"[bold]Unlinked:[/]"
+                f" {s['unlinked_sessions']}"
+            )
+            if s["plans"]:
+                table = Table(title="Plans")
+                table.add_column(
+                    "Plan", style="cyan"
+                )
+                table.add_column(
+                    "Sessions", style="green"
+                )
+                for name, count in s["plans"].items():
+                    table.add_row(name, str(count))
+                console.print(table)
+            return
+
+        import logging
+        logging.basicConfig(
+            level=logging.INFO, format="%(message)s"
+        )
+
+        from ..pipeline.plan_linking import (
+            run_plan_linking as _run,
+        )
+
+        console.print(
+            "[bold]Linking sessions to plans...[/]"
+        )
+        result = _run(
+            vector_store=store,
+            repo_root=repo_root,
+            project=project,
+            force=force,
+        )
+        console.print(
+            f"[green]Done![/] Checked:"
+            f" {result['sessions_checked']},"
+            f" Linked: {result['sessions_linked']}"
+        )
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(

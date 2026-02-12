@@ -219,7 +219,43 @@ ordered chronologically. Useful for understanding a file's history.""",
                 },
                 "required": ["file_path"]
             }
-        )
+        ),
+        Tool(
+            name="zikaron_plan_links",
+            description=(
+                "Query plan-linked sessions."
+                " Shows which plan/phase a session belongs"
+                " to, or lists all sessions for a plan."
+                " Useful for: 'which plan was I working"
+                " on in this session?' or 'show all"
+                " sessions for componentize-golems'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "plan_name": {
+                        "type": "string",
+                        "description": (
+                            "Plan name to query"
+                            " (e.g. 'local-llm-integration')"
+                        )
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": (
+                            "Session ID to look up"
+                            " plan info for"
+                        )
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Optional: filter by project"
+                        )
+                    },
+                },
+            }
+        ),
     ]
 
 
@@ -267,6 +303,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     elif name == "zikaron_regression":
         return await _regression(
             file_path=arguments["file_path"],
+            project=arguments.get("project"),
+        )
+
+    elif name == "zikaron_plan_links":
+        return await _plan_links(
+            plan_name=arguments.get("plan_name"),
+            session_id=arguments.get("session_id"),
             project=arguments.get("project"),
         )
 
@@ -570,6 +613,76 @@ async def _regression(
         return [TextContent(
             type="text",
             text=f"Regression error: {str(e)}",
+        )]
+
+
+async def _plan_links(
+    plan_name: str | None = None,
+    session_id: str | None = None,
+    project: str | None = None,
+) -> list[TextContent]:
+    """Query plan-linked sessions."""
+    try:
+        store = _get_vector_store()
+
+        if session_id:
+            ctx = store.get_session_context(session_id)
+            if not ctx:
+                return [TextContent(
+                    type="text",
+                    text=f"No context for session '{session_id[:8]}'.",
+                )]
+            parts = [
+                f"## Session {ctx['session_id'][:8]}\n",
+                f"- Branch: {ctx.get('branch') or '?'}",
+                f"- PR: #{ctx.get('pr_number') or '?'}",
+                f"- Plan: {ctx.get('plan_name') or '(none)'}",
+                f"- Phase: {ctx.get('plan_phase') or '(none)'}",
+                f"- Story: {ctx.get('story_id') or '(none)'}",
+            ]
+            return [TextContent(
+                type="text", text="\n".join(parts),
+            )]
+
+        sessions = store.get_sessions_by_plan(
+            plan_name=plan_name, project=project
+        )
+        if not sessions:
+            if plan_name:
+                msg = f"No sessions linked to plan '{plan_name}'."
+            else:
+                msg = "No plan-linked sessions found."
+            return [TextContent(type="text", text=msg)]
+
+        title = plan_name or "All Plans"
+        parts = [f"## Sessions: {title}\n"]
+        for s in sessions[:30]:
+            sid = (s["session_id"] or "")[:8]
+            branch = s.get("branch") or "?"
+            pr = f"#{s['pr_number']}" if s.get("pr_number") else ""
+            phase = s.get("plan_phase") or ""
+            plan = s.get("plan_name") or ""
+            started = (s.get("started_at") or "")[:19]
+            parts.append(
+                f"- {sid} | {plan}/{phase}"
+                f" | {branch} {pr}"
+                f" | {started}"
+            )
+
+        stats = store.get_plan_linking_stats()
+        parts.append(
+            f"\nTotal: {stats['linked_sessions']}"
+            f"/{stats['total_sessions']} linked"
+        )
+
+        return [TextContent(
+            type="text", text="\n".join(parts),
+        )]
+
+    except Exception as e:
+        return [TextContent(
+            type="text",
+            text=f"Plan links error: {str(e)}",
         )]
 
 

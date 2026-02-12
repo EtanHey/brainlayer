@@ -130,6 +130,14 @@ class VectorStore:
                 created_at TEXT
             )
         """)
+        # Phase 8c: Plan linking columns on session_context
+        for col in ("plan_name", "plan_phase", "story_id"):
+            try:
+                cursor.execute(
+                    f"ALTER TABLE session_context ADD COLUMN {col} TEXT"
+                )
+            except apsw.SQLError:
+                pass  # column already exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS file_interactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -790,19 +798,42 @@ class VectorStore:
         files_changed: Optional[List[str]] = None,
         started_at: Optional[str] = None,
         ended_at: Optional[str] = None,
+        plan_name: Optional[str] = None,
+        plan_phase: Optional[str] = None,
+        story_id: Optional[str] = None,
     ) -> None:
-        """Store git context for a session (upsert)."""
+        """Store git context for a session (upsert).
+
+        Preserves existing plan_name/plan_phase/story_id
+        if not provided (avoids wiping plan links on
+        git overlay re-runs).
+        """
         cursor = self.conn.cursor()
+        # Preserve existing plan fields if not provided
+        if plan_name is None:
+            existing = list(cursor.execute(
+                "SELECT plan_name, plan_phase, story_id"
+                " FROM session_context"
+                " WHERE session_id = ?",
+                (session_id,),
+            ))
+            if existing:
+                plan_name = existing[0][0]
+                plan_phase = plan_phase or existing[0][1]
+                story_id = story_id or existing[0][2]
         cursor.execute("""
             INSERT OR REPLACE INTO session_context
             (session_id, project, branch, pr_number, commit_shas,
-             files_changed, started_at, ended_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             files_changed, started_at, ended_at, created_at,
+             plan_name, plan_phase, story_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
+                    ?, ?, ?)
         """, (
             session_id, project, branch, pr_number,
             json.dumps(commit_shas) if commit_shas else None,
             json.dumps(files_changed) if files_changed else None,
             started_at, ended_at,
+            plan_name, plan_phase, story_id,
         ))
 
     def store_file_interactions(
@@ -871,7 +902,7 @@ class VectorStore:
         if not rows:
             return None
         row = rows[0]
-        return {
+        result = {
             "session_id": row[0],
             "project": row[1],
             "branch": row[2],
@@ -882,6 +913,126 @@ class VectorStore:
             "ended_at": row[7],
             "created_at": row[8],
         }
+        # Plan linking columns (may not exist in old DBs)
+        if len(row) > 9:
+            result["plan_name"] = row[9]
+            result["plan_phase"] = row[10]
+            result["story_id"] = row[11]
+        return result
+
+    def update_session_plan(
+        self,
+        session_id: str,
+        plan_name: Optional[str] = None,
+        plan_phase: Optional[str] = None,
+        story_id: Optional[str] = None,
+    ) -> bool:
+        """Update plan linking fields for an existing session.
+
+        Returns True if session was found and updated.
+        """
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            "SELECT 1 FROM session_context WHERE session_id = ?",
+            (session_id,),
+        ))
+        if not rows:
+            return False
+        cursor.execute("""
+            UPDATE session_context
+            SET plan_name = ?, plan_phase = ?, story_id = ?
+            WHERE session_id = ?
+        """, (plan_name, plan_phase, story_id, session_id))
+        return True
+
+    def get_sessions_by_plan(
+        self,
+        plan_name: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get all sessions linked to a plan (or all linked sessions)."""
+        cursor = self.conn.cursor()
+        query = (
+            "SELECT session_id, project, branch, pr_number,"
+            " started_at, ended_at, plan_name, plan_phase, story_id"
+            " FROM session_context"
+            " WHERE plan_name IS NOT NULL"
+        )
+        params: list = []
+        if plan_name:
+            query += " AND plan_name = ?"
+            params.append(plan_name)
+        if project:
+            query += " AND project = ?"
+            params.append(project)
+        query += " ORDER BY started_at ASC"
+
+        results = []
+        for row in cursor.execute(query, params):
+            results.append({
+                "session_id": row[0],
+                "project": row[1],
+                "branch": row[2],
+                "pr_number": row[3],
+                "started_at": row[4],
+                "ended_at": row[5],
+                "plan_name": row[6],
+                "plan_phase": row[7],
+                "story_id": row[8],
+            })
+        return results
+
+    def get_plan_linking_stats(self) -> Dict[str, Any]:
+        """Get plan linking statistics."""
+        cursor = self.conn.cursor()
+        total = list(cursor.execute(
+            "SELECT COUNT(*) FROM session_context"
+        ))[0][0]
+        linked = list(cursor.execute(
+            "SELECT COUNT(*) FROM session_context"
+            " WHERE plan_name IS NOT NULL"
+        ))[0][0]
+        plans = list(cursor.execute(
+            "SELECT plan_name, COUNT(*) FROM session_context"
+            " WHERE plan_name IS NOT NULL"
+            " GROUP BY plan_name ORDER BY COUNT(*) DESC"
+        ))
+        return {
+            "total_sessions": total,
+            "linked_sessions": linked,
+            "unlinked_sessions": total - linked,
+            "plans": {row[0]: row[1] for row in plans},
+        }
+
+    def clear_plan_links(
+        self, project: Optional[str] = None
+    ) -> int:
+        """Clear plan links. Returns count cleared."""
+        cursor = self.conn.cursor()
+        if project:
+            rows = list(cursor.execute(
+                "SELECT COUNT(*) FROM session_context"
+                " WHERE plan_name IS NOT NULL AND project = ?",
+                (project,),
+            ))
+            cursor.execute(
+                "UPDATE session_context"
+                " SET plan_name = NULL, plan_phase = NULL,"
+                " story_id = NULL"
+                " WHERE project = ?",
+                (project,),
+            )
+        else:
+            rows = list(cursor.execute(
+                "SELECT COUNT(*) FROM session_context"
+                " WHERE plan_name IS NOT NULL"
+            ))
+            cursor.execute(
+                "UPDATE session_context"
+                " SET plan_name = NULL, plan_phase = NULL,"
+                " story_id = NULL"
+            )
+        return rows[0][0] if rows else 0
 
     def get_git_overlay_stats(self) -> Dict[str, Any]:
         """Get git overlay statistics."""
