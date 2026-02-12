@@ -973,6 +973,124 @@ def git_overlay(
         store.close()
 
 
+@app.command("group-operations")
+def group_operations(
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Only process specific project name"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Re-process sessions with existing operations"
+    ),
+    max_sessions: int = typer.Option(
+        0, "--max", "-m",
+        help="Max sessions to process (0=all)"
+    ),
+    stats_only: bool = typer.Option(
+        False, "--stats", help="Show stats and exit"
+    ),
+    session: str = typer.Option(
+        None, "--session", "-s",
+        help="Show operations for a specific session"
+    ),
+) -> None:
+    """Group chunks into logical operations (Phase 8a)."""
+    from ..vector_store import VectorStore
+
+    db_path = (
+        Path.home() / ".local" / "share"
+        / "zikaron" / "zikaron.db"
+    )
+    store = VectorStore(db_path)
+
+    try:
+        if session:
+            ops = store.get_session_operations(session)
+            if not ops:
+                console.print(
+                    f"[dim]No operations for session"
+                    f" '{session[:8]}...'[/]"
+                )
+                return
+
+            table = Table(
+                title=f"Operations: {session[:8]}..."
+            )
+            table.add_column("Type", style="cyan")
+            table.add_column("Summary", style="white")
+            table.add_column("Steps", style="yellow")
+            table.add_column("Outcome", style="green")
+            table.add_column("Started", style="dim")
+
+            for op in ops:
+                outcome_style = {
+                    "success": "[green]success[/]",
+                    "failure": "[red]failure[/]",
+                }.get(
+                    op["outcome"],
+                    f"[dim]{op['outcome']}[/]",
+                )
+                ts = (op["started_at"] or "")[:19]
+                table.add_row(
+                    op["operation_type"],
+                    op["summary"],
+                    str(op["step_count"]),
+                    outcome_style,
+                    ts,
+                )
+            console.print(table)
+            return
+
+        if stats_only:
+            s = store.get_operations_stats()
+            console.print(
+                "[bold]Total operations:[/]"
+                f" {s['total_operations']}"
+            )
+            console.print(
+                "[bold]Sessions with operations:[/]"
+                f" {s['sessions_with_operations']}"
+            )
+            if s["by_type"]:
+                table = Table(title="By Type")
+                table.add_column("Type", style="cyan")
+                table.add_column("Count", style="yellow")
+                for t, c in s["by_type"].items():
+                    table.add_row(t, str(c))
+                console.print(table)
+            return
+
+        import logging
+        logging.basicConfig(
+            level=logging.INFO, format="%(message)s"
+        )
+
+        from ..pipeline.operation_grouping import (
+            run_operation_grouping as _run,
+        )
+
+        console.print(
+            "[bold]Grouping operations...[/]"
+        )
+        result = _run(
+            vector_store=store,
+            project=project,
+            force=force,
+            max_sessions=max_sessions,
+        )
+        console.print(
+            f"[green]Done![/] Sessions:"
+            f" {result['sessions_processed']},"
+            f" Operations: {result['operations_added']}"
+        )
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(

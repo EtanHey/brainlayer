@@ -171,6 +171,25 @@ ordered chronologically. Useful for understanding a file's history.""",
                 },
                 "required": ["file_path"]
             }
+        ),
+        Tool(
+            name="zikaron_operations",
+            description=(
+                "Get logical operation groups for a session."
+                " Operations are patterns like"
+                " read→edit→test cycles, research chains,"
+                " or debug sequences."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to query"
+                    },
+                },
+                "required": ["session_id"]
+            }
         )
     ]
 
@@ -209,6 +228,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             file_path=arguments["file_path"],
             project=arguments.get("project"),
             limit=arguments.get("limit", 50)
+        )
+
+    elif name == "zikaron_operations":
+        return await _operations(
+            session_id=arguments["session_id"],
         )
 
     else:
@@ -403,6 +427,49 @@ async def _file_timeline(
 
     except Exception as e:
         return [TextContent(type="text", text=f"File timeline error: {str(e)}")]
+
+
+async def _operations(
+    session_id: str,
+) -> list[TextContent]:
+    """Get operations for a session."""
+    try:
+        store = _get_vector_store()
+        ops = store.get_session_operations(session_id)
+
+        if not ops:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"No operations for session"
+                    f" '{session_id[:8]}...'."
+                ),
+            )]
+
+        output_parts = [
+            f"## Operations: {session_id[:8]}...\n",
+            f"Found {len(ops)} operations:\n",
+        ]
+
+        for i, op in enumerate(ops):
+            outcome = op.get("outcome", "unknown")
+            ts = (op.get("started_at") or "?")[:19]
+            output_parts.append(
+                f"{i+1}. **{op['operation_type']}**"
+                f" — {op['summary']}"
+                f" [{outcome}] at {ts}"
+            )
+
+        return [TextContent(
+            type="text",
+            text="\n".join(output_parts),
+        )]
+
+    except Exception as e:
+        return [TextContent(
+            type="text",
+            text=f"Operations error: {str(e)}",
+        )]
 
 
 def serve():

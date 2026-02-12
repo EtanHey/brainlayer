@@ -2,6 +2,7 @@
 
 import json
 import struct
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -154,6 +155,32 @@ class VectorStore:
             "CREATE INDEX IF NOT EXISTS"
             " idx_session_context_project"
             " ON session_context(project)"
+        )
+
+        # Phase 8a: Operations table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS operations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                operation_type TEXT,
+                chunk_ids TEXT,
+                summary TEXT,
+                outcome TEXT,
+                started_at TEXT,
+                ended_at TEXT,
+                step_count INTEGER DEFAULT 0,
+                created_at TEXT
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_operations_session"
+            " ON operations(session_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_operations_type"
+            " ON operations(operation_type)"
         )
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
@@ -851,6 +878,123 @@ class VectorStore:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM session_context WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM file_interactions WHERE session_id = ?", (session_id,))
+
+    def store_operations(
+        self,
+        operations: List[Dict[str, Any]],
+    ) -> int:
+        """Store operation groups.
+
+        Args:
+            operations: List of dicts with id, session_id,
+                operation_type, chunk_ids, summary, outcome,
+                started_at, ended_at, step_count.
+
+        Returns:
+            Number of operations stored.
+        """
+        if not operations:
+            return 0
+        cursor = self.conn.cursor()
+        from datetime import timezone
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for op in operations:
+            chunk_ids_json = json.dumps(
+                op.get("chunk_ids", [])
+            )
+            cursor.execute(
+                """INSERT OR REPLACE INTO operations
+                (id, session_id, operation_type, chunk_ids,
+                 summary, outcome, started_at, ended_at,
+                 step_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    op["id"],
+                    op["session_id"],
+                    op.get("operation_type"),
+                    chunk_ids_json,
+                    op.get("summary"),
+                    op.get("outcome"),
+                    op.get("started_at"),
+                    op.get("ended_at"),
+                    op.get("step_count", 0),
+                    now,
+                ),
+            )
+            count += 1
+        return count
+
+    def get_session_operations(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get all operations for a session."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            """SELECT id, session_id, operation_type,
+                      chunk_ids, summary, outcome,
+                      started_at, ended_at, step_count
+               FROM operations
+               WHERE session_id = ?
+               ORDER BY started_at""",
+            (session_id,),
+        ))
+        results = []
+        for row in rows:
+            chunk_ids = []
+            if row[3]:
+                try:
+                    chunk_ids = json.loads(row[3])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            results.append({
+                "id": row[0],
+                "session_id": row[1],
+                "operation_type": row[2],
+                "chunk_ids": chunk_ids,
+                "summary": row[4],
+                "outcome": row[5],
+                "started_at": row[6],
+                "ended_at": row[7],
+                "step_count": row[8],
+            })
+        return results
+
+    def get_operations_stats(self) -> Dict[str, Any]:
+        """Get operation grouping statistics."""
+        cursor = self.conn.cursor()
+        total = list(cursor.execute(
+            "SELECT COUNT(*) FROM operations"
+        ))[0][0]
+        by_type = list(cursor.execute(
+            """SELECT operation_type, COUNT(*)
+               FROM operations
+               GROUP BY operation_type
+               ORDER BY COUNT(*) DESC"""
+        ))
+        sessions = list(cursor.execute(
+            """SELECT COUNT(DISTINCT session_id)
+               FROM operations"""
+        ))[0][0]
+        return {
+            "total_operations": total,
+            "sessions_with_operations": sessions,
+            "by_type": {
+                (row[0] or "unknown"): row[1]
+                for row in by_type
+            },
+        }
+
+    def clear_session_operations(
+        self, session_id: str
+    ) -> None:
+        """Clear operations for a session."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM operations WHERE session_id = ?",
+            (session_id,),
+        )
 
     def close(self) -> None:
         """Close database connection."""
