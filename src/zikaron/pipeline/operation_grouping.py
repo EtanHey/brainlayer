@@ -72,15 +72,40 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
         "is_user_message": content_type == "user_message",
         "is_assistant": content_type == "assistant_text",
         "timestamp": chunk.get("timestamp"),
+        "snippet": "",  # brief context for summaries
     }
 
+    # Extract a short snippet for summary context
+    # Take first meaningful line (skip empty, very short)
+    for line in content.split("\n"):
+        line = line.strip()
+        if len(line) > 10 and not line.startswith("#"):
+            info["snippet"] = line[:80]
+            break
+
+    # Extract file paths from content
+    import re
+    file_match = re.search(
+        r'(?:file_path|path)[=:]\s*["\']?'
+        r'([^\s"\']+\.\w+)',
+        content,
+    )
+    if file_match:
+        info["file_path"] = file_match.group(1)
+    else:
+        # Also match bare file paths
+        bare_match = re.search(
+            r'(?:^|\s)(/[^\s]+\.\w{1,5})',
+            content,
+        )
+        if bare_match:
+            info["file_path"] = bare_match.group(1)
+
     # Detect tool calls from content patterns
-    # Check for tool_use blocks or tool names in content
     has_tool_marker = (
         "tool_use" in content
         or "Tool:" in content
     )
-    # Also detect tools in assistant text (chunked output)
     if has_tool_marker or content_type == "assistant_text":
         for tool in ALL_FILE_TOOLS:
             if tool in content:
@@ -181,9 +206,9 @@ def _generate_summary(
     actions = [s["action"] for s in steps if s["action"]]
     unique_actions = list(dict.fromkeys(actions))  # ordered
 
-    action_str = " → ".join(unique_actions[:5])
+    action_str = " -> ".join(unique_actions[:5])
     if len(unique_actions) > 5:
-        action_str += " → ..."
+        action_str += " -> ..."
 
     type_labels = {
         OP_EDIT_CYCLE: "Edit cycle",
@@ -194,7 +219,41 @@ def _generate_summary(
         OP_REVIEW: "Code review",
     }
     label = type_labels.get(op_type, op_type)
-    return f"{label}: {action_str} ({step_count} steps)"
+
+    # Extract file context from steps
+    files = []
+    for s in steps:
+        fp = s.get("file_path")
+        if fp:
+            # Extract just the filename
+            import os
+            basename = os.path.basename(fp)
+            if basename and basename not in files:
+                files.append(basename)
+    file_ctx = ""
+    if files:
+        shown = files[:3]
+        file_ctx = " on " + ", ".join(shown)
+        if len(files) > 3:
+            file_ctx += f" +{len(files)-3}"
+
+    # Extract topic from first user message or snippet
+    topic = ""
+    if not file_ctx:
+        for s in steps:
+            if s.get("snippet"):
+                topic = f": {s['snippet'][:50]}"
+                break
+
+    parts = [label]
+    if action_str:
+        parts.append(f"({action_str})")
+    if file_ctx:
+        parts.append(file_ctx)
+    elif topic:
+        parts.append(topic)
+    parts.append(f"[{step_count} steps]")
+    return " ".join(parts)
 
 
 def group_session_chunks(
@@ -366,6 +425,9 @@ def run_operation_grouping(
             )
             if existing:
                 continue
+        else:
+            # Clear existing operations for re-processing
+            vector_store.clear_session_operations(session_id)
 
         # Get chunks for this session
         source_file_pattern = f"%{session_id}%"
