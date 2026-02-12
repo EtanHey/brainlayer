@@ -1451,6 +1451,70 @@ def plan_linking(
         store.close()
 
 
+@app.command("export-obsidian")
+def export_obsidian(
+    vault_path: str = typer.Option(
+        None, "--vault", "-v",
+        help="Obsidian vault path"
+        " (default: ~/.golems-brain/Zikaron)"
+    ),
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Filter by project name"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Overwrite existing notes"
+    ),
+) -> None:
+    """Export Zikaron data to Obsidian vault (Phase 9)."""
+    from ..vector_store import VectorStore
+
+    db_path = (
+        Path.home() / ".local" / "share"
+        / "zikaron" / "zikaron.db"
+    )
+    store = VectorStore(db_path)
+
+    try:
+        import logging
+        logging.basicConfig(
+            level=logging.INFO, format="%(message)s"
+        )
+
+        from ..pipeline.obsidian_export import (
+            export_obsidian as _export,
+        )
+
+        console.print(
+            "[bold]Exporting to Obsidian vault...[/]"
+        )
+        result = _export(
+            vector_store=store,
+            vault_path=vault_path,
+            project=project,
+            force=force,
+        )
+        console.print(
+            f"[green]Done![/]"
+            f" Sessions: {result['sessions']},"
+            f" Files: {result['files']},"
+            f" Plans: {result['plans']},"
+            f" Dashboards: {result['dashboards']}"
+        )
+        vault = vault_path or str(
+            Path.home() / ".golems-brain" / "Zikaron"
+        )
+        console.print(
+            f"[dim]Vault: {vault}[/]"
+        )
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(
