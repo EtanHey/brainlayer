@@ -140,9 +140,21 @@ class VectorStore:
                 project TEXT
             )
         """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_path ON file_interactions(file_path)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_session ON file_interactions(session_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_context_project ON session_context(project)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_file_interactions_path"
+            " ON file_interactions(file_path)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_file_interactions_session"
+            " ON file_interactions(session_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS"
+            " idx_session_context_project"
+            " ON session_context(project)"
+        )
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]

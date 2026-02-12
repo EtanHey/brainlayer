@@ -154,7 +154,10 @@ ordered chronologically. Useful for understanding a file's history.""",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "File path or partial path to search for (e.g., 'telegram-bot.ts')"
+                        "description": (
+                            "File path or partial path to search"
+                            " for (e.g., 'telegram-bot.ts')"
+                        )
                     },
                     "project": {
                         "type": "string",
@@ -352,7 +355,7 @@ async def _context(
         if not result.get("context"):
             return [TextContent(type="text", text="No context available for this chunk.")]
 
-        output_parts = [f"## Conversation Context\n"]
+        output_parts = ["## Conversation Context\n"]
 
         for chunk in result["context"]:
             marker = " **[TARGET]**" if chunk.get("is_target") else ""
@@ -391,7 +394,10 @@ async def _file_timeline(
             session = row.get("session_id", "?")[:8]
             proj = row.get("project", "?")
             fp = row.get("file_path", file_path)
-            output_parts.append(f"{i+1}. **{action}** `{fp}` at {ts} (session: {session}, project: {proj})")
+            output_parts.append(
+                f"{i+1}. **{action}** `{fp}` at {ts}"
+                f" (session: {session}, project: {proj})"
+            )
 
         return [TextContent(type="text", text="\n".join(output_parts))]
 

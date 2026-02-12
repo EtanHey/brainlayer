@@ -188,11 +188,7 @@ def get_git_context(
 
     # Try to extract PR number from branch name
     if branch and branch not in ("master", "main", "HEAD"):
-        pr_output = _git_cmd(
-            ["log", "--oneline", "--grep", f"#{branch}", "-1"],
-            repo_path,
-        )
-        # Also try gh CLI for PR number
+        # Try gh CLI for PR number
         try:
             result = subprocess.run(
                 ["gh", "pr", "list", "--head", branch, "--json", "number",
