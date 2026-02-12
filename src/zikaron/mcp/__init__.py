@@ -82,6 +82,19 @@ The knowledge base contains indexed conversations organized by:
                             "Filter by data source (default: claude_code)."
                             " Use 'all' to search everything."
                         )
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Filter by tag (e.g. 'bug-fix', 'authentication', 'typescript')"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"],
+                        "description": "Filter by intent classification"
+                    },
+                    "importance_min": {
+                        "type": "number",
+                        "description": "Minimum importance score (1-10)"
                     }
                 },
                 "required": ["query"]
@@ -143,7 +156,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             project=arguments.get("project"),
             content_type=arguments.get("content_type"),
             num_results=arguments.get("num_results", 5),
-            source=arguments.get("source")
+            source=arguments.get("source"),
+            tag=arguments.get("tag"),
+            intent=arguments.get("intent"),
+            importance_min=arguments.get("importance_min"),
         )
 
     elif name == "zikaron_stats":
@@ -168,7 +184,10 @@ async def _search(
     project: str | None = None,
     content_type: str | None = None,
     num_results: int = 5,
-    source: str | None = None
+    source: str | None = None,
+    tag: str | None = None,
+    intent: str | None = None,
+    importance_min: float | None = None,
 ) -> list[TextContent]:
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
@@ -205,7 +224,10 @@ async def _search(
             n_results=num_results,
             project_filter=project,
             content_type_filter=content_type,
-            source_filter=source_filter
+            source_filter=source_filter,
+            tag_filter=tag,
+            intent_filter=intent,
+            importance_min=importance_min,
         )
 
         if not results["documents"][0]:
@@ -221,7 +243,19 @@ async def _search(
         )):
             score = 1 - dist if dist is not None else 0
             output_parts.append(f"\n### Result {i+1} (score: {score:.3f})")
+            # Enrichment header line
+            enrichment_parts = []
+            if meta.get("intent"):
+                enrichment_parts.append(f"Intent: {meta['intent']}")
+            if meta.get("importance") is not None:
+                enrichment_parts.append(f"Importance: {meta['importance']:.0f}/10")
+            if meta.get("tags") and isinstance(meta["tags"], list):
+                enrichment_parts.append(f"Tags: {', '.join(str(t) for t in meta['tags'][:5])}")
             output_parts.append(f"**Project:** {meta.get('project', 'unknown')} | **Type:** {meta.get('content_type', 'unknown')}")
+            if enrichment_parts:
+                output_parts.append(f"**{' | '.join(enrichment_parts)}**")
+            if meta.get("summary"):
+                output_parts.append(f"> {meta['summary']}")
             output_parts.append(f"**Source:** `{meta.get('source_file', 'unknown')}`\n")
             output_parts.append(doc[:1000] + ("..." if len(doc) > 1000 else ""))
             output_parts.append("\n---")

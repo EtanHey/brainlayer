@@ -856,6 +856,40 @@ def migrate() -> None:
     migrate_command()
 
 
+@app.command("enrich")
+def enrich(
+    batch_size: int = typer.Option(50, "--batch-size", "-b", help="Chunks per batch"),
+    max_chunks: int = typer.Option(0, "--max", "-m", help="Max chunks (0=unlimited)"),
+    no_context: bool = typer.Option(False, "--no-context", help="Skip surrounding context"),
+    stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
+) -> None:
+    """Enrich chunks with LLM-generated metadata (summary, tags, importance, intent)."""
+    try:
+        from ..pipeline.enrichment import run_enrichment, DEFAULT_DB_PATH
+        from ..vector_store import VectorStore
+
+        if stats_only:
+            store = VectorStore(DEFAULT_DB_PATH)
+            try:
+                s = store.get_enrichment_stats()
+                console.print(f"[bold]Total:[/] {s['total_chunks']}")
+                console.print(f"[bold]Enriched:[/] {s['enriched']} ({s['percent']}%)")
+                console.print(f"[bold]Remaining:[/] {s['remaining']}")
+                if s['by_intent']:
+                    console.print(f"[bold]Intent distribution:[/] {s['by_intent']}")
+            finally:
+                store.close()
+        else:
+            run_enrichment(
+                batch_size=batch_size,
+                max_chunks=max_chunks,
+                with_context=not no_context,
+            )
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(

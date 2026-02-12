@@ -60,6 +60,11 @@ class VectorStore:
             ("source", "TEXT"), ("sender", "TEXT"), ("language", "TEXT"),
             ("conversation_id", "TEXT"), ("position", "INTEGER"), ("context_summary", "TEXT"),
             ("tags", "TEXT"), ("tag_confidence", "REAL"),
+            # Enrichment columns (Phase 5)
+            ("summary", "TEXT"),
+            ("importance", "REAL"),
+            ("intent", "TEXT"),
+            ("enriched_at", "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -71,6 +76,9 @@ class VectorStore:
             ("idx_chunks_source", "source"),
             ("idx_chunks_sender", "sender"),
             ("idx_chunks_conversation", "conversation_id"),
+            ("idx_chunks_intent", "intent"),
+            ("idx_chunks_importance", "importance"),
+            ("idx_chunks_enriched", "enriched_at"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -166,7 +174,10 @@ class VectorStore:
         content_type_filter: Optional[str] = None,
         source_filter: Optional[str] = None,
         sender_filter: Optional[str] = None,
-        language_filter: Optional[str] = None
+        language_filter: Optional[str] = None,
+        tag_filter: Optional[str] = None,
+        intent_filter: Optional[str] = None,
+        importance_min: Optional[float] = None
     ) -> Dict[str, List]:
         """Search chunks by embedding or text."""
 
@@ -194,6 +205,15 @@ class VectorStore:
             if language_filter:
                 where_clauses.append("c.language = ?")
                 params.insert(-1, language_filter)
+            if tag_filter:
+                where_clauses.append("c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)")
+                params.insert(-1, tag_filter)
+            if intent_filter:
+                where_clauses.append("c.intent = ?")
+                params.insert(-1, intent_filter)
+            if importance_min is not None:
+                where_clauses.append("c.importance >= ?")
+                params.insert(-1, importance_min)
 
             where_sql = ""
             if where_clauses:
@@ -203,7 +223,8 @@ class VectorStore:
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
-                       v.distance
+                       v.distance,
+                       c.summary, c.tags, c.importance, c.intent
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -232,13 +253,23 @@ class VectorStore:
             if language_filter:
                 where_clauses.append("language = ?")
                 params.append(language_filter)
+            if tag_filter:
+                where_clauses.append("tags IS NOT NULL AND json_valid(tags) = 1 AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)")
+                params.append(tag_filter)
+            if intent_filter:
+                where_clauses.append("intent = ?")
+                params.append(intent_filter)
+            if importance_min is not None:
+                where_clauses.append("importance >= ?")
+                params.append(importance_min)
 
             params.append(n_results)
 
             query = f"""
                 SELECT id, content, metadata, source_file, project,
                        content_type, value_type, char_count,
-                       NULL as distance
+                       NULL as distance,
+                       summary, tags, importance, intent
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -264,8 +295,20 @@ class VectorStore:
                 "project": row[4],
                 "content_type": row[5],
                 "value_type": row[6],
-                "char_count": row[7]
+                "char_count": row[7],
             })
+            # Enrichment fields (may be None if not yet enriched)
+            if row[9]:
+                metadata["summary"] = row[9]
+            if row[10]:
+                try:
+                    metadata["tags"] = json.loads(row[10])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if row[11] is not None:
+                metadata["importance"] = row[11]
+            if row[12]:
+                metadata["intent"] = row[12]
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -343,6 +386,9 @@ class VectorStore:
         source_filter: Optional[str] = None,
         sender_filter: Optional[str] = None,
         language_filter: Optional[str] = None,
+        tag_filter: Optional[str] = None,
+        intent_filter: Optional[str] = None,
+        importance_min: Optional[float] = None,
         k: int = 60
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
@@ -356,6 +402,9 @@ class VectorStore:
             source_filter=source_filter,
             sender_filter=sender_filter,
             language_filter=language_filter,
+            tag_filter=tag_filter,
+            intent_filter=intent_filter,
+            importance_min=importance_min,
         )
 
         # Build semantic rank map: chunk_content -> rank
@@ -368,16 +417,30 @@ class VectorStore:
 
         # 2. FTS5 keyword search
         cursor = self.conn.cursor()
-        fts_results = list(cursor.execute("""
+        fts_extra = []
+        fts_params: list = [query_text]
+        if tag_filter:
+            fts_extra.append("AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)")
+            fts_params.append(tag_filter)
+        if intent_filter:
+            fts_extra.append("AND c.intent = ?")
+            fts_params.append(intent_filter)
+        if importance_min is not None:
+            fts_extra.append("AND c.importance >= ?")
+            fts_params.append(importance_min)
+        fts_params.append(n_results * 3)
+
+        fts_results = list(cursor.execute(f"""
             SELECT f.chunk_id, f.rank,
                    c.content, c.metadata, c.source_file, c.project,
-                   c.content_type, c.value_type, c.char_count
+                   c.content_type, c.value_type, c.char_count,
+                   c.summary, c.tags, c.importance, c.intent
             FROM chunks_fts f
             JOIN chunks c ON f.chunk_id = c.id
-            WHERE chunks_fts MATCH ?
+            WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
             ORDER BY f.rank
             LIMIT ?
-        """, (query_text, n_results * 3)))
+        """, fts_params))
 
         # Build FTS rank map
         fts_ranks = {}
@@ -393,6 +456,10 @@ class VectorStore:
                 "content_type": row[6],
                 "value_type": row[7],
                 "char_count": row[8],
+                "summary": row[9],
+                "tags": row[10],
+                "importance": row[11],
+                "intent": row[12],
             }
 
         # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
@@ -438,6 +505,17 @@ class VectorStore:
                     "value_type": data["value_type"],
                     "char_count": data["char_count"],
                 })
+                if data.get("summary"):
+                    meta["summary"] = data["summary"]
+                if data.get("tags"):
+                    try:
+                        meta["tags"] = json.loads(data["tags"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if data.get("importance") is not None:
+                    meta["importance"] = data["importance"]
+                if data.get("intent"):
+                    meta["intent"] = data["intent"]
                 dist = None
             else:
                 continue
@@ -515,6 +593,97 @@ class VectorStore:
         return {
             "target": {"id": chunk_id, "content": content, "position": position},
             "context": context,
+        }
+
+    def get_unenriched_chunks(
+        self,
+        batch_size: int = 50,
+        content_types: Optional[List[str]] = None,
+        min_char_count: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get chunks that haven't been enriched yet, for batch processing."""
+        cursor = self.conn.cursor()
+
+        where = ["enriched_at IS NULL", "char_count >= ?"]
+        params: list = [min_char_count]
+
+        if content_types:
+            placeholders = ",".join("?" for _ in content_types)
+            where.append(f"content_type IN ({placeholders})")
+            params.extend(content_types)
+
+        params.append(batch_size)
+
+        results = list(cursor.execute(f"""
+            SELECT id, content, source_file, project, content_type,
+                   conversation_id, position, char_count
+            FROM chunks
+            WHERE {" AND ".join(where)}
+            ORDER BY char_count DESC
+            LIMIT ?
+        """, params))
+
+        return [
+            {
+                "id": row[0],
+                "content": row[1],
+                "source_file": row[2],
+                "project": row[3],
+                "content_type": row[4],
+                "conversation_id": row[5],
+                "position": row[6],
+                "char_count": row[7],
+            }
+            for row in results
+        ]
+
+    def update_enrichment(
+        self,
+        chunk_id: str,
+        summary: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        importance: Optional[float] = None,
+        intent: Optional[str] = None
+    ) -> None:
+        """Update enrichment metadata for a chunk."""
+        cursor = self.conn.cursor()
+        from datetime import datetime, timezone
+
+        sets = ["enriched_at = ?"]
+        params: list = [datetime.now(timezone.utc).isoformat()]
+
+        if summary is not None:
+            sets.append("summary = ?")
+            params.append(summary)
+        if tags is not None:
+            sets.append("tags = ?")
+            params.append(json.dumps(tags))
+        if importance is not None:
+            sets.append("importance = ?")
+            params.append(importance)
+        if intent is not None:
+            sets.append("intent = ?")
+            params.append(intent)
+
+        params.append(chunk_id)
+        cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+
+    def get_enrichment_stats(self) -> Dict[str, Any]:
+        """Get enrichment progress statistics."""
+        cursor = self.conn.cursor()
+        total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
+        enriched = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"))[0][0]
+        by_intent = list(cursor.execute("""
+            SELECT intent, COUNT(*) FROM chunks
+            WHERE intent IS NOT NULL
+            GROUP BY intent ORDER BY COUNT(*) DESC
+        """))
+        return {
+            "total_chunks": total,
+            "enriched": enriched,
+            "remaining": total - enriched,
+            "percent": round(enriched / total * 100, 1) if total > 0 else 0,
+            "by_intent": {row[0]: row[1] for row in by_intent},
         }
 
     def close(self) -> None:
