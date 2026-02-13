@@ -36,6 +36,10 @@ class VectorStore:
 
         cursor = self.conn.cursor()
 
+        # AIDEV-NOTE: busy_timeout is critical for multi-process access (daemon + MCP + enrichment).
+        # Without this, concurrent writes get SQLITE_BUSY immediately and crash silently.
+        cursor.execute("PRAGMA busy_timeout = 5000")
+
         # Create tables
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -56,7 +60,8 @@ class VectorStore:
             )
         """)
 
-        # Add columns if upgrading existing DB
+        # Add columns if upgrading existing DB (check existing columns first)
+        existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         for col, typ in [
             ("source", "TEXT"), ("sender", "TEXT"), ("language", "TEXT"),
             ("conversation_id", "TEXT"), ("position", "INTEGER"), ("context_summary", "TEXT"),
@@ -67,10 +72,8 @@ class VectorStore:
             ("intent", "TEXT"),
             ("enriched_at", "TEXT"),
         ]:
-            try:
+            if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
-            except apsw.SQLError:
-                pass  # column already exists
 
         # Indexes for filtering
         for idx, col in [
@@ -131,13 +134,10 @@ class VectorStore:
             )
         """)
         # Phase 8c: Plan linking columns on session_context
+        existing_sc_cols = {row[1] for row in cursor.execute("PRAGMA table_info(session_context)")}
         for col in ("plan_name", "plan_phase", "story_id"):
-            try:
-                cursor.execute(
-                    f"ALTER TABLE session_context ADD COLUMN {col} TEXT"
-                )
-            except apsw.SQLError:
-                pass  # column already exists
+            if col not in existing_sc_cols:
+                cursor.execute(f"ALTER TABLE session_context ADD COLUMN {col} TEXT")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS file_interactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -766,7 +766,17 @@ class VectorStore:
             params.append(intent)
 
         params.append(chunk_id)
-        cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+        # Retry on SQLITE_BUSY — concurrent access from daemon/MCP/enrichment
+        import time as _time
+        for attempt in range(3):
+            try:
+                cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+                return
+            except apsw.BusyError:
+                if attempt < 2:
+                    _time.sleep(0.5 * (attempt + 1))
+                else:
+                    raise
 
     def get_enrichment_stats(self) -> Dict[str, Any]:
         """Get enrichment progress statistics."""
