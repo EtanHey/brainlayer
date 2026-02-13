@@ -35,6 +35,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+brain = [
+    "igraph>=0.11.0",  # Graph operations + Leiden via leidenalg
+    "leidenalg>=0.10.0",  # Leiden community detection (replaces graspologic)
+    "umap-learn>=0.5.0",  # UMAP 3D layout
+]
 ast = [
     "tree-sitter-languages>=1.9.0",  # Better code chunking (falls back to line-based if unavailable)
 ]

@@ -1728,5 +1728,47 @@ def analyze_semantic(
         raise typer.Exit(1)
 
 
+@app.command("brain-export")
+def brain_export(
+    output: str = typer.Option(
+        None, "--output", "-o",
+        help="Output directory (default: ~/.golems-brain)"
+    ),
+    project: str = typer.Option(
+        None, "--project", "-p",
+        help="Only include sessions from this project"
+    ),
+) -> None:
+    """Generate brain graph (graph.json) for 3D visualization.
+
+    Aggregates sessions → computes similarity → runs Leiden communities → UMAP 3D layout.
+    Requires: pip install -e '.[brain]' (igraph, leidenalg, umap-learn)
+    """
+    try:
+        from ..pipeline.brain_graph import generate_brain_graph
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+        path = generate_brain_graph(output_dir=output, project=project)
+        rprint(f"[bold green]Brain graph exported to {path}[/]")
+
+        import json
+        meta_path = path.parent / "metadata.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            rprint(f"  Nodes: {meta['node_count']}, Edges: {meta['edge_count']}")
+            rprint(f"  Communities: {meta['community_counts']}")
+    except ImportError as e:
+        rprint(f"[bold red]Missing dependency:[/] {e}")
+        rprint("[dim]Install brain extras: pip install -e '.[brain]'[/]")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
