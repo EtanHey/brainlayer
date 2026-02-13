@@ -99,7 +99,7 @@ def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
     try:
         resp = requests.post(
             OLLAMA_URL,
-            json={"model": MODEL, "prompt": prompt, "stream": False},
+            json={"model": MODEL, "prompt": prompt, "stream": False, "think": False},
             timeout=timeout,
         )
         resp.raise_for_status()
