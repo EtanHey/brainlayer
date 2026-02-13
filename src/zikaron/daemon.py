@@ -114,7 +114,7 @@ app.add_middleware(
         "https://www.etanheyman.com",
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -630,6 +630,234 @@ async def backlog_delete(item_id: str):
     if result is None:
         return JSONResponse({"error": "delete failed"}, status_code=500)
     return {"deleted": True, "count": len(result) if isinstance(result, list) else 0}
+
+
+# ──────────────────────────────────────────────
+# Dashboard Search & Session Detail
+# ──────────────────────────────────────────────
+
+@app.get("/dashboard/search")
+async def dashboard_search(q: str = "", project: str = "", content_type: str = "", limit: int = 20):
+    """Fast FTS5 text search across all chunks. Returns ranked results with snippets."""
+    if not q.strip():
+        return {"results": [], "query": q, "total": 0, "time_ms": 0}
+
+    limit = max(1, min(limit, 100))
+    start_time = time.time()
+
+    def _run_search():
+        import re
+        conn = apsw.Connection(str(DEFAULT_DB_PATH), flags=apsw.SQLITE_OPEN_READONLY)
+        cursor = conn.cursor()
+        try:
+            # Build FTS5 match expression: split words, join with AND
+            # Strip FTS5 special chars except quotes
+            words = re.findall(r'[a-zA-Z0-9_]+', q)
+            if not words:
+                return []
+            match_expr = " AND ".join(f'"{w}"' for w in words)
+
+            # Build WHERE clauses for filters
+            where_parts = []
+            params: list = []
+            if project:
+                where_parts.append("c.project LIKE ?")
+                params.append(f"%{project}%")
+            if content_type:
+                where_parts.append("c.content_type = ?")
+                params.append(content_type)
+            where_clause = (" AND " + " AND ".join(where_parts)) if where_parts else ""
+
+            sql = f"""
+                SELECT c.id, c.content_type, c.project, c.conversation_id,
+                       c.importance, c.tags, c.summary, c.intent,
+                       snippet(chunks_fts, 0, '<mark>', '</mark>', '...', 40) as snippet,
+                       fts.rank
+                FROM chunks_fts fts
+                JOIN chunks c ON c.id = fts.chunk_id
+                WHERE chunks_fts MATCH ?{where_clause}
+                ORDER BY fts.rank
+                LIMIT ?
+            """
+            all_params = [match_expr] + params + [limit]
+            rows = list(cursor.execute(sql, all_params))
+            return rows
+        except Exception as e:
+            logger.warning(f"Dashboard search failed: {e}")
+            return []
+        finally:
+            conn.close()
+
+    rows = await asyncio.to_thread(_run_search)
+    elapsed = (time.time() - start_time) * 1000
+
+    def _sanitize_snippet(raw: str) -> str:
+        """Escape HTML in FTS5 snippet except <mark> tags (defense-in-depth)."""
+        import html
+        escaped = html.escape(raw)
+        return escaped.replace("&lt;mark&gt;", "<mark>").replace("&lt;/mark&gt;", "</mark>")
+
+    results = []
+    for row in rows:
+        chunk_id, content_type, proj, conv_id, importance, tags, summary, intent, snippet_text, rank = row
+        results.append({
+            "id": chunk_id,
+            "content_type": content_type,
+            "project": proj,
+            "conversation_id": conv_id,
+            "importance": importance,
+            "tags": tags,
+            "summary": summary,
+            "intent": intent,
+            "snippet": _sanitize_snippet(snippet_text) if snippet_text else "",
+            "rank": rank,
+        })
+
+    return {"results": results, "query": q, "total": len(results), "time_ms": round(elapsed, 1)}
+
+
+@app.get("/session/{session_id:path}")
+async def session_detail(session_id: str, page: int = 1, per_page: int = 50, content_type: str = ""):
+    """Get session detail: chunks (paginated), files touched, metadata.
+
+    Sessions are matched by conversation_id OR by chunk ID prefix (for newer chunks
+    that don't have conversation_id set). The chunk ID format is '{jsonl_path}:{N}'.
+    Optionally filter by content_type.
+    """
+    per_page = max(1, min(per_page, 200))
+    offset = (max(1, page) - 1) * per_page
+
+    def _get_session():
+        conn = apsw.Connection(str(DEFAULT_DB_PATH), flags=apsw.SQLITE_OPEN_READONLY)
+        cursor = conn.cursor()
+        try:
+            # Try conversation_id first, then fall back to ID prefix match
+            total = list(cursor.execute(
+                "SELECT COUNT(*) FROM chunks WHERE conversation_id = ?", [session_id]
+            ))[0][0]
+
+            if total == 0:
+                # Fall back to ID prefix match (chunks where id starts with session_id:)
+                prefix = session_id + ":"
+                total = list(cursor.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [prefix]
+                ))[0][0]
+                if total == 0:
+                    # Also try exact prefix without colon (e.g. the path itself)
+                    total = list(cursor.execute(
+                        "SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [session_id]
+                    ))[0][0]
+                    if total == 0:
+                        return None
+                    id_filter = ("id LIKE ? || '%'", [session_id])
+                else:
+                    id_filter = ("id LIKE ? || '%'", [prefix])
+            else:
+                id_filter = ("conversation_id = ?", [session_id])
+
+            where, wparams = id_filter
+
+            # Add type filter if specified
+            type_where = ""
+            type_params: list = []
+            if content_type:
+                type_where = " AND content_type = ?"
+                type_params = [content_type]
+                # Recalculate total with type filter
+                total = list(cursor.execute(
+                    f"SELECT COUNT(*) FROM chunks WHERE {where}{type_where}",
+                    wparams + type_params
+                ))[0][0]
+
+            # Paginated chunks
+            chunks = list(cursor.execute(f"""
+                SELECT id, content_type, project, position, importance,
+                       tags, summary, intent, content, source_file
+                FROM chunks
+                WHERE {where}{type_where}
+                ORDER BY position ASC, rowid ASC
+                LIMIT ? OFFSET ?
+            """, wparams + type_params + [per_page, offset]))
+
+            # Session context (if available)
+            ctx = list(cursor.execute("""
+                SELECT session_id, project, branch, pr_number, commit_shas,
+                       files_changed, started_at, ended_at, created_at,
+                       plan_name, plan_phase, story_id
+                FROM session_context WHERE session_id = ?
+            """, [session_id]))
+
+            # Unique files touched in this session
+            files = list(cursor.execute(f"""
+                SELECT DISTINCT source_file
+                FROM chunks
+                WHERE {where} AND source_file IS NOT NULL AND source_file != ''
+                ORDER BY source_file
+            """, wparams))
+
+            # Content type distribution
+            type_dist = list(cursor.execute(f"""
+                SELECT content_type, COUNT(*) as cnt
+                FROM chunks
+                WHERE {where}
+                GROUP BY content_type
+                ORDER BY cnt DESC
+            """, wparams))
+
+            return {
+                "total": total,
+                "chunks": chunks,
+                "context": ctx,
+                "files": files,
+                "type_distribution": type_dist,
+            }
+        finally:
+            conn.close()
+
+    data = await asyncio.to_thread(_get_session)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    # Format chunks
+    formatted_chunks = []
+    for c in data["chunks"]:
+        cid, ctype, proj, pos, imp, tags, summary, intent, content, src = c
+        formatted_chunks.append({
+            "id": cid,
+            "content_type": ctype,
+            "project": proj,
+            "position": pos,
+            "importance": imp,
+            "tags": tags,
+            "summary": summary,
+            "intent": intent,
+            "content": content[:2000] if content else None,  # Truncate large content
+            "source_file": src,
+        })
+
+    # Format session context
+    ctx_data = None
+    if data["context"]:
+        row = data["context"][0]
+        ctx_data = {
+            "session_id": row[0], "project": row[1], "branch": row[2],
+            "pr_number": row[3], "commit_shas": row[4], "files_changed": row[5],
+            "started_at": row[6], "ended_at": row[7], "created_at": row[8],
+            "plan_name": row[9] if len(row) > 9 else None,
+            "plan_phase": row[10] if len(row) > 10 else None,
+            "story_id": row[11] if len(row) > 11 else None,
+        }
+
+    return {
+        "session_id": session_id,
+        "total_chunks": data["total"],
+        "page": page,
+        "per_page": per_page,
+        "chunks": formatted_chunks,
+        "context": ctx_data,
+        "files": [f[0] for f in data["files"]],
+        "type_distribution": {t: c for t, c in data["type_distribution"]},
+    }
 
 
 # ──────────────────────────────────────────────
