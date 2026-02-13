@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any
 
 import apsw
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -536,6 +536,100 @@ async def stats_service_runs(limit: int = 20):
         f"select=service,started_at,ended_at,duration_ms,status,error&order=started_at.desc&limit={max(1, min(limit, 50))}"
     )
     return {"runs": rows, "count": len(rows)}
+
+
+# ──────────────────────────────────────────────
+# Backlog CRUD
+# ──────────────────────────────────────────────
+
+def _supabase_mutate(method: str, path: str, body: dict | None = None, params: str = "") -> dict | list | None:
+    """POST/PATCH/DELETE to Supabase REST API. Returns parsed JSON or None."""
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    if not supabase_url or not supabase_key:
+        return None
+    import urllib.request
+    try:
+        url = f"{supabase_url}/rest/v1/{path}{'?' + params if params else ''}"
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        })
+        with urllib.request.urlopen(req, timeout=5, context=_supabase_ssl_ctx()) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        logger.warning(f"Supabase {method} failed ({path}): {e}")
+        return None
+
+
+@app.get("/backlog/items")
+async def backlog_list(project: str = "", status: str = ""):
+    """List backlog items, optionally filtered by project and/or status."""
+    from urllib.parse import quote
+    params = "select=*&order=updated_at.desc&limit=200"
+    if project:
+        params += f"&project=eq.{quote(project, safe='')}"
+    if status:
+        params += f"&status=eq.{quote(status, safe='')}"
+    rows = await asyncio.to_thread(_supabase_get, "backlog_items", params)
+    return {"items": rows, "count": len(rows)}
+
+
+@app.post("/backlog/items")
+async def backlog_create(request: Request):
+    """Create a new backlog item."""
+    body = await request.json()
+    # Validate required fields
+    if not body.get("title"):
+        return JSONResponse({"error": "title is required"}, status_code=400)
+    item = {
+        "title": body["title"],
+        "project": body.get("project", "golems"),
+        "description": body.get("description"),
+        "status": body.get("status", "backlog"),
+        "priority": body.get("priority", "medium"),
+        "tags": body.get("tags", []),
+        "created_by": body.get("created_by", "dashboard"),
+    }
+    result = await asyncio.to_thread(_supabase_mutate, "POST", "backlog_items", item)
+    if result and len(result) > 0:
+        return result[0]
+    return JSONResponse({"error": "failed to create item"}, status_code=500)
+
+
+@app.patch("/backlog/items/{item_id}")
+async def backlog_update(item_id: str, request: Request):
+    """Update a backlog item."""
+    from urllib.parse import quote
+    body = await request.json()
+    # Only allow safe fields
+    allowed = {"title", "description", "status", "priority", "tags", "project"}
+    update = {k: v for k, v in body.items() if k in allowed}
+    if not update:
+        return JSONResponse({"error": "no valid fields to update"}, status_code=400)
+    result = await asyncio.to_thread(
+        _supabase_mutate, "PATCH", "backlog_items",
+        update, f"id=eq.{quote(item_id, safe='')}"
+    )
+    if result and len(result) > 0:
+        return result[0]
+    return JSONResponse({"error": "item not found or update failed"}, status_code=404)
+
+
+@app.delete("/backlog/items/{item_id}")
+async def backlog_delete(item_id: str):
+    """Delete a backlog item."""
+    from urllib.parse import quote
+    result = await asyncio.to_thread(
+        _supabase_mutate, "DELETE", "backlog_items",
+        None, f"id=eq.{quote(item_id, safe='')}"
+    )
+    if result is None:
+        return JSONResponse({"error": "delete failed"}, status_code=500)
+    return {"deleted": True, "count": len(result) if isinstance(result, list) else 0}
 
 
 # ──────────────────────────────────────────────
