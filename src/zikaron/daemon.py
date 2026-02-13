@@ -339,29 +339,16 @@ async def health_services():
 @app.get("/stats/tokens")
 async def stats_tokens(days: int = 7):
     """Token usage summary from Supabase llm_usage table."""
-    supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-
-    if not supabase_url or not supabase_key:
-        # Fallback to local JSONL
-        return _stats_tokens_local(days)
-
-    import urllib.request
-    import urllib.error
     from datetime import datetime, timedelta, timezone
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    try:
-        url = f"{supabase_url}/rest/v1/llm_usage?select=model,source,input_tokens,output_tokens,cost_usd,tier,created_at&created_at=gte.{cutoff}&order=created_at.desc&limit=200"
-        req = urllib.request.Request(url, headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        })
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            entries = json.loads(resp.read())
-    except Exception as e:
-        logger.warning(f"Supabase llm_usage query failed: {e}")
+    entries = await asyncio.to_thread(
+        _supabase_get, "llm_usage",
+        f"select=model,source,input_tokens,output_tokens,cost_usd,tier,created_at&created_at=gte.{cutoff}&order=created_at.desc&limit=1000"
+    )
+
+    if not entries:
         return _stats_tokens_local(days)
 
     total_cost = sum(float(e.get("cost_usd", 0)) for e in entries)
@@ -379,6 +366,19 @@ async def stats_tokens(days: int = 7):
         by_model[model]["output_tokens"] += e.get("output_tokens", 0)
         by_model[model]["cost_usd"] += float(e.get("cost_usd", 0))
 
+    # Group by day for charts
+    by_day: Dict[str, Dict[str, Any]] = {}
+    for e in entries:
+        day = e.get("created_at", "")[:10]  # YYYY-MM-DD
+        if not day:
+            continue
+        if day not in by_day:
+            by_day[day] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        by_day[day]["calls"] += 1
+        by_day[day]["input_tokens"] += e.get("input_tokens", 0)
+        by_day[day]["output_tokens"] += e.get("output_tokens", 0)
+        by_day[day]["cost_usd"] += float(e.get("cost_usd", 0))
+
     return {
         "days": days,
         "total_cost_usd": round(total_cost, 4),
@@ -386,6 +386,7 @@ async def stats_tokens(days: int = 7):
         "total_output_tokens": total_output,
         "entry_count": len(entries),
         "by_model": {k: {**v, "cost_usd": round(v["cost_usd"], 4)} for k, v in by_model.items()},
+        "by_day": {k: {**v, "cost_usd": round(v["cost_usd"], 4)} for k, v in sorted(by_day.items())},
         "recent": entries[:20],
     }
 
@@ -396,7 +397,7 @@ def _stats_tokens_local(days: int) -> Dict[str, Any]:
         return {"entries": [], "total_cost_usd": 0, "total_input_tokens": 0, "total_output_tokens": 0}
 
     from datetime import datetime, timedelta, timezone
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     entries: List[Dict[str, Any]] = []
     total_cost = 0.0
@@ -475,6 +476,66 @@ async def stats_enrichment():
         }
     finally:
         conn.close()
+
+
+# ──────────────────────────────────────────────
+# Events + Service Runs
+# ──────────────────────────────────────────────
+
+_cached_ssl_ctx = None
+
+def _supabase_ssl_ctx():
+    """Get SSL context that works on macOS (uses certifi if available). Cached."""
+    global _cached_ssl_ctx
+    if _cached_ssl_ctx is not None:
+        return _cached_ssl_ctx
+    import ssl
+    try:
+        import certifi
+        _cached_ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        _cached_ssl_ctx = ssl.create_default_context()
+    return _cached_ssl_ctx
+
+
+def _supabase_get(path: str, params: str = "") -> list:
+    """Fetch from Supabase REST API. Returns list of rows or empty on error."""
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    if not supabase_url or not supabase_key:
+        return []
+    import urllib.request
+    try:
+        url = f"{supabase_url}/rest/v1/{path}{'?' + params if params else ''}"
+        req = urllib.request.Request(url, headers={
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+        })
+        with urllib.request.urlopen(req, timeout=5, context=_supabase_ssl_ctx()) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        logger.warning(f"Supabase query failed ({path}): {e}")
+        return []
+
+
+@app.get("/events/recent")
+async def events_recent(limit: int = 50):
+    """Recent golem events from Supabase."""
+    rows = await asyncio.to_thread(
+        _supabase_get, "golem_events",
+        f"select=actor,type,data,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}"
+    )
+    return {"events": rows, "count": len(rows)}
+
+
+@app.get("/stats/service-runs")
+async def stats_service_runs(limit: int = 20):
+    """Recent service runs from Supabase."""
+    rows = await asyncio.to_thread(
+        _supabase_get, "service_runs",
+        f"select=service,started_at,ended_at,duration_ms,status,error&order=started_at.desc&limit={max(1, min(limit, 50))}"
+    )
+    return {"runs": rows, "count": len(rows)}
 
 
 # ──────────────────────────────────────────────
