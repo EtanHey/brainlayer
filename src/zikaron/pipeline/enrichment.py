@@ -14,6 +14,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -25,7 +26,7 @@ from ..vector_store import VectorStore
 
 # AIDEV-NOTE: Uses local Ollama GLM only — never sends chunk content to cloud APIs
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL = "glm-4.7-flash"
+MODEL = os.environ.get("ZIKARON_ENRICH_MODEL", "glm-4.7-flash")
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
 # High-value content types worth enriching
@@ -93,7 +94,7 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
     )
 
 
-def call_glm(prompt: str, timeout: int = 120) -> Optional[str]:
+def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
     """Call local GLM via Ollama HTTP API."""
     try:
         resp = requests.post(
