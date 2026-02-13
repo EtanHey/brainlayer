@@ -272,23 +272,61 @@ async def health_services():
     )
     telegram_fut = asyncio.to_thread(
         _check_service,
-        ["launchctl", "list", "com.golems.telegram-bot"], 3
+        ["launchctl", "list", "com.golemszikaron.telegram"], 3
     )
     railway_fut = asyncio.to_thread(
         _check_service,
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-         "https://golems-production.up.railway.app/health"], 5
+         "https://helpful-empathy-production-482d.up.railway.app/health"], 5
     )
 
-    ollama_code, telegram_out, railway_code = await asyncio.gather(
-        ollama_fut, telegram_fut, railway_fut
+    # Check all launchd services in one call (fast)
+    launchd_fut = asyncio.to_thread(
+        _check_service,
+        ["bash", "-c", "launchctl list 2>/dev/null | grep -E 'golem|zikaron' || true"], 3
     )
+
+    ollama_code, telegram_out, railway_code, launchd_out = await asyncio.gather(
+        ollama_fut, telegram_fut, railway_fut, launchd_fut
+    )
+
+    # Parse launchd services
+    launchd_services = {
+        "nightshift": "com.golemszikaron.nightshift",
+        "briefing": "com.golemszikaron.briefing",
+        "healthcheck": "com.golemszikaron.healthcheck",
+        "compactor": "com.golemszikaron.compactor",
+        "bedtime_guardian": "com.golems.bedtime-guardian",
+        "session_archiver": "com.golems.session-archiver",
+        "auto_index": "com.golems.auto-index",
+    }
+    # Parse launchd list output — format: "PID\tExitStatus\tLabel"
+    # PID is "-" for scheduled services not currently running (normal for cron-like jobs)
+    launchd_statuses = {}
+    for name, label in launchd_services.items():
+        found = False
+        for line in launchd_out.splitlines():
+            if label in line:
+                found = True
+                parts = line.split("\t")
+                pid = parts[0].strip() if parts else "-"
+                exit_status = parts[1].strip() if len(parts) > 1 else "0"
+                if pid != "-":
+                    launchd_statuses[name] = {"status": "up"}
+                elif exit_status == "0":
+                    launchd_statuses[name] = {"status": "idle"}  # loaded, last run OK
+                else:
+                    launchd_statuses[name] = {"status": "error"}  # loaded, last run failed
+                break
+        if not found:
+            launchd_statuses[name] = {"status": "not_loaded"}
 
     services = {
         "ollama": {"status": "up" if ollama_code == "200" else "down"},
-        "telegram_bot": {"status": "up" if telegram_out else "down"},
+        "telegram_bot": {"status": "up" if telegram_out and not telegram_out.startswith("-\t") else "down"},
         "railway": {"status": "up" if railway_code == "200" else "down"},
         "zikaron_daemon": {"status": "up", "chunks": vector_store.count() if vector_store else 0},
+        **launchd_statuses,
     }
 
     return {"services": services}
