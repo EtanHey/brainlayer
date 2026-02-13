@@ -719,7 +719,7 @@ class VectorStore:
                    conversation_id, position, char_count
             FROM chunks
             WHERE {" AND ".join(where)}
-            ORDER BY char_count DESC
+            ORDER BY rowid DESC
             LIMIT ?
         """, params))
 
