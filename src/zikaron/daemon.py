@@ -539,6 +539,60 @@ async def stats_service_runs(limit: int = 20):
 
 
 # ──────────────────────────────────────────────
+# Content Pipeline
+# ──────────────────────────────────────────────
+
+@app.get("/content/pipeline-runs")
+async def content_pipeline_runs(limit: int = 50):
+    """Recent pipeline runs from Supabase."""
+    rows = await asyncio.to_thread(
+        _supabase_get, "pipeline_runs",
+        f"select=id,pipeline_id,idea,idea_type,success,duration_ms,quality_score,user_feedback,output_format,error,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}"
+    )
+    return {"runs": rows, "count": len(rows)}
+
+
+@app.get("/content/pipeline-stats")
+async def content_pipeline_stats():
+    """Aggregate pipeline performance stats."""
+    rows = await asyncio.to_thread(
+        _supabase_get, "pipeline_runs",
+        "select=pipeline_id,success,duration_ms,quality_score,idea_type&order=created_at.desc&limit=500"
+    )
+    # Aggregate by pipeline
+    stats: dict[str, dict] = {}
+    for r in rows:
+        pid = r.get("pipeline_id", "unknown")
+        if pid not in stats:
+            stats[pid] = {"total": 0, "success": 0, "quality_sum": 0.0, "quality_count": 0, "duration_sum": 0, "idea_types": {}}
+        s = stats[pid]
+        s["total"] += 1
+        if r.get("success"):
+            s["success"] += 1
+        qs = r.get("quality_score")
+        if qs is not None:
+            s["quality_sum"] += float(qs)
+            s["quality_count"] += 1
+        s["duration_sum"] += int(r.get("duration_ms") or 0)
+        it = r.get("idea_type", "general")
+        s["idea_types"][it] = s["idea_types"].get(it, 0) + 1
+
+    result = []
+    for pid, s in stats.items():
+        top_types = sorted(s["idea_types"].items(), key=lambda x: -x[1])[:3]
+        result.append({
+            "pipeline_id": pid,
+            "total_runs": s["total"],
+            "successful_runs": s["success"],
+            "success_rate": round(s["success"] / s["total"], 2) if s["total"] > 0 else 0,
+            "avg_quality": round(s["quality_sum"] / s["quality_count"], 2) if s["quality_count"] > 0 else None,
+            "avg_duration_ms": round(s["duration_sum"] / s["total"]) if s["total"] > 0 else 0,
+            "top_idea_types": [t[0] for t in top_types],
+        })
+    return {"stats": result, "total_runs": len(rows)}
+
+
+# ──────────────────────────────────────────────
 # Backlog CRUD
 # ──────────────────────────────────────────────
 
