@@ -1615,6 +1615,17 @@ def index_fast(
         elapsed_total = time.time() - start_time
         rprint(f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total/60:.1f}[/] minutes")
 
+        # Sync enrichment stats to Supabase (best-effort)
+        try:
+            from ..pipeline.enrichment import _sync_stats_to_supabase, DEFAULT_DB_PATH
+            from ..vector_store import VectorStore
+            store = VectorStore(DEFAULT_DB_PATH)
+            _sync_stats_to_supabase(store)
+            store.close()
+            rprint("[dim]Synced enrichment stats to Supabase[/]")
+        except Exception:
+            pass
+
     except typer.Exit:
         raise
     except Exception as e:

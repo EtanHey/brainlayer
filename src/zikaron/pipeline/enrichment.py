@@ -34,6 +34,56 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 
+def _sync_stats_to_supabase(store: "VectorStore") -> None:
+    """Sync enrichment stats to Supabase for dashboard visibility. Best-effort."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        stats = store.get_enrichment_stats()
+        # Get detailed field counts from DB
+        cursor = store.conn.cursor()
+        total = stats["total_chunks"]
+        has_tags = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != ''"))[0][0]
+        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[0][0]
+        has_importance = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE importance IS NOT NULL"))[0][0]
+        has_intent = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE intent IS NOT NULL AND intent != ''"))[0][0]
+        try:
+            has_embeddings = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors_rowids"))[0][0]
+        except Exception:
+            has_embeddings = 0
+        projects = list(cursor.execute(
+            "SELECT project, COUNT(*) FROM chunks WHERE project IS NOT NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20"
+        ))
+
+        row = {
+            "total_chunks": total,
+            "embedded": has_embeddings,
+            "tagged": has_tags,
+            "summarized": has_summary,
+            "importance_scored": has_importance,
+            "intent_classified": has_intent,
+            "projects": [{"project": p, "chunks": c} for p, c in projects],
+            "by_intent": stats.get("by_intent", {}),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+        # Upsert — use user_id=null for service-role inserts
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/enrichment_stats",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal,resolution=merge-duplicates",
+            },
+            json={**row, "user_id": None},
+            timeout=5,
+        )
+        resp.raise_for_status()
+    except Exception:
+        pass  # Never let sync failure affect enrichment
+
+
 def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int) -> None:
     """Log GLM usage to Supabase llm_usage table. Best-effort, never blocks enrichment."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -308,6 +358,10 @@ def run_enrichment(
             print(f"Batch done: +{result['success']} ok, +{result['failed']} fail | "
                   f"Total: {total_processed} ({rate:.1f}/s)")
 
+            # Sync stats to Supabase every 5 batches
+            if total_processed % (batch_size * 5) < batch_size:
+                _sync_stats_to_supabase(store)
+
             if max_chunks > 0 and total_processed >= max_chunks:
                 print(f"Reached max ({max_chunks}).")
                 break
@@ -319,6 +373,9 @@ def run_enrichment(
 
         final_stats = store.get_enrichment_stats()
         print(f"Progress: {final_stats['enriched']}/{final_stats['total_chunks']} ({final_stats['percent']}%)")
+
+        # Final sync to Supabase
+        _sync_stats_to_supabase(store)
     finally:
         store.close()
 
