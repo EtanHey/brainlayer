@@ -29,6 +29,39 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MODEL = os.environ.get("ZIKARON_ENRICH_MODEL", "glm-4.7-flash")
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
+# Supabase usage logging — track GLM calls even though they're free
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+
+def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int) -> None:
+    """Log GLM usage to Supabase llm_usage table. Best-effort, never blocks enrichment."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/llm_usage",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            json={
+                "model": MODEL,
+                "source": "enrichment",
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "cost_usd": 0,
+                "tier": "free",
+                "duration_ms": duration_ms,
+            },
+            timeout=2,
+        )
+        resp.raise_for_status()
+    except Exception:
+        pass  # Never let logging failure affect enrichment
+
 # High-value content types worth enriching
 HIGH_VALUE_TYPES = ["ai_code", "stack_trace", "user_message", "assistant_text"]
 
@@ -95,15 +128,26 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
 
 
 def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
-    """Call local GLM via Ollama HTTP API."""
+    """Call local GLM via Ollama HTTP API. Logs usage to Supabase."""
     try:
+        start_ms = int(time.time() * 1000)
         resp = requests.post(
             OLLAMA_URL,
             json={"model": MODEL, "prompt": prompt, "stream": False, "think": False},
             timeout=timeout,
         )
         resp.raise_for_status()
-        return resp.json().get("response", "")
+        data = resp.json()
+        duration_ms = int(time.time() * 1000) - start_ms
+
+        # Extract token counts from Ollama response
+        prompt_tokens = data.get("prompt_eval_count", 0) or 0
+        completion_tokens = data.get("eval_count", 0) or 0
+
+        # Log to Supabase (best-effort)
+        _log_glm_usage(prompt_tokens, completion_tokens, duration_ms)
+
+        return data.get("response", "")
     except Exception as e:
         print(f"  GLM error: {e}", file=sys.stderr)
         return None
