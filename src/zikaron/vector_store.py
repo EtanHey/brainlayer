@@ -71,6 +71,13 @@ class VectorStore:
             ("importance", "REAL"),
             ("intent", "TEXT"),
             ("enriched_at", "TEXT"),
+            # Extended enrichment columns (Phase 3 — Gemini backfill)
+            ("primary_symbols", "TEXT"),   # JSON array of classes/functions/files
+            ("resolved_query", "TEXT"),    # HyDE-style hypothetical question
+            ("epistemic_level", "TEXT"),   # hypothesis/substantiated/validated
+            ("version_scope", "TEXT"),     # version or system state discussed
+            ("debt_impact", "TEXT"),       # introduction/resolution/none
+            ("external_deps", "TEXT"),     # JSON array of libraries/APIs
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -743,7 +750,13 @@ class VectorStore:
         summary: Optional[str] = None,
         tags: Optional[List[str]] = None,
         importance: Optional[float] = None,
-        intent: Optional[str] = None
+        intent: Optional[str] = None,
+        primary_symbols: Optional[List[str]] = None,
+        resolved_query: Optional[str] = None,
+        epistemic_level: Optional[str] = None,
+        version_scope: Optional[str] = None,
+        debt_impact: Optional[str] = None,
+        external_deps: Optional[List[str]] = None,
     ) -> None:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
@@ -764,6 +777,24 @@ class VectorStore:
         if intent is not None:
             sets.append("intent = ?")
             params.append(intent)
+        if primary_symbols is not None:
+            sets.append("primary_symbols = ?")
+            params.append(json.dumps(primary_symbols))
+        if resolved_query is not None:
+            sets.append("resolved_query = ?")
+            params.append(resolved_query)
+        if epistemic_level is not None:
+            sets.append("epistemic_level = ?")
+            params.append(epistemic_level)
+        if version_scope is not None:
+            sets.append("version_scope = ?")
+            params.append(version_scope)
+        if debt_impact is not None:
+            sets.append("debt_impact = ?")
+            params.append(debt_impact)
+        if external_deps is not None:
+            sets.append("external_deps = ?")
+            params.append(json.dumps(external_deps))
 
         params.append(chunk_id)
         # Retry on SQLITE_BUSY — concurrent access from daemon/MCP/enrichment

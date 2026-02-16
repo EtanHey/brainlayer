@@ -5,6 +5,12 @@ Processes unenriched chunks through local GLM-4.7-Flash (Ollama) to add:
 - tags: structured tags from fixed taxonomy
 - importance: 1-10 score
 - intent: debugging | designing | configuring | discussing | deciding
+- primary_symbols: classes, functions, files mentioned
+- resolved_query: hypothetical question this chunk answers (HyDE-style)
+- epistemic_level: hypothesis | substantiated | validated
+- version_scope: version or system state discussed
+- debt_impact: introduction | resolution | none
+- external_deps: libraries or external APIs used
 
 Usage:
     python -m zikaron.pipeline.enrichment                    # Process 100 chunks
@@ -117,6 +123,8 @@ HIGH_VALUE_TYPES = ["ai_code", "stack_trace", "user_message", "assistant_text"]
 
 # Fixed tag taxonomy for coding conversations
 VALID_INTENTS = ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"]
+VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
+VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
 
 ENRICHMENT_PROMPT = """You are a metadata extraction assistant. Analyze this conversation chunk and return ONLY a JSON object.
 
@@ -132,7 +140,13 @@ Return this exact JSON structure:
   "summary": "<one sentence describing what this chunk is about>",
   "tags": ["<tag1>", "<tag2>", ...],
   "importance": <1-10 integer>,
-  "intent": "<one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing>"
+  "intent": "<one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing>",
+  "primary_symbols": ["<class/function/file names mentioned>"],
+  "resolved_query": "<hypothetical question this chunk answers>",
+  "epistemic_level": "<one of: hypothesis, substantiated, validated>",
+  "version_scope": "<version or system state discussed, or null>",
+  "debt_impact": "<one of: introduction, resolution, none>",
+  "external_deps": ["<libraries or external APIs used>"]
 }}
 
 TAG RULES:
@@ -147,6 +161,22 @@ IMPORTANCE RULES:
 - 4-6: Moderate (standard code, config changes, routine discussions)
 - 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)
 - 10: Critical (security fixes, production incidents, key architectural choices)
+
+PRIMARY_SYMBOLS: Extract class names, function names, file paths, and variable names that are central to this chunk. Empty array if none.
+
+RESOLVED_QUERY: Write a natural question that someone would ask to find this chunk. E.g., "How do I fix EADDRINUSE errors in Bun?" or "What's the SQLite busy_timeout fix for concurrent access?"
+
+EPISTEMIC_LEVEL:
+- hypothesis: Exploring ideas, asking questions, speculating
+- substantiated: Implementing with evidence, citing docs, testing
+- validated: Confirmed working, merged, production-tested
+
+DEBT_IMPACT:
+- introduction: Adding workarounds, TODOs, known shortcuts
+- resolution: Fixing tech debt, removing hacks, cleaning up
+- none: Neither introducing nor resolving debt
+
+EXTERNAL_DEPS: Libraries, APIs, services referenced (e.g., "ollama", "supabase", "react-force-graph-3d"). Empty array if none.
 
 Return ONLY the JSON object, no other text."""
 
@@ -244,6 +274,35 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
         if isinstance(intent, str) and intent.lower().strip() in VALID_INTENTS:
             result["intent"] = intent.lower().strip()
 
+        # Extended fields (graceful — missing is OK)
+        primary_symbols = match.get("primary_symbols", [])
+        if isinstance(primary_symbols, list):
+            cleaned = [str(s).strip() for s in primary_symbols if isinstance(s, str) and s.strip()][:20]
+            if cleaned:
+                result["primary_symbols"] = cleaned
+
+        resolved_query = match.get("resolved_query", "")
+        if isinstance(resolved_query, str) and len(resolved_query) > 10:
+            result["resolved_query"] = resolved_query[:500]
+
+        epistemic_level = match.get("epistemic_level", "")
+        if isinstance(epistemic_level, str) and epistemic_level.lower().strip() in VALID_EPISTEMIC:
+            result["epistemic_level"] = epistemic_level.lower().strip()
+
+        version_scope = match.get("version_scope")
+        if isinstance(version_scope, str) and version_scope.strip() and version_scope.lower() != "null":
+            result["version_scope"] = version_scope.strip()[:200]
+
+        debt_impact = match.get("debt_impact", "")
+        if isinstance(debt_impact, str) and debt_impact.lower().strip() in VALID_DEBT_IMPACT:
+            result["debt_impact"] = debt_impact.lower().strip()
+
+        external_deps = match.get("external_deps", [])
+        if isinstance(external_deps, list):
+            cleaned = [str(d).strip().lower() for d in external_deps if isinstance(d, str) and d.strip()][:15]
+            if cleaned:
+                result["external_deps"] = cleaned
+
         # Must have at least summary + tags to be valid
         if "summary" in result and "tags" in result:
             return result
@@ -292,6 +351,12 @@ def enrich_batch(
                 tags=enrichment.get("tags"),
                 importance=enrichment.get("importance"),
                 intent=enrichment.get("intent"),
+                primary_symbols=enrichment.get("primary_symbols"),
+                resolved_query=enrichment.get("resolved_query"),
+                epistemic_level=enrichment.get("epistemic_level"),
+                version_scope=enrichment.get("version_scope"),
+                debt_impact=enrichment.get("debt_impact"),
+                external_deps=enrichment.get("external_deps"),
             )
             success += 1
         else:

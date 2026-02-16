@@ -35,6 +35,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cloud = [
+    "google-genai>=1.0.0",  # Gemini Batch API for cloud backfill (new SDK)
+]
 brain = [
     "igraph>=0.11.0",  # Graph operations + Leiden via leidenalg
     "leidenalg>=0.10.0",  # Leiden community detection (replaces graspologic)
