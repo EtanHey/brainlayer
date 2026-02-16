@@ -52,7 +52,7 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MLX_URL = os.environ.get("ZIKARON_MLX_URL", os.environ.get("MLX_URL", "http://127.0.0.1:8080/v1/chat/completions"))
 MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
 MODEL = os.environ.get("ZIKARON_ENRICH_MODEL", "glm-4.7-flash")
-MLX_MODEL = os.environ.get("ZIKARON_MLX_MODEL", "default")
+MLX_MODEL = os.environ.get("ZIKARON_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "zikaron" / "zikaron.db"
 
 # Supabase usage logging — track GLM calls even though they're free
