@@ -1,6 +1,7 @@
 """Zikaron CLI - Command line interface for the knowledge pipeline."""
 
 import os
+import re as _re
 import sys
 import time
 
@@ -112,23 +113,68 @@ def context(
 
 
 # Known project renames/aliases - map old names to canonical names
+# Pre-monorepo standalone repos → golems
 PROJECT_ALIASES = {
-    "ralphtools": "claude-golem",
-    "config-ralphtools": "claude-golem",
-    "config-ralph": "claude-golem",
+    "ralphtools": "golems",
+    "config-ralphtools": "golems",
+    "config-ralph": "golems",
+    "claude-golem": "golems",
+    "ralph": "golems",
+    "zikaron": "golems",
+    "recruiterGolem": "golems",
+    "contentGolem": "golems",
+    "tellerGolem": "golems",
+    "monitorGolem": "golems",
 }
+
+# Sub-package prefixes that should resolve to parent repo
+_MONOREPO_PACKAGES = {
+    "golems-packages-autonomous": "golems",
+    "golems-packages-content": "golems",
+    "golems-packages-zikaron": "golems",
+    "golems-packages-coach": "golems",
+    "golems-packages-ralph": "golems",
+    "golems-packages-recruiter": "golems",
+    "golems-packages-teller": "golems",
+    "golems-packages-services": "golems",
+    "golems-packages-shared": "golems",
+    "golems-packages-claude": "golems",
+    "golems-packages-jobs": "golems",
+    "golems-packages-dashboard": "golems",
+    "golems-packages-golems-tui": "golems",
+    "golems-packages-tax-helper": "golems",
+    "golems-packages-orchestrator": "golems",
+    "rudy-monorepo-apps-jem": "rudy-monorepo",
+    "domica-apps-public": "domica",
+}
+
+# Regex for worktree/nightshift suffixes
+_WORKTREE_SUFFIX = _re.compile(r"^(.+?)(?:-nightshift-\d+|-worktrees-.+|-haiku)$")
 
 
 def _normalize_project_name(raw_name: str) -> str:
     """Normalize a raw project folder name to a clean canonical name.
 
     Used during indexing to store clean names in the database.
+    Handles: path prefixes, sub-packages, worktree suffixes, aliases.
     """
-    # First clean the path-style name
+    # First clean the path-style name (strips -Users-etanheyman-Gits- etc.)
     cleaned = _clean_project_name(raw_name)
 
-    # Then apply aliases for renamed projects
-    return PROJECT_ALIASES.get(cleaned, cleaned)
+    # Strip worktree/nightshift suffixes
+    m = _WORKTREE_SUFFIX.match(cleaned)
+    if m:
+        cleaned = m.group(1)
+
+    # Check sub-package mappings
+    if cleaned in _MONOREPO_PACKAGES:
+        return _MONOREPO_PACKAGES[cleaned]
+
+    # Check aliases (pre-monorepo standalone repos)
+    if cleaned in PROJECT_ALIASES:
+        return PROJECT_ALIASES[cleaned]
+
+    return cleaned
 
 
 @app.command()
@@ -856,6 +902,26 @@ def migrate() -> None:
     migrate_command()
 
 
+@app.command("consolidate")
+def consolidate(
+    execute: bool = typer.Option(False, "--execute", help="Apply changes (default: dry-run)"),
+    generate_rollback: bool = typer.Option(False, "--generate-rollback", help="Save rollback SQL"),
+) -> None:
+    """Consolidate fragmented project names into canonical names."""
+    import subprocess
+    script = Path(__file__).parent.parent.parent.parent / "scripts" / "consolidate_projects.py"
+    if not script.exists():
+        rprint(f"[bold red]Error:[/] Script not found: {script}")
+        raise typer.Exit(1)
+    args = [sys.executable, str(script)]
+    if execute:
+        args.append("--execute")
+    if generate_rollback:
+        args.append("--generate-rollback")
+    result = subprocess.run(args)
+    raise typer.Exit(result.returncode)
+
+
 @app.command("enrich")
 def enrich(
     batch_size: int = typer.Option(50, "--batch-size", "-b", help="Chunks per batch"),
@@ -1577,7 +1643,8 @@ def index_fast(
             task = progress.add_task("Processing files...", total=len(jsonl_files))
 
             for i, jsonl_file in enumerate(jsonl_files):
-                proj_name = jsonl_file.parent.name if jsonl_file.parent != source else None
+                raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
+                proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
                 # Parse, classify, and chunk each entry
                 all_chunks = []

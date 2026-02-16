@@ -89,7 +89,7 @@ def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int)
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
-        requests.post(
+        resp = requests.post(
             f"{SUPABASE_URL}/rest/v1/llm_usage",
             headers={
                 "apikey": SUPABASE_SERVICE_KEY,
