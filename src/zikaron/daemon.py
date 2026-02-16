@@ -270,6 +270,10 @@ async def health_services():
         _check_service,
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:11434/api/tags"], 3
     )
+    mlx_fut = asyncio.to_thread(
+        _check_service,
+        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8080/v1/models"], 3
+    )
     telegram_fut = asyncio.to_thread(
         _check_service,
         ["launchctl", "list", "com.golemszikaron.telegram"], 3
@@ -286,8 +290,8 @@ async def health_services():
         ["bash", "-c", "launchctl list 2>/dev/null | grep -E 'golem|zikaron' || true"], 3
     )
 
-    ollama_code, telegram_out, railway_code, launchd_out = await asyncio.gather(
-        ollama_fut, telegram_fut, railway_fut, launchd_fut
+    ollama_code, mlx_code, telegram_out, railway_code, launchd_out = await asyncio.gather(
+        ollama_fut, mlx_fut, telegram_fut, railway_fut, launchd_fut
     )
 
     # Parse launchd services
@@ -323,6 +327,7 @@ async def health_services():
 
     services = {
         "ollama": {"status": "up" if ollama_code == "200" else "down"},
+        "mlx": {"status": "up" if mlx_code == "200" else "down"},
         "telegram_bot": {"status": "up" if telegram_out and not telegram_out.startswith("-\t") else "down"},
         "railway": {"status": "up" if railway_code == "200" else "down"},
         "zikaron_daemon": {"status": "up", "chunks": vector_store.count() if vector_store else 0},

@@ -40,7 +40,7 @@ zikaron enrich
 │                                         1024 dims   fast DB │
 └─────────────────────────────────────────────────────────────┘
         ↓
-~/.local/share/zikaron/zikaron.db   # Storage: sqlite-vec (~1.4GB, 226K+ chunks)
+~/.local/share/zikaron/zikaron.db   # Storage: sqlite-vec (~1.4GB, 260K+ chunks)
         ↓
 ┌─────────────────────────────────────────────────────────────┐
 │  POST-PROCESSING                                             │
@@ -273,20 +273,63 @@ Add to `~/.claude/settings.json`:
 
 ## Enrichment Pipeline
 
-Local LLM enrichment adds metadata to indexed chunks:
+Local LLM enrichment adds structured metadata to each chunk. Think of it as a librarian cataloging every conversation snippet — what it's about, how important it is, and how to find it later.
 
-| Field | Description | Source |
-|-------|-------------|--------|
-| `summary` | 1-2 sentence summary | GLM-4.7-Flash |
-| `tags` | Comma-separated topic tags | GLM-4.7-Flash |
-| `importance` | 1-10 relevance score | GLM-4.7-Flash |
-| `intent` | Activity classification | GLM-4.7-Flash |
+### Fields (10 total)
 
-**Requirements:** Ollama running with `glm4:latest` model. Set `"think": false` in API calls — GLM-4.7-Flash defaults to thinking mode which adds 350+ reasoning tokens and takes 20s for trivial prompts.
+| Field | What it captures | Example |
+|-------|-----------------|---------|
+| `summary` | 1-2 sentence gist | "Debugging why Telegram bot drops messages under load" |
+| `tags` | Topic tags (comma-separated) | "telegram, debugging, performance" |
+| `importance` | 1-10 relevance score | 8 (architectural decision) vs 2 (directory listing) |
+| `intent` | What was happening | `debugging`, `designing`, `implementing`, `configuring`, `discussing`, `deciding`, `reviewing` |
+| `primary_symbols` | Key code entities | "TelegramBot, handleMessage, grammy" |
+| `resolved_query` | Question this answers (HyDE-style) | "How does the Telegram bot handle rate limiting?" |
+| `epistemic_level` | How proven is this | `hypothesis`, `substantiated`, `validated` |
+| `version_scope` | What version/system state | "grammy 1.32, Node 22, pre-Railway migration" |
+| `debt_impact` | Technical debt signal | `introduction`, `resolution`, `none` |
+| `external_deps` | Libraries/APIs mentioned | "grammy, Supabase, Railway" |
 
-**Concurrency:** Uses `PRAGMA busy_timeout = 5000` and 3-attempt retry logic with backoff to handle concurrent DB access from daemon + MCP + enrichment.
+The first 4 fields have been populated for ~11.6K chunks via local Ollama. The remaining 6 fields await cloud backfill (Gemini Batch API, ~$16 for all 251K chunks).
 
-**Background running:** `PYTHONUNBUFFERED=1` required for log visibility in background processes.
+### Backends
+
+Two local LLM backends available — use whichever suits your setup:
+
+| Backend | How to start | Speed | Env var |
+|---------|-------------|-------|---------|
+| **Ollama** (default) | `ollama serve` + `ollama pull glm4` | ~1s/chunk (short), ~13s (long) | `ZIKARON_ENRICH_BACKEND=ollama` |
+| **MLX** (Apple Silicon) | `python3 -m mlx_lm.server --model mlx-community/Qwen2.5-Coder-14B-Instruct-4bit --port 8080` | 21-87% faster | `ZIKARON_ENRICH_BACKEND=mlx` |
+
+Both work with the same enrichment pipeline — just set the env var and go.
+
+### Running Enrichment
+
+```bash
+# Basic (50 chunks at a time, Ollama)
+zikaron enrich
+
+# Bigger batches, MLX, parallel workers
+ZIKARON_ENRICH_BACKEND=mlx zikaron enrich --batch-size=100 --parallel=3
+
+# Process up to 5000 chunks in one run
+zikaron enrich --max=5000
+
+# Automated scheduling (checks queue, runs if needed)
+./scripts/auto-enrich.sh --threshold 500 --max-hours 3
+```
+
+### Cloud Backfill (one-time)
+
+For the initial 251K chunk backfill, there's a Gemini Batch API script. See `docs/enrichment-runbook.md` for the full runbook.
+
+### Concurrency Notes
+
+- **`PRAGMA busy_timeout = 5000`** — waits up to 5s for DB locks (daemon + MCP + enrichment can all access DB)
+- **Retry logic** — 3 attempts with backoff on `SQLITE_BUSY`
+- **Parallel mode** — each thread gets its own DB connection (thread-local VectorStore)
+- **Ollama tip:** Set `"think": false` in API calls — GLM-4.7 defaults to thinking mode, adding 350+ tokens and 20s delay for no benefit
+- **Background running:** `PYTHONUNBUFFERED=1` required for log visibility in background processes
 
 ---
 
@@ -316,7 +359,7 @@ Used by the Golems Dashboard 3D visualization (`react-force-graph-3d`). Can be u
 | Path | Purpose |
 |------|---------|
 | `~/.claude/projects/` | Source conversations (read-only) |
-| `~/.local/share/zikaron/zikaron.db` | sqlite-vec database (~1.4GB, 226K+ chunks) |
+| `~/.local/share/zikaron/zikaron.db` | sqlite-vec database (~1.4GB, 260K+ chunks) |
 | `~/.local/share/zikaron/prompts/` | Deduplicated system prompts (SHA-256) |
 | `/tmp/zikaron.sock` | Daemon Unix socket |
 | `/tmp/zikaron-enrichment.lock` | Enrichment process lock file |
