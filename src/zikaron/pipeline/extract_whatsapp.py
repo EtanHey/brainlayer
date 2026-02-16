@@ -27,6 +27,7 @@ def extract_whatsapp_messages(
     limit: Optional[int] = None,
     only_from_me: bool = False,
     exclude_groups: bool = True,
+    min_char_count: int = 10,
 ) -> Iterator[dict]:
     """
     Extract WhatsApp messages from SQLite database.
@@ -36,7 +37,8 @@ def extract_whatsapp_messages(
         limit: Maximum number of messages to extract
         only_from_me: Only extract messages sent by user
         exclude_groups: Exclude group chat messages
-    
+        min_char_count: Minimum message length to include (filters emoji-only etc.)
+
     Yields:
         Message dictionaries with text, timestamp, sender info
     """
@@ -55,7 +57,7 @@ def extract_whatsapp_messages(
         
         # Build query
         query = """
-            SELECT 
+            SELECT
                 Z_PK as id,
                 ZTEXT as text,
                 ZISFROMME as is_from_me,
@@ -71,7 +73,9 @@ def extract_whatsapp_messages(
             FROM ZWAMESSAGE
             WHERE ZTEXT IS NOT NULL
                 AND ZTEXT != ''
+                AND LENGTH(ZTEXT) >= ?
         """
+        params = [min_char_count]
         
         # Add filters
         if only_from_me:
@@ -85,9 +89,10 @@ def extract_whatsapp_messages(
         query += " ORDER BY ZMESSAGEDATE DESC"
         
         if limit:
-            query += f" LIMIT {limit}"
-        
-        cursor.execute(query)
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
         
         for row in cursor:
             # Convert Core Data timestamp to Unix timestamp

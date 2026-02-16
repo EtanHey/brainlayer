@@ -350,6 +350,20 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
         if results:
             return min(results, key=lambda x: list(ContentValue).index(x.value))
 
+    # WhatsApp messages
+    if entry_type == "whatsapp_message":
+        content = entry.get("content", "")
+        role = entry.get("role", "contact")
+        ct = ContentType.USER_MESSAGE if role == "user" else ContentType.ASSISTANT_TEXT
+        if not content or len(content.strip()) < 10:
+            return None
+        return ClassifiedContent(
+            content=content,
+            content_type=ct,
+            value=ContentValue.HIGH if role == "user" else ContentValue.MEDIUM,
+            metadata={"source": "whatsapp"},
+        )
+
     return None
 
 
