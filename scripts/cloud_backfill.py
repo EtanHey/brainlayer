@@ -37,8 +37,11 @@ from zikaron.vector_store import VectorStore
 from zikaron.pipeline.enrichment import (
     ENRICHMENT_PROMPT,
     HIGH_VALUE_TYPES,
+    build_external_prompt,
+    build_prompt,
     parse_enrichment,
 )
+from zikaron.pipeline.sanitize import Sanitizer, SanitizeConfig
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -131,15 +134,61 @@ def get_pending_jobs(store: VectorStore) -> List[Dict[str, Any]]:
 
 # ── Export ──────────────────────────────────────────────────────────────
 
+def _init_sanitizer(store: VectorStore) -> Sanitizer:
+    """Initialize the sanitizer with name dictionary from the DB.
+
+    AIDEV-NOTE: This is called once at the start of any external export.
+    The sanitizer is THE gate for external API calls — not optional.
+    """
+    sanitizer = Sanitizer.from_env()
+
+    # Build name dictionary from WhatsApp senders in DB
+    known_names = sanitizer.build_name_dictionary(store)
+    if known_names:
+        print(f"  Built name dictionary: {len(known_names)} names from WhatsApp contacts")
+        # Rebuild sanitizer with the full name dictionary
+        new_config = SanitizeConfig(
+            owner_names=sanitizer.config.owner_names,
+            owner_emails=sanitizer.config.owner_emails,
+            owner_paths=sanitizer.config.owner_paths,
+            known_names=frozenset(known_names) | sanitizer.config.known_names,
+            strip_emails=sanitizer.config.strip_emails,
+            strip_ips=sanitizer.config.strip_ips,
+            strip_jwts=sanitizer.config.strip_jwts,
+            strip_op_refs=sanitizer.config.strip_op_refs,
+            strip_phone_numbers=sanitizer.config.strip_phone_numbers,
+            use_spacy_ner=sanitizer.config.use_spacy_ner,
+        )
+        sanitizer = Sanitizer(new_config)
+
+    # Load existing mapping for pseudonym consistency across runs
+    mapping_path = EXPORT_DIR / "pii_mapping.json"
+    sanitizer.load_mapping(mapping_path)
+
+    return sanitizer
+
+
 def export_unenriched_chunks(
     store: VectorStore,
     max_chunks: int = 0,
     content_types: Optional[List[str]] = None,
     min_char_count: int = 50,
+    no_sanitize: bool = False,
 ) -> List[Path]:
-    """Export unenriched chunks to JSONL files (one per batch job)."""
+    """Export unenriched chunks to JSONL files (one per batch job).
+
+    Content is sanitized before export — PII is stripped via build_external_prompt().
+    Use no_sanitize=True only for local testing with trusted backends.
+    """
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     types = content_types or HIGH_VALUE_TYPES
+
+    if no_sanitize:
+        print("WARNING: PII sanitization DISABLED — use only for local testing!")
+        sanitizer = None
+    else:
+        print("Initializing PII sanitizer...")
+        sanitizer = _init_sanitizer(store)
 
     cursor = store.conn.cursor()
 
@@ -159,9 +208,9 @@ def export_unenriched_chunks(
         total = min(total, max_chunks)
         print(f"Limiting to: {total}")
 
-    # Fetch all eligible chunk IDs and content
+    # Fetch all eligible chunk IDs, content, and metadata for sanitization
     query = f"""
-        SELECT id, content, project, content_type
+        SELECT id, content, project, content_type, source, sender
         FROM chunks
         WHERE {where}
         ORDER BY rowid
@@ -177,6 +226,7 @@ def export_unenriched_chunks(
     # Split into batch files
     jsonl_files = []
     batch_num = 0
+    total_pii_found = 0
 
     for i in range(0, len(rows), CHUNKS_PER_JOB):
         batch = rows[i:i + CHUNKS_PER_JOB]
@@ -185,28 +235,31 @@ def export_unenriched_chunks(
         filename = EXPORT_DIR / f"batch_{ts}_{batch_num:03d}.jsonl"
 
         with open(filename, "w") as f:
-            for chunk_id, content, project, content_type in batch:
-                # Truncate very long content
-                if len(content) > 4000:
-                    content = content[:4000] + "\n... [truncated]"
+            for chunk_id, content, project, content_type, source, sender in batch:
+                chunk_dict = {
+                    "content": content,
+                    "project": project,
+                    "content_type": content_type,
+                    "source": source,
+                    "sender": sender,
+                }
 
-                # Escape braces in content to avoid str.format() crash on code chunks
-                safe_content = content.replace("{", "{{").replace("}", "}}")
-                prompt = ENRICHMENT_PROMPT.format(
-                    project=project or "unknown",
-                    content_type=content_type or "unknown",
-                    content=safe_content,
-                    context_section="",  # No context for batch (too expensive)
-                )
+                if sanitizer is not None:
+                    prompt, sanitize_result = build_external_prompt(
+                        chunk_dict, sanitizer
+                    )
+                    if sanitize_result.pii_detected:
+                        total_pii_found += 1
+                else:
+                    # No sanitization — use local prompt builder
+                    prompt = build_prompt(chunk_dict)
 
+                # Gemini Batch API format (camelCase — raw JSONL uses REST API casing)
                 request_line = {
                     "key": chunk_id,
                     "request": {
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "responseMimeType": "application/json",
-                            "responseSchema": ENRICHMENT_SCHEMA,
-                        },
+                        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json"},
                     },
                 }
                 f.write(json.dumps(request_line) + "\n")
@@ -214,7 +267,13 @@ def export_unenriched_chunks(
         jsonl_files.append(filename)
         print(f"  Wrote {filename.name} ({len(batch)} chunks)")
 
-    print(f"\nExported {len(rows)} chunks to {len(jsonl_files)} JSONL files")
+    # Save PII mapping for reversibility (local only, never uploaded)
+    if sanitizer is not None:
+        mapping_path = EXPORT_DIR / "pii_mapping.json"
+        sanitizer.save_mapping(mapping_path)
+    print(f"\nPII sanitization: {total_pii_found}/{len(rows)} chunks had PII stripped")
+    print(f"Mapping saved to: {mapping_path}")
+    print(f"Exported {len(rows)} chunks to {len(jsonl_files)} JSONL files")
     return jsonl_files
 
 
@@ -238,7 +297,7 @@ def _get_genai_client():
 
 def submit_gemini_batch(
     jsonl_path: Path,
-    model: str = "models/gemini-2.5-flash-lite",
+    model: str = "models/gemini-2.5-flash",
     store: Optional[VectorStore] = None,
 ) -> str:
     """Upload JSONL and submit a Gemini batch job. Returns batch job name."""
@@ -254,7 +313,7 @@ def submit_gemini_batch(
     print("  Uploading JSONL to File API...")
     uploaded_file = client.files.upload(
         file=str(jsonl_path),
-        config={"display_name": f"zikaron-backfill-{jsonl_path.stem}"},
+        config={"display_name": f"zikaron-backfill-{jsonl_path.stem}", "mime_type": "application/json"},
     )
     print(f"  Uploaded: {uploaded_file.name}")
 
@@ -475,9 +534,10 @@ def log_batch_usage(batch_id: str, model: str, input_tokens: int, output_tokens:
 
 def run_full_backfill(
     db_path: Path,
-    model: str = "models/gemini-2.5-flash-lite",
+    model: str = "models/gemini-2.5-flash",
     dry_run: bool = False,
     sample: int = 0,
+    no_sanitize: bool = False,
 ) -> None:
     """Run the full backfill: export → submit → poll → import."""
     store = VectorStore(db_path)
@@ -491,7 +551,7 @@ def run_full_backfill(
 
         # Step 1: Export
         max_chunks = sample if sample > 0 else 0
-        jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks)
+        jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
 
         if not jsonl_files:
             print("Nothing to export!")
@@ -530,8 +590,8 @@ def run_full_backfill(
                     um = job.usage_metadata
                     in_tok = getattr(um, "prompt_token_count", 0) or 0
                     out_tok = getattr(um, "candidates_token_count", 0) or 0
-                    # Gemini 2.5 Flash-Lite: $0.075/1M input, $0.30/1M output
-                    cost = (in_tok * 0.075 + out_tok * 0.30) / 1_000_000
+                    # Gemini 2.5 Flash: $0.15/1M input, $0.60/1M output (Tier 1)
+                    cost = (in_tok * 0.15 + out_tok * 0.60) / 1_000_000
                     log_batch_usage(batch_name, model, in_tok, out_tok, cost)
 
                 save_checkpoint(store, batch_id=batch_name, status="completed",
@@ -631,12 +691,14 @@ def show_status(db_path: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloud backfill for Zikaron enrichment")
     parser.add_argument("--db", type=str, default=None, help="Database path")
-    parser.add_argument("--model", type=str, default="models/gemini-2.5-flash-lite",
-                        help="Gemini model (default: gemini-2.5-flash-lite)")
+    parser.add_argument("--model", type=str, default="models/gemini-2.5-flash",
+                        help="Gemini model (default: gemini-2.5-flash; flash-lite does not support batch)")
     parser.add_argument("--dry-run", action="store_true", help="Export JSONL only, don't submit")
     parser.add_argument("--sample", type=int, default=0, help="Run N-chunk validation sample")
     parser.add_argument("--resume", action="store_true", help="Resume pending batch jobs")
     parser.add_argument("--status", action="store_true", help="Show batch job status")
+    parser.add_argument("--no-sanitize", action="store_true",
+                        help="Skip PII sanitization (local testing only — NEVER use for external APIs)")
 
     args = parser.parse_args()
     db = Path(args.db) if args.db else DEFAULT_DB_PATH
@@ -646,4 +708,5 @@ if __name__ == "__main__":
     elif args.resume:
         resume_backfill(db)
     else:
-        run_full_backfill(db, model=args.model, dry_run=args.dry_run, sample=args.sample)
+        run_full_backfill(db, model=args.model, dry_run=args.dry_run, sample=args.sample,
+                          no_sanitize=args.no_sanitize)

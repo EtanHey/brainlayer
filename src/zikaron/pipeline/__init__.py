@@ -15,6 +15,13 @@ from .semantic_style import (
     TopicCluster,
     analyze_semantic_style,
 )
+from .sanitize import (
+    Sanitizer,
+    SanitizeConfig,
+    SanitizeResult,
+    Replacement,
+)
+from .enrichment import build_external_prompt
 
 __all__ = [
     "extract_system_prompts",
@@ -30,4 +37,11 @@ __all__ = [
     "SemanticStyleAnalysis",
     "TopicCluster",
     "analyze_semantic_style",
+    # PII sanitization
+    "Sanitizer",
+    "SanitizeConfig",
+    "SanitizeResult",
+    "Replacement",
+    # External enrichment (sanitized)
+    "build_external_prompt",
 ]

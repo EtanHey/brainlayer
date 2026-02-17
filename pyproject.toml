@@ -32,6 +32,7 @@ dependencies = [
     "pyyaml>=6.0",  # Chat-tags config
     "numpy>=1.22,<3.0",  # For sentence-transformers
     "scikit-learn>=1.0.0",  # K-means for cluster-based sampling
+    "spacy>=3.7,<4.0",  # NER for PII sanitization (en_core_web_sm model)
 ]
 
 [project.optional-dependencies]

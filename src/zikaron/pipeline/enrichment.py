@@ -18,6 +18,12 @@ Usage:
     python -m zikaron.pipeline.enrichment --max=5000         # Process up to 5000
     python -m zikaron.pipeline.enrichment --parallel=3       # 3 concurrent workers (MLX)
     python -m zikaron.pipeline.enrichment --stats            # Show progress
+
+AIDEV-NOTE: Two prompt paths exist:
+  1. build_prompt()          — for LOCAL LLM enrichment (Ollama/MLX). No sanitization needed.
+  2. build_external_prompt() — for ANY external API (Gemini, Groq, etc). Sanitization is MANDATORY.
+     This function requires a Sanitizer instance — you literally cannot call it without one.
+     cloud_backfill.py and any future external backend MUST use build_external_prompt().
 """
 
 import json
@@ -202,7 +208,11 @@ Return ONLY the JSON object, no other text."""
 
 
 def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, Any]]] = None) -> str:
-    """Build enrichment prompt with optional surrounding context."""
+    """Build enrichment prompt with optional surrounding context.
+
+    For LOCAL LLM enrichment only (Ollama/MLX). For external APIs, use
+    build_external_prompt() which enforces PII sanitization.
+    """
     if context_chunks is None:
         context_chunks = []
 
@@ -219,12 +229,85 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
             ctx_parts.append(f"[{ctx.get('content_type', '?')}] {ctx_content}")
         context_section = "SURROUNDING CONTEXT:\n" + "\n---\n".join(ctx_parts)
 
+    # Escape braces in content to avoid str.format() crash on code chunks
+    safe_content = content.replace("{", "{{").replace("}", "}}")
+    if context_section:
+        context_section = context_section.replace("{", "{{").replace("}", "}}")
+
     return ENRICHMENT_PROMPT.format(
         project=chunk.get("project", "unknown"),
         content_type=chunk.get("content_type", "unknown"),
-        content=content,
+        content=safe_content,
         context_section=context_section,
     )
+
+
+def build_external_prompt(
+    chunk: Dict[str, Any],
+    sanitizer: "Sanitizer",
+    context_chunks: Optional[List[Dict[str, Any]]] = None,
+) -> tuple[str, "SanitizeResult"]:
+    """Build enrichment prompt with MANDATORY PII sanitization for external APIs.
+
+    AIDEV-NOTE: This is THE function for sending content to any external LLM
+    (Gemini, Groq, etc). Sanitization is not optional — it's coupled into
+    the function signature. You cannot call this without a Sanitizer.
+
+    Args:
+        chunk: Chunk dict with at least 'content', 'project', 'content_type'.
+        sanitizer: A Sanitizer instance (from Sanitizer.from_env() or custom).
+        context_chunks: Optional surrounding chunks for enrichment context.
+
+    Returns:
+        Tuple of (prompt_string, sanitize_result). The prompt uses sanitized
+        content. The result tracks what was replaced (for audit/mapping).
+    """
+    from .sanitize import Sanitizer, SanitizeResult  # noqa: F811 — type narrowing
+
+    if context_chunks is None:
+        context_chunks = []
+
+    content = chunk["content"]
+    # Truncate very long chunks to stay within context
+    if len(content) > 4000:
+        content = content[:4000] + "\n... [truncated]"
+
+    # Sanitize the main content
+    metadata = {
+        "source": chunk.get("source"),
+        "sender": chunk.get("sender"),
+        "project": chunk.get("project"),
+    }
+    result = sanitizer.sanitize(content, metadata)
+    sanitized_content = result.sanitized
+
+    # Sanitize context chunks too — merge their replacements into the main result
+    context_section = ""
+    if context_chunks:
+        ctx_parts = []
+        for ctx in context_chunks[:3]:
+            ctx_content = ctx["content"][:1000]
+            ctx_result = sanitizer.sanitize(ctx_content)
+            # Merge context PII replacements into main result for full audit trail
+            result.replacements.extend(ctx_result.replacements)
+            if ctx_result.pii_detected:
+                result.pii_detected = True
+            ctx_parts.append(f"[{ctx.get('content_type', '?')}] {ctx_result.sanitized}")
+        context_section = "SURROUNDING CONTEXT:\n" + "\n---\n".join(ctx_parts)
+
+    # Escape braces for str.format()
+    safe_content = sanitized_content.replace("{", "{{").replace("}", "}}")
+    if context_section:
+        context_section = context_section.replace("{", "{{").replace("}", "}}")
+
+    prompt = ENRICHMENT_PROMPT.format(
+        project=chunk.get("project", "unknown"),
+        content_type=chunk.get("content_type", "unknown"),
+        content=safe_content,
+        context_section=context_section,
+    )
+
+    return prompt, result
 
 
 def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
