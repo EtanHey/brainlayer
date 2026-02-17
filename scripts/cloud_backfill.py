@@ -50,9 +50,12 @@ EXPORT_DIR = Path(__file__).resolve().parent / "backfill_data"
 CHECKPOINT_TABLE = "enrichment_checkpoints"
 
 # Gemini Batch API limits (Tier 1)
-MAX_TOKENS_PER_JOB = 9_000_000  # Stay under 10M limit with safety margin
+# AIDEV-NOTE: Tier 1 has low enqueued-token quota for 2.5-flash batch.
+# 12K chunks/job (~9M tokens) hits 429 RESOURCE_EXHAUSTED.
+# 500 chunks/job (~350K tokens) stays safely under quota.
+MAX_TOKENS_PER_JOB = 350_000  # Conservative: stay under Tier 1 enqueued limit
 AVG_PROMPT_TOKENS = 700  # Estimated avg tokens per chunk prompt
-CHUNKS_PER_JOB = MAX_TOKENS_PER_JOB // AVG_PROMPT_TOKENS  # ~12,800
+CHUNKS_PER_JOB = MAX_TOKENS_PER_JOB // AVG_PROMPT_TOKENS  # ~500
 
 # Supabase usage logging
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -299,8 +302,9 @@ def submit_gemini_batch(
     jsonl_path: Path,
     model: str = "models/gemini-2.5-flash",
     store: Optional[VectorStore] = None,
-) -> str:
-    """Upload JSONL and submit a Gemini batch job. Returns batch job name."""
+    max_retries: int = 3,
+) -> Optional[str]:
+    """Upload JSONL and submit a Gemini batch job. Returns batch job name or None on failure."""
     client = _get_genai_client()
 
     # Count chunks in file
@@ -317,29 +321,54 @@ def submit_gemini_batch(
     )
     print(f"  Uploaded: {uploaded_file.name}")
 
-    # Create batch job — src can be the file name string
-    print(f"  Creating batch job (model: {model})...")
-    batch_job = client.batches.create(
-        model=model,
-        src=uploaded_file.name,
-        config={"display_name": f"zikaron-enrichment-{jsonl_path.stem}"},
-    )
-    print(f"  Job created: {batch_job.name} (state: {batch_job.state})")
+    # Create batch job with retry on 429
+    for attempt in range(max_retries):
+        try:
+            print(f"  Creating batch job (model: {model})..." + (f" (retry {attempt})" if attempt else ""))
+            batch_job = client.batches.create(
+                model=model,
+                src=uploaded_file.name,
+                config={"display_name": f"zikaron-enrichment-{jsonl_path.stem}"},
+            )
+            print(f"  Job created: {batch_job.name} (state: {batch_job.state})")
 
-    # Save checkpoint
-    if store:
-        save_checkpoint(
-            store,
-            batch_id=batch_job.name,
-            backend="gemini",
-            model=model,
-            status="submitted",
-            chunk_count=chunk_count,
-            jsonl_path=str(jsonl_path),
-            submitted_at=datetime.now(timezone.utc).isoformat(),
-        )
+            # Save checkpoint
+            if store:
+                save_checkpoint(
+                    store,
+                    batch_id=batch_job.name,
+                    backend="gemini",
+                    model=model,
+                    status="submitted",
+                    chunk_count=chunk_count,
+                    jsonl_path=str(jsonl_path),
+                    submitted_at=datetime.now(timezone.utc).isoformat(),
+                )
 
-    return batch_job.name
+            return batch_job.name
+
+        except Exception as e:
+            err = str(e)
+            if "429" in err and attempt < max_retries - 1:
+                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
+                print(f"  429 RESOURCE_EXHAUSTED — waiting {wait}s before retry...")
+                time.sleep(wait)
+            else:
+                print(f"  FAILED: {err[:120]}")
+                if store:
+                    save_checkpoint(
+                        store,
+                        batch_id=f"failed-{jsonl_path.stem}",
+                        backend="gemini",
+                        model=model,
+                        status="failed",
+                        chunk_count=chunk_count,
+                        jsonl_path=str(jsonl_path),
+                        error=err[:500],
+                    )
+                return None
+
+    return None
 
 
 def poll_gemini_batch(batch_name: str, timeout_hours: float = 25) -> Dict[str, Any]:
@@ -538,6 +567,7 @@ def run_full_backfill(
     dry_run: bool = False,
     sample: int = 0,
     no_sanitize: bool = False,
+    submit_only: bool = False,
 ) -> None:
     """Run the full backfill: export → submit → poll → import."""
     store = VectorStore(db_path)
@@ -567,8 +597,21 @@ def run_full_backfill(
         batch_names = []
         for jsonl_path in jsonl_files:
             batch_name = submit_gemini_batch(jsonl_path, model=model, store=store)
-            batch_names.append(batch_name)
+            if batch_name is not None:
+                batch_names.append(batch_name)
+            else:
+                print(f"  [WARN] Submission failed for {jsonl_path}, skipping")
             time.sleep(2)  # Brief pause between submissions
+
+        if not batch_names:
+            print("\nNo batch jobs submitted successfully.")
+            return
+
+        if submit_only:
+            print(f"\nSubmitted {len(batch_names)} batch jobs. Run --resume later to import results.")
+            for name in batch_names:
+                print(f"  {name}")
+            return
 
         print(f"\nSubmitted {len(batch_names)} batch jobs. Polling for results...")
 
@@ -699,6 +742,8 @@ if __name__ == "__main__":
     parser.add_argument("--status", action="store_true", help="Show batch job status")
     parser.add_argument("--no-sanitize", action="store_true",
                         help="Skip PII sanitization (local testing only — NEVER use for external APIs)")
+    parser.add_argument("--submit-only", action="store_true",
+                        help="Submit batch jobs and exit — don't poll. Use --resume later to import.")
 
     args = parser.parse_args()
     db = Path(args.db) if args.db else DEFAULT_DB_PATH
@@ -709,4 +754,4 @@ if __name__ == "__main__":
         resume_backfill(db)
     else:
         run_full_backfill(db, model=args.model, dry_run=args.dry_run, sample=args.sample,
-                          no_sanitize=args.no_sanitize)
+                          no_sanitize=args.no_sanitize, submit_only=args.submit_only)
