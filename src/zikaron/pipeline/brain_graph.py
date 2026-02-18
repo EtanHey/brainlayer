@@ -73,7 +73,10 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
         SELECT source_file, project, COUNT(*) as chunk_count,
                GROUP_CONCAT(DISTINCT content_type) as types,
                GROUP_CONCAT(DISTINCT intent) as intents,
-               AVG(CASE WHEN importance IS NOT NULL THEN importance END) as avg_importance
+               AVG(CASE WHEN importance IS NOT NULL THEN importance END) as avg_importance,
+               (SELECT source FROM chunks c2
+                WHERE c2.source_file = chunks.source_file AND c2.source IS NOT NULL
+                GROUP BY source ORDER BY COUNT(*) DESC LIMIT 1) as dominant_source
         FROM chunks
     """
     params = []
@@ -96,7 +99,7 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
     embed_dim = None
     EMBED_SAMPLE = 20  # Sample up to 20 embeddings per session for mean-pooling
 
-    for i, (src_file, proj, chunk_count, types_str, intents_str, avg_imp) in enumerate(source_files):
+    for i, (src_file, proj, chunk_count, types_str, intents_str, avg_imp, dominant_source) in enumerate(source_files):
         if i % 200 == 0 and i > 0:
             logger.info(f"Processing session {i}/{len(source_files)}...")
 
@@ -163,6 +166,7 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
             "content_types": content_types,
             "intents": intents,
             "importance": float(avg_imp) if avg_imp is not None else 5.0,
+            "source": dominant_source or "claude_code",
             "text": text,
             "embedding": embedding,
         })
@@ -428,6 +432,7 @@ def build_graph_json(
             "z": round(float(coords[i, 2]), 2),
             "size": round(float(np.clip(s["importance"] / 10 * 5 + 1, 1, 8)), 2),
             "color_type": dominant_type(s["intents"]),
+            "source": s.get("source", "claude_code"),
             "project": s["project"],
             "branch": s["branch"],
             "plan": s["plan_name"],
