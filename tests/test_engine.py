@@ -328,6 +328,7 @@ class TestFormatSessions:
 # ── Integration Tests: DB Queries ────────────────────────────────────
 
 
+@pytest.mark.integration
 class TestSessionsIntegration:
     """Test sessions() with real DB. Requires production DB."""
 
@@ -372,6 +373,7 @@ class TestSessionsIntegration:
                     assert s.project == project
 
 
+@pytest.mark.integration
 class TestRecallFileIntegration:
     """Test recall() with real DB for file-based recall (no embedding needed)."""
 

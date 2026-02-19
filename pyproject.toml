@@ -72,9 +72,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/brainlayer/brainlayer"
-Repository = "https://github.com/brainlayer/brainlayer"
-Issues = "https://github.com/brainlayer/brainlayer/issues"
+Homepage = "https://github.com/EtanHey/brainlayer"
+Repository = "https://github.com/EtanHey/brainlayer"
+Issues = "https://github.com/EtanHey/brainlayer/issues"
 
 [project.scripts]
 brainlayer = "brainlayer.cli:app"
@@ -96,3 +96,6 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that need the real production DB (268K+ chunks)",
+]
