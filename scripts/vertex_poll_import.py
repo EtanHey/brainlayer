@@ -18,11 +18,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from brainlayer.vector_store import VectorStore
+from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.pipeline.enrichment import parse_enrichment
 
 # ── Config ──────────────────────────────────────────────────────────────
 
-DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DB_PATH = DEFAULT_DB_PATH
 JOBS_FILE = Path(__file__).resolve().parent / "backfill_data" / "vertex_jobs.json"
 GCS_OUTPUT = "gs://brainlayer-enrichment-batch/output"
 GSUTIL = Path.home() / "google-cloud-sdk" / "bin" / "gsutil"

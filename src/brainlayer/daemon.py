@@ -25,7 +25,7 @@ from .embeddings import get_embedding_model
 logger = logging.getLogger(__name__)
 
 # Default paths
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from .paths import DEFAULT_DB_PATH
 SOCKET_PATH = Path("/tmp/brainlayer.sock")
 BRAIN_DIR = Path.home() / ".brainlayer-brain"
 API_COSTS_PATH = Path.home() / ".local" / "share" / "brainlayer" / "api_costs.jsonl"

@@ -240,8 +240,42 @@ def _line_based_chunk(text: str) -> list[str]:
     return chunks
 
 
+def _split_at_sentences(text: str, target_size: int = TARGET_CHUNK_SIZE) -> list[str]:
+    """Split text at sentence boundaries, respecting target chunk size.
+
+    Falls back to line boundaries if no sentences found.
+    """
+    # Match sentence endings: period/question/exclamation followed by space or newline
+    sentence_pattern = re.compile(r'(?<=[.!?])\s+')
+    sentences = sentence_pattern.split(text)
+
+    if len(sentences) <= 1:
+        # No sentence boundaries found, fall back to line-based
+        return _line_based_chunk(text)
+
+    chunks = []
+    current = []
+    current_size = 0
+
+    for sent in sentences:
+        sent_size = len(sent) + 1  # +1 for space separator
+
+        if current_size + sent_size > target_size and current:
+            chunks.append(" ".join(current))
+            current = []
+            current_size = 0
+
+        current.append(sent)
+        current_size += sent_size
+
+    if current:
+        chunks.append(" ".join(current))
+
+    return chunks
+
+
 def _chunk_text(classified: ClassifiedContent) -> list[Chunk]:
-    """Simple text chunking for non-code content."""
+    """Text chunking that respects paragraph and sentence boundaries."""
     content = classified.content
 
     if len(content) <= TARGET_CHUNK_SIZE:
@@ -261,6 +295,32 @@ def _chunk_text(classified: ClassifiedContent) -> list[Chunk]:
 
     for para in paragraphs:
         para_size = len(para) + 2  # +2 for paragraph separator
+
+        # If a single paragraph exceeds target, split it at sentence boundaries
+        if para_size > TARGET_CHUNK_SIZE:
+            # Flush current chunk first
+            if current_chunk:
+                chunks.append(Chunk(
+                    content="\n\n".join(current_chunk),
+                    content_type=classified.content_type,
+                    value=classified.value,
+                    metadata=classified.metadata,
+                    char_count=current_size
+                ))
+                current_chunk = []
+                current_size = 0
+
+            # Split the oversized paragraph at sentence boundaries
+            sub_chunks = _split_at_sentences(para)
+            for sub in sub_chunks:
+                chunks.append(Chunk(
+                    content=sub,
+                    content_type=classified.content_type,
+                    value=classified.value,
+                    metadata=classified.metadata,
+                    char_count=len(sub)
+                ))
+            continue
 
         if current_size + para_size > TARGET_CHUNK_SIZE and current_chunk:
             chunks.append(Chunk(
