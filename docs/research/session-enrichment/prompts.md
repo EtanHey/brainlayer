@@ -194,4 +194,4 @@ ID: chunk_abc123
 4. **Prompt 4** (auto-learnings) builds on top of session enrichment
 5. **Prompt 5** (CLI UX) can run anytime — it's the presentation layer
 
-Save responses to `docs.local/research/session-enrichment/` for reference.
+Save responses to `docs/research/session-enrichment/` for reference.

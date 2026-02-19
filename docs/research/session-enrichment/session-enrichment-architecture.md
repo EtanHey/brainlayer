@@ -69,7 +69,7 @@ CREATE TABLE session_enrichments (
     rules_established TEXT DEFAULT '[]',
 
     -- Tool usage (JSON — per-tool stats)
-    tool_usage_stats TEXT DEFAULT '{}',
+    tool_usage_stats TEXT DEFAULT '[]',
     most_used_tools TEXT DEFAULT '[]',
     tool_failures TEXT DEFAULT '[]',
 
@@ -81,6 +81,8 @@ CREATE TABLE session_enrichments (
 The JSON columns use SQLite's `json_each()` table-valued function for querying. When a JSON field becomes a frequent filter target, promote it without migration:
 
 ```sql
+-- Note: tool_usage_stats stores a JSON array (e.g., [{"tool_name": "Read", "count": 42}])
+-- Default should be '[]' not '{}' to match this array access pattern
 ALTER TABLE session_enrichments ADD COLUMN primary_tool TEXT
     GENERATED ALWAYS AS (json_extract(tool_usage_stats, '$[0].tool_name')) VIRTUAL;
 CREATE INDEX idx_primary_tool ON session_enrichments(primary_tool);
@@ -195,15 +197,15 @@ For the map-reduce path, Pass 1 runs independently on each chunk (the "map"). Pa
 
 Detecting that the same correction appears across sessions requires two complementary mechanisms: **real-time similarity matching during ingestion** and **periodic batch clustering** for pattern discovery.
 
-**Real-time dedup during correction ingestion** uses sqlite-vec. When a new correction is extracted, embed it and query the vec_corrections table for neighbors within cosine distance **0.85** (empirically strong threshold for "semantically same correction, different wording"). If a near-duplicate exists, invoke the AUDN loop: the LLM decides whether to merge (incrementing reinforcement_count and updating confidence) or keep as distinct.
+**Real-time dedup during correction ingestion** uses sqlite-vec. When a new correction is extracted, embed it and query the vec_corrections table for neighbors within cosine distance **< 0.15** (i.e., cosine similarity > 0.85 — `vec_distance_cosine` returns distance where lower = more similar). If a near-duplicate exists, invoke the AUDN loop: the LLM decides whether to merge (incrementing reinforcement_count and updating confidence) or keep as distinct.
 
 ```sql
--- Find similar existing corrections
+-- Find similar existing corrections (distance < 0.15 = similarity > 0.85)
 SELECT c.id, c.rule_text, c.confidence, c.reinforcement_count,
        vec_distance_cosine(vc.embedding, :new_embedding) as distance
 FROM vec_corrections vc
 JOIN corrections c ON c.id = vc.correction_id
-WHERE vec_distance_cosine(vc.embedding, :new_embedding) < 0.85
+WHERE vec_distance_cosine(vc.embedding, :new_embedding) < 0.15
 ORDER BY distance
 LIMIT 5;
 ```
