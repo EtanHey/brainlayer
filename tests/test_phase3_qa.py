@@ -214,46 +214,45 @@ class TestProjectNameNormalization:
         assert normalize_project_name("golems-haiku-1234567890") == "golems"
         assert normalize_project_name("golems-worktree-9999999999") == "golems"
 
-    def test_claude_code_simple_path(self, tmp_path):
+    def test_claude_code_simple_path(self, test_user, tmp_path):
         """Simple Claude Code path: -Users-name-Gits-projectname."""
         # Create a mock directory structure
         gits_dir = tmp_path / "Gits"
         gits_dir.mkdir()
         (gits_dir / "myproject").mkdir()
 
-        segments = f"-{tmp_path.name}-Gits-myproject"
         # We need to mock the path correctly
         with patch("os.path.isdir") as mock_isdir:
             mock_isdir.side_effect = lambda p: p.endswith("/myproject")
-            result = normalize_project_name("-Users-janedev-Gits-myproject")
+            result = normalize_project_name(f"-Users-{test_user}-Gits-myproject")
             # Should try to match "myproject" against filesystem
             # Since we mock isdir to return True for myproject, it should return it
             assert result == "myproject"
 
-    def test_claude_code_compound_name(self):
+    def test_claude_code_compound_name(self, test_user):
         """Compound names like rudy-monorepo should try filesystem lookup."""
         # When os.path.isdir returns True for "rudy-monorepo", use the compound name
         with patch("os.path.isdir") as mock_isdir:
             mock_isdir.side_effect = lambda p: "rudy-monorepo" in p
-            result = normalize_project_name("-Users-janedev-Gits-rudy-monorepo")
+            result = normalize_project_name(f"-Users-{test_user}-Gits-rudy-monorepo")
             assert result == "rudy-monorepo"
 
-    def test_claude_code_compound_name_fallback(self):
+    def test_claude_code_compound_name_fallback(self, test_user):
         """When no directory matches, fall back to first segment."""
         with patch("os.path.isdir", return_value=False):
-            result = normalize_project_name("-Users-janedev-Gits-rudy-monorepo")
+            result = normalize_project_name(f"-Users-{test_user}-Gits-rudy-monorepo")
             assert result == "rudy"
 
-    def test_claude_code_desktop_gits(self):
+    def test_claude_code_desktop_gits(self, test_user):
         """Old-style Desktop/Gits path should work too."""
         with patch("os.path.isdir") as mock_isdir:
             mock_isdir.side_effect = lambda p: "golems" in p
-            result = normalize_project_name("-Users-janedev-Desktop-Gits-golems")
+            result = normalize_project_name(f"-Users-{test_user}-Desktop-Gits-golems")
             assert result == "golems"
 
-    def test_no_gits_segment(self):
+    def test_no_gits_segment(self, test_user):
         """Paths without 'Gits' should return None."""
-        result = normalize_project_name("-Users-janedev-Documents-stuff")
+        result = normalize_project_name(f"-Users-{test_user}-Documents-stuff")
         assert result is None
 
 

@@ -20,16 +20,14 @@ class TestNormalizeProjectName:
         """Already-clean names pass through unchanged."""
         assert normalize_project_name("golems") == "golems"
 
-    def test_claude_code_encoded_path(self):
+    def test_claude_code_encoded_path(self, test_user):
         """Standard Claude Code path encoding decodes correctly."""
-        # This test requires the actual filesystem to have ~/Gits/golems
-        result = normalize_project_name("-Users-janedev-Gits-golems")
+        result = normalize_project_name(f"-Users-{test_user}-Gits-golems")
         assert result == "golems"
 
-    def test_desktop_gits_path(self):
+    def test_desktop_gits_path(self, test_user):
         """Old Desktop/Gits paths decode correctly."""
-        # Old path — directory may not exist, but first segment is returned
-        result = normalize_project_name("-Users-janedev-Desktop-Gits-golems")
+        result = normalize_project_name(f"-Users-{test_user}-Desktop-Gits-golems")
         # Either finds the dir or falls back to first segment
         assert result is not None
 
@@ -42,8 +40,7 @@ class TestNormalizeProjectName:
             for entry in os.listdir(gits_dir):
                 if "-" in entry and os.path.isdir(os.path.join(gits_dir, entry)):
                     # Test that this compound name resolves correctly
-                    encoded = f"-Users-{os.path.basename(home)}-Gits-{entry.replace('-', '-')}"
-                    # The encoding is just dashes, same as the name
+                    encoded = f"-Users-{os.path.basename(home)}-Gits-{entry}"
                     # Just verify it doesn't crash
                     result = normalize_project_name(encoded)
                     assert result is not None
@@ -55,7 +52,7 @@ class TestNormalizeProjectName:
         assert normalize_project_name("golems-haiku-1770775282043") == "golems"
         assert normalize_project_name("golems-worktree-1770775282043") == "golems"
 
-    def test_no_gits_segment_returns_none(self):
+    def test_no_gits_segment_returns_none(self, test_user):
         """Paths without 'Gits' segment return None."""
-        result = normalize_project_name("-Users-janedev-Documents-stuff")
+        result = normalize_project_name(f"-Users-{test_user}-Documents-stuff")
         assert result is None

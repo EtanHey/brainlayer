@@ -656,6 +656,9 @@ async def _search(
             if meta.get("tags") and isinstance(meta["tags"], list):
                 enrichment_parts.append(f"Tags: {', '.join(str(t) for t in meta['tags'][:5])}")
             project_display = normalize_project_name(meta.get("project")) or meta.get("project", "unknown")
+            # For WhatsApp/non-code sources, show contact name instead of "unknown" project
+            if project_display == "unknown" and meta.get("contact_name"):
+                project_display = meta["contact_name"]
             header = f"**Project:** {project_display} | **Type:** {meta.get('content_type', 'unknown')}"
             if meta.get("created_at"):
                 # Show just the date portion for readability
