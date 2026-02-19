@@ -332,38 +332,39 @@ class VectorStore:
             query_bytes = serialize_f32(query_embedding)
 
             where_clauses = []
-            params = [query_bytes, n_results]
+            filter_params: list = []
 
             if project_filter:
                 where_clauses.append("c.project = ?")
-                params.insert(-1, project_filter)
+                filter_params.append(project_filter)
             if content_type_filter:
                 where_clauses.append("c.content_type = ?")
-                params.insert(-1, content_type_filter)
+                filter_params.append(content_type_filter)
             if source_filter:
                 where_clauses.append("c.source = ?")
-                params.insert(-1, source_filter)
+                filter_params.append(source_filter)
             if sender_filter:
                 where_clauses.append("c.sender = ?")
-                params.insert(-1, sender_filter)
+                filter_params.append(sender_filter)
             if language_filter:
                 where_clauses.append("c.language = ?")
-                params.insert(-1, language_filter)
+                filter_params.append(language_filter)
             if tag_filter:
                 where_clauses.append("c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)")
-                params.insert(-1, tag_filter)
+                filter_params.append(tag_filter)
             if intent_filter:
                 where_clauses.append("c.intent = ?")
-                params.insert(-1, intent_filter)
+                filter_params.append(intent_filter)
             if importance_min is not None:
                 where_clauses.append("c.importance >= ?")
-                params.insert(-1, importance_min)
+                filter_params.append(importance_min)
 
             where_sql = ""
             if where_clauses:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
-            # sqlite-vec requires k = ? in WHERE clause for KNN queries
+            # sqlite-vec KNN: MATCH and k must bind before filter params
+            params = [query_bytes, n_results] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
