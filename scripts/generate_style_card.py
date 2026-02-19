@@ -59,7 +59,8 @@ def get_user_messages(db_path: Path, min_chars: int = 10, sample_size: int = 200
 
 def main():
     parser = argparse.ArgumentParser(description="Generate communication style card from BrainLayer data")
-    parser.add_argument("--db", type=Path, default=Path.home() / ".local/share/brainlayer/brainlayer.db",
+    from brainlayer.paths import DEFAULT_DB_PATH
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
                         help="Path to BrainLayer database")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="Output directory (default: ~/.local/share/brainlayer/storage/style/)")

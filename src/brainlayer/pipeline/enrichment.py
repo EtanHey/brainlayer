@@ -59,7 +59,7 @@ MLX_URL = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http:/
 MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
 MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
 MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from ..paths import DEFAULT_DB_PATH
 
 # Supabase usage logging — track GLM calls even though they're free
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
