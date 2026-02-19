@@ -318,9 +318,7 @@ class TestFormatSessions:
 
     def test_session_count(self):
         """Total session count is shown."""
-        sessions_list = [
-            SessionInfo(session_id=f"id{i}", project="p", started_at="2026-02-15") for i in range(3)
-        ]
+        sessions_list = [SessionInfo(session_id=f"id{i}", project="p", started_at="2026-02-15") for i in range(3)]
         result = format_sessions(sessions_list)
         assert "3 sessions" in result
 

@@ -145,10 +145,7 @@ class TestThinkReal:
             embed_fn=embed_fn,
         )
         has_any = (
-            len(result.decisions) > 0
-            or len(result.patterns) > 0
-            or len(result.bugs) > 0
-            or len(result.context) > 0
+            len(result.decisions) > 0 or len(result.patterns) > 0 or len(result.bugs) > 0 or len(result.context) > 0
         )
         assert has_any, "Expected at least one category to have results"
 
@@ -277,7 +274,11 @@ class TestMCPToolCount:
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        new_tools = [t for t in tools if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")]
+        new_tools = [
+            t
+            for t in tools
+            if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")
+        ]
         for tool in new_tools:
             assert tool.annotations is not None
             assert tool.annotations.readOnlyHint is True
