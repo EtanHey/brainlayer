@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "description": "Hierarchical topic labels for BrainLayer chunks. 5 categories, ~50 labels.",
+  "categories": {
+    "tech": {
+      "description": "Technical content — code, debugging, architecture",
+      "labels": {
+        "tech/code-snippet": "Code written or reviewed",
+        "tech/debug/error-trace": "Stack traces, error messages, crash logs",
+        "tech/debug/investigation": "Debugging discussion, root cause analysis",
+        "tech/architecture": "System design, architectural decisions",
+        "tech/config": "Configuration files, env vars, settings",
+        "tech/testing": "Test code, test strategies, CI/CD",
+        "tech/refactor": "Code refactoring, cleanup, migration",
+        "tech/performance": "Performance optimization, profiling",
+        "tech/security": "Auth, secrets, security concerns",
+        "tech/devops": "Deployment, Docker, Railway, infra",
+        "tech/database": "SQL, migrations, schema design",
+        "tech/api": "API endpoints, HTTP, REST, GraphQL",
+        "tech/frontend": "UI components, CSS, React, Next.js",
+        "tech/mobile": "React Native, Expo, mobile-specific",
+        "tech/ai-ml": "LLM integration, embeddings, RAG, agents"
+      }
+    },
+    "pm": {
+      "description": "Project management — planning, decisions, requirements",
+      "labels": {
+        "pm/planning": "Roadmap, sprint planning, task breakdown",
+        "pm/decision": "Architecture decisions, tool choices, trade-offs",
+        "pm/requirements": "Feature specs, user stories, PRDs",
+        "pm/review": "Code review, PR discussion, feedback",
+        "pm/retrospective": "What worked, what didn't, lessons learned"
+      }
+    },
+    "personal": {
+      "description": "Personal/career — job search, learning, communication",
+      "labels": {
+        "personal/job-search": "Job applications, interviews, outreach",
+        "personal/learning": "Tutorials, research, skill development",
+        "personal/writing": "Blog posts, documentation, content creation",
+        "personal/communication": "Email drafts, message style, social posts",
+        "personal/finance": "Expenses, invoices, tax, payments"
+      }
+    },
+    "platform": {
+      "description": "Platform-specific — which tool/service the content is about",
+      "labels": {
+        "platform/claude": "Claude Code, Claude API, Anthropic",
+        "platform/github": "GitHub issues, PRs, Actions, repos",
+        "platform/supabase": "Supabase DB, auth, storage, edge functions",
+        "platform/telegram": "Telegram bot, grammy, messaging",
+        "platform/convex": "Convex backend, functions, schema",
+        "platform/vercel": "Vercel deployment, Next.js hosting",
+        "platform/railway": "Railway deployment, services",
+        "platform/obsidian": "Obsidian vault, notes, sync",
+        "platform/linear": "Linear issues, project management"
+      }
+    },
+    "project": {
+      "description": "Project-specific — which codebase/product",
+      "labels": {
+        "project/my-project": "Example project",
+        "project/brainlayer": "BrainLayer memory pipeline",
+        "project/app-a": "Example application A",
+        "project/app-b": "Example application B",
+        "project/personal-site": "Personal website, admin dashboard",
+        "project/union": "Union platform"
+      }
+    },
+    "meta": {
+      "description": "Meta labels — content quality, noise, empty",
+      "labels": {
+        "meta/noise": "Noise, irrelevant, or garbage content",
+        "meta/empty": "Empty or near-empty content (nothing useful)",
+        "meta/context-only": "Only useful as context for surrounding chunks",
+        "meta/duplicate": "Duplicate or near-duplicate of another chunk"
+      }
+    }
+  }
+}

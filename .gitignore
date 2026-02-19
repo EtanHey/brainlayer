@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+
+# Build
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.tox/
+
+# Data
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local working files (audit logs, prompts, scratch)
+docs.local/
+
+# OS
+.DS_Store
+Thumbs.db
