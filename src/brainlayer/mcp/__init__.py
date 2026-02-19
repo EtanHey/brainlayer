@@ -5,7 +5,13 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import (
+    CompleteResult,
+    Completion,
+    TextContent,
+    Tool,
+    ToolAnnotations,
+)
 
 from ..embeddings import get_embedding_model
 from ..paths import DEFAULT_DB_PATH
@@ -90,12 +96,22 @@ def _get_embedding_model():
     return _embedding_model
 
 
+# All BrainLayer tools are read-only (search and analyze only)
+_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools."""
     return [
         Tool(
             name="brainlayer_search",
+            title="Search Knowledge Base",
             description="""Search through past Claude Code conversations and learnings.
 
 Use this to find:
@@ -108,6 +124,7 @@ The knowledge base contains indexed conversations organized by:
 - Project (which codebase the conversation was about)
 - Content type (ai_code, stack_trace, user_message, etc.)
 """,
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -178,20 +195,26 @@ The knowledge base contains indexed conversations organized by:
         ),
         Tool(
             name="brainlayer_stats",
+            title="Knowledge Base Stats",
             description="Get statistics about the knowledge base (total chunks, projects, content types).",
+            annotations=_READ_ONLY,
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="brainlayer_list_projects",
+            title="List Projects",
             description="List all projects in the knowledge base.",
+            annotations=_READ_ONLY,
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="brainlayer_context",
+            title="Get Chunk Context",
             description="""Get surrounding conversation context for a search result.
 
 Given a chunk ID from a search result, returns the chunks before and after it
 from the same conversation. Useful for understanding isolated search results.""",
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -215,10 +238,12 @@ from the same conversation. Useful for understanding isolated search results."""
         ),
         Tool(
             name="brainlayer_file_timeline",
+            title="File Interaction Timeline",
             description="""Get the interaction timeline for a specific file across sessions.
 
 Shows all Claude Code sessions that read, edited, or wrote to a file,
 ordered chronologically. Useful for understanding a file's history.""",
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -241,12 +266,14 @@ ordered chronologically. Useful for understanding a file's history.""",
         ),
         Tool(
             name="brainlayer_operations",
+            title="Session Operations",
             description=(
                 "Get logical operation groups for a session."
                 " Operations are patterns like"
                 " read→edit→test cycles, research chains,"
                 " or debug sequences."
             ),
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -257,6 +284,7 @@ ordered chronologically. Useful for understanding a file's history.""",
         ),
         Tool(
             name="brainlayer_regression",
+            title="Regression Analysis",
             description=(
                 "Analyze a file for regressions."
                 " Shows the last successful operation"
@@ -264,6 +292,7 @@ ordered chronologically. Useful for understanding a file's history.""",
                 " Useful for debugging: 'what changed"
                 " since this file last worked?'"
             ),
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -278,6 +307,7 @@ ordered chronologically. Useful for understanding a file's history.""",
         ),
         Tool(
             name="brainlayer_plan_links",
+            title="Plan-Session Links",
             description=(
                 "Query plan-linked sessions."
                 " Shows which plan/phase a session belongs"
@@ -286,6 +316,7 @@ ordered chronologically. Useful for understanding a file's history.""",
                 " on in this session?' or 'show all"
                 " sessions for my-feature-plan'."
             ),
+            annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -302,6 +333,56 @@ ordered chronologically. Useful for understanding a file's history.""",
             },
         ),
     ]
+
+
+@server.completion()
+async def handle_completion(ref, argument) -> CompleteResult:
+    """Provide completions for tool arguments."""
+    # Only handle tool argument completions
+    if not hasattr(ref, "name"):
+        return CompleteResult(completion=Completion(values=[]))
+
+    arg_name = argument.name if hasattr(argument, "name") else ""
+    arg_value = argument.value if hasattr(argument, "value") else ""
+
+    if arg_name == "project":
+        try:
+            store = _get_vector_store()
+            stats = store.get_stats()
+            projects = stats.get("projects", [])
+            # Normalize and filter by prefix
+            normalized = []
+            for p in projects:
+                norm = normalize_project_name(p) or p
+                if norm not in normalized:
+                    normalized.append(norm)
+            if arg_value:
+                normalized = [p for p in normalized if p.lower().startswith(arg_value.lower())]
+            return CompleteResult(
+                completion=Completion(values=sorted(normalized)[:20], hasMore=len(normalized) > 20)
+            )
+        except Exception:
+            return CompleteResult(completion=Completion(values=[]))
+
+    elif arg_name == "content_type":
+        types = ["ai_code", "stack_trace", "user_message", "assistant_text", "file_read", "git_diff"]
+        if arg_value:
+            types = [t for t in types if t.startswith(arg_value)]
+        return CompleteResult(completion=Completion(values=types))
+
+    elif arg_name == "source":
+        sources = ["claude_code", "whatsapp", "youtube", "all"]
+        if arg_value:
+            sources = [s for s in sources if s.startswith(arg_value)]
+        return CompleteResult(completion=Completion(values=sources))
+
+    elif arg_name == "intent":
+        intents = ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"]
+        if arg_value:
+            intents = [i for i in intents if i.startswith(arg_value)]
+        return CompleteResult(completion=Completion(values=intents))
+
+    return CompleteResult(completion=Completion(values=[]))
 
 
 @server.call_tool()
