@@ -8,6 +8,7 @@ Split into:
 import pytest
 
 from brainlayer.engine import (
+    CurrentContext,
     RecallResult,
     SessionInfo,
     ThinkResult,
@@ -224,6 +225,55 @@ class TestRecallResultFormat:
         formatted = result.format()
         assert "Sessions That Touched This" in formatted
         assert "feat/auth" in formatted
+
+
+class TestCurrentContextFormat:
+    """Test CurrentContext formatting."""
+
+    def test_empty_context(self):
+        """No sessions returns message."""
+        ctx = CurrentContext()
+        assert "No recent session" in ctx.format()
+
+    def test_with_projects(self):
+        """Active projects are shown."""
+        ctx = CurrentContext(
+            recent_sessions=[SessionInfo(session_id="abc12345xyz", started_at="2026-02-15")],
+            active_projects=["golems", "brainlayer"],
+        )
+        formatted = ctx.format()
+        assert "golems" in formatted
+        assert "brainlayer" in formatted
+
+    def test_with_branches(self):
+        """Active branches are shown."""
+        ctx = CurrentContext(
+            recent_sessions=[SessionInfo(session_id="abc12345xyz", started_at="2026-02-15")],
+            active_branches=["feat/think-recall", "main"],
+        )
+        formatted = ctx.format()
+        assert "feat/think-recall" in formatted
+
+    def test_with_plan(self):
+        """Active plan is shown."""
+        ctx = CurrentContext(
+            recent_sessions=[SessionInfo(session_id="abc12345xyz", started_at="2026-02-15")],
+            active_plan="brainlayer-launch",
+        )
+        formatted = ctx.format()
+        assert "brainlayer-launch" in formatted
+
+    def test_recent_files_truncated(self):
+        """Recent files show filename only, limited to 10."""
+        ctx = CurrentContext(
+            recent_sessions=[SessionInfo(session_id="abc12345xyz", started_at="2026-02-15")],
+            recent_files=[f"/path/to/file{i}.ts" for i in range(15)],
+        )
+        formatted = ctx.format()
+        # Should show filenames not full paths
+        assert "file0.ts" in formatted
+        # Should be limited to 10
+        assert "file10.ts" not in formatted
 
 
 class TestFormatSessions:
