@@ -559,8 +559,9 @@ def analyze_style(
         preview_lines = rules.split('\n')[:25]
         for line in preview_lines:
             rprint(f"[dim]{line}[/]")
-        if len(rules.split('\n')) > 25:
-            rprint(f"[dim]... ({len(rules.split('\n')) - 25} more lines)[/]")
+        total_lines = len(rules.split('\n'))
+        if total_lines > 25:
+            rprint(f"[dim]... ({total_lines - 25} more lines)[/]")
         
     except typer.Exit:
         raise
