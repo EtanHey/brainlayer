@@ -332,6 +332,93 @@ ordered chronologically. Useful for understanding a file's history.""",
                 },
             },
         ),
+        Tool(
+            name="brainlayer_think",
+            title="Think — Retrieve Relevant Memories",
+            description="""Given your current task context, retrieve relevant past decisions, patterns, and code.
+
+Use this BEFORE starting a task to get informed context instead of cold-starting:
+- "I'm implementing JWT authentication for the API"
+- "I need to fix the database connection pooling"
+- "Working on the deployment pipeline for Railway"
+
+Returns categorized memories: decisions, patterns, bugs/fixes, and related context.
+Results are filtered by importance (3+) and grouped by intent.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "context": {
+                        "type": "string",
+                        "description": "Describe what you're working on — the engine will find relevant past knowledge",
+                    },
+                    "project": {"type": "string", "description": "Optional: filter by project"},
+                    "max_results": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Maximum memories to retrieve (default: 10)",
+                    },
+                },
+                "required": ["context"],
+            },
+        ),
+        Tool(
+            name="brainlayer_recall",
+            title="Recall — Proactive Context for File or Topic",
+            description="""Proactive smart retrieval. Not "search for X" but:
+- "What happened with this file before?" (file_path mode)
+- "What have I discussed about authentication?" (topic mode)
+
+For files: returns interaction timeline, sessions that touched it, and related knowledge.
+For topics: returns related past discussions, decisions, and patterns.
+
+Use when opening a file or starting work on a familiar topic.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "File path to recall context for (e.g., 'telegram-bot.ts')",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Topic to recall context for (e.g., 'authentication', 'deployment')",
+                    },
+                    "project": {"type": "string", "description": "Optional: filter by project"},
+                    "max_results": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Maximum results (default: 10)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="brainlayer_sessions",
+            title="Browse Recent Sessions",
+            description="""List recent Claude Code sessions with metadata.
+
+Shows session ID, project, branch, plan linkage, and timestamp.
+Useful for browsing what you've been working on by date or project.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Optional: filter by project"},
+                    "days": {
+                        "type": "integer",
+                        "default": 7,
+                        "description": "How many days back to look (default: 7)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Maximum sessions to return (default: 20)",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -439,6 +526,28 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             plan_name=arguments.get("plan_name"),
             session_id=arguments.get("session_id"),
             project=arguments.get("project"),
+        )
+
+    elif name == "brainlayer_think":
+        return await _think(
+            context=arguments["context"],
+            project=arguments.get("project"),
+            max_results=arguments.get("max_results", 10),
+        )
+
+    elif name == "brainlayer_recall":
+        return await _recall(
+            file_path=arguments.get("file_path"),
+            topic=arguments.get("topic"),
+            project=arguments.get("project"),
+            max_results=arguments.get("max_results", 10),
+        )
+
+    elif name == "brainlayer_sessions":
+        return await _sessions(
+            project=arguments.get("project"),
+            days=arguments.get("days", 7),
+            limit=arguments.get("limit", 20),
         )
 
     else:
@@ -811,6 +920,106 @@ async def _plan_links(
                 text=f"Plan links error: {str(e)}",
             )
         ]
+
+
+async def _think(
+    context: str,
+    project: str | None = None,
+    max_results: int = 10,
+) -> list[TextContent]:
+    """Execute think — retrieve relevant memories for current task."""
+    try:
+        from ..engine import think
+
+        store = _get_vector_store()
+        model = _get_embedding_model()
+
+        # Run embedding in thread to not block
+        loop = asyncio.get_running_loop()
+
+        def _embed(text: str) -> list[float]:
+            return model.embed_query(text)
+
+        # Normalize project
+        normalized_project = normalize_project_name(project)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: think(
+                context=context,
+                store=store,
+                embed_fn=_embed,
+                project=normalized_project,
+                max_results=max_results,
+            ),
+        )
+
+        return [TextContent(type="text", text=result.format())]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Think error: {str(e)}")]
+
+
+async def _recall(
+    file_path: str | None = None,
+    topic: str | None = None,
+    project: str | None = None,
+    max_results: int = 10,
+) -> list[TextContent]:
+    """Execute recall — proactive context retrieval."""
+    try:
+        from ..engine import recall
+
+        store = _get_vector_store()
+        model = _get_embedding_model()
+        normalized_project = normalize_project_name(project)
+
+        loop = asyncio.get_running_loop()
+
+        def _embed(text: str) -> list[float]:
+            return model.embed_query(text)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: recall(
+                store=store,
+                embed_fn=_embed,
+                file_path=file_path,
+                topic=topic,
+                project=normalized_project,
+                max_results=max_results,
+            ),
+        )
+
+        return [TextContent(type="text", text=result.format())]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Recall error: {str(e)}")]
+
+
+async def _sessions(
+    project: str | None = None,
+    days: int = 7,
+    limit: int = 20,
+) -> list[TextContent]:
+    """Execute sessions — list recent sessions."""
+    try:
+        from ..engine import format_sessions, sessions
+
+        store = _get_vector_store()
+        normalized_project = normalize_project_name(project)
+
+        result = sessions(
+            store=store,
+            project=normalized_project,
+            days=days,
+            limit=limit,
+        )
+
+        return [TextContent(type="text", text=format_sessions(result, days=days))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Sessions error: {str(e)}")]
 
 
 def serve():
