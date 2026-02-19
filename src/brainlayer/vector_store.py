@@ -106,6 +106,8 @@ class VectorStore:
             ("version_scope", "TEXT"),     # version or system state discussed
             ("debt_impact", "TEXT"),       # introduction/resolution/none
             ("external_deps", "TEXT"),     # JSON array of libraries/APIs
+            # Phase 3: created_at for date filtering
+            ("created_at", "TEXT"),         # ISO 8601 timestamp of when chunk was created/ingested
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -118,6 +120,7 @@ class VectorStore:
             ("idx_chunks_intent", "intent"),
             ("idx_chunks_importance", "importance"),
             ("idx_chunks_enriched", "enriched_at"),
+            ("idx_chunks_created", "created_at"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -277,8 +280,8 @@ class VectorStore:
             cursor.execute("""
                 INSERT INTO chunks
                 (id, content, metadata, source_file, project,
-                 content_type, value_type, char_count, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_type, value_type, char_count, source, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     content = excluded.content,
                     metadata = excluded.metadata,
@@ -287,7 +290,8 @@ class VectorStore:
                     content_type = excluded.content_type,
                     value_type = excluded.value_type,
                     char_count = excluded.char_count,
-                    source = excluded.source
+                    source = excluded.source,
+                    created_at = COALESCE(chunks.created_at, excluded.created_at)
             """, (
                 chunk_id,
                 chunk["content"],
@@ -297,7 +301,8 @@ class VectorStore:
                 chunk.get("content_type"),
                 chunk.get("value_type"),
                 chunk.get("char_count", 0),
-                chunk.get("source", "claude_code")
+                chunk.get("source", "claude_code"),
+                chunk.get("created_at"),
             ))
 
             # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
@@ -321,7 +326,9 @@ class VectorStore:
         language_filter: Optional[str] = None,
         tag_filter: Optional[str] = None,
         intent_filter: Optional[str] = None,
-        importance_min: Optional[float] = None
+        importance_min: Optional[float] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text."""
 
@@ -358,6 +365,12 @@ class VectorStore:
             if importance_min is not None:
                 where_clauses.append("c.importance >= ?")
                 filter_params.append(importance_min)
+            if date_from:
+                where_clauses.append("c.created_at >= ?")
+                filter_params.append(date_from)
+            if date_to:
+                where_clauses.append("c.created_at <= ?")
+                filter_params.append(date_to)
 
             where_sql = ""
             if where_clauses:
@@ -369,7 +382,8 @@ class VectorStore:
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
-                       c.summary, c.tags, c.importance, c.intent
+                       c.summary, c.tags, c.importance, c.intent,
+                       c.created_at, c.source
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -407,6 +421,12 @@ class VectorStore:
             if importance_min is not None:
                 where_clauses.append("importance >= ?")
                 params.append(importance_min)
+            if date_from:
+                where_clauses.append("created_at >= ?")
+                params.append(date_from)
+            if date_to:
+                where_clauses.append("created_at <= ?")
+                params.append(date_to)
 
             params.append(n_results)
 
@@ -414,7 +434,8 @@ class VectorStore:
                 SELECT id, content, metadata, source_file, project,
                        content_type, value_type, char_count,
                        NULL as distance,
-                       summary, tags, importance, intent
+                       summary, tags, importance, intent,
+                       created_at, source
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -454,6 +475,11 @@ class VectorStore:
                 metadata["importance"] = row[11]
             if row[12]:
                 metadata["intent"] = row[12]
+            # Temporal and source metadata
+            if row[13]:
+                metadata["created_at"] = row[13]
+            if row[14]:
+                metadata["source"] = row[14]
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -534,6 +560,8 @@ class VectorStore:
         tag_filter: Optional[str] = None,
         intent_filter: Optional[str] = None,
         importance_min: Optional[float] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         k: int = 60
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
@@ -550,6 +578,8 @@ class VectorStore:
             tag_filter=tag_filter,
             intent_filter=intent_filter,
             importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
         )
 
         # Build semantic rank map: chunk_content -> rank
@@ -573,13 +603,20 @@ class VectorStore:
         if importance_min is not None:
             fts_extra.append("AND c.importance >= ?")
             fts_params.append(importance_min)
+        if date_from:
+            fts_extra.append("AND c.created_at >= ?")
+            fts_params.append(date_from)
+        if date_to:
+            fts_extra.append("AND c.created_at <= ?")
+            fts_params.append(date_to)
         fts_params.append(n_results * 3)
 
         fts_results = list(cursor.execute(f"""
             SELECT f.chunk_id, f.rank,
                    c.content, c.metadata, c.source_file, c.project,
                    c.content_type, c.value_type, c.char_count,
-                   c.summary, c.tags, c.importance, c.intent
+                   c.summary, c.tags, c.importance, c.intent,
+                   c.created_at, c.source
             FROM chunks_fts f
             JOIN chunks c ON f.chunk_id = c.id
             WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
@@ -605,6 +642,8 @@ class VectorStore:
                 "tags": row[10],
                 "importance": row[11],
                 "intent": row[12],
+                "created_at": row[13],
+                "source": row[14],
             }
 
         # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
@@ -661,6 +700,10 @@ class VectorStore:
                     meta["importance"] = data["importance"]
                 if data.get("intent"):
                     meta["intent"] = data["intent"]
+                if data.get("created_at"):
+                    meta["created_at"] = data["created_at"]
+                if data.get("source"):
+                    meta["source"] = data["source"]
                 dist = None
             else:
                 continue

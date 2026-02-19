@@ -9,10 +9,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from ..embeddings import get_embedding_model
+from ..paths import DEFAULT_DB_PATH
 from ..vector_store import VectorStore
-
-# Default paths
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
 
 # Create MCP server
 server = Server("brainlayer")
@@ -20,6 +18,61 @@ server = Server("brainlayer")
 # Lazy-loaded globals
 _vector_store = None
 _embedding_model = None
+
+
+def normalize_project_name(project: str | None) -> str | None:
+    """Normalize project names for consistent filtering.
+
+    Handles:
+    - Claude Code encoded paths: "-Users-janedev-Gits-golems" → "golems"
+    - Worktree paths: "golems-nightshift-1770775282043" → "golems"
+    - Path-like names with multiple segments
+    - Already-clean names pass through unchanged
+    """
+    if not project:
+        return None
+
+    name = project.strip()
+    if not name or name == "-":
+        return None
+
+    # Decode Claude Code path encoding
+    # "-Users-janedev-Gits-golems" → "golems"
+    # "-Users-janedev-Desktop-Gits-rudy-monorepo" → "rudy-monorepo"
+    if name.startswith("-"):
+        import os
+        # Find the "Gits" segment by splitting on dashes
+        segments = name[1:].split("-")  # Remove leading dash, split
+        gits_idx = None
+        for i, s in enumerate(segments):
+            if s == "Gits":
+                gits_idx = i
+                # Use last occurrence in case of nested "Desktop-Gits"
+        if gits_idx is not None and gits_idx + 1 < len(segments):
+            # Remaining segments after "Gits" form the project path
+            remaining = segments[gits_idx + 1:]
+            # Skip secondary "Gits" (e.g., Desktop-Gits)
+            while remaining and remaining[0] == "Gits":
+                remaining = remaining[1:]
+            if not remaining:
+                return None
+            # Try progressively joining segments with dashes to find a real directory
+            gits_dir = "/" + "/".join(segments[:gits_idx]) + "/Gits"
+            for length in range(len(remaining), 0, -1):
+                candidate_name = "-".join(remaining[:length])
+                candidate_path = os.path.join(gits_dir, candidate_name)
+                if os.path.isdir(candidate_path):
+                    return candidate_name
+            # Fallback: return first segment (best guess)
+            return remaining[0]
+        # No "Gits" found — not a standard project path
+        return None
+
+    # Strip worktree suffixes (nightshift-{epoch}, haiku-*, worktree-*)
+    import re
+    name = re.sub(r'-(?:nightshift|haiku|worktree)-\d+$', '', name)
+
+    return name
 
 
 def _get_vector_store() -> VectorStore:
@@ -95,6 +148,14 @@ The knowledge base contains indexed conversations organized by:
                     "importance_min": {
                         "type": "number",
                         "description": "Minimum importance score (1-10)"
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Filter results from this date (ISO 8601, e.g. '2026-02-01')"
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')"
                     }
                 },
                 "required": ["query"]
@@ -273,6 +334,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             tag=arguments.get("tag"),
             intent=arguments.get("intent"),
             importance_min=arguments.get("importance_min"),
+            date_from=arguments.get("date_from"),
+            date_to=arguments.get("date_to"),
         )
 
     elif name == "brainlayer_stats":
@@ -326,6 +389,8 @@ async def _search(
     tag: str | None = None,
     intent: str | None = None,
     importance_min: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[TextContent]:
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
@@ -341,6 +406,9 @@ async def _search(
                 type="text",
                 text="Knowledge base is empty. Run 'brainlayer index' to populate it."
             )]
+
+        # Normalize project name for consistent filtering
+        normalized_project = normalize_project_name(project)
 
         # Generate embedding (run in thread to not block)
         loop = asyncio.get_running_loop()
@@ -360,12 +428,14 @@ async def _search(
             query_embedding=query_embedding,
             query_text=query,
             n_results=num_results,
-            project_filter=project,
+            project_filter=normalized_project,
             content_type_filter=content_type,
             source_filter=source_filter,
             tag_filter=tag,
             intent_filter=intent,
             importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
         )
 
         if not results["documents"][0]:
@@ -389,12 +459,20 @@ async def _search(
                 enrichment_parts.append(f"Importance: {meta['importance']:.0f}/10")
             if meta.get("tags") and isinstance(meta["tags"], list):
                 enrichment_parts.append(f"Tags: {', '.join(str(t) for t in meta['tags'][:5])}")
-            output_parts.append(f"**Project:** {meta.get('project', 'unknown')} | **Type:** {meta.get('content_type', 'unknown')}")
+            project_display = normalize_project_name(meta.get('project')) or meta.get('project', 'unknown')
+            header = f"**Project:** {project_display} | **Type:** {meta.get('content_type', 'unknown')}"
+            if meta.get("created_at"):
+                # Show just the date portion for readability
+                date_str = meta["created_at"][:10] if len(meta.get("created_at", "")) >= 10 else meta["created_at"]
+                header += f" | **Date:** {date_str}"
+            if meta.get("source") and meta["source"] != "claude_code":
+                header += f" | **Source:** {meta['source']}"
+            output_parts.append(header)
             if enrichment_parts:
                 output_parts.append(f"**{' | '.join(enrichment_parts)}**")
             if meta.get("summary"):
                 output_parts.append(f"> {meta['summary']}")
-            output_parts.append(f"**Source:** `{meta.get('source_file', 'unknown')}`\n")
+            output_parts.append(f"**File:** `{meta.get('source_file', 'unknown')}`\n")
             output_parts.append(doc[:1000] + ("..." if len(doc) > 1000 else ""))
             output_parts.append("\n---")
 

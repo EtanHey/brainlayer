@@ -10,7 +10,7 @@ from .pipeline.chunk import Chunk
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from .paths import DEFAULT_DB_PATH
 
 
 def index_chunks_to_sqlite(
@@ -23,22 +23,41 @@ def index_chunks_to_sqlite(
     """Index chunks to sqlite-vec database."""
     if not chunks:
         return 0
-    
+
     # Generate embeddings
     embedded_chunks = embed_chunks(chunks, on_progress=on_progress)
-    
+
     if not embedded_chunks:
         return 0
-    
+
+    # Try to get timestamp from source file (first JSONL message)
+    created_at = None
+    try:
+        import json as _json
+        with open(source_file) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                _data = _json.loads(_line)
+                if "timestamp" in _data:
+                    created_at = _data["timestamp"]
+                    break
+    except Exception:
+        pass
+    if not created_at:
+        from datetime import datetime, timezone
+        created_at = datetime.now(timezone.utc).isoformat()
+
     # Prepare data for vector store
     chunk_data = []
     embeddings = []
-    
+
     for i, ec in enumerate(embedded_chunks):
         chunk = ec.chunk
-        
+
         chunk_id = f"{source_file}:{i}"
-        
+
         chunk_data.append({
             "id": chunk_id,
             "content": chunk.content,
@@ -47,7 +66,8 @@ def index_chunks_to_sqlite(
             "project": project,
             "content_type": chunk.content_type.value,
             "value_type": chunk.value.value,
-            "char_count": chunk.char_count
+            "char_count": chunk.char_count,
+            "created_at": created_at,
         })
         
         embeddings.append(ec.embedding)

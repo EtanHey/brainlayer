@@ -17,7 +17,7 @@ from ..vector_store import VectorStore
 from .search import HybridSearchEngine
 from .views import HomeView, MemoryView
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from ..paths import DEFAULT_DB_PATH
 
 
 class DashboardApp:

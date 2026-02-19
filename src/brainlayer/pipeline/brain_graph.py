@@ -493,7 +493,7 @@ def build_graph_json(
 # ─── Main Pipeline ──────────────────────────────────────────────────
 
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from ..paths import DEFAULT_DB_PATH
 
 
 def generate_brain_graph(
