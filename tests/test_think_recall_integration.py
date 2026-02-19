@@ -242,19 +242,19 @@ class TestRecallTopicReal:
 
 
 class TestMCPToolCount:
-    """Verify MCP server has all 11 tools."""
+    """Verify MCP server has all 12 tools."""
 
     def test_tool_count(self):
-        """MCP server should have 11 tools."""
+        """MCP server should have 12 tools."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        assert len(tools) == 11
+        assert len(tools) == 12
 
     def test_new_tools_registered(self):
-        """Think, recall, and sessions tools are registered."""
+        """Think, recall, sessions, and current_context tools are registered."""
         import asyncio
 
         from brainlayer.mcp import list_tools
@@ -264,6 +264,7 @@ class TestMCPToolCount:
         assert "brainlayer_think" in names
         assert "brainlayer_recall" in names
         assert "brainlayer_sessions" in names
+        assert "brainlayer_current_context" in names
 
     def test_new_tools_have_annotations(self):
         """New tools have read-only annotations."""
@@ -272,7 +273,7 @@ class TestMCPToolCount:
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        new_tools = [t for t in tools if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions")]
+        new_tools = [t for t in tools if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")]
         for tool in new_tools:
             assert tool.annotations is not None
             assert tool.annotations.readOnlyHint is True

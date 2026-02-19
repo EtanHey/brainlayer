@@ -381,6 +381,113 @@ def sessions(
     return results
 
 
+@dataclass
+class CurrentContext:
+    """Current working context — what the user is working on right now."""
+
+    recent_sessions: list[SessionInfo] = field(default_factory=list)
+    active_projects: list[str] = field(default_factory=list)
+    recent_files: list[str] = field(default_factory=list)
+    active_branches: list[str] = field(default_factory=list)
+    active_plan: str = ""
+
+    def format(self) -> str:
+        """Format as concise markdown — designed for voice/quick context."""
+        if not self.recent_sessions:
+            return "No recent session context available."
+
+        parts = ["## Current Context\n"]
+
+        if self.active_projects:
+            parts.append(f"**Projects:** {', '.join(self.active_projects)}")
+        if self.active_branches:
+            parts.append(f"**Branches:** {', '.join(self.active_branches)}")
+        if self.active_plan:
+            parts.append(f"**Plan:** {self.active_plan}")
+
+        if self.recent_files:
+            parts.append(f"\n**Recent files ({len(self.recent_files)}):**")
+            for f in self.recent_files[:10]:
+                # Show just the filename, not full path
+                name = f.rsplit("/", 1)[-1] if "/" in f else f
+                parts.append(f"- {name}")
+
+        if self.recent_sessions:
+            latest = self.recent_sessions[0]
+            parts.append(f"\n**Latest session:** {latest.session_id[:8]}")
+            if latest.started_at:
+                parts.append(f"**Started:** {latest.started_at[:19]}")
+            if latest.project:
+                parts.append(f"**Project:** {latest.project}")
+            if latest.branch:
+                parts.append(f"**Branch:** {latest.branch}")
+
+        return "\n".join(parts)
+
+
+def current_context(
+    store: VectorStore,
+    hours: int = 24,
+) -> CurrentContext:
+    """Get current working context — what the user is doing right now.
+
+    Designed for voice assistants and quick context injection.
+    Lightweight — no embedding model needed.
+
+    Args:
+        store: VectorStore instance
+        hours: How many hours back to look (default: 24)
+
+    Returns:
+        CurrentContext with recent sessions, files, projects, branches
+    """
+    result = CurrentContext()
+
+    # Get recent sessions
+    recent = sessions(store, days=max(1, hours // 24) or 1, limit=10)
+    result.recent_sessions = recent
+
+    if not recent:
+        return result
+
+    # Extract active projects and branches
+    projects = []
+    branches = []
+    plans = []
+    for s in recent:
+        if s.project and s.project not in projects:
+            projects.append(s.project)
+        if s.branch and s.branch not in branches:
+            branches.append(s.branch)
+        if s.plan_name and s.plan_name not in plans:
+            plans.append(s.plan_name)
+
+    result.active_projects = projects[:5]
+    result.active_branches = branches[:5]
+    if plans:
+        result.active_plan = plans[0]  # Most recent plan
+
+    # Get recent files from file_interactions
+    cursor = store.conn.cursor()
+    date_from = (datetime.now() - timedelta(hours=hours)).isoformat()
+
+    rows = list(
+        cursor.execute(
+            """
+        SELECT DISTINCT file_path
+        FROM file_interactions
+        WHERE timestamp >= ?
+        ORDER BY timestamp DESC
+        LIMIT 20
+    """,
+            (date_from,),
+        )
+    )
+    result.recent_files = [r[0] for r in rows if r[0]]
+
+    return result
+
+
 def format_sessions(session_list: list[SessionInfo], days: int = 7) -> str:
     """Format sessions list as markdown."""
     if not session_list:
