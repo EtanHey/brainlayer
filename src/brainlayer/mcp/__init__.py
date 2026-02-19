@@ -419,6 +419,25 @@ Useful for browsing what you've been working on by date or project.""",
                 },
             },
         ),
+        Tool(
+            name="brainlayer_current_context",
+            title="Current Working Context",
+            description="""Get what you're currently working on — recent sessions, projects, files, and active plan.
+
+Lightweight (no embedding needed). Designed for voice assistants and quick context injection.
+Use at conversation start to understand current state without asking the user.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "hours": {
+                        "type": "integer",
+                        "default": 24,
+                        "description": "How many hours back to look (default: 24)",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -548,6 +567,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             project=arguments.get("project"),
             days=arguments.get("days", 7),
             limit=arguments.get("limit", 20),
+        )
+
+    elif name == "brainlayer_current_context":
+        return await _current_context(
+            hours=arguments.get("hours", 24),
         )
 
     else:
@@ -1020,6 +1044,21 @@ async def _sessions(
 
     except Exception as e:
         return [TextContent(type="text", text=f"Sessions error: {str(e)}")]
+
+
+async def _current_context(
+    hours: int = 24,
+) -> list[TextContent]:
+    """Execute current_context — lightweight session awareness."""
+    try:
+        from ..engine import current_context
+
+        store = _get_vector_store()
+        result = current_context(store=store, hours=hours)
+        return [TextContent(type="text", text=result.format())]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Current context error: {str(e)}")]
 
 
 def serve():
