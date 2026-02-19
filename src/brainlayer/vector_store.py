@@ -42,6 +42,28 @@ def _safe_json_loads(value: Any) -> list:
         return []
 
 
+def _escape_fts5_query(query: str) -> str:
+    """Escape a query string for FTS5 MATCH.
+
+    FTS5 treats certain characters as syntax: ., *, ^, ", (, ), +, -, NOT, AND, OR, NEAR.
+    We wrap each word in double quotes so they're treated as literal terms,
+    joined with OR for lenient matching (any term matches).
+    Empty/whitespace-only queries return a wildcard match-all.
+    """
+    if not query or not query.strip():
+        return "*"
+    # Split into words, wrap each in double quotes (escaping any internal quotes)
+    terms = []
+    for word in query.split():
+        # Remove internal double quotes to prevent FTS5 injection
+        clean = word.replace('"', "")
+        if clean:
+            terms.append(f'"{clean}"')
+    # Use OR between terms so matching is lenient (any term matches)
+    # Without OR, FTS5 defaults to AND (all terms must be present)
+    return " OR ".join(terms) if terms else "*"
+
+
 def serialize_f32(vector: List[float]) -> bytes:
     """Serialize a float32 vector to bytes for sqlite-vec."""
     return struct.pack(f"{len(vector)}f", *vector)
@@ -583,7 +605,11 @@ class VectorStore:
         # 2. FTS5 keyword search
         cursor = self.conn.cursor()
         fts_extra = []
-        fts_params: list = [query_text]
+        # AIDEV-NOTE: FTS5 MATCH requires escaped query text. Special chars like
+        # '.', '*', '"', '(', ')' cause syntax errors if passed raw.
+        # Wrap each term in double quotes to treat as literal strings.
+        fts_query = _escape_fts5_query(query_text)
+        fts_params: list = [fts_query]
         if tag_filter:
             fts_extra.append(
                 "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
