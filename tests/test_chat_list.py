@@ -1,9 +1,8 @@
 """Test chat list extraction."""
-import pytest
-from pathlib import Path
 
-from brainlayer.pipeline.unified_timeline import UnifiedTimeline, UnifiedMessage
 from datetime import datetime
+
+from brainlayer.pipeline.unified_timeline import UnifiedMessage, UnifiedTimeline
 
 
 def test_get_chat_list_from_messages():

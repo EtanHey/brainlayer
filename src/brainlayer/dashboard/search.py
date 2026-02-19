@@ -1,8 +1,8 @@
 """Hybrid search engine combining BM25 and semantic search."""
 
 import math
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
 from collections import Counter, defaultdict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..embeddings import EmbeddingModel
 
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 class BM25:
     """Simple BM25 implementation for keyword search."""
-    
+
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
@@ -22,31 +22,31 @@ class BM25:
         self.doc_freqs = []
         self.idf = {}
         self.vocab = set()
-    
+
     def fit(self, documents: List[str]):
         """Fit BM25 on document corpus."""
         self.documents = documents
         self.doc_lengths = [len(doc.split()) for doc in documents]
         self.avg_doc_length = sum(self.doc_lengths) / len(self.doc_lengths) if documents else 0
-        
+
         # Calculate document frequencies
         self.doc_freqs = []
         vocab_counter = Counter()
-        
+
         for doc in documents:
             words = doc.lower().split()
             word_counts = Counter(words)
             self.doc_freqs.append(word_counts)
             vocab_counter.update(set(words))
-        
+
         self.vocab = set(vocab_counter.keys())
-        
+
         # Calculate IDF
         n_docs = len(documents)
         for word in self.vocab:
             df = sum(1 for doc_freq in self.doc_freqs if word in doc_freq)
             self.idf[word] = math.log((n_docs - df + 0.5) / (df + 0.5))
-    
+
     def score(self, query: str, doc_idx: int) -> float:
         """Calculate BM25 score for query against document."""
         if doc_idx >= len(self.doc_freqs):
@@ -73,7 +73,7 @@ class BM25:
                     score += idf * (numerator / denominator)
 
         return score
-    
+
     def search(self, query: str, n_results: int = 10) -> List[Tuple[int, float]]:
         """Search documents and return (doc_idx, score) pairs."""
         scores = []
@@ -81,7 +81,7 @@ class BM25:
             score = self.score(query, i)
             if score > 0:
                 scores.append((i, score))
-        
+
         # Sort by score descending
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:n_results]
@@ -131,7 +131,7 @@ class HybridSearchEngine:
         n_results: int = 10,
         project_filter: Optional[str] = None,
         content_type_filter: Optional[str] = None,
-        alpha: float = 0.5
+        alpha: float = 0.5,
     ) -> Dict[str, Any]:
         """
         Hybrid search using RRF (Reciprocal Rank Fusion).
@@ -155,9 +155,7 @@ class HybridSearchEngine:
 
         if not self.is_fitted or not self.documents:
             # Fallback to semantic search only
-            return self._semantic_search_only(
-                vector_store, query, n_results, project_filter, content_type_filter
-            )
+            return self._semantic_search_only(vector_store, query, n_results, project_filter, content_type_filter)
 
         try:
             # 1. BM25 keyword search
@@ -169,7 +167,7 @@ class HybridSearchEngine:
                 query_embedding=query_embedding,
                 n_results=n_results * 2,
                 project_filter=project_filter,
-                content_type_filter=content_type_filter
+                content_type_filter=content_type_filter,
             )
 
             # 3. Reciprocal Rank Fusion (RRF)
@@ -199,14 +197,12 @@ class HybridSearchEngine:
             return {
                 "documents": [semantic_docs[:n_results]],
                 "metadatas": [semantic_metas[:n_results]],
-                "distances": [semantic_distances[:n_results]]
+                "distances": [semantic_distances[:n_results]],
             }
 
         except Exception as e:
             print(f"Hybrid search error: {e}")
-            return self._semantic_search_only(
-                vector_store, query, n_results, project_filter, content_type_filter
-            )
+            return self._semantic_search_only(vector_store, query, n_results, project_filter, content_type_filter)
 
     def _semantic_search_only(
         self,
@@ -214,7 +210,7 @@ class HybridSearchEngine:
         query: str,
         n_results: int,
         project_filter: Optional[str] = None,
-        content_type_filter: Optional[str] = None
+        content_type_filter: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fallback to semantic search only."""
         try:
@@ -223,7 +219,7 @@ class HybridSearchEngine:
                 query_embedding=query_embedding,
                 n_results=n_results,
                 project_filter=project_filter,
-                content_type_filter=content_type_filter
+                content_type_filter=content_type_filter,
             )
         except Exception as e:
             print(f"Semantic search error: {e}")

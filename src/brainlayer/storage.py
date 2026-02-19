@@ -4,9 +4,9 @@ All docs.local, plans, research, and logs live here — not in project repos.
 Files persist across worktrees, branches, and repo deletions.
 To make something public, copy from storage into the git repo.
 """
+
 from pathlib import Path
 from typing import Optional
-
 
 DEFAULT_BASE_DIR = Path.home() / ".local" / "share" / "brainlayer" / "storage"
 
@@ -49,10 +49,7 @@ class BrainStorage:
 
     def list_projects(self) -> list[str]:
         """List all projects that have storage directories."""
-        return sorted(
-            d.name for d in self.base_dir.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
-        )
+        return sorted(d.name for d in self.base_dir.iterdir() if d.is_dir() and not d.name.startswith("."))
 
     def list_files(self, project: str, subdir: str = "") -> list[Path]:
         """List all files in a project's storage (or a subdirectory)."""

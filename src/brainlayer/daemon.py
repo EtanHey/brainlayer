@@ -10,7 +10,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 import apsw
 import uvicorn
@@ -19,13 +19,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .vector_store import VectorStore
 from .embeddings import get_embedding_model
+from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 # Default paths
 from .paths import DEFAULT_DB_PATH
+
 SOCKET_PATH = Path("/tmp/brainlayer.sock")
 BRAIN_DIR = Path.home() / ".brainlayer-brain"
 API_COSTS_PATH = Path.home() / ".local" / "share" / "brainlayer" / "api_costs.jsonl"
@@ -38,6 +39,7 @@ http_port: Optional[int] = None
 
 class SearchRequest(BaseModel):
     """Search request model."""
+
     query: str
     n_results: int = 10
     project_filter: Optional[str] = None
@@ -49,6 +51,7 @@ class SearchRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     """Search response model."""
+
     ids: List[Optional[str]] = []
     documents: List[str]
     metadatas: List[Dict[str, Any]]
@@ -58,6 +61,7 @@ class SearchResponse(BaseModel):
 
 class StatsResponse(BaseModel):
     """Stats response model."""
+
     total_chunks: int
     projects: List[str]
     content_types: List[str]
@@ -101,7 +105,7 @@ app = FastAPI(
     title="BrainLayer Daemon",
     description="Fast search daemon + dashboard API for brainlayer knowledge base",
     version="0.2.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # CORS — allow dashboard origins
@@ -122,6 +126,7 @@ app.add_middleware(
 # ──────────────────────────────────────────────
 # Existing endpoints (search, stats, context)
 # ──────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health_check():
@@ -156,7 +161,7 @@ async def search(request: SearchRequest):
                 n_results=request.n_results,
                 project_filter=request.project_filter,
                 content_type_filter=request.content_type_filter,
-                source_filter=request.source_filter
+                source_filter=request.source_filter,
             )
         elif request.use_semantic:
             query_embedding = embedding_model.embed_query(request.query)
@@ -165,7 +170,7 @@ async def search(request: SearchRequest):
                 n_results=request.n_results,
                 project_filter=request.project_filter,
                 content_type_filter=request.content_type_filter,
-                source_filter=request.source_filter
+                source_filter=request.source_filter,
             )
         else:
             results = vector_store.search(
@@ -173,7 +178,7 @@ async def search(request: SearchRequest):
                 n_results=request.n_results,
                 project_filter=request.project_filter,
                 content_type_filter=request.content_type_filter,
-                source_filter=request.source_filter
+                source_filter=request.source_filter,
             )
 
         total_time_ms = (time.time() - start_time) * 1000
@@ -183,7 +188,7 @@ async def search(request: SearchRequest):
             documents=results["documents"][0],
             metadatas=results["metadatas"][0],
             distances=results["distances"][0],
-            total_time_ms=total_time_ms
+            total_time_ms=total_time_ms,
         )
 
     except Exception as e:
@@ -212,6 +217,7 @@ async def get_context(chunk_id: str, before: int = 3, after: int = 3):
 # ──────────────────────────────────────────────
 # Brain View endpoints
 # ──────────────────────────────────────────────
+
 
 @app.get("/brain/graph")
 async def brain_graph():
@@ -253,6 +259,7 @@ async def brain_node_detail(node_id: str):
 # Health / Service status endpoints
 # ──────────────────────────────────────────────
 
+
 @app.get("/health/services")
 async def health_services():
     """Check status of ecosystem services: Ollama, Telegram bot, Railway, launchd."""
@@ -268,26 +275,26 @@ async def health_services():
     # Run all checks concurrently via thread pool (non-blocking)
     ollama_fut = asyncio.to_thread(
         _check_service,
-        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:11434/api/tags"], 3
+        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:11434/api/tags"],
+        3,
     )
     mlx_fut = asyncio.to_thread(
         _check_service,
-        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8080/v1/models"], 3
+        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8080/v1/models"],
+        3,
     )
-    telegram_fut = asyncio.to_thread(
-        _check_service,
-        ["launchctl", "list", "com.brainlayer.telegram"], 3
-    )
+    telegram_fut = asyncio.to_thread(_check_service, ["launchctl", "list", "com.brainlayer.telegram"], 3)
     railway_fut = asyncio.to_thread(
         _check_service,
-        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-         "http://localhost:8080/health"], 5
+        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8080/health"],
+        5,
     )
 
     # Check all launchd services in one call (fast)
     launchd_fut = asyncio.to_thread(
         _check_service,
-        ["bash", "-c", "launchctl list 2>/dev/null | grep -E 'brainlayer' || true"], 3
+        ["bash", "-c", "launchctl list 2>/dev/null | grep -E 'brainlayer' || true"],
+        3,
     )
 
     ollama_code, mlx_code, telegram_out, railway_code, launchd_out = await asyncio.gather(
@@ -330,7 +337,10 @@ async def health_services():
         "mlx": {"status": "up" if mlx_code == "200" else "down"},
         "telegram_bot": {"status": "up" if telegram_out and not telegram_out.startswith("-\t") else "down"},
         "railway": {"status": "up" if railway_code == "200" else "down"},
-        "brainlayer_daemon": {"status": "up", "chunks": vector_store.count() if vector_store else 0},
+        "brainlayer_daemon": {
+            "status": "up",
+            "chunks": vector_store.count() if vector_store else 0,
+        },
         **launchd_statuses,
     }
 
@@ -341,6 +351,7 @@ async def health_services():
 # Stats / Token usage endpoints
 # ──────────────────────────────────────────────
 
+
 @app.get("/stats/tokens")
 async def stats_tokens(days: int = 7):
     """Token usage summary from Supabase llm_usage table."""
@@ -349,8 +360,9 @@ async def stats_tokens(days: int = 7):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     entries = await asyncio.to_thread(
-        _supabase_get, "llm_usage",
-        f"select=model,source,input_tokens,output_tokens,cost_usd,tier,created_at&created_at=gte.{cutoff}&order=created_at.desc&limit=1000"
+        _supabase_get,
+        "llm_usage",
+        f"select=model,source,input_tokens,output_tokens,cost_usd,tier,created_at&created_at=gte.{cutoff}&order=created_at.desc&limit=1000",
     )
 
     if not entries:
@@ -399,9 +411,15 @@ async def stats_tokens(days: int = 7):
 def _stats_tokens_local(days: int) -> Dict[str, Any]:
     """Fallback: read from local api_costs.jsonl with date filtering."""
     if not API_COSTS_PATH.exists():
-        return {"entries": [], "total_cost_usd": 0, "total_input_tokens": 0, "total_output_tokens": 0}
+        return {
+            "entries": [],
+            "total_cost_usd": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+        }
 
     from datetime import datetime, timedelta, timezone
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     entries: List[Dict[str, Any]] = []
@@ -450,7 +468,9 @@ async def stats_enrichment():
     try:
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
         has_tags = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != ''"))[0][0]
-        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[0][0]
+        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[
+            0
+        ][0]
         has_importance = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE importance IS NOT NULL"))[0][0]
         has_intent = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE intent IS NOT NULL AND intent != ''"))[0][0]
 
@@ -461,22 +481,36 @@ async def stats_enrichment():
             has_embeddings = 0
 
         # Projects breakdown
-        projects = list(cursor.execute("""
+        projects = list(
+            cursor.execute("""
             SELECT project, COUNT(*) as cnt
             FROM chunks
             WHERE project IS NOT NULL
             GROUP BY project
             ORDER BY cnt DESC
             LIMIT 20
-        """))
+        """)
+        )
 
         return {
             "total_chunks": total,
-            "embeddings": {"count": has_embeddings, "pct": round(has_embeddings * 100 / total, 1) if total else 0},
+            "embeddings": {
+                "count": has_embeddings,
+                "pct": round(has_embeddings * 100 / total, 1) if total else 0,
+            },
             "tags": {"count": has_tags, "pct": round(has_tags * 100 / total, 1) if total else 0},
-            "summaries": {"count": has_summary, "pct": round(has_summary * 100 / total, 1) if total else 0},
-            "importance": {"count": has_importance, "pct": round(has_importance * 100 / total, 1) if total else 0},
-            "intent": {"count": has_intent, "pct": round(has_intent * 100 / total, 1) if total else 0},
+            "summaries": {
+                "count": has_summary,
+                "pct": round(has_summary * 100 / total, 1) if total else 0,
+            },
+            "importance": {
+                "count": has_importance,
+                "pct": round(has_importance * 100 / total, 1) if total else 0,
+            },
+            "intent": {
+                "count": has_intent,
+                "pct": round(has_intent * 100 / total, 1) if total else 0,
+            },
             "projects": [{"project": p, "chunks": c} for p, c in projects],
         }
     finally:
@@ -489,14 +523,17 @@ async def stats_enrichment():
 
 _cached_ssl_ctx = None
 
+
 def _supabase_ssl_ctx():
     """Get SSL context that works on macOS (uses certifi if available). Cached."""
     global _cached_ssl_ctx
     if _cached_ssl_ctx is not None:
         return _cached_ssl_ctx
     import ssl
+
     try:
         import certifi
+
         _cached_ssl_ctx = ssl.create_default_context(cafile=certifi.where())
     except ImportError:
         _cached_ssl_ctx = ssl.create_default_context()
@@ -510,12 +547,16 @@ def _supabase_get(path: str, params: str = "") -> list:
     if not supabase_url or not supabase_key:
         return []
     import urllib.request
+
     try:
         url = f"{supabase_url}/rest/v1/{path}{'?' + params if params else ''}"
-        req = urllib.request.Request(url, headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-        })
+        req = urllib.request.Request(
+            url,
+            headers={
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+            },
+        )
         with urllib.request.urlopen(req, timeout=5, context=_supabase_ssl_ctx()) as resp:
             return json.loads(resp.read())
     except Exception as e:
@@ -527,8 +568,9 @@ def _supabase_get(path: str, params: str = "") -> list:
 async def events_recent(limit: int = 50):
     """Recent golem events from Supabase."""
     rows = await asyncio.to_thread(
-        _supabase_get, "golem_events",
-        f"select=actor,type,data,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}"
+        _supabase_get,
+        "golem_events",
+        f"select=actor,type,data,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}",
     )
     return {"events": rows, "count": len(rows)}
 
@@ -537,8 +579,9 @@ async def events_recent(limit: int = 50):
 async def stats_service_runs(limit: int = 20):
     """Recent service runs from Supabase."""
     rows = await asyncio.to_thread(
-        _supabase_get, "service_runs",
-        f"select=service,started_at,ended_at,duration_ms,status,error&order=started_at.desc&limit={max(1, min(limit, 50))}"
+        _supabase_get,
+        "service_runs",
+        f"select=service,started_at,ended_at,duration_ms,status,error&order=started_at.desc&limit={max(1, min(limit, 50))}",
     )
     return {"runs": rows, "count": len(rows)}
 
@@ -547,12 +590,14 @@ async def stats_service_runs(limit: int = 20):
 # Content Pipeline
 # ──────────────────────────────────────────────
 
+
 @app.get("/content/pipeline-runs")
 async def content_pipeline_runs(limit: int = 50):
     """Recent pipeline runs from Supabase."""
     rows = await asyncio.to_thread(
-        _supabase_get, "pipeline_runs",
-        f"select=id,pipeline_id,idea,idea_type,success,duration_ms,quality_score,user_feedback,output_format,error,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}"
+        _supabase_get,
+        "pipeline_runs",
+        f"select=id,pipeline_id,idea,idea_type,success,duration_ms,quality_score,user_feedback,output_format,error,created_at&order=created_at.desc&limit={max(1, min(limit, 100))}",
     )
     return {"runs": rows, "count": len(rows)}
 
@@ -561,15 +606,23 @@ async def content_pipeline_runs(limit: int = 50):
 async def content_pipeline_stats():
     """Aggregate pipeline performance stats."""
     rows = await asyncio.to_thread(
-        _supabase_get, "pipeline_runs",
-        "select=pipeline_id,success,duration_ms,quality_score,idea_type&order=created_at.desc&limit=500"
+        _supabase_get,
+        "pipeline_runs",
+        "select=pipeline_id,success,duration_ms,quality_score,idea_type&order=created_at.desc&limit=500",
     )
     # Aggregate by pipeline
     stats: dict[str, dict] = {}
     for r in rows:
         pid = r.get("pipeline_id", "unknown")
         if pid not in stats:
-            stats[pid] = {"total": 0, "success": 0, "quality_sum": 0.0, "quality_count": 0, "duration_sum": 0, "idea_types": {}}
+            stats[pid] = {
+                "total": 0,
+                "success": 0,
+                "quality_sum": 0.0,
+                "quality_count": 0,
+                "duration_sum": 0,
+                "idea_types": {},
+            }
         s = stats[pid]
         s["total"] += 1
         if r.get("success"):
@@ -585,21 +638,24 @@ async def content_pipeline_stats():
     result = []
     for pid, s in stats.items():
         top_types = sorted(s["idea_types"].items(), key=lambda x: -x[1])[:3]
-        result.append({
-            "pipeline_id": pid,
-            "total_runs": s["total"],
-            "successful_runs": s["success"],
-            "success_rate": round(s["success"] / s["total"], 2) if s["total"] > 0 else 0,
-            "avg_quality": round(s["quality_sum"] / s["quality_count"], 2) if s["quality_count"] > 0 else None,
-            "avg_duration_ms": round(s["duration_sum"] / s["total"]) if s["total"] > 0 else 0,
-            "top_idea_types": [t[0] for t in top_types],
-        })
+        result.append(
+            {
+                "pipeline_id": pid,
+                "total_runs": s["total"],
+                "successful_runs": s["success"],
+                "success_rate": round(s["success"] / s["total"], 2) if s["total"] > 0 else 0,
+                "avg_quality": round(s["quality_sum"] / s["quality_count"], 2) if s["quality_count"] > 0 else None,
+                "avg_duration_ms": round(s["duration_sum"] / s["total"]) if s["total"] > 0 else 0,
+                "top_idea_types": [t[0] for t in top_types],
+            }
+        )
     return {"stats": result, "total_runs": len(rows)}
 
 
 # ──────────────────────────────────────────────
 # Backlog CRUD
 # ──────────────────────────────────────────────
+
 
 def _supabase_mutate(method: str, path: str, body: dict | None = None, params: str = "") -> dict | list | None:
     """POST/PATCH/DELETE to Supabase REST API. Returns parsed JSON or None."""
@@ -608,15 +664,21 @@ def _supabase_mutate(method: str, path: str, body: dict | None = None, params: s
     if not supabase_url or not supabase_key:
         return None
     import urllib.request
+
     try:
         url = f"{supabase_url}/rest/v1/{path}{'?' + params if params else ''}"
         data = json.dumps(body).encode() if body else None
-        req = urllib.request.Request(url, data=data, method=method, headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        })
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+        )
         with urllib.request.urlopen(req, timeout=5, context=_supabase_ssl_ctx()) as resp:
             return json.loads(resp.read())
     except Exception as e:
@@ -628,6 +690,7 @@ def _supabase_mutate(method: str, path: str, body: dict | None = None, params: s
 async def backlog_list(project: str = "", status: str = ""):
     """List backlog items, optionally filtered by project and/or status."""
     from urllib.parse import quote
+
     params = "select=*&order=updated_at.desc&limit=200"
     if project:
         params += f"&project=eq.{quote(project, safe='')}"
@@ -663,6 +726,7 @@ async def backlog_create(request: Request):
 async def backlog_update(item_id: str, request: Request):
     """Update a backlog item."""
     from urllib.parse import quote
+
     body = await request.json()
     # Only allow safe fields
     allowed = {"title", "description", "status", "priority", "tags", "project"}
@@ -670,8 +734,7 @@ async def backlog_update(item_id: str, request: Request):
     if not update:
         return JSONResponse({"error": "no valid fields to update"}, status_code=400)
     result = await asyncio.to_thread(
-        _supabase_mutate, "PATCH", "backlog_items",
-        update, f"id=eq.{quote(item_id, safe='')}"
+        _supabase_mutate, "PATCH", "backlog_items", update, f"id=eq.{quote(item_id, safe='')}"
     )
     if result and len(result) > 0:
         return result[0]
@@ -682,9 +745,9 @@ async def backlog_update(item_id: str, request: Request):
 async def backlog_delete(item_id: str):
     """Delete a backlog item."""
     from urllib.parse import quote
+
     result = await asyncio.to_thread(
-        _supabase_mutate, "DELETE", "backlog_items",
-        None, f"id=eq.{quote(item_id, safe='')}"
+        _supabase_mutate, "DELETE", "backlog_items", None, f"id=eq.{quote(item_id, safe='')}"
     )
     if result is None:
         return JSONResponse({"error": "delete failed"}, status_code=500)
@@ -694,6 +757,7 @@ async def backlog_delete(item_id: str):
 # ──────────────────────────────────────────────
 # Dashboard Search & Session Detail
 # ──────────────────────────────────────────────
+
 
 @app.get("/dashboard/search")
 async def dashboard_search(q: str = "", project: str = "", content_type: str = "", limit: int = 20):
@@ -706,12 +770,13 @@ async def dashboard_search(q: str = "", project: str = "", content_type: str = "
 
     def _run_search():
         import re
+
         conn = apsw.Connection(str(DEFAULT_DB_PATH), flags=apsw.SQLITE_OPEN_READONLY)
         cursor = conn.cursor()
         try:
             # Build FTS5 match expression: split words, join with AND
             # Strip FTS5 special chars except quotes
-            words = re.findall(r'[a-zA-Z0-9_]+', q)
+            words = re.findall(r"[a-zA-Z0-9_]+", q)
             if not words:
                 return []
             match_expr = " AND ".join(f'"{w}"' for w in words)
@@ -753,24 +818,38 @@ async def dashboard_search(q: str = "", project: str = "", content_type: str = "
     def _sanitize_snippet(raw: str) -> str:
         """Escape HTML in FTS5 snippet except <mark> tags (defense-in-depth)."""
         import html
+
         escaped = html.escape(raw)
         return escaped.replace("&lt;mark&gt;", "<mark>").replace("&lt;/mark&gt;", "</mark>")
 
     results = []
     for row in rows:
-        chunk_id, content_type, proj, conv_id, importance, tags, summary, intent, snippet_text, rank = row
-        results.append({
-            "id": chunk_id,
-            "content_type": content_type,
-            "project": proj,
-            "conversation_id": conv_id,
-            "importance": importance,
-            "tags": tags,
-            "summary": summary,
-            "intent": intent,
-            "snippet": _sanitize_snippet(snippet_text) if snippet_text else "",
-            "rank": rank,
-        })
+        (
+            chunk_id,
+            content_type,
+            proj,
+            conv_id,
+            importance,
+            tags,
+            summary,
+            intent,
+            snippet_text,
+            rank,
+        ) = row
+        results.append(
+            {
+                "id": chunk_id,
+                "content_type": content_type,
+                "project": proj,
+                "conversation_id": conv_id,
+                "importance": importance,
+                "tags": tags,
+                "summary": summary,
+                "intent": intent,
+                "snippet": _sanitize_snippet(snippet_text) if snippet_text else "",
+                "rank": rank,
+            }
+        )
 
     return {"results": results, "query": q, "total": len(results), "time_ms": round(elapsed, 1)}
 
@@ -791,21 +870,17 @@ async def session_detail(session_id: str, page: int = 1, per_page: int = 50, con
         cursor = conn.cursor()
         try:
             # Try conversation_id first, then fall back to ID prefix match
-            total = list(cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE conversation_id = ?", [session_id]
-            ))[0][0]
+            total = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE conversation_id = ?", [session_id]))[0][0]
 
             if total == 0:
                 # Fall back to ID prefix match (chunks where id starts with session_id:)
                 prefix = session_id + ":"
-                total = list(cursor.execute(
-                    "SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [prefix]
-                ))[0][0]
+                total = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [prefix]))[0][0]
                 if total == 0:
                     # Also try exact prefix without colon (e.g. the path itself)
-                    total = list(cursor.execute(
-                        "SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [session_id]
-                    ))[0][0]
+                    total = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE id LIKE ? || '%'", [session_id]))[0][
+                        0
+                    ]
                     if total == 0:
                         return None
                     id_filter = ("id LIKE ? || '%'", [session_id])
@@ -823,45 +898,67 @@ async def session_detail(session_id: str, page: int = 1, per_page: int = 50, con
                 type_where = " AND content_type = ?"
                 type_params = [content_type]
                 # Recalculate total with type filter
-                total = list(cursor.execute(
-                    f"SELECT COUNT(*) FROM chunks WHERE {where}{type_where}",
-                    wparams + type_params
-                ))[0][0]
+                total = list(
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM chunks WHERE {where}{type_where}",
+                        wparams + type_params,
+                    )
+                )[0][0]
 
             # Paginated chunks
-            chunks = list(cursor.execute(f"""
+            chunks = list(
+                cursor.execute(
+                    f"""
                 SELECT id, content_type, project, position, importance,
                        tags, summary, intent, content, source_file
                 FROM chunks
                 WHERE {where}{type_where}
                 ORDER BY position ASC, rowid ASC
                 LIMIT ? OFFSET ?
-            """, wparams + type_params + [per_page, offset]))
+            """,
+                    wparams + type_params + [per_page, offset],
+                )
+            )
 
             # Session context (if available)
-            ctx = list(cursor.execute("""
+            ctx = list(
+                cursor.execute(
+                    """
                 SELECT session_id, project, branch, pr_number, commit_shas,
                        files_changed, started_at, ended_at, created_at,
                        plan_name, plan_phase, story_id
                 FROM session_context WHERE session_id = ?
-            """, [session_id]))
+            """,
+                    [session_id],
+                )
+            )
 
             # Unique files touched in this session
-            files = list(cursor.execute(f"""
+            files = list(
+                cursor.execute(
+                    f"""
                 SELECT DISTINCT source_file
                 FROM chunks
                 WHERE {where} AND source_file IS NOT NULL AND source_file != ''
                 ORDER BY source_file
-            """, wparams))
+            """,
+                    wparams,
+                )
+            )
 
             # Content type distribution
-            type_dist = list(cursor.execute(f"""
+            type_dist = list(
+                cursor.execute(
+                    f"""
                 SELECT content_type, COUNT(*) as cnt
                 FROM chunks
                 WHERE {where}
                 GROUP BY content_type
                 ORDER BY cnt DESC
-            """, wparams))
+            """,
+                    wparams,
+                )
+            )
 
             return {
                 "total": total,
@@ -881,27 +978,35 @@ async def session_detail(session_id: str, page: int = 1, per_page: int = 50, con
     formatted_chunks = []
     for c in data["chunks"]:
         cid, ctype, proj, pos, imp, tags, summary, intent, content, src = c
-        formatted_chunks.append({
-            "id": cid,
-            "content_type": ctype,
-            "project": proj,
-            "position": pos,
-            "importance": imp,
-            "tags": tags,
-            "summary": summary,
-            "intent": intent,
-            "content": content[:2000] if content else None,  # Truncate large content
-            "source_file": src,
-        })
+        formatted_chunks.append(
+            {
+                "id": cid,
+                "content_type": ctype,
+                "project": proj,
+                "position": pos,
+                "importance": imp,
+                "tags": tags,
+                "summary": summary,
+                "intent": intent,
+                "content": content[:2000] if content else None,  # Truncate large content
+                "source_file": src,
+            }
+        )
 
     # Format session context
     ctx_data = None
     if data["context"]:
         row = data["context"][0]
         ctx_data = {
-            "session_id": row[0], "project": row[1], "branch": row[2],
-            "pr_number": row[3], "commit_shas": row[4], "files_changed": row[5],
-            "started_at": row[6], "ended_at": row[7], "created_at": row[8],
+            "session_id": row[0],
+            "project": row[1],
+            "branch": row[2],
+            "pr_number": row[3],
+            "commit_shas": row[4],
+            "files_changed": row[5],
+            "started_at": row[6],
+            "ended_at": row[7],
+            "created_at": row[8],
             "plan_name": row[9] if len(row) > 9 else None,
             "plan_phase": row[10] if len(row) > 10 else None,
             "story_id": row[11] if len(row) > 11 else None,
@@ -923,8 +1028,10 @@ async def session_detail(session_id: str, page: int = 1, per_page: int = 50, con
 # Server startup
 # ──────────────────────────────────────────────
 
+
 def setup_signal_handlers():
     """Setup graceful shutdown signal handlers."""
+
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
         sys.exit(0)
@@ -945,10 +1052,7 @@ def main():
     http_port = args.http
 
     # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     setup_signal_handlers()
 

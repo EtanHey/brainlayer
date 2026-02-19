@@ -1,7 +1,6 @@
 """BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -41,6 +40,7 @@ def normalize_project_name(project: str | None) -> str | None:
     # "-Users-etanheyman-Desktop-Gits-rudy-monorepo" → "rudy-monorepo"
     if name.startswith("-"):
         import os
+
         # Find the "Gits" segment by splitting on dashes
         segments = name[1:].split("-")  # Remove leading dash, split
         gits_idx = None
@@ -50,7 +50,7 @@ def normalize_project_name(project: str | None) -> str | None:
                 # Use last occurrence in case of nested "Desktop-Gits"
         if gits_idx is not None and gits_idx + 1 < len(segments):
             # Remaining segments after "Gits" form the project path
-            remaining = segments[gits_idx + 1:]
+            remaining = segments[gits_idx + 1 :]
             # Skip secondary "Gits" (e.g., Desktop-Gits)
             while remaining and remaining[0] == "Gits":
                 remaining = remaining[1:]
@@ -70,7 +70,8 @@ def normalize_project_name(project: str | None) -> str | None:
 
     # Strip worktree suffixes (nightshift-{epoch}, haiku-*, worktree-*)
     import re
-    name = re.sub(r'-(?:nightshift|haiku|worktree)-\d+$', '', name)
+
+    name = re.sub(r"-(?:nightshift|haiku|worktree)-\d+$", "", name)
 
     return name
 
@@ -112,70 +113,78 @@ The knowledge base contains indexed conversations organized by:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language search query (e.g., 'how did I implement authentication' or 'React useEffect cleanup')"
+                        "description": "Natural language search query (e.g., 'how did I implement authentication' or 'React useEffect cleanup')",
                     },
                     "project": {
                         "type": "string",
-                        "description": "Optional: filter by project name"
+                        "description": "Optional: filter by project name",
                     },
                     "content_type": {
                         "type": "string",
-                        "enum": ["ai_code", "stack_trace", "user_message", "assistant_text", "file_read", "git_diff"],
-                        "description": "Optional: filter by content type"
+                        "enum": [
+                            "ai_code",
+                            "stack_trace",
+                            "user_message",
+                            "assistant_text",
+                            "file_read",
+                            "git_diff",
+                        ],
+                        "description": "Optional: filter by content type",
                     },
                     "num_results": {
                         "type": "integer",
                         "default": 5,
-                        "description": "Number of results to return (default: 5)"
+                        "description": "Number of results to return (default: 5)",
                     },
                     "source": {
                         "type": "string",
                         "enum": ["claude_code", "whatsapp", "youtube", "all"],
                         "description": (
-                            "Filter by data source (default: claude_code)."
-                            " Use 'all' to search everything."
-                        )
+                            "Filter by data source (default: claude_code). Use 'all' to search everything."
+                        ),
                     },
                     "tag": {
                         "type": "string",
-                        "description": "Filter by tag (e.g. 'bug-fix', 'authentication', 'typescript')"
+                        "description": "Filter by tag (e.g. 'bug-fix', 'authentication', 'typescript')",
                     },
                     "intent": {
                         "type": "string",
-                        "enum": ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"],
-                        "description": "Filter by intent classification"
+                        "enum": [
+                            "debugging",
+                            "designing",
+                            "configuring",
+                            "discussing",
+                            "deciding",
+                            "implementing",
+                            "reviewing",
+                        ],
+                        "description": "Filter by intent classification",
                     },
                     "importance_min": {
                         "type": "number",
-                        "description": "Minimum importance score (1-10)"
+                        "description": "Minimum importance score (1-10)",
                     },
                     "date_from": {
                         "type": "string",
-                        "description": "Filter results from this date (ISO 8601, e.g. '2026-02-01')"
+                        "description": "Filter results from this date (ISO 8601, e.g. '2026-02-01')",
                     },
                     "date_to": {
                         "type": "string",
-                        "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')"
-                    }
+                        "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')",
+                    },
                 },
-                "required": ["query"]
-            }
+                "required": ["query"],
+            },
         ),
         Tool(
             name="brainlayer_stats",
             description="Get statistics about the knowledge base (total chunks, projects, content types).",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="brainlayer_list_projects",
             description="List all projects in the knowledge base.",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="brainlayer_context",
@@ -188,21 +197,21 @@ from the same conversation. Useful for understanding isolated search results."""
                 "properties": {
                     "chunk_id": {
                         "type": "string",
-                        "description": "The chunk ID from a search result"
+                        "description": "The chunk ID from a search result",
                     },
                     "before": {
                         "type": "integer",
                         "default": 3,
-                        "description": "Number of chunks before the target to include"
+                        "description": "Number of chunks before the target to include",
                     },
                     "after": {
                         "type": "integer",
                         "default": 3,
-                        "description": "Number of chunks after the target to include"
-                    }
+                        "description": "Number of chunks after the target to include",
+                    },
                 },
-                "required": ["chunk_id"]
-            }
+                "required": ["chunk_id"],
+            },
         ),
         Tool(
             name="brainlayer_file_timeline",
@@ -215,23 +224,20 @@ ordered chronologically. Useful for understanding a file's history.""",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": (
-                            "File path or partial path to search"
-                            " for (e.g., 'telegram-bot.ts')"
-                        )
+                        "description": ("File path or partial path to search for (e.g., 'telegram-bot.ts')"),
                     },
                     "project": {
                         "type": "string",
-                        "description": "Optional: filter by project name"
+                        "description": "Optional: filter by project name",
                     },
                     "limit": {
                         "type": "integer",
                         "default": 50,
-                        "description": "Maximum number of interactions to return"
-                    }
+                        "description": "Maximum number of interactions to return",
+                    },
                 },
-                "required": ["file_path"]
-            }
+                "required": ["file_path"],
+            },
         ),
         Tool(
             name="brainlayer_operations",
@@ -244,13 +250,10 @@ ordered chronologically. Useful for understanding a file's history.""",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID to query"
-                    },
+                    "session_id": {"type": "string", "description": "Session ID to query"},
                 },
-                "required": ["session_id"]
-            }
+                "required": ["session_id"],
+            },
         ),
         Tool(
             name="brainlayer_regression",
@@ -266,20 +269,12 @@ ordered chronologically. Useful for understanding a file's history.""",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": (
-                            "File path or partial path"
-                            " to analyze"
-                        )
+                        "description": ("File path or partial path to analyze"),
                     },
-                    "project": {
-                        "type": "string",
-                        "description": (
-                            "Optional: filter by project"
-                        )
-                    },
+                    "project": {"type": "string", "description": ("Optional: filter by project")},
                 },
-                "required": ["file_path"]
-            }
+                "required": ["file_path"],
+            },
         ),
         Tool(
             name="brainlayer_plan_links",
@@ -296,26 +291,15 @@ ordered chronologically. Useful for understanding a file's history.""",
                 "properties": {
                     "plan_name": {
                         "type": "string",
-                        "description": (
-                            "Plan name to query"
-                            " (e.g. 'local-llm-integration')"
-                        )
+                        "description": ("Plan name to query (e.g. 'local-llm-integration')"),
                     },
                     "session_id": {
                         "type": "string",
-                        "description": (
-                            "Session ID to look up"
-                            " plan info for"
-                        )
+                        "description": ("Session ID to look up plan info for"),
                     },
-                    "project": {
-                        "type": "string",
-                        "description": (
-                            "Optional: filter by project"
-                        )
-                    },
+                    "project": {"type": "string", "description": ("Optional: filter by project")},
                 },
-            }
+            },
         ),
     ]
 
@@ -348,14 +332,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _context(
             chunk_id=arguments["chunk_id"],
             before=min(arguments.get("before", 3), 50),
-            after=min(arguments.get("after", 3), 50)
+            after=min(arguments.get("after", 3), 50),
         )
 
     elif name == "brainlayer_file_timeline":
         return await _file_timeline(
             file_path=arguments["file_path"],
             project=arguments.get("project"),
-            limit=arguments.get("limit", 50)
+            limit=arguments.get("limit", 50),
         )
 
     elif name == "brainlayer_operations":
@@ -402,10 +386,12 @@ async def _search(
         store = _get_vector_store()
 
         if store.count() == 0:
-            return [TextContent(
-                type="text",
-                text="Knowledge base is empty. Run 'brainlayer index' to populate it."
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text="Knowledge base is empty. Run 'brainlayer index' to populate it.",
+                )
+            ]
 
         # Normalize project name for consistent filtering
         normalized_project = normalize_project_name(project)
@@ -444,13 +430,11 @@ async def _search(
         # Format results
         output_parts = [f"## Search Results for: {query}\n"]
 
-        for i, (doc, meta, dist) in enumerate(zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0]
-        )):
+        for i, (doc, meta, dist) in enumerate(
+            zip(results["documents"][0], results["metadatas"][0], results["distances"][0])
+        ):
             score = 1 - dist if dist is not None else 0
-            output_parts.append(f"\n### Result {i+1} (score: {score:.3f})")
+            output_parts.append(f"\n### Result {i + 1} (score: {score:.3f})")
             # Enrichment header line
             enrichment_parts = []
             if meta.get("intent"):
@@ -459,7 +443,7 @@ async def _search(
                 enrichment_parts.append(f"Importance: {meta['importance']:.0f}/10")
             if meta.get("tags") and isinstance(meta["tags"], list):
                 enrichment_parts.append(f"Tags: {', '.join(str(t) for t in meta['tags'][:5])}")
-            project_display = normalize_project_name(meta.get('project')) or meta.get('project', 'unknown')
+            project_display = normalize_project_name(meta.get("project")) or meta.get("project", "unknown")
             header = f"**Project:** {project_display} | **Type:** {meta.get('content_type', 'unknown')}"
             if meta.get("created_at"):
                 # Show just the date portion for readability
@@ -490,9 +474,9 @@ async def _stats() -> list[TextContent]:
 
         output = f"""## BrainLayer Knowledge Base Stats
 
-- **Total Chunks:** {stats['total_chunks']}
-- **Projects:** {', '.join(stats['projects'][:15])}{'...' if len(stats['projects']) > 15 else ''}
-- **Content Types:** {', '.join(stats['content_types'])}
+- **Total Chunks:** {stats["total_chunks"]}
+- **Projects:** {", ".join(stats["projects"][:15])}{"..." if len(stats["projects"]) > 15 else ""}
+- **Content Types:** {", ".join(stats["content_types"])}
 """
         return [TextContent(type="text", text=output)]
 
@@ -506,11 +490,11 @@ async def _list_projects() -> list[TextContent]:
         store = _get_vector_store()
         stats = store.get_stats()
 
-        if not stats['projects']:
+        if not stats["projects"]:
             return [TextContent(type="text", text="No projects indexed yet.")]
 
         output = "## Indexed Projects\n\n"
-        for proj in sorted(stats['projects']):
+        for proj in sorted(stats["projects"]):
             output += f"- {proj}\n"
 
         return [TextContent(type="text", text=output)]
@@ -519,11 +503,7 @@ async def _list_projects() -> list[TextContent]:
         return [TextContent(type="text", text=f"Error listing projects: {str(e)}")]
 
 
-async def _context(
-    chunk_id: str,
-    before: int = 3,
-    after: int = 3
-) -> list[TextContent]:
+async def _context(chunk_id: str, before: int = 3, after: int = 3) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
         store = _get_vector_store()
@@ -574,10 +554,7 @@ async def _file_timeline(
             session = row.get("session_id", "?")[:8]
             proj = row.get("project", "?")
             fp = row.get("file_path", file_path)
-            output_parts.append(
-                f"{i+1}. **{action}** `{fp}` at {ts}"
-                f" (session: {session}, project: {proj})"
-            )
+            output_parts.append(f"{i + 1}. **{action}** `{fp}` at {ts} (session: {session}, project: {proj})")
 
         return [TextContent(type="text", text="\n".join(output_parts))]
 
@@ -594,13 +571,12 @@ async def _operations(
         ops = store.get_session_operations(session_id)
 
         if not ops:
-            return [TextContent(
-                type="text",
-                text=(
-                    f"No operations for session"
-                    f" '{session_id[:8]}...'."
-                ),
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=(f"No operations for session '{session_id[:8]}...'."),
+                )
+            ]
 
         output_parts = [
             f"## Operations: {session_id[:8]}...\n",
@@ -611,21 +587,23 @@ async def _operations(
             outcome = op.get("outcome", "unknown")
             ts = (op.get("started_at") or "?")[:19]
             output_parts.append(
-                f"{i+1}. **{op.get('operation_type', '?')}**"
-                f" — {op.get('summary') or '?'}"
-                f" [{outcome}] at {ts}"
+                f"{i + 1}. **{op.get('operation_type', '?')}** — {op.get('summary') or '?'} [{outcome}] at {ts}"
             )
 
-        return [TextContent(
-            type="text",
-            text="\n".join(output_parts),
-        )]
+        return [
+            TextContent(
+                type="text",
+                text="\n".join(output_parts),
+            )
+        ]
 
     except Exception as e:
-        return [TextContent(
-            type="text",
-            text=f"Operations error: {str(e)}",
-        )]
+        return [
+            TextContent(
+                type="text",
+                text=f"Operations error: {str(e)}",
+            )
+        ]
 
 
 async def _regression(
@@ -635,23 +613,19 @@ async def _regression(
     """Analyze a file for regressions."""
     try:
         store = _get_vector_store()
-        result = store.get_file_regression(
-            file_path, project=project
-        )
+        result = store.get_file_regression(file_path, project=project)
 
         if not result["timeline"]:
-            return [TextContent(
-                type="text",
-                text=(
-                    f"No interactions found"
-                    f" for '{file_path}'."
-                ),
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=(f"No interactions found for '{file_path}'."),
+                )
+            ]
 
         parts = [
             f"## Regression Analysis: {file_path}\n",
-            f"Timeline: {len(result['timeline'])}"
-            f" interactions\n",
+            f"Timeline: {len(result['timeline'])} interactions\n",
         ]
 
         if result["last_success"]:
@@ -662,36 +636,29 @@ async def _regression(
                 f" branch {ls.get('branch', '?')})\n"
             )
         else:
-            parts.append(
-                "**No successful operations found**\n"
-            )
+            parts.append("**No successful operations found**\n")
 
         if result["changes_after"]:
-            parts.append(
-                f"**Changes after last success:**"
-                f" {len(result['changes_after'])}\n"
-            )
-            for i, c in enumerate(
-                result["changes_after"][:15]
-            ):
+            parts.append(f"**Changes after last success:** {len(result['changes_after'])}\n")
+            for i, c in enumerate(result["changes_after"][:15]):
                 ts = (c["timestamp"] or "?")[:19]
                 branch = c.get("branch") or "?"
-                parts.append(
-                    f"{i+1}. {c['action']}"
-                    f" at {ts}"
-                    f" (branch: {branch})"
-                )
+                parts.append(f"{i + 1}. {c['action']} at {ts} (branch: {branch})")
 
-        return [TextContent(
-            type="text",
-            text="\n".join(parts),
-        )]
+        return [
+            TextContent(
+                type="text",
+                text="\n".join(parts),
+            )
+        ]
 
     except Exception as e:
-        return [TextContent(
-            type="text",
-            text=f"Regression error: {str(e)}",
-        )]
+        return [
+            TextContent(
+                type="text",
+                text=f"Regression error: {str(e)}",
+            )
+        ]
 
 
 async def _plan_links(
@@ -706,10 +673,12 @@ async def _plan_links(
         if session_id:
             ctx = store.get_session_context(session_id)
             if not ctx:
-                return [TextContent(
-                    type="text",
-                    text=f"No context for session '{session_id[:8]}'.",
-                )]
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"No context for session '{session_id[:8]}'.",
+                    )
+                ]
             parts = [
                 f"## Session {ctx['session_id'][:8]}\n",
                 f"- Branch: {ctx.get('branch') or '?'}",
@@ -718,13 +687,14 @@ async def _plan_links(
                 f"- Phase: {ctx.get('plan_phase') or '(none)'}",
                 f"- Story: {ctx.get('story_id') or '(none)'}",
             ]
-            return [TextContent(
-                type="text", text="\n".join(parts),
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text="\n".join(parts),
+                )
+            ]
 
-        sessions = store.get_sessions_by_plan(
-            plan_name=plan_name, project=project
-        )
+        sessions = store.get_sessions_by_plan(plan_name=plan_name, project=project)
         if not sessions:
             if plan_name:
                 msg = f"No sessions linked to plan '{plan_name}'."
@@ -741,27 +711,25 @@ async def _plan_links(
             phase = s.get("plan_phase") or ""
             plan = s.get("plan_name") or ""
             started = (s.get("started_at") or "")[:19]
-            parts.append(
-                f"- {sid} | {plan}/{phase}"
-                f" | {branch} {pr}"
-                f" | {started}"
-            )
+            parts.append(f"- {sid} | {plan}/{phase} | {branch} {pr} | {started}")
 
         stats = store.get_plan_linking_stats()
-        parts.append(
-            f"\nTotal: {stats['linked_sessions']}"
-            f"/{stats['total_sessions']} linked"
-        )
+        parts.append(f"\nTotal: {stats['linked_sessions']}/{stats['total_sessions']} linked")
 
-        return [TextContent(
-            type="text", text="\n".join(parts),
-        )]
+        return [
+            TextContent(
+                type="text",
+                text="\n".join(parts),
+            )
+        ]
 
     except Exception as e:
-        return [TextContent(
-            type="text",
-            text=f"Plan links error: {str(e)}",
-        )]
+        return [
+            TextContent(
+                type="text",
+                text=f"Plan links error: {str(e)}",
+            )
+        ]
 
 
 def serve():
@@ -770,6 +738,7 @@ def serve():
     Note: MCP uses stdin/stdout for communication, not network ports.
     This is designed for integration with Claude Code via mcpServers config.
     """
+
     async def main():
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())

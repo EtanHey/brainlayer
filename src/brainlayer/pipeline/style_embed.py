@@ -9,6 +9,7 @@ from typing import Optional
 
 try:
     from sentence_transformers import SentenceTransformer
+
     HAS_SENTENCE_TRANSFORMERS = True
 except ImportError:
     HAS_SENTENCE_TRANSFORMERS = False
@@ -23,9 +24,7 @@ MAX_EMBEDDING_CHARS = 8000
 def _get_model() -> "SentenceTransformer":
     """Load mStyleDistance. Multilingual (Hebrew+English)."""
     if not HAS_SENTENCE_TRANSFORMERS:
-        raise ImportError(
-            "sentence-transformers required. Install: pip install sentence-transformers"
-        )
+        raise ImportError("sentence-transformers required. Install: pip install sentence-transformers")
     return SentenceTransformer(STYLE_MODEL)
 
 
@@ -50,10 +49,7 @@ def embed_messages(
     """
     total = len(messages)
     encoder = _get_model()
-    texts = [
-        m.text[:MAX_EMBEDDING_CHARS] if len(m.text) > MAX_EMBEDDING_CHARS else m.text
-        for m in messages
-    ]
+    texts = [m.text[:MAX_EMBEDDING_CHARS] if len(m.text) > MAX_EMBEDDING_CHARS else m.text for m in messages]
     embeddings = encoder.encode(
         texts,
         batch_size=batch_size,

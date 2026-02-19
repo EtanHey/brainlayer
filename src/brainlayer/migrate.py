@@ -1,10 +1,9 @@
 """Migration script to convert ChromaDB data to sqlite-vec."""
 
+import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
-import logging
 
 # Disable ChromaDB telemetry
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
@@ -12,12 +11,13 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 try:
     import chromadb
     from chromadb.config import Settings
+
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
 
-from .vector_store import VectorStore
 from .embeddings import get_embedding_model
+from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -31,20 +31,17 @@ def migrate_from_chromadb() -> bool:
     if not CHROMADB_AVAILABLE:
         print("ChromaDB not available, skipping migration")
         return False
-    
+
     if not CHROMADB_PATH.exists():
         print("No existing ChromaDB found, skipping migration")
         return False
-    
+
     print(f"Migrating from ChromaDB at {CHROMADB_PATH}")
-    
+
     try:
         # Connect to ChromaDB
-        client = chromadb.PersistentClient(
-            path=str(CHROMADB_PATH),
-            settings=Settings(anonymized_telemetry=False)
-        )
-        
+        client = chromadb.PersistentClient(path=str(CHROMADB_PATH), settings=Settings(anonymized_telemetry=False))
+
         # Get all collections
         collections = client.list_collections()
         if not collections:
@@ -94,13 +91,23 @@ def migrate_from_chromadb() -> bool:
                     chunk_data = {
                         "id": chunk_id,
                         "content": document,
-                        "metadata": {k: v for k, v in metadata.items()
-                                     if k not in ["source_file", "project", "content_type", "value_type", "char_count"]},
+                        "metadata": {
+                            k: v
+                            for k, v in metadata.items()
+                            if k
+                            not in [
+                                "source_file",
+                                "project",
+                                "content_type",
+                                "value_type",
+                                "char_count",
+                            ]
+                        },
                         "source_file": metadata.get("source_file", "unknown"),
                         "project": metadata.get("project"),
                         "content_type": metadata.get("content_type"),
                         "value_type": metadata.get("value_type"),
-                        "char_count": metadata.get("char_count", len(document))
+                        "char_count": metadata.get("char_count", len(document)),
                     }
                     chunks.append(chunk_data)
 
@@ -118,7 +125,7 @@ def migrate_from_chromadb() -> bool:
                         embedding_model = get_embedding_model()
 
                     for rb_start in range(0, len(need_reembed), 32):
-                        rb_indices = need_reembed[rb_start:rb_start + 32]
+                        rb_indices = need_reembed[rb_start : rb_start + 32]
                         rb_texts = [chunks[idx]["content"] for idx in rb_indices]
                         try:
                             rb_embs = embedding_model._load_model().encode(
@@ -134,8 +141,8 @@ def migrate_from_chromadb() -> bool:
                 # Insert this batch into sqlite-vec
                 INSERT_BATCH = 1000
                 for ins_start in range(0, len(chunks), INSERT_BATCH):
-                    ins_chunks = chunks[ins_start:ins_start + INSERT_BATCH]
-                    ins_embs = embeddings_batch[ins_start:ins_start + INSERT_BATCH]
+                    ins_chunks = chunks[ins_start : ins_start + INSERT_BATCH]
+                    ins_embs = embeddings_batch[ins_start : ins_start + INSERT_BATCH]
                     vector_store.upsert_chunks(ins_chunks, ins_embs)
 
                 migrated += len(chunks)
@@ -156,7 +163,7 @@ def migrate_from_chromadb() -> bool:
         print(f"\nMigration complete: {final_count} chunks in sqlite-vec (from {total_all} in ChromaDB)")
 
         return True
-        
+
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         print(f"Migration failed: {e}")
@@ -166,25 +173,25 @@ def migrate_from_chromadb() -> bool:
 def main():
     """Main migration entry point."""
     logging.basicConfig(level=logging.INFO)
-    
+
     print("זיכרון - Migration Tool")
     print("=" * 50)
-    
+
     if SQLITE_PATH.exists():
         response = input(f"sqlite-vec database already exists at {SQLITE_PATH}. Overwrite? (y/N): ")
-        if response.lower() != 'y':
+        if response.lower() != "y":
             print("Migration cancelled")
             return
-        
+
         # Remove existing database and WAL/SHM files
         SQLITE_PATH.unlink()
         for suffix in ["-shm", "-wal"]:
             p = SQLITE_PATH.parent / (SQLITE_PATH.name + suffix)
             if p.exists():
                 p.unlink()
-    
+
     success = migrate_from_chromadb()
-    
+
     if success:
         print("\nMigration completed successfully!")
         print("You can now use the new fast daemon service:")

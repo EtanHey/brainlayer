@@ -128,12 +128,14 @@ def extract_file_actions(jsonl_path: Path, session_id: str) -> List[Dict[str, An
                         inp = block.get("input", {})
                         file_path = inp.get("file_path") or inp.get("path")
                         if file_path:
-                            interactions.append({
-                                "file_path": file_path,
-                                "timestamp": timestamp,
-                                "session_id": session_id,
-                                "action": action,
-                            })
+                            interactions.append(
+                                {
+                                    "file_path": file_path,
+                                    "timestamp": timestamp,
+                                    "session_id": session_id,
+                                    "action": action,
+                                }
+                            )
                 except json.JSONDecodeError:
                     continue
     except (OSError, IOError):
@@ -163,8 +165,7 @@ def get_git_context(
 
     # Commits in the time range
     log_output = _git_cmd(
-        ["log", f"--after={start_ts}", f"--before={end_ts}",
-         "--format=%H %s", "--all"],
+        ["log", f"--after={start_ts}", f"--before={end_ts}", "--format=%H %s", "--all"],
         repo_path,
     )
     if log_output:
@@ -176,23 +177,20 @@ def get_git_context(
     # Files changed in those commits
     if context["commit_shas"]:
         first_sha = context["commit_shas"][-1]  # oldest
-        last_sha = context["commit_shas"][0]     # newest
+        last_sha = context["commit_shas"][0]  # newest
         diff_output = _git_cmd(
             ["diff", "--name-only", f"{first_sha}~1", last_sha],
             repo_path,
         )
         if diff_output:
-            context["files_changed"] = [
-                f for f in diff_output.strip().split("\n") if f.strip()
-            ]
+            context["files_changed"] = [f for f in diff_output.strip().split("\n") if f.strip()]
 
     # Try to extract PR number from branch name
     if branch and branch not in ("master", "main", "HEAD"):
         # Try gh CLI for PR number
         try:
             result = subprocess.run(
-                ["gh", "pr", "list", "--head", branch, "--json", "number",
-                 "--limit", "1"],
+                ["gh", "pr", "list", "--head", branch, "--json", "number", "--limit", "1"],
                 cwd=str(repo_path),
                 capture_output=True,
                 text=True,

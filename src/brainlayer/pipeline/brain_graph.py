@@ -99,7 +99,15 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
     embed_dim = None
     EMBED_SAMPLE = 20  # Sample up to 20 embeddings per session for mean-pooling
 
-    for i, (src_file, proj, chunk_count, types_str, intents_str, avg_imp, dominant_source) in enumerate(source_files):
+    for i, (
+        src_file,
+        proj,
+        chunk_count,
+        types_str,
+        intents_str,
+        avg_imp,
+        dominant_source,
+    ) in enumerate(source_files):
         if i % 200 == 0 and i > 0:
             logger.info(f"Processing session {i}/{len(source_files)}...")
 
@@ -115,20 +123,23 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
                 break
 
         # Get sample of content for TF-IDF (first 20 chunks)
-        text_rows = list(cursor.execute(
-            "SELECT content FROM chunks WHERE source_file = ? AND content IS NOT NULL "
-            "ORDER BY ROWID ASC LIMIT 20",
-            (src_file,),
-        ))
+        text_rows = list(
+            cursor.execute(
+                "SELECT content FROM chunks WHERE source_file = ? AND content IS NOT NULL ORDER BY ROWID ASC LIMIT 20",
+                (src_file,),
+            )
+        )
         text = " ".join(row[0][:2000] for row in text_rows if row[0])
 
         # Get sampled embeddings (evenly spaced for representative mean)
-        embed_rows = list(cursor.execute(
-            "SELECT cv.embedding FROM chunk_vectors cv "
-            "JOIN chunks c ON cv.chunk_id = c.id "
-            "WHERE c.source_file = ? ORDER BY c.ROWID ASC",
-            (src_file,),
-        ))
+        embed_rows = list(
+            cursor.execute(
+                "SELECT cv.embedding FROM chunk_vectors cv "
+                "JOIN chunks c ON cv.chunk_id = c.id "
+                "WHERE c.source_file = ? ORDER BY c.ROWID ASC",
+                (src_file,),
+            )
+        )
 
         embedding = None
         if embed_rows:
@@ -151,25 +162,27 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
         content_types = Counter(t.strip() for t in (types_str or "").split(",") if t.strip())
         intents = Counter(t.strip() for t in (intents_str or "").split(",") if t.strip())
 
-        sessions.append({
-            "id": sid,
-            "source_file": src_file,
-            "project": (ctx["project"] if ctx else proj) or "",
-            "branch": ctx["branch"] if ctx else "",
-            "pr_number": ctx["pr_number"] if ctx else None,
-            "files": ctx["files"] if ctx else [],
-            "started_at": ctx["started_at"] if ctx else "",
-            "ended_at": ctx["ended_at"] if ctx else "",
-            "plan_name": ctx["plan_name"] if ctx else "",
-            "plan_phase": ctx["plan_phase"] if ctx else "",
-            "chunk_count": chunk_count,
-            "content_types": content_types,
-            "intents": intents,
-            "importance": float(avg_imp) if avg_imp is not None else 5.0,
-            "source": dominant_source or "claude_code",
-            "text": text,
-            "embedding": embedding,
-        })
+        sessions.append(
+            {
+                "id": sid,
+                "source_file": src_file,
+                "project": (ctx["project"] if ctx else proj) or "",
+                "branch": ctx["branch"] if ctx else "",
+                "pr_number": ctx["pr_number"] if ctx else None,
+                "files": ctx["files"] if ctx else [],
+                "started_at": ctx["started_at"] if ctx else "",
+                "ended_at": ctx["ended_at"] if ctx else "",
+                "plan_name": ctx["plan_name"] if ctx else "",
+                "plan_phase": ctx["plan_phase"] if ctx else "",
+                "chunk_count": chunk_count,
+                "content_types": content_types,
+                "intents": intents,
+                "importance": float(avg_imp) if avg_imp is not None else 5.0,
+                "source": dominant_source or "claude_code",
+                "text": text,
+                "embedding": embedding,
+            }
+        )
 
     logger.info(f"Built {len(sessions)} sessions with embeddings")
     return sessions
@@ -211,6 +224,7 @@ def compute_similarity_matrix(sessions: list[dict]) -> np.ndarray:
     for s in sessions:
         try:
             from datetime import datetime
+
             ts = datetime.fromisoformat(s["started_at"].replace("Z", "+00:00"))
             timestamps.append(ts.timestamp())
         except (ValueError, AttributeError):
@@ -242,12 +256,7 @@ def compute_similarity_matrix(sessions: list[dict]) -> np.ndarray:
                 branch_sim[j, i] = 0.7
 
     # Combine with weights
-    hybrid = (
-        0.40 * semantic_sim
-        + 0.35 * file_sim
-        + 0.15 * temporal_sim
-        + 0.10 * branch_sim
-    )
+    hybrid = 0.40 * semantic_sim + 0.35 * file_sim + 0.15 * temporal_sim + 0.10 * branch_sim
 
     elapsed = time.time() - t0
     logger.info(f"Similarity matrix computed in {elapsed:.1f}s")
@@ -309,13 +318,17 @@ def detect_communities(
             n_iterations=-1,  # Run until convergence
         )
         label = (
-            "coarse" if resolution == LEIDEN_RESOLUTIONS[0]
-            else "fine" if resolution == LEIDEN_RESOLUTIONS[-1]
+            "coarse"
+            if resolution == LEIDEN_RESOLUTIONS[0]
+            else "fine"
+            if resolution == LEIDEN_RESOLUTIONS[-1]
             else "medium"
         )
         hierarchy[label] = partition.membership
         n_communities = len(set(partition.membership))
-        logger.info(f"Leiden {label} (res={resolution}): {n_communities} communities, modularity={partition.modularity:.3f}")
+        logger.info(
+            f"Leiden {label} (res={resolution}): {n_communities} communities, modularity={partition.modularity:.3f}"
+        )
 
     return hierarchy
 
@@ -419,28 +432,29 @@ def build_graph_json(
     nodes = []
     for i, s in enumerate(sessions):
         comm = medium_membership[i] if i < len(medium_membership) else 0
-        nodes.append({
-            "id": s["id"][:8],
-            "session_id": s["id"],
-            "label": labels.get(comm, f"cluster-{comm}"),
-            "community": {
-                level: membership[i] if i < len(membership) else 0
-                for level, membership in hierarchy.items()
-            },
-            "x": round(float(coords[i, 0]), 2),
-            "y": round(float(coords[i, 1]), 2),
-            "z": round(float(coords[i, 2]), 2),
-            "size": round(float(np.clip(s["importance"] / 10 * 5 + 1, 1, 8)), 2),
-            "color_type": dominant_type(s["intents"]),
-            "source": s.get("source", "claude_code"),
-            "project": s["project"],
-            "branch": s["branch"],
-            "plan": s["plan_name"],
-            "chunk_count": s["chunk_count"],
-            "files_count": len(s["files"]),
-            "started_at": s["started_at"],
-            "importance": round(float(s["importance"]), 2),
-        })
+        nodes.append(
+            {
+                "id": s["id"][:8],
+                "session_id": s["id"],
+                "label": labels.get(comm, f"cluster-{comm}"),
+                "community": {
+                    level: membership[i] if i < len(membership) else 0 for level, membership in hierarchy.items()
+                },
+                "x": round(float(coords[i, 0]), 2),
+                "y": round(float(coords[i, 1]), 2),
+                "z": round(float(coords[i, 2]), 2),
+                "size": round(float(np.clip(s["importance"] / 10 * 5 + 1, 1, 8)), 2),
+                "color_type": dominant_type(s["intents"]),
+                "source": s.get("source", "claude_code"),
+                "project": s["project"],
+                "branch": s["branch"],
+                "plan": s["plan_name"],
+                "chunk_count": s["chunk_count"],
+                "files_count": len(s["files"]),
+                "started_at": s["started_at"],
+                "importance": round(float(s["importance"]), 2),
+            }
+        )
 
     # Build edges (top N per node to avoid clutter)
     edges = []
@@ -453,11 +467,13 @@ def build_graph_json(
         top_j = np.argsort(row)[-max_edges_per_node:]
         for j in top_j:
             if row[j] > 0 and i < j:
-                edges.append({
-                    "source": sessions[i]["id"][:8],
-                    "target": sessions[j]["id"][:8],
-                    "weight": round(float(row[j]), 3),
-                })
+                edges.append(
+                    {
+                        "source": sessions[i]["id"][:8],
+                        "target": sessions[j]["id"][:8],
+                        "weight": round(float(row[j]), 3),
+                    }
+                )
 
     # Build hierarchy info
     hierarchy_info = {}
@@ -483,9 +499,7 @@ def build_graph_json(
             "session_count": len(sessions),
             "node_count": len(nodes),
             "edge_count": len(edges),
-            "community_counts": {
-                level: len(set(m)) for level, m in hierarchy.items()
-            },
+            "community_counts": {level: len(set(m)) for level, m in hierarchy.items()},
         },
     }
 

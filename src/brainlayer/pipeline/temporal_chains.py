@@ -54,13 +54,15 @@ def build_file_session_map(
     rows = list(cursor.execute(query, params))
 
     # Group by file, then by session
-    file_sessions: Dict[
-        str, Dict[str, Dict[str, Any]]
-    ] = defaultdict(lambda: defaultdict(lambda: {
-        "actions": [],
-        "first_ts": None,
-        "last_ts": None,
-    }))
+    file_sessions: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(
+        lambda: defaultdict(
+            lambda: {
+                "actions": [],
+                "first_ts": None,
+                "last_ts": None,
+            }
+        )
+    )
 
     for row in rows:
         fp, sid, action, ts = row[0], row[1], row[2], row[3]
@@ -78,17 +80,17 @@ def build_file_session_map(
     for fp, sessions in file_sessions.items():
         session_list = []
         for sid, info in sessions.items():
-            session_list.append({
-                "session_id": sid,
-                "action_count": len(info["actions"]),
-                "actions": list(set(info["actions"])),
-                "first_ts": info["first_ts"],
-                "last_ts": info["last_ts"],
-            })
+            session_list.append(
+                {
+                    "session_id": sid,
+                    "action_count": len(info["actions"]),
+                    "actions": list(set(info["actions"])),
+                    "first_ts": info["first_ts"],
+                    "last_ts": info["last_ts"],
+                }
+            )
         # Sort by first timestamp
-        session_list.sort(
-            key=lambda x: x.get("first_ts") or ""
-        )
+        session_list.sort(key=lambda x: x.get("first_ts") or "")
         result[fp] = session_list
 
     return result
@@ -132,18 +134,18 @@ def build_topic_chains(
                 delta_hours = round((tb - ta) / 3600, 2)
 
             # Count shared actions
-            shared = len(
-                set(sa["actions"]) & set(sb["actions"])
-            )
+            shared = len(set(sa["actions"]) & set(sb["actions"]))
 
-            chains.append({
-                "file_path": fp,
-                "session_a": sa["session_id"],
-                "session_b": sb["session_id"],
-                "shared_actions": shared,
-                "time_delta_hours": delta_hours,
-                "project": project,
-            })
+            chains.append(
+                {
+                    "file_path": fp,
+                    "session_a": sa["session_id"],
+                    "session_b": sb["session_id"],
+                    "shared_actions": shared,
+                    "time_delta_hours": delta_hours,
+                    "project": project,
+                }
+            )
 
     return chains
 
@@ -170,8 +172,7 @@ def run_temporal_chains(
     stats = vector_store.get_topic_chain_stats()
     if stats["total_chains"] > 0 and not force:
         logger.info(
-            "Topic chains already exist (%d chains)."
-            " Use --force to rebuild.",
+            "Topic chains already exist (%d chains). Use --force to rebuild.",
             stats["total_chains"],
         )
         return {
@@ -180,21 +181,15 @@ def run_temporal_chains(
         }
 
     # Build file→session map
-    file_map = build_file_session_map(
-        vector_store, project=project
-    )
+    file_map = build_file_session_map(vector_store, project=project)
     logger.info(
         "Built file map: %d files across sessions",
         len(file_map),
     )
 
     # Build chains
-    chains = build_topic_chains(
-        file_map, project=project
-    )
-    logger.info(
-        "Found %d topic chains", len(chains)
-    )
+    chains = build_topic_chains(file_map, project=project)
+    logger.info("Found %d topic chains", len(chains))
 
     # Store
     if chains:

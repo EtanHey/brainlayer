@@ -20,10 +20,21 @@ DEFAULT_VAULT = Path.home() / ".brainlayer-brain" / "BrainLayer"
 def _sanitize_filename(name: str) -> str:
     """Make a string safe for use as a filename."""
     # Strip common extensions to avoid double .md.md
-    for ext in (".md", ".ts", ".tsx", ".js", ".py", ".json",
-                ".css", ".svg", ".txt", ".yaml", ".toml"):
+    for ext in (
+        ".md",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".py",
+        ".json",
+        ".css",
+        ".svg",
+        ".txt",
+        ".yaml",
+        ".toml",
+    ):
         if name.endswith(ext):
-            name = name[:-len(ext)]
+            name = name[: -len(ext)]
             break
     bad = '<>:"/\\|?*'
     for c in bad:
@@ -56,9 +67,7 @@ def _session_title(ctx: Dict[str, Any]) -> str:
         label = plan
     else:
         branch = ctx.get("branch") or ""
-        label = branch.replace("feature/", "").replace(
-            "llm-", ""
-        ).replace("componentize-", "")
+        label = branch.replace("feature/", "").replace("llm-", "").replace("componentize-", "")
 
     if label:
         return f"{date} {_sanitize_filename(label)} ({sid})"
@@ -79,10 +88,7 @@ def generate_session_note(
     phase = ctx.get("plan_phase") or ""
 
     # Build tags from operations
-    op_types = list({
-        o.get("operation_type", "unknown")
-        for o in operations
-    })
+    op_types = list({o.get("operation_type", "unknown") for o in operations})
 
     # YAML frontmatter
     lines = [
@@ -99,9 +105,7 @@ def generate_session_note(
     if phase:
         lines.append(f"phase: {phase}")
     if files:
-        file_list = ", ".join(
-            f.split("/")[-1] for f in files[:20]
-        )
+        file_list = ", ".join(f.split("/")[-1] for f in files[:20])
         lines.append(f"files: [{file_list}]")
     if op_types:
         tags = ", ".join(op_types)
@@ -117,9 +121,7 @@ def generate_session_note(
     if phase:
         title_parts.append(phase)
     if branch:
-        title_parts.append(
-            branch.replace("feature/", "")
-        )
+        title_parts.append(branch.replace("feature/", ""))
     title = " / ".join(title_parts) if title_parts else f"Session {sid}"
     lines.append(f"# {title}")
     lines.append("")
@@ -135,10 +137,7 @@ def generate_session_note(
             ),
         )
         display_ops = sorted_ops[:50]
-        lines.append(
-            f"## Operations ({len(operations)} total,"
-            f" showing {len(display_ops)})"
-        )
+        lines.append(f"## Operations ({len(operations)} total, showing {len(display_ops)})")
         lines.append("")
         for i, op in enumerate(display_ops, 1):
             otype = op.get("operation_type", "?")
@@ -259,10 +258,7 @@ def generate_plan_note(
         phase = s.get("plan_phase") or ""
         branch = s.get("branch") or ""
         title = _session_title(s)
-        lines.append(
-            f"| {date} | {phase} | {branch}"
-            f" | [[{title}]] |"
-        )
+        lines.append(f"| {date} | {phase} | {branch} | [[{title}]] |")
 
     lines.append("")
 
@@ -283,52 +279,58 @@ def generate_plan_note(
 def generate_dashboard(dashboard_type: str) -> str:
     """Generate a Dataview dashboard note."""
     if dashboard_type == "recent":
-        return "\n".join([
-            "---",
-            "dashboard: recent-sessions",
-            "---",
-            "",
-            "# Recent Sessions",
-            "",
-            "```dataview",
-            "TABLE date, tags, plan, phase, operations",
-            'FROM "Sessions"',
-            "WHERE date >= date(today) - dur(7 days)",
-            "SORT date DESC",
-            "```",
-            "",
-        ])
+        return "\n".join(
+            [
+                "---",
+                "dashboard: recent-sessions",
+                "---",
+                "",
+                "# Recent Sessions",
+                "",
+                "```dataview",
+                "TABLE date, tags, plan, phase, operations",
+                'FROM "Sessions"',
+                "WHERE date >= date(today) - dur(7 days)",
+                "SORT date DESC",
+                "```",
+                "",
+            ]
+        )
     elif dashboard_type == "files":
-        return "\n".join([
-            "---",
-            "dashboard: most-modified",
-            "---",
-            "",
-            "# Most Modified Files",
-            "",
-            "```dataview",
-            "TABLE interactions, last_modified",
-            'FROM "Files"',
-            "SORT interactions DESC",
-            "LIMIT 20",
-            "```",
-            "",
-        ])
+        return "\n".join(
+            [
+                "---",
+                "dashboard: most-modified",
+                "---",
+                "",
+                "# Most Modified Files",
+                "",
+                "```dataview",
+                "TABLE interactions, last_modified",
+                'FROM "Files"',
+                "SORT interactions DESC",
+                "LIMIT 20",
+                "```",
+                "",
+            ]
+        )
     elif dashboard_type == "plans":
-        return "\n".join([
-            "---",
-            "dashboard: plans",
-            "---",
-            "",
-            "# Plans Overview",
-            "",
-            "```dataview",
-            "TABLE sessions, plan",
-            'FROM "Plans"',
-            "SORT sessions DESC",
-            "```",
-            "",
-        ])
+        return "\n".join(
+            [
+                "---",
+                "dashboard: plans",
+                "---",
+                "",
+                "# Plans Overview",
+                "",
+                "```dataview",
+                "TABLE sessions, plan",
+                'FROM "Plans"',
+                "SORT sessions DESC",
+                "```",
+                "",
+            ]
+        )
     return ""
 
 
@@ -371,12 +373,8 @@ def export_obsidian(
         params.append(project)
     query += " ORDER BY started_at ASC"
 
-    session_ids = [
-        r[0] for r in cursor.execute(query, params)
-    ]
-    logger.info(
-        "Exporting %d sessions", len(session_ids)
-    )
+    session_ids = [r[0] for r in cursor.execute(query, params)]
+    logger.info("Exporting %d sessions", len(session_ids))
 
     for sid in session_ids:
         ctx = vector_store.get_session_context(sid)
@@ -392,11 +390,12 @@ def export_obsidian(
         ops = vector_store.get_session_operations(sid)
 
         # Get files touched
-        file_interactions = list(cursor.execute(
-            "SELECT DISTINCT file_path FROM file_interactions"
-            " WHERE session_id = ?",
-            (sid,),
-        ))
+        file_interactions = list(
+            cursor.execute(
+                "SELECT DISTINCT file_path FROM file_interactions WHERE session_id = ?",
+                (sid,),
+            )
+        )
         files = [r[0] for r in file_interactions]
 
         content = generate_session_note(ctx, ops, files)
@@ -404,22 +403,15 @@ def export_obsidian(
         counts["sessions"] += 1
 
     # 2. Export file notes (top 100 most-interacted files)
-    file_query = (
-        "SELECT file_path, COUNT(*) as cnt"
-        " FROM file_interactions"
-    )
+    file_query = "SELECT file_path, COUNT(*) as cnt FROM file_interactions"
     file_params: list = []
     if project:
         file_query += " WHERE project = ?"
         file_params.append(project)
     file_query += " GROUP BY file_path ORDER BY cnt DESC LIMIT 100"
 
-    top_files = list(
-        cursor.execute(file_query, file_params)
-    )
-    logger.info(
-        "Exporting %d file notes", len(top_files)
-    )
+    top_files = list(cursor.execute(file_query, file_params))
+    logger.info("Exporting %d file notes", len(top_files))
 
     for row in top_files:
         fp = row[0]
@@ -428,9 +420,7 @@ def export_obsidian(
         if note_path.exists() and not force:
             continue
 
-        timeline = vector_store.get_file_timeline(
-            fp, project=project, limit=50
-        )
+        timeline = vector_store.get_file_timeline(fp, project=project, limit=50)
         content = generate_file_note(fp, timeline)
         note_path.write_text(content)
         counts["files"] += 1
@@ -442,9 +432,7 @@ def export_obsidian(
         if note_path.exists() and not force:
             continue
 
-        sessions = vector_store.get_sessions_by_plan(
-            plan_name=plan_name, project=project
-        )
+        sessions = vector_store.get_sessions_by_plan(plan_name=plan_name, project=project)
         content = generate_plan_note(plan_name, sessions)
         note_path.write_text(content)
         counts["plans"] += 1

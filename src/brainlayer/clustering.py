@@ -24,7 +24,7 @@ import logging
 import struct
 import time
 import uuid
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -257,15 +257,17 @@ def recursive_leiden(
         cluster_id = str(uuid.uuid4())[:12]
         path = f"{parent_path}/{cluster_id}" if parent_path else cluster_id
         centroid = embeddings[node_indices].mean(axis=0) if len(node_indices) > 0 else np.zeros(EMBEDDING_DIM)
-        return [{
-            "id": cluster_id,
-            "level": level,
-            "parent_id": parent_id,
-            "path": path,
-            "node_indices": node_indices,
-            "centroid": centroid,
-            "chunk_count": len(node_indices),
-        }]
+        return [
+            {
+                "id": cluster_id,
+                "level": level,
+                "parent_id": parent_id,
+                "path": path,
+                "node_indices": node_indices,
+                "centroid": centroid,
+                "chunk_count": len(node_indices),
+            }
+        ]
 
     # Get weights for this subgraph
     weights = graph.es["weight"] if graph.es else None
@@ -424,7 +426,15 @@ def write_clusters(
             # Write cluster
             cursor.execute(
                 "INSERT INTO clusters (id, level, parent_id, path, chunk_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (cluster["id"], cluster["level"], cluster["parent_id"], cluster["path"], cluster["chunk_count"], now, now),
+                (
+                    cluster["id"],
+                    cluster["level"],
+                    cluster["parent_id"],
+                    cluster["path"],
+                    cluster["chunk_count"],
+                    now,
+                    now,
+                ),
             )
 
             # Write centroid (L2-normalize for cosine similarity via sqlite-vec match)
@@ -687,7 +697,7 @@ def run_clustering(
 
     elapsed = time.time() - t0
     logger.info("=" * 60)
-    logger.info(f"DONE in {elapsed/60:.1f} minutes")
+    logger.info(f"DONE in {elapsed / 60:.1f} minutes")
     logger.info(f"  Chunks: {n}")
     logger.info(f"  Clusters: {level_counts}")
     logger.info(f"  Silhouette: {silhouette_scores}")

@@ -50,6 +50,7 @@ def _get_thread_store(db_path: Path) -> VectorStore:
         _thread_local.store = VectorStore(db_path)
     return _thread_local.store
 
+
 # AIDEV-NOTE: Uses local LLM only — never sends chunk content to cloud APIs
 # Backend selection: ollama (default) or mlx
 ENRICH_BACKEND = os.environ.get("BRAINLAYER_ENRICH_BACKEND", "ollama")
@@ -76,16 +77,20 @@ def _sync_stats_to_supabase(store: "VectorStore") -> None:
         cursor = store.conn.cursor()
         total = stats["total_chunks"]
         has_tags = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != ''"))[0][0]
-        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[0][0]
+        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[
+            0
+        ][0]
         has_importance = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE importance IS NOT NULL"))[0][0]
         has_intent = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE intent IS NOT NULL AND intent != ''"))[0][0]
         try:
             has_embeddings = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors_rowids"))[0][0]
         except Exception:
             has_embeddings = 0
-        projects = list(cursor.execute(
-            "SELECT project, COUNT(*) FROM chunks WHERE project IS NOT NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20"
-        ))
+        projects = list(
+            cursor.execute(
+                "SELECT project, COUNT(*) FROM chunks WHERE project IS NOT NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20"
+            )
+        )
 
         row = {
             "total_chunks": total,
@@ -144,11 +149,20 @@ def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int,
     except Exception:
         pass  # Never let logging failure affect enrichment
 
+
 # High-value content types worth enriching
 HIGH_VALUE_TYPES = ["ai_code", "stack_trace", "user_message", "assistant_text"]
 
 # Fixed tag taxonomy for coding conversations
-VALID_INTENTS = ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"]
+VALID_INTENTS = [
+    "debugging",
+    "designing",
+    "configuring",
+    "discussing",
+    "deciding",
+    "implementing",
+    "reviewing",
+]
 VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
 VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
 
@@ -262,7 +276,6 @@ def build_external_prompt(
         Tuple of (prompt_string, sanitize_result). The prompt uses sanitized
         content. The result tracks what was replaced (for audit/mapping).
     """
-    from .sanitize import Sanitizer, SanitizeResult  # noqa: F811 — type narrowing
 
     if context_chunks is None:
         context_chunks = []
@@ -476,10 +489,7 @@ def _enrich_one(
     context_chunks = []
     if with_context and chunk.get("conversation_id") and chunk.get("position") is not None:
         ctx = store.get_context(chunk["id"], before=2, after=1)
-        context_chunks = [
-            c for c in ctx.get("context", [])
-            if not c.get("is_target")
-        ]
+        context_chunks = [c for c in ctx.get("context", []) if not c.get("is_target")]
 
     prompt = build_prompt(chunk, context_chunks)
     response = call_llm(prompt)
@@ -530,10 +540,7 @@ def enrich_batch(
         # APSW connections are not safe for concurrent use from multiple threads.
         db_path = store.db_path
         with ThreadPoolExecutor(max_workers=parallel) as pool:
-            futures = {
-                pool.submit(_enrich_one, db_path, chunk, with_context): chunk
-                for chunk in chunks
-            }
+            futures = {pool.submit(_enrich_one, db_path, chunk, with_context): chunk for chunk in chunks}
             for future in as_completed(futures):
                 try:
                     if future.result():
@@ -601,7 +608,7 @@ def run_enrichment(
         stats = store.get_enrichment_stats()
         print(f"Enrichment status: {stats['enriched']}/{stats['total_chunks']} ({stats['percent']}%)")
         print(f"Remaining: {stats['remaining']}")
-        if stats['by_intent']:
+        if stats["by_intent"]:
             print(f"Intent distribution: {stats['by_intent']}")
         print(f"Batch size: {batch_size}, Max: {max_chunks or 'unlimited'}, Parallel: {parallel}")
         print("---")
@@ -630,8 +637,10 @@ def run_enrichment(
 
             elapsed = time.time() - start_time
             rate = total_processed / elapsed if elapsed > 0 else 0
-            print(f"Batch done: +{result['success']} ok, +{result['failed']} fail | "
-                  f"Total: {total_processed} ({rate:.1f}/s)")
+            print(
+                f"Batch done: +{result['success']} ok, +{result['failed']} fail | "
+                f"Total: {total_processed} ({rate:.1f}/s)"
+            )
 
             # Sync stats to Supabase every 5 batches
             if total_processed % (batch_size * 5) < batch_size:
@@ -642,9 +651,9 @@ def run_enrichment(
                 break
 
         elapsed = time.time() - start_time
-        print(f"\n--- Enrichment Complete ---")
+        print("\n--- Enrichment Complete ---")
         print(f"Processed: {total_processed} ({total_success} ok, {total_failed} fail)")
-        print(f"Time: {elapsed:.0f}s ({elapsed/60:.1f}min)")
+        print(f"Time: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
 
         final_stats = store.get_enrichment_stats()
         print(f"Progress: {final_stats['enriched']}/{final_stats['total_chunks']} ({final_stats['percent']}%)")
@@ -661,7 +670,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Enrich BrainLayer chunks with LLM metadata")
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--max", type=int, default=0, help="Max chunks to process (0=unlimited)")
-    parser.add_argument("--parallel", type=int, default=1, help="Concurrent workers (1=sequential, 3=recommended for MLX)")
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Concurrent workers (1=sequential, 3=recommended for MLX)",
+    )
     parser.add_argument("--no-context", action="store_true", help="Skip surrounding context")
     parser.add_argument("--stats", action="store_true", help="Show enrichment stats and exit")
     parser.add_argument("--db", type=str, default=None, help="Database path")
@@ -675,7 +689,7 @@ if __name__ == "__main__":
         print(f"Total: {stats['total_chunks']}")
         print(f"Enriched: {stats['enriched']} ({stats['percent']}%)")
         print(f"Remaining: {stats['remaining']}")
-        if stats['by_intent']:
+        if stats["by_intent"]:
             print(f"Intent: {stats['by_intent']}")
         store.close()
     else:

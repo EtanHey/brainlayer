@@ -1,10 +1,9 @@
 """Tests for semantic style analysis module."""
 
-import pytest
-from pathlib import Path
 from unittest.mock import Mock, patch
-import numpy as np
 
+import numpy as np
+import pytest
 
 # Skip all tests if dependencies not available
 pytest.importorskip("sentence_transformers")
@@ -12,11 +11,11 @@ pytest.importorskip("sklearn")
 
 
 from brainlayer.pipeline.semantic_style import (
-    SemanticStyleAnalyzer,
+    TOPIC_SEEDS,
     SemanticStyleAnalysis,
+    SemanticStyleAnalyzer,
     TopicCluster,
     analyze_semantic_style,
-    TOPIC_SEEDS,
 )
 
 
@@ -46,7 +45,7 @@ class TestClusterStyleAnalysis:
     @pytest.fixture
     def analyzer(self):
         """Create analyzer with mocked model."""
-        with patch.object(SemanticStyleAnalyzer, 'model', new_callable=lambda: Mock()):
+        with patch.object(SemanticStyleAnalyzer, "model", new_callable=lambda: Mock()):
             return SemanticStyleAnalyzer()
 
     def test_empty_messages_returns_empty(self, analyzer):
@@ -64,9 +63,9 @@ class TestClusterStyleAnalysis:
     def test_emoji_rate(self, analyzer):
         """Emoji rate should count emoji per message."""
         messages = [
-            "hello 😀",      # 1 emoji
+            "hello 😀",  # 1 emoji
             "hi 👋 wow 🎉",  # 2 separate emoji
-            "plain text",    # 0 emoji
+            "plain text",  # 0 emoji
         ]
         result = analyzer.analyze_cluster_style(messages)
         # Regex finds emoji groups: 1 + 2 + 0 = 3 emoji in 3 messages = 1.0
@@ -82,7 +81,7 @@ class TestClusterStyleAnalysis:
         ]
         result = analyzer.analyze_cluster_style(messages)
         # 2 questions in 3 messages = 0.67
-        assert result["question_rate"] == pytest.approx(2/3, rel=0.01)
+        assert result["question_rate"] == pytest.approx(2 / 3, rel=0.01)
 
     def test_exclamation_rate(self, analyzer):
         """Exclamation rate should count exclamations per message."""
@@ -93,7 +92,7 @@ class TestClusterStyleAnalysis:
         ]
         result = analyzer.analyze_cluster_style(messages)
         # 3 exclamations in 3 messages = 1.0
-        assert result["exclamation_rate"] == pytest.approx(3/3, rel=0.01)
+        assert result["exclamation_rate"] == pytest.approx(3 / 3, rel=0.01)
 
     def test_formality_casual_markers(self, analyzer):
         """Messages with casual markers should have lower formality."""
@@ -109,7 +108,7 @@ class TestClusterStyleAnalysis:
         """Hebrew messages should be detected in language mix."""
         messages = [
             "שלום מה נשמע",  # Hebrew
-            "hello there",   # English
+            "hello there",  # English
             "היי what's up",  # Mixed
         ]
         result = analyzer.analyze_cluster_style(messages)
@@ -137,7 +136,7 @@ class TestTopicAssignment:
 
     def test_assignment_returns_all_topics(self):
         """Assignment should return dict with all topic keys plus 'other'."""
-        with patch.object(SemanticStyleAnalyzer, 'model') as mock_model:
+        with patch.object(SemanticStyleAnalyzer, "model") as mock_model:
             # Mock the encoder
             mock_model.encode.return_value = np.random.randn(5, 1024)
 
@@ -146,11 +145,8 @@ class TestTopicAssignment:
             embeddings = np.random.randn(5, 1024)
 
             # Need to also mock the seed embeddings computation
-            with patch.object(analyzer, '_get_topic_seed_embeddings') as mock_seeds:
-                mock_seeds.return_value = {
-                    topic: np.random.randn(1024)
-                    for topic in TOPIC_SEEDS.keys()
-                }
+            with patch.object(analyzer, "_get_topic_seed_embeddings") as mock_seeds:
+                mock_seeds.return_value = {topic: np.random.randn(1024) for topic in TOPIC_SEEDS.keys()}
                 result = analyzer.assign_topics(messages, embeddings)
 
         expected_keys = set(TOPIC_SEEDS.keys()) | {"other"}
@@ -158,18 +154,15 @@ class TestTopicAssignment:
 
     def test_assignment_indices_valid(self):
         """All assigned indices should be valid message indices."""
-        with patch.object(SemanticStyleAnalyzer, 'model') as mock_model:
+        with patch.object(SemanticStyleAnalyzer, "model") as mock_model:
             mock_model.encode.return_value = np.random.randn(10, 1024)
 
             analyzer = SemanticStyleAnalyzer()
             messages = [f"message {i}" for i in range(10)]
             embeddings = np.random.randn(10, 1024)
 
-            with patch.object(analyzer, '_get_topic_seed_embeddings') as mock_seeds:
-                mock_seeds.return_value = {
-                    topic: np.random.randn(1024)
-                    for topic in TOPIC_SEEDS.keys()
-                }
+            with patch.object(analyzer, "_get_topic_seed_embeddings") as mock_seeds:
+                mock_seeds.return_value = {topic: np.random.randn(1024) for topic in TOPIC_SEEDS.keys()}
                 result = analyzer.assign_topics(messages, embeddings)
 
         all_indices = []
@@ -205,7 +198,7 @@ class TestInsightGeneration:
     @pytest.fixture
     def analyzer(self):
         """Create analyzer with mocked model."""
-        with patch.object(SemanticStyleAnalyzer, 'model'):
+        with patch.object(SemanticStyleAnalyzer, "model"):
             return SemanticStyleAnalyzer()
 
     def test_formality_comparison_insight(self, analyzer):
@@ -248,7 +241,7 @@ class TestMarkdownGeneration:
     @pytest.fixture
     def analyzer(self):
         """Create analyzer with mocked model."""
-        with patch.object(SemanticStyleAnalyzer, 'model'):
+        with patch.object(SemanticStyleAnalyzer, "model"):
             return SemanticStyleAnalyzer()
 
     def test_markdown_has_header(self, analyzer):

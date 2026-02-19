@@ -1,7 +1,6 @@
 """Stage 1: Extract system prompts and detect conversation continuations."""
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Iterator
 

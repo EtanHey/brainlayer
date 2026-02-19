@@ -12,27 +12,54 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-
 # =============================================================================
 # SMART FILTERING CONFIGURATION
 # =============================================================================
 
 # Minimum length thresholds by content type
 MIN_LENGTH_THRESHOLDS = {
-    "user_message": 15,      # Short questions can be valuable
-    "assistant_text": 50,    # Technical explanations can be concise
-    "ai_code": 30,           # Code can be short but meaningful
-    "tool_result": 50,       # Tool outputs need context
-    "stack_trace": 0,        # Always keep stack traces
+    "user_message": 15,  # Short questions can be valuable
+    "assistant_text": 50,  # Technical explanations can be concise
+    "ai_code": 30,  # Code can be short but meaningful
+    "tool_result": 50,  # Tool outputs need context
+    "stack_trace": 0,  # Always keep stack traces
 }
 DEFAULT_MIN_LENGTH = 50
 
 # Pure acknowledgments to skip (case-insensitive, exact match after strip)
 ACKNOWLEDGMENTS = {
-    "yes", "no", "ok", "okay", "sure", "done", "got it", "thanks", "thank you",
-    "do it", "go ahead", "proceed", "continue", "next", "skip", "stop",
-    "warmup", "y", "n", "k", "yep", "nope", "yup", "ah", "oh", "hmm",
-    "ah gotcha", "gotcha", "i see", "makes sense", "perfect", "great",
+    "yes",
+    "no",
+    "ok",
+    "okay",
+    "sure",
+    "done",
+    "got it",
+    "thanks",
+    "thank you",
+    "do it",
+    "go ahead",
+    "proceed",
+    "continue",
+    "next",
+    "skip",
+    "stop",
+    "warmup",
+    "y",
+    "n",
+    "k",
+    "yep",
+    "nope",
+    "yup",
+    "ah",
+    "oh",
+    "hmm",
+    "ah gotcha",
+    "gotcha",
+    "i see",
+    "makes sense",
+    "perfect",
+    "great",
 }
 
 # Patterns that indicate tool JSON garbage (stringified tool_use inputs)
@@ -64,38 +91,41 @@ HIGH_VALUE_PATTERNS = [
 
 class ContentType(Enum):
     """Types of content in Claude Code conversations."""
+
     # Conversation content
-    AI_CODE = "ai_code"           # Code written by Claude (HIGH VALUE)
-    STACK_TRACE = "stack_trace"   # Error traces (HIGH VALUE - preserve exact)
-    USER_MESSAGE = "user_message" # Human questions (HIGH VALUE)
+    AI_CODE = "ai_code"  # Code written by Claude (HIGH VALUE)
+    STACK_TRACE = "stack_trace"  # Error traces (HIGH VALUE - preserve exact)
+    USER_MESSAGE = "user_message"  # Human questions (HIGH VALUE)
     ASSISTANT_TEXT = "assistant_text"  # Claude's explanations
-    FILE_READ = "file_read"       # Code from tool reads (MEDIUM)
-    GIT_DIFF = "git_diff"         # Git changes (MEDIUM)
-    BUILD_LOG = "build_log"       # Build/test output (LOW - summarize)
+    FILE_READ = "file_read"  # Code from tool reads (MEDIUM)
+    GIT_DIFF = "git_diff"  # Git changes (MEDIUM)
+    BUILD_LOG = "build_log"  # Build/test output (LOW - summarize)
     DIRECTORY_LISTING = "dir_listing"  # ls output (LOW - structure only)
-    CONFIG = "config"             # Config files (MEDIUM)
-    NOISE = "noise"               # progress, queue-operation (SKIP)
+    CONFIG = "config"  # Config files (MEDIUM)
+    NOISE = "noise"  # progress, queue-operation (SKIP)
 
     # Markdown content types
-    LEARNING = "learning"         # Curated learnings (HIGH VALUE)
-    SKILL = "skill"               # Skill definitions (HIGH VALUE)
+    LEARNING = "learning"  # Curated learnings (HIGH VALUE)
+    SKILL = "skill"  # Skill definitions (HIGH VALUE)
     PROJECT_CONFIG = "project_config"  # CLAUDE.md files (HIGH VALUE)
-    RESEARCH = "research"         # Research documents (HIGH VALUE)
-    PRD_ARCHIVE = "prd_archive"   # PRD archives (MEDIUM)
-    VERIFICATION = "verification" # Verification rounds (LOW)
+    RESEARCH = "research"  # Research documents (HIGH VALUE)
+    PRD_ARCHIVE = "prd_archive"  # PRD archives (MEDIUM)
+    VERIFICATION = "verification"  # Verification rounds (LOW)
     DOCUMENTATION = "documentation"  # General markdown docs (MEDIUM)
 
 
 class ContentValue(Enum):
     """Value level for preservation decisions."""
-    HIGH = "high"       # Preserve verbatim
-    MEDIUM = "medium"   # Context-dependent
-    LOW = "low"         # Summarize or mask
+
+    HIGH = "high"  # Preserve verbatim
+    MEDIUM = "medium"  # Context-dependent
+    LOW = "low"  # Summarize or mask
 
 
 @dataclass
 class ClassifiedContent:
     """A classified piece of content."""
+
     content: str
     content_type: ContentType
     value: ContentValue
@@ -105,18 +135,18 @@ class ClassifiedContent:
 # Stack trace detection patterns (ReDoS-safe: avoid unbounded .*)
 STACK_TRACE_PATTERNS = [
     r"^Traceback \(most recent call last\):",  # Python
-    r"^\s+at\s+[\w.]+\([\w.]+:\d+\)",          # Java
-    r"at\s+[^\(]+\([^\)]+:\d+:\d+\)",          # JavaScript/Node (ReDoS-safe)
-    r"^\s+File \"[^\"]+\", line \d+",          # Python file reference (ReDoS-safe)
+    r"^\s+at\s+[\w.]+\([\w.]+:\d+\)",  # Java
+    r"at\s+[^\(]+\([^\)]+:\d+:\d+\)",  # JavaScript/Node (ReDoS-safe)
+    r"^\s+File \"[^\"]+\", line \d+",  # Python file reference (ReDoS-safe)
 ]
 
 # Build log patterns
 BUILD_LOG_PATTERNS = [
-    r"^\s*\d+ passing",           # Test results
+    r"^\s*\d+ passing",  # Test results
     r"^\s*\d+ failing",
-    r"^npm (ERR!|WARN)",          # npm output
-    r"^error\[E\d+\]:",           # Rust errors
-    r"^\[[\d:]+\]",               # Timestamped logs
+    r"^npm (ERR!|WARN)",  # npm output
+    r"^error\[E\d+\]:",  # Rust errors
+    r"^\[[\d:]+\]",  # Timestamped logs
 ]
 
 
@@ -147,6 +177,7 @@ def _extract_text_content(content: Any) -> str:
 # =============================================================================
 # SMART FILTERING HELPERS
 # =============================================================================
+
 
 def _is_tool_json(content: str) -> bool:
     """Detect stringified tool_use input JSON that has no semantic value."""
@@ -301,13 +332,13 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
                 content=content,
                 content_type=ContentType.USER_MESSAGE,
                 value=ContentValue.MEDIUM,  # System prompts are deduplicated elsewhere
-                metadata={"is_system_prompt": True}
+                metadata={"is_system_prompt": True},
             )
         return ClassifiedContent(
             content=content,
             content_type=ContentType.USER_MESSAGE,
             value=ContentValue.HIGH,
-            metadata={}
+            metadata={},
         )
 
     if entry_type == "assistant":
@@ -376,23 +407,18 @@ def _classify_text(text: str) -> ClassifiedContent:
                 content=text,
                 content_type=ContentType.STACK_TRACE,
                 value=ContentValue.HIGH,
-                metadata={}
+                metadata={},
             )
 
     # Check for code blocks (AI-generated code)
     if "```" in text:
-        return ClassifiedContent(
-            content=text,
-            content_type=ContentType.AI_CODE,
-            value=ContentValue.HIGH,
-            metadata={}
-        )
+        return ClassifiedContent(content=text, content_type=ContentType.AI_CODE, value=ContentValue.HIGH, metadata={})
 
     return ClassifiedContent(
         content=text,
         content_type=ContentType.ASSISTANT_TEXT,
         value=ContentValue.MEDIUM,
-        metadata={}
+        metadata={},
     )
 
 
@@ -405,7 +431,7 @@ def _classify_tool_result(content: str, block: dict) -> ClassifiedContent:
                 content=content,
                 content_type=ContentType.STACK_TRACE,
                 value=ContentValue.HIGH,
-                metadata={}
+                metadata={},
             )
 
     # Check for build logs
@@ -415,7 +441,7 @@ def _classify_tool_result(content: str, block: dict) -> ClassifiedContent:
                 content=content,
                 content_type=ContentType.BUILD_LOG,
                 value=ContentValue.LOW,
-                metadata={"action": "summarize"}
+                metadata={"action": "summarize"},
             )
 
     # Git diff detection
@@ -424,7 +450,7 @@ def _classify_tool_result(content: str, block: dict) -> ClassifiedContent:
             content=content,
             content_type=ContentType.GIT_DIFF,
             value=ContentValue.MEDIUM,
-            metadata={}
+            metadata={},
         )
 
     # Directory listing detection
@@ -437,13 +463,10 @@ def _classify_tool_result(content: str, block: dict) -> ClassifiedContent:
             content=content,
             content_type=ContentType.DIRECTORY_LISTING,
             value=ContentValue.LOW,
-            metadata={"action": "structure_only"}
+            metadata={"action": "structure_only"},
         )
 
     # Default: file read or general output
     return ClassifiedContent(
-        content=content,
-        content_type=ContentType.FILE_READ,
-        value=ContentValue.MEDIUM,
-        metadata={}
+        content=content, content_type=ContentType.FILE_READ, value=ContentValue.MEDIUM, metadata={}
     )

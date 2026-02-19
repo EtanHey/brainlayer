@@ -1,6 +1,7 @@
 """Test dashboard functionality."""
 
 from unittest.mock import Mock, patch
+
 from brainlayer.dashboard.search import BM25, HybridSearchEngine
 
 
@@ -10,7 +11,7 @@ def test_bm25_basic():
     documents = [
         "python programming language",
         "javascript web development",
-        "machine learning python"
+        "machine learning python",
     ]
 
     bm25.fit(documents)
@@ -38,11 +39,11 @@ def test_hybrid_engine_unfitted_fallback():
     mock_store.search.return_value = {
         "documents": [["test document"]],
         "metadatas": [[{"project": "test", "content_type": "ai_code"}]],
-        "distances": [[0.5]]
+        "distances": [[0.5]],
     }
     mock_store.get_all_chunks.return_value = []  # Empty = can't fit BM25
 
-    with patch.object(engine, '_embedding_model') as mock_model:
+    with patch.object(engine, "_embedding_model") as mock_model:
         mock_model.embed_query.return_value = [0.1] * 1024
         engine._embedding_model = mock_model
 

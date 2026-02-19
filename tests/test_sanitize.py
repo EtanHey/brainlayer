@@ -1,37 +1,39 @@
 """Tests for PII sanitization pipeline."""
 
 import json
+
 import pytest
-from pathlib import Path
 
 
 def _spacy_available() -> bool:
     try:
         import spacy
+
         spacy.load("en_core_web_sm")
         return True
     except Exception:
         return False
 
 
+from brainlayer.pipeline.enrichment import build_external_prompt
 from brainlayer.pipeline.sanitize import (
-    Sanitizer,
     SanitizeConfig,
+    Sanitizer,
     SanitizeResult,
-    Replacement,
     _strip_nikud,
 )
-from brainlayer.pipeline.enrichment import build_external_prompt
 
 
 @pytest.fixture
 def default_sanitizer():
     """Sanitizer with test config for PII sanitization."""
-    return Sanitizer(SanitizeConfig(
-        owner_names=("Jane Developer", "jane", "JaneDev", "janedev"),
-        owner_emails=("jane@example.com",),
-        owner_paths=("/Users/testuser",),
-    ))
+    return Sanitizer(
+        SanitizeConfig(
+            owner_names=("Jane Developer", "jane", "JaneDev", "janedev"),
+            owner_emails=("jane@example.com",),
+            owner_paths=("/Users/testuser",),
+        )
+    )
 
 
 @pytest.fixture
@@ -185,9 +187,7 @@ class TestSpacyNER:
     )
     def test_unknown_english_name_detected(self, default_sanitizer):
         """spaCy should catch names not in dictionary or owner list."""
-        result = default_sanitizer.sanitize(
-            "John Smith and Michael Johnson discussed the architecture"
-        )
+        result = default_sanitizer.sanitize("John Smith and Michael Johnson discussed the architecture")
         spacy_replacements = [r for r in result.replacements if r.source == "spacy"]
         # At least one PERSON entity should be detected
         assert len(spacy_replacements) >= 1

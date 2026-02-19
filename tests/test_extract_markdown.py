@@ -1,17 +1,14 @@
 """Tests for markdown extraction pipeline."""
 
-import tempfile
 from pathlib import Path
 
-import pytest
-
+from brainlayer.pipeline.classify import ContentType, ContentValue
 from brainlayer.pipeline.extract_markdown import (
-    find_markdown_files,
-    parse_markdown,
     classify_by_path,
     extract_markdown_content,
+    find_markdown_files,
+    parse_markdown,
 )
-from brainlayer.pipeline.classify import ContentType, ContentValue
 
 
 class TestFindMarkdownFiles:

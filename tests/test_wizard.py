@@ -1,4 +1,4 @@
-from brainlayer.cli.wizard import detect_environment, WizardConfig
+from brainlayer.cli.wizard import WizardConfig, detect_environment
 
 
 def test_detect_ollama_running():
