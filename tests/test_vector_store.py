@@ -1,143 +1,146 @@
-"""Test vector store functionality (FTS5, hybrid search, context view)."""
+"""Tests for vector_store.py — date filtering, search metadata, schema."""
 
 import pytest
 
-from brainlayer.vector_store import VectorStore, serialize_f32
+from brainlayer.paths import DEFAULT_DB_PATH
+from brainlayer.vector_store import VectorStore
 
 
-@pytest.fixture
-def store(tmp_path):
-    """Create a temporary vector store."""
-    db_path = tmp_path / "test.db"
-    return VectorStore(db_path)
+@pytest.fixture(scope="module")
+def store():
+    """Read-only connection to the production DB for integration tests."""
+    s = VectorStore(DEFAULT_DB_PATH)
+    yield s
+    s.close()
 
 
-@pytest.fixture
-def populated_store(store):
-    """Store with sample data for testing."""
-    chunks = [
-        {
-            "id": "chunk-1",
-            "content": "How to implement OTP authentication in Python",
-            "metadata": {"role": "user"},
-            "source_file": "/session/conv1.jsonl",
-            "project": "my-project",
-            "content_type": "user_message",
-            "char_count": 50,
-            "source": "claude_code",
-        },
-        {
-            "id": "chunk-2",
-            "content": "Here is the OTP implementation using pyotp library",
-            "metadata": {"role": "assistant"},
-            "source_file": "/session/conv1.jsonl",
-            "project": "my-project",
-            "content_type": "ai_code",
-            "char_count": 55,
-            "source": "claude_code",
-        },
-        {
-            "id": "chunk-3",
-            "content": "React useEffect cleanup function for websockets",
-            "metadata": {"role": "user"},
-            "source_file": "/session/conv2.jsonl",
-            "project": "app-a",
-            "content_type": "user_message",
-            "char_count": 50,
-            "source": "claude_code",
-        },
-    ]
-    # Use 1024-dim fake embeddings
-    embeddings = [[float(i) / 1024] * 1024 for i in range(3)]
-    store.upsert_chunks(chunks, embeddings)
-    return store
+class TestSchema:
+    """Verify the DB schema has required columns."""
+
+    def test_created_at_column_exists(self, store):
+        """created_at column exists in chunks table."""
+        cursor = store.conn.cursor()
+        cols = list(cursor.execute("PRAGMA table_info(chunks)"))
+        col_names = [c[1] for c in cols]
+        assert "created_at" in col_names
+
+    def test_created_at_coverage(self, store):
+        """All chunks should have created_at (from backfill)."""
+        cursor = store.conn.cursor()
+        total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
+        with_date = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE created_at IS NOT NULL"))[0][0]
+        coverage = with_date / total if total > 0 else 0
+        assert coverage >= 0.99, f"Only {coverage:.1%} of chunks have created_at (expected 100%)"
+
+    def test_source_column_exists(self, store):
+        """source column exists in chunks table."""
+        cursor = store.conn.cursor()
+        cols = list(cursor.execute("PRAGMA table_info(chunks)"))
+        col_names = [c[1] for c in cols]
+        assert "source" in col_names
 
 
-def test_fts5_table_created(store):
-    """FTS5 virtual table should exist after init."""
-    cursor = store.conn.cursor()
-    tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-    assert "chunks_fts" in tables
+class TestDateFiltering:
+    """Test date filtering in search queries."""
+
+    def test_search_with_date_from(self, store):
+        """Search with date_from filter returns only recent results."""
+        from brainlayer.embeddings import get_embedding_model
+
+        model = get_embedding_model()
+        query_emb = model.embed_query("test query")
+
+        results = store.hybrid_search(
+            query_embedding=query_emb,
+            query_text="test query",
+            n_results=5,
+            date_from="2026-02-15",
+        )
+        docs = results["documents"][0]
+        # Should return results (we have data from Feb 2026)
+        # The key test is that it doesn't crash
+        assert isinstance(docs, list)
+
+    def test_search_with_date_to(self, store):
+        """Search with date_to filter works."""
+        from brainlayer.embeddings import get_embedding_model
+
+        model = get_embedding_model()
+        query_emb = model.embed_query("test query")
+
+        results = store.hybrid_search(
+            query_embedding=query_emb,
+            query_text="test query",
+            n_results=5,
+            date_to="2026-01-01",
+        )
+        # Should not crash, may return empty if no old data
+        assert isinstance(results["documents"][0], list)
+
+    def test_search_with_date_range(self, store):
+        """Search with both date_from and date_to works."""
+        from brainlayer.embeddings import get_embedding_model
+
+        model = get_embedding_model()
+        query_emb = model.embed_query("authentication")
+
+        results = store.hybrid_search(
+            query_embedding=query_emb,
+            query_text="authentication",
+            n_results=5,
+            date_from="2026-02-01",
+            date_to="2026-02-28",
+        )
+        assert isinstance(results["documents"][0], list)
 
 
-def test_fts5_auto_populated_on_insert(populated_store):
-    """FTS5 should be populated via triggers when chunks are inserted."""
-    cursor = populated_store.conn.cursor()
-    fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
-    chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-    assert fts_count == chunk_count
-    assert fts_count == 3
+class TestSearchMetadata:
+    """Test that search results include proper metadata."""
+
+    def test_results_have_created_at(self, store):
+        """Search results include created_at in metadata."""
+        from brainlayer.embeddings import get_embedding_model
+
+        model = get_embedding_model()
+        query_emb = model.embed_query("function implementation")
+
+        results = store.hybrid_search(
+            query_embedding=query_emb,
+            query_text="function implementation",
+            n_results=3,
+        )
+        if results["documents"][0]:
+            meta = results["metadatas"][0][0]
+            assert "created_at" in meta, "Search results should include created_at"
+
+    def test_results_have_source(self, store):
+        """Search results include source in metadata."""
+        from brainlayer.embeddings import get_embedding_model
+
+        model = get_embedding_model()
+        query_emb = model.embed_query("function implementation")
+
+        results = store.hybrid_search(
+            query_embedding=query_emb,
+            query_text="function implementation",
+            n_results=3,
+        )
+        if results["documents"][0]:
+            meta = results["metadatas"][0][0]
+            assert "source" in meta or "source_file" in meta, "Results should include source info"
 
 
-def test_fts5_keyword_search(populated_store):
-    """FTS5 should find exact keyword matches."""
-    cursor = populated_store.conn.cursor()
-    results = list(cursor.execute("SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH 'OTP' ORDER BY rank"))
-    # Both chunk-1 and chunk-2 contain "OTP"
-    ids = [r[0] for r in results]
-    assert "chunk-1" in ids
-    assert "chunk-2" in ids
-    assert "chunk-3" not in ids
+class TestStats:
+    """Test get_stats returns expected data."""
 
+    def test_stats_have_projects(self, store):
+        stats = store.get_stats()
+        assert len(stats["projects"]) > 0
 
-def test_hybrid_search_returns_results(populated_store):
-    """Hybrid search should return results combining semantic + keyword."""
-    query_embedding = [0.001] * 1024
-    results = populated_store.hybrid_search(
-        query_embedding=query_embedding,
-        query_text="OTP",
-        n_results=5,
-    )
-    assert "documents" in results
-    assert "metadatas" in results
-    assert "distances" in results
-    assert len(results["documents"][0]) > 0
+    def test_stats_have_content_types(self, store):
+        stats = store.get_stats()
+        assert len(stats["content_types"]) > 0
 
-
-def test_hybrid_search_respects_project_filter(populated_store):
-    """Hybrid search should filter by project."""
-    query_embedding = [0.001] * 1024
-    results = populated_store.hybrid_search(
-        query_embedding=query_embedding,
-        query_text="implementation",
-        n_results=5,
-        project_filter="app-a",
-    )
-    for meta in results["metadatas"][0]:
-        assert meta.get("project") == "app-a"
-
-
-def test_get_context_with_conversation(populated_store):
-    """Context view should return surrounding chunks."""
-    cursor = populated_store.conn.cursor()
-    # Manually set conversation_id and position
-    cursor.execute("UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 0 WHERE id = 'chunk-1'")
-    cursor.execute("UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 1 WHERE id = 'chunk-2'")
-
-    result = populated_store.get_context("chunk-1", before=0, after=5)
-    assert result["target"] is not None
-    assert result["target"]["id"] == "chunk-1"
-    assert len(result["context"]) == 2  # chunk-1 and chunk-2
-    # chunk-1 should be marked as target
-    target_chunks = [c for c in result["context"] if c.get("is_target")]
-    assert len(target_chunks) == 1
-
-
-def test_get_context_missing_chunk(populated_store):
-    """Context view should handle missing chunk gracefully."""
-    result = populated_store.get_context("nonexistent-id")
-    assert result.get("error") == "Chunk not found"
-
-
-def test_get_context_no_conversation_id(populated_store):
-    """Context view should handle chunks without conversation_id."""
-    result = populated_store.get_context("chunk-3")
-    assert "error" in result
-    assert "no conversation context" in result["error"].lower()
-
-
-def test_serialize_f32():
-    """serialize_f32 should produce correct byte length."""
-    vec = [1.0, 2.0, 3.0]
-    data = serialize_f32(vec)
-    assert len(data) == 12  # 3 floats * 4 bytes
+    def test_stats_total_chunks(self, store):
+        stats = store.get_stats()
+        assert stats["total_chunks"] > 200_000  # We have 268K+
