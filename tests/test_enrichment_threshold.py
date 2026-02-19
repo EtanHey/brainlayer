@@ -1,6 +1,5 @@
 """Tests for source-aware enrichment thresholds."""
 
-import pytest
 from brainlayer.vector_store import source_aware_min_chars
 
 

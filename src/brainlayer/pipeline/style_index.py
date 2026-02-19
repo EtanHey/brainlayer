@@ -60,15 +60,17 @@ def index_style_messages(
         ids.append(_msg_id(msg, i))
         embeddings.append(emb)
         documents.append(msg.text[:2000])
-        metadatas.append({
-            "ts_epoch": _timestamp_epoch(msg),
-            "timestamp": msg.timestamp.isoformat(),
-            "source": msg.source,
-            "language": msg.language,
-            "chat_id": (msg.chat_id or "")[:200],
-            "contact_name": (msg.contact_name or "")[:200],
-            "relationship_tag": msg.relationship_tag or "unlabeled",
-        })
+        metadatas.append(
+            {
+                "ts_epoch": _timestamp_epoch(msg),
+                "timestamp": msg.timestamp.isoformat(),
+                "source": msg.source,
+                "language": msg.language,
+                "chat_id": (msg.chat_id or "")[:200],
+                "contact_name": (msg.contact_name or "")[:200],
+                "relationship_tag": msg.relationship_tag or "unlabeled",
+            }
+        )
 
     for i in range(0, len(ids), CHROMADB_BATCH_SIZE):
         end = min(i + CHROMADB_BATCH_SIZE, len(ids))

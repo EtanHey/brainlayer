@@ -39,25 +39,23 @@ def parse_plan_readme(
 
     # Pattern 1: Phase headers with branch names
     # "### Phase N: Name — `feature/branch-name`"
-    header_pattern = re.compile(
-        r"###\s+Phase\s+(\d+)[^—\n]*—\s*`([^`]+)`"
-    )
+    header_pattern = re.compile(r"###\s+Phase\s+(\d+)[^—\n]*—\s*`([^`]+)`")
     for match in header_pattern.finditer(text):
         phase_num = match.group(1)
         branch = match.group(2)
-        mappings.append({
-            "plan_name": plan_name,
-            "plan_phase": f"phase-{phase_num}",
-            "branch": branch,
-            "pr_number": None,
-        })
+        mappings.append(
+            {
+                "plan_name": plan_name,
+                "plan_phase": f"phase-{phase_num}",
+                "branch": branch,
+                "pr_number": None,
+            }
+        )
 
     # Pattern 2: Table rows with PR numbers
     # "| N | Description | ... | #NNN |" or "| ... | `branch` | ..."
     # Match PR numbers like #121, #134, "#131, #132"
-    table_row_pattern = re.compile(
-        r"^\|([^|]+)\|([^|]+)\|(.+)\|$", re.MULTILINE
-    )
+    table_row_pattern = re.compile(r"^\|([^|]+)\|([^|]+)\|(.+)\|$", re.MULTILINE)
     for match in table_row_pattern.finditer(text):
         full_row = match.group(0)
 
@@ -91,9 +89,7 @@ def parse_plan_readme(
         step_num = cells[0].strip() if cells else None
 
         # Try to get phase from folder reference [phase-N]
-        folder_match = re.search(
-            r"\[phase-([^\]]+)\]", full_row
-        )
+        folder_match = re.search(r"\[phase-([^\]]+)\]", full_row)
         if folder_match:
             phase_str = f"phase-{folder_match.group(1)}"
         elif step_num and step_num.isdigit():
@@ -105,19 +101,23 @@ def parse_plan_readme(
         # Create a mapping for each PR number
         if pr_numbers:
             for pr_num in pr_numbers:
-                mappings.append({
+                mappings.append(
+                    {
+                        "plan_name": plan_name,
+                        "plan_phase": phase_str or desc[:50],
+                        "branch": branch,
+                        "pr_number": pr_num,
+                    }
+                )
+        elif branch:
+            mappings.append(
+                {
                     "plan_name": plan_name,
                     "plan_phase": phase_str or desc[:50],
                     "branch": branch,
-                    "pr_number": pr_num,
-                })
-        elif branch:
-            mappings.append({
-                "plan_name": plan_name,
-                "plan_phase": phase_str or desc[:50],
-                "branch": branch,
-                "pr_number": None,
-            })
+                    "pr_number": None,
+                }
+            )
 
     # Deduplicate by (plan_name, branch, pr_number)
     seen: set = set()
@@ -268,10 +268,7 @@ def run_plan_linking(
 
     # Get all sessions with git context
     cursor = vector_store.conn.cursor()
-    query = (
-        "SELECT session_id, project, branch, pr_number"
-        " FROM session_context"
-    )
+    query = "SELECT session_id, project, branch, pr_number FROM session_context"
     params: list = []
     if project:
         query += " WHERE project = ?"
@@ -294,9 +291,7 @@ def run_plan_linking(
             "branch": row[2],
             "pr_number": row[3],
         }
-        plan = match_session_to_plan(
-            session, branch_index, pr_index
-        )
+        plan = match_session_to_plan(session, branch_index, pr_index)
         if plan:
             vector_store.update_session_plan(
                 session_id=session["session_id"],

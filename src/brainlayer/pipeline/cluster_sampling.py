@@ -7,6 +7,7 @@ T = TypeVar("T")
 
 class HasText(Protocol):
     """Protocol for objects with .text attribute."""
+
     text: str
 
 

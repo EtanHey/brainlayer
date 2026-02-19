@@ -44,7 +44,7 @@ def _safe_json_loads(value: Any) -> list:
 
 def serialize_f32(vector: List[float]) -> bytes:
     """Serialize a float32 vector to bytes for sqlite-vec."""
-    return struct.pack(f'{len(vector)}f', *vector)
+    return struct.pack(f"{len(vector)}f", *vector)
 
 
 class VectorStore:
@@ -91,23 +91,28 @@ class VectorStore:
         # Add columns if upgrading existing DB (check existing columns first)
         existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         for col, typ in [
-            ("source", "TEXT"), ("sender", "TEXT"), ("language", "TEXT"),
-            ("conversation_id", "TEXT"), ("position", "INTEGER"), ("context_summary", "TEXT"),
-            ("tags", "TEXT"), ("tag_confidence", "REAL"),
+            ("source", "TEXT"),
+            ("sender", "TEXT"),
+            ("language", "TEXT"),
+            ("conversation_id", "TEXT"),
+            ("position", "INTEGER"),
+            ("context_summary", "TEXT"),
+            ("tags", "TEXT"),
+            ("tag_confidence", "REAL"),
             # Enrichment columns (Phase 5)
             ("summary", "TEXT"),
             ("importance", "REAL"),
             ("intent", "TEXT"),
             ("enriched_at", "TEXT"),
             # Extended enrichment columns (Phase 3 — Gemini backfill)
-            ("primary_symbols", "TEXT"),   # JSON array of classes/functions/files
-            ("resolved_query", "TEXT"),    # HyDE-style hypothetical question
-            ("epistemic_level", "TEXT"),   # hypothesis/substantiated/validated
-            ("version_scope", "TEXT"),     # version or system state discussed
-            ("debt_impact", "TEXT"),       # introduction/resolution/none
-            ("external_deps", "TEXT"),     # JSON array of libraries/APIs
+            ("primary_symbols", "TEXT"),  # JSON array of classes/functions/files
+            ("resolved_query", "TEXT"),  # HyDE-style hypothetical question
+            ("epistemic_level", "TEXT"),  # hypothesis/substantiated/validated
+            ("version_scope", "TEXT"),  # version or system state discussed
+            ("debt_impact", "TEXT"),  # introduction/resolution/none
+            ("external_deps", "TEXT"),  # JSON array of libraries/APIs
             # Phase 3: created_at for date filtering
-            ("created_at", "TEXT"),         # ISO 8601 timestamp of when chunk was created/ingested
+            ("created_at", "TEXT"),  # ISO 8601 timestamp of when chunk was created/ingested
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -187,21 +192,9 @@ class VectorStore:
                 project TEXT
             )
         """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_file_interactions_path"
-            " ON file_interactions(file_path)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_file_interactions_session"
-            " ON file_interactions(session_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_session_context_project"
-            " ON session_context(project)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_path ON file_interactions(file_path)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_session ON file_interactions(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_context_project ON session_context(project)")
 
         # Phase 8a: Operations table
         cursor.execute("""
@@ -218,16 +211,8 @@ class VectorStore:
                 created_at TEXT
             )
         """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_operations_session"
-            " ON operations(session_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_operations_type"
-            " ON operations(operation_type)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_operations_session ON operations(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_operations_type ON operations(operation_type)")
 
         # Phase 8d: Topic chains table
         cursor.execute("""
@@ -242,16 +227,8 @@ class VectorStore:
                 created_at TEXT
             )
         """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_topic_chains_file"
-            " ON topic_chains(file_path)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS"
-            " idx_topic_chains_session"
-            " ON topic_chains(session_a)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_file ON topic_chains(file_path)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_session ON topic_chains(session_a)")
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
@@ -262,11 +239,7 @@ class VectorStore:
                 SELECT content, id FROM chunks
             """)
 
-    def upsert_chunks(
-        self,
-        chunks: List[Dict[str, Any]],
-        embeddings: List[List[float]]
-    ) -> int:
+    def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
         """Upsert chunks with embeddings."""
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
@@ -277,7 +250,8 @@ class VectorStore:
             chunk_id = chunk["id"]
 
             # Upsert chunk — preserve enrichment columns on re-index
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO chunks
                 (id, content, metadata, source_file, project,
                  content_type, value_type, char_count, source, created_at)
@@ -292,25 +266,30 @@ class VectorStore:
                     char_count = excluded.char_count,
                     source = excluded.source,
                     created_at = COALESCE(chunks.created_at, excluded.created_at)
-            """, (
-                chunk_id,
-                chunk["content"],
-                json.dumps(chunk["metadata"]),
-                chunk["source_file"],
-                chunk.get("project"),
-                chunk.get("content_type"),
-                chunk.get("value_type"),
-                chunk.get("char_count", 0),
-                chunk.get("source", "claude_code"),
-                chunk.get("created_at"),
-            ))
+            """,
+                (
+                    chunk_id,
+                    chunk["content"],
+                    json.dumps(chunk["metadata"]),
+                    chunk["source_file"],
+                    chunk.get("project"),
+                    chunk.get("content_type"),
+                    chunk.get("value_type"),
+                    chunk.get("char_count", 0),
+                    chunk.get("source", "claude_code"),
+                    chunk.get("created_at"),
+                ),
+            )
 
             # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
             cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO chunk_vectors (chunk_id, embedding)
                 VALUES (?, ?)
-            """, (chunk_id, serialize_f32(embedding)))
+            """,
+                (chunk_id, serialize_f32(embedding)),
+            )
 
         return len(chunks)
 
@@ -357,7 +336,9 @@ class VectorStore:
                 where_clauses.append("c.language = ?")
                 filter_params.append(language_filter)
             if tag_filter:
-                where_clauses.append("c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)")
+                where_clauses.append(
+                    "c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
+                )
                 filter_params.append(tag_filter)
             if intent_filter:
                 where_clauses.append("c.intent = ?")
@@ -413,7 +394,9 @@ class VectorStore:
                 where_clauses.append("language = ?")
                 params.append(language_filter)
             if tag_filter:
-                where_clauses.append("tags IS NOT NULL AND json_valid(tags) = 1 AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)")
+                where_clauses.append(
+                    "tags IS NOT NULL AND json_valid(tags) = 1 AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
+                )
                 params.append(tag_filter)
             if intent_filter:
                 where_clauses.append("intent = ?")
@@ -456,13 +439,15 @@ class VectorStore:
             ids.append(row[0])  # chunk id
             documents.append(row[1])  # content
             metadata = json.loads(row[2])  # metadata
-            metadata.update({
-                "source_file": row[3],
-                "project": row[4],
-                "content_type": row[5],
-                "value_type": row[6],
-                "char_count": row[7],
-            })
+            metadata.update(
+                {
+                    "source_file": row[3],
+                    "project": row[4],
+                    "content_type": row[5],
+                    "value_type": row[6],
+                    "char_count": row[7],
+                }
+            )
             # Enrichment fields (may be None if not yet enriched)
             if row[9]:
                 metadata["summary"] = row[9]
@@ -487,7 +472,7 @@ class VectorStore:
             "ids": [ids],
             "documents": [documents],
             "metadatas": [metadatas],
-            "distances": [distances]
+            "distances": [distances],
         }
 
     def count(self) -> int:
@@ -506,12 +491,14 @@ class VectorStore:
         cursor = self.conn.cursor()
 
         # Get unique projects and content types
-        results = list(cursor.execute("""
+        results = list(
+            cursor.execute("""
             SELECT DISTINCT project, content_type
             FROM chunks
             WHERE project IS NOT NULL AND content_type IS NOT NULL
             LIMIT 100
-        """))
+        """)
+        )
 
         projects = set()
         content_types = set()
@@ -523,17 +510,22 @@ class VectorStore:
         return {
             "total_chunks": count,
             "projects": list(projects),
-            "content_types": list(content_types)
+            "content_types": list(content_types),
         }
 
     def get_all_chunks(self, limit: int = 10000) -> List[Dict[str, Any]]:
         """Get all chunks for BM25 fitting (limited for performance)."""
         cursor = self.conn.cursor()
-        results = list(cursor.execute("""
+        results = list(
+            cursor.execute(
+                """
             SELECT id, content, metadata, source_file, project, content_type
             FROM chunks
             LIMIT ?
-        """, (limit,)))
+        """,
+                (limit,),
+            )
+        )
 
         return [
             {
@@ -542,7 +534,7 @@ class VectorStore:
                 "metadata": json.loads(row[2]) if row[2] else {},
                 "source_file": row[3],
                 "project": row[4],
-                "content_type": row[5]
+                "content_type": row[5],
             }
             for row in results
         ]
@@ -562,7 +554,7 @@ class VectorStore:
         importance_min: Optional[float] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
-        k: int = 60
+        k: int = 60,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
 
@@ -584,9 +576,7 @@ class VectorStore:
 
         # Build semantic rank map: chunk_content -> rank
         semantic_ranks = {}
-        for i, (doc, meta) in enumerate(zip(
-            semantic["documents"][0], semantic["metadatas"][0]
-        )):
+        for i, (doc, meta) in enumerate(zip(semantic["documents"][0], semantic["metadatas"][0])):
             key = meta.get("source_file", "") + "|" + doc[:100]
             semantic_ranks[key] = i
 
@@ -595,7 +585,9 @@ class VectorStore:
         fts_extra = []
         fts_params: list = [query_text]
         if tag_filter:
-            fts_extra.append("AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)")
+            fts_extra.append(
+                "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
+            )
             fts_params.append(tag_filter)
         if intent_filter:
             fts_extra.append("AND c.intent = ?")
@@ -611,7 +603,9 @@ class VectorStore:
             fts_params.append(date_to)
         fts_params.append(n_results * 3)
 
-        fts_results = list(cursor.execute(f"""
+        fts_results = list(
+            cursor.execute(
+                f"""
             SELECT f.chunk_id, f.rank,
                    c.content, c.metadata, c.source_file, c.project,
                    c.content_type, c.value_type, c.char_count,
@@ -622,7 +616,10 @@ class VectorStore:
             WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
             ORDER BY f.rank
             LIMIT ?
-        """, fts_params))
+        """,
+                fts_params,
+            )
+        )
 
         # Build FTS rank map
         fts_ranks = {}
@@ -682,13 +679,15 @@ class VectorStore:
                 data = fts_data[cid]
                 doc = data["content"]
                 meta = data["metadata"].copy()
-                meta.update({
-                    "source_file": data["source_file"],
-                    "project": data["project"],
-                    "content_type": data["content_type"],
-                    "value_type": data["value_type"],
-                    "char_count": data["char_count"],
-                })
+                meta.update(
+                    {
+                        "source_file": data["source_file"],
+                        "project": data["project"],
+                        "content_type": data["content_type"],
+                        "value_type": data["value_type"],
+                        "char_count": data["char_count"],
+                    }
+                )
                 if data.get("summary"):
                     meta["summary"] = data["summary"]
                 if data.get("tags"):
@@ -732,20 +731,20 @@ class VectorStore:
             "distances": [distances],
         }
 
-    def get_context(
-        self,
-        chunk_id: str,
-        before: int = 3,
-        after: int = 3
-    ) -> Dict[str, Any]:
+    def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
         cursor = self.conn.cursor()
 
         # Get the target chunk's conversation_id and position
-        target = list(cursor.execute("""
+        target = list(
+            cursor.execute(
+                """
             SELECT conversation_id, position, content, metadata
             FROM chunks WHERE id = ?
-        """, (chunk_id,)))
+        """,
+                (chunk_id,),
+            )
+        )
 
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
@@ -756,27 +755,34 @@ class VectorStore:
             return {
                 "target": {"id": chunk_id, "content": content, "position": None},
                 "context": [],
-                "error": "Chunk has no conversation context (conversation_id/position not set)"
+                "error": "Chunk has no conversation context (conversation_id/position not set)",
             }
 
         # Get surrounding chunks
-        context_rows = list(cursor.execute("""
+        context_rows = list(
+            cursor.execute(
+                """
             SELECT id, content, position, content_type
             FROM chunks
             WHERE conversation_id = ?
               AND position BETWEEN ? AND ?
             ORDER BY position
-        """, (conv_id, position - before, position + after)))
+        """,
+                (conv_id, position - before, position + after),
+            )
+        )
 
         context = []
         for row in context_rows:
-            context.append({
-                "id": row[0],
-                "content": row[1],
-                "position": row[2],
-                "content_type": row[3],
-                "is_target": row[0] == chunk_id,
-            })
+            context.append(
+                {
+                    "id": row[0],
+                    "content": row[1],
+                    "position": row[2],
+                    "content_type": row[3],
+                    "is_target": row[0] == chunk_id,
+                }
+            )
 
         return {
             "target": {"id": chunk_id, "content": content, "position": position},
@@ -812,14 +818,19 @@ class VectorStore:
 
         params.append(batch_size)
 
-        results = list(cursor.execute(f"""
+        results = list(
+            cursor.execute(
+                f"""
             SELECT id, content, source_file, project, content_type,
                    conversation_id, position, char_count
             FROM chunks
             WHERE {" AND ".join(where)}
             ORDER BY rowid DESC
             LIMIT ?
-        """, params))
+        """,
+                params,
+            )
+        )
 
         return [
             {
@@ -890,6 +901,7 @@ class VectorStore:
         params.append(chunk_id)
         # Retry on SQLITE_BUSY — concurrent access from daemon/MCP/enrichment
         import time as _time
+
         for attempt in range(3):
             try:
                 cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
@@ -905,11 +917,13 @@ class VectorStore:
         cursor = self.conn.cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
         enriched = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"))[0][0]
-        by_intent = list(cursor.execute("""
+        by_intent = list(
+            cursor.execute("""
             SELECT intent, COUNT(*) FROM chunks
             WHERE intent IS NOT NULL
             GROUP BY intent ORDER BY COUNT(*) DESC
-        """))
+        """)
+        )
         return {
             "total_chunks": total,
             "enriched": enriched,
@@ -943,49 +957,62 @@ class VectorStore:
         cursor = self.conn.cursor()
         # Preserve existing plan fields if not provided
         if plan_name is None:
-            existing = list(cursor.execute(
-                "SELECT plan_name, plan_phase, story_id"
-                " FROM session_context"
-                " WHERE session_id = ?",
-                (session_id,),
-            ))
+            existing = list(
+                cursor.execute(
+                    "SELECT plan_name, plan_phase, story_id FROM session_context WHERE session_id = ?",
+                    (session_id,),
+                )
+            )
             if existing:
                 plan_name = existing[0][0]
                 plan_phase = plan_phase or existing[0][1]
                 story_id = story_id or existing[0][2]
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO session_context
             (session_id, project, branch, pr_number, commit_shas,
              files_changed, started_at, ended_at, created_at,
              plan_name, plan_phase, story_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
                     ?, ?, ?)
-        """, (
-            session_id, project, branch, pr_number,
-            json.dumps(commit_shas) if commit_shas else None,
-            json.dumps(files_changed) if files_changed else None,
-            started_at, ended_at,
-            plan_name, plan_phase, story_id,
-        ))
+        """,
+            (
+                session_id,
+                project,
+                branch,
+                pr_number,
+                json.dumps(commit_shas) if commit_shas else None,
+                json.dumps(files_changed) if files_changed else None,
+                started_at,
+                ended_at,
+                plan_name,
+                plan_phase,
+                story_id,
+            ),
+        )
 
-    def store_file_interactions(
-        self, interactions: List[Dict[str, Any]]
-    ) -> int:
+    def store_file_interactions(self, interactions: List[Dict[str, Any]]) -> int:
         """Store file interaction records. Returns count stored."""
         if not interactions:
             return 0
         cursor = self.conn.cursor()
         count = 0
         for i in interactions:
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO file_interactions
                 (file_path, timestamp, session_id, action, chunk_id, project)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                i["file_path"], i.get("timestamp"), i["session_id"],
-                i.get("action", "unknown"), i.get("chunk_id"),
-                i.get("project"),
-            ))
+            """,
+                (
+                    i["file_path"],
+                    i.get("timestamp"),
+                    i["session_id"],
+                    i.get("action", "unknown"),
+                    i.get("chunk_id"),
+                    i.get("project"),
+                ),
+            )
             count += 1
         return count
 
@@ -1013,24 +1040,23 @@ class VectorStore:
 
         results = []
         for row in cursor.execute(query, params):
-            results.append({
-                "file_path": row[0],
-                "timestamp": row[1],
-                "session_id": row[2],
-                "action": row[3],
-                "project": row[4],
-                "branch": row[5],
-                "pr_number": row[6],
-            })
+            results.append(
+                {
+                    "file_path": row[0],
+                    "timestamp": row[1],
+                    "session_id": row[2],
+                    "action": row[3],
+                    "project": row[4],
+                    "branch": row[5],
+                    "pr_number": row[6],
+                }
+            )
         return results
 
     def get_session_context(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get git context for a session."""
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT * FROM session_context WHERE session_id = ?",
-            (session_id,)
-        ))
+        rows = list(cursor.execute("SELECT * FROM session_context WHERE session_id = ?", (session_id,)))
         if not rows:
             return None
         row = rows[0]
@@ -1064,17 +1090,22 @@ class VectorStore:
         Returns True if session was found and updated.
         """
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT 1 FROM session_context WHERE session_id = ?",
-            (session_id,),
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT 1 FROM session_context WHERE session_id = ?",
+                (session_id,),
+            )
+        )
         if not rows:
             return False
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE session_context
             SET plan_name = ?, plan_phase = ?, story_id = ?
             WHERE session_id = ?
-        """, (plan_name, plan_phase, story_id, session_id))
+        """,
+            (plan_name, plan_phase, story_id, session_id),
+        )
         return True
 
     def get_sessions_by_plan(
@@ -1101,34 +1132,33 @@ class VectorStore:
 
         results = []
         for row in cursor.execute(query, params):
-            results.append({
-                "session_id": row[0],
-                "project": row[1],
-                "branch": row[2],
-                "pr_number": row[3],
-                "started_at": row[4],
-                "ended_at": row[5],
-                "plan_name": row[6],
-                "plan_phase": row[7],
-                "story_id": row[8],
-            })
+            results.append(
+                {
+                    "session_id": row[0],
+                    "project": row[1],
+                    "branch": row[2],
+                    "pr_number": row[3],
+                    "started_at": row[4],
+                    "ended_at": row[5],
+                    "plan_name": row[6],
+                    "plan_phase": row[7],
+                    "story_id": row[8],
+                }
+            )
         return results
 
     def get_plan_linking_stats(self) -> Dict[str, Any]:
         """Get plan linking statistics."""
         cursor = self.conn.cursor()
-        total = list(cursor.execute(
-            "SELECT COUNT(*) FROM session_context"
-        ))[0][0]
-        linked = list(cursor.execute(
-            "SELECT COUNT(*) FROM session_context"
-            " WHERE plan_name IS NOT NULL"
-        ))[0][0]
-        plans = list(cursor.execute(
-            "SELECT plan_name, COUNT(*) FROM session_context"
-            " WHERE plan_name IS NOT NULL"
-            " GROUP BY plan_name ORDER BY COUNT(*) DESC"
-        ))
+        total = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
+        linked = list(cursor.execute("SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL"))[0][0]
+        plans = list(
+            cursor.execute(
+                "SELECT plan_name, COUNT(*) FROM session_context"
+                " WHERE plan_name IS NOT NULL"
+                " GROUP BY plan_name ORDER BY COUNT(*) DESC"
+            )
+        )
         return {
             "total_sessions": total,
             "linked_sessions": linked,
@@ -1136,34 +1166,23 @@ class VectorStore:
             "plans": {row[0]: row[1] for row in plans},
         }
 
-    def clear_plan_links(
-        self, project: Optional[str] = None
-    ) -> int:
+    def clear_plan_links(self, project: Optional[str] = None) -> int:
         """Clear plan links. Returns count cleared."""
         cursor = self.conn.cursor()
         if project:
-            rows = list(cursor.execute(
-                "SELECT COUNT(*) FROM session_context"
-                " WHERE plan_name IS NOT NULL AND project = ?",
-                (project,),
-            ))
+            rows = list(
+                cursor.execute(
+                    "SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL AND project = ?",
+                    (project,),
+                )
+            )
             cursor.execute(
-                "UPDATE session_context"
-                " SET plan_name = NULL, plan_phase = NULL,"
-                " story_id = NULL"
-                " WHERE project = ?",
+                "UPDATE session_context SET plan_name = NULL, plan_phase = NULL, story_id = NULL WHERE project = ?",
                 (project,),
             )
         else:
-            rows = list(cursor.execute(
-                "SELECT COUNT(*) FROM session_context"
-                " WHERE plan_name IS NOT NULL"
-            ))
-            cursor.execute(
-                "UPDATE session_context"
-                " SET plan_name = NULL, plan_phase = NULL,"
-                " story_id = NULL"
-            )
+            rows = list(cursor.execute("SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL"))
+            cursor.execute("UPDATE session_context SET plan_name = NULL, plan_phase = NULL, story_id = NULL")
         return rows[0][0] if rows else 0
 
     def get_git_overlay_stats(self) -> Dict[str, Any]:
@@ -1171,9 +1190,7 @@ class VectorStore:
         cursor = self.conn.cursor()
         sessions = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
         interactions = list(cursor.execute("SELECT COUNT(*) FROM file_interactions"))[0][0]
-        unique_files = list(cursor.execute(
-            "SELECT COUNT(DISTINCT file_path) FROM file_interactions"
-        ))[0][0]
+        unique_files = list(cursor.execute("SELECT COUNT(DISTINCT file_path) FROM file_interactions"))[0][0]
         return {
             "sessions_with_context": sessions,
             "file_interactions": interactions,
@@ -1204,12 +1221,11 @@ class VectorStore:
             return 0
         cursor = self.conn.cursor()
         from datetime import timezone
+
         now = datetime.now(timezone.utc).isoformat()
         count = 0
         for op in operations:
-            chunk_ids_json = json.dumps(
-                op.get("chunk_ids", [])
-            )
+            chunk_ids_json = json.dumps(op.get("chunk_ids", []))
             cursor.execute(
                 """INSERT OR REPLACE INTO operations
                 (id, session_id, operation_type, chunk_ids,
@@ -1238,15 +1254,17 @@ class VectorStore:
     ) -> List[Dict[str, Any]]:
         """Get all operations for a session."""
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            """SELECT id, session_id, operation_type,
+        rows = list(
+            cursor.execute(
+                """SELECT id, session_id, operation_type,
                       chunk_ids, summary, outcome,
                       started_at, ended_at, step_count
                FROM operations
                WHERE session_id = ?
                ORDER BY started_at""",
-            (session_id,),
-        ))
+                (session_id,),
+            )
+        )
         results = []
         for row in rows:
             chunk_ids = []
@@ -1255,47 +1273,46 @@ class VectorStore:
                     chunk_ids = json.loads(row[3])
                 except (json.JSONDecodeError, TypeError):
                     pass
-            results.append({
-                "id": row[0],
-                "session_id": row[1],
-                "operation_type": row[2],
-                "chunk_ids": chunk_ids,
-                "summary": row[4],
-                "outcome": row[5],
-                "started_at": row[6],
-                "ended_at": row[7],
-                "step_count": row[8],
-            })
+            results.append(
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "operation_type": row[2],
+                    "chunk_ids": chunk_ids,
+                    "summary": row[4],
+                    "outcome": row[5],
+                    "started_at": row[6],
+                    "ended_at": row[7],
+                    "step_count": row[8],
+                }
+            )
         return results
 
     def get_operations_stats(self) -> Dict[str, Any]:
         """Get operation grouping statistics."""
         cursor = self.conn.cursor()
-        total = list(cursor.execute(
-            "SELECT COUNT(*) FROM operations"
-        ))[0][0]
-        by_type = list(cursor.execute(
-            """SELECT operation_type, COUNT(*)
+        total = list(cursor.execute("SELECT COUNT(*) FROM operations"))[0][0]
+        by_type = list(
+            cursor.execute(
+                """SELECT operation_type, COUNT(*)
                FROM operations
                GROUP BY operation_type
                ORDER BY COUNT(*) DESC"""
-        ))
-        sessions = list(cursor.execute(
-            """SELECT COUNT(DISTINCT session_id)
+            )
+        )
+        sessions = list(
+            cursor.execute(
+                """SELECT COUNT(DISTINCT session_id)
                FROM operations"""
-        ))[0][0]
+            )
+        )[0][0]
         return {
             "total_operations": total,
             "sessions_with_operations": sessions,
-            "by_type": {
-                (row[0] or "unknown"): row[1]
-                for row in by_type
-            },
+            "by_type": {(row[0] or "unknown"): row[1] for row in by_type},
         }
 
-    def clear_session_operations(
-        self, session_id: str
-    ) -> None:
+    def clear_session_operations(self, session_id: str) -> None:
         """Clear operations for a session."""
         cursor = self.conn.cursor()
         cursor.execute(
@@ -1312,6 +1329,7 @@ class VectorStore:
             return 0
         cursor = self.conn.cursor()
         from datetime import timezone
+
         now = datetime.now(timezone.utc).isoformat()
         count = 0
         for chain in chains:
@@ -1341,8 +1359,9 @@ class VectorStore:
     ) -> List[Dict[str, Any]]:
         """Get topic chains for a file (sessions linked by file)."""
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            """SELECT tc.file_path, tc.session_a,
+        rows = list(
+            cursor.execute(
+                """SELECT tc.file_path, tc.session_a,
                       tc.session_b, tc.shared_actions,
                       tc.time_delta_hours, tc.project,
                       sa.branch AS branch_a,
@@ -1355,8 +1374,9 @@ class VectorStore:
                WHERE tc.file_path LIKE ?
                ORDER BY tc.time_delta_hours
                LIMIT ?""",
-            (f"%{file_path}%", limit),
-        ))
+                (f"%{file_path}%", limit),
+            )
+        )
         return [
             {
                 "file_path": row[0],
@@ -1416,15 +1436,17 @@ class VectorStore:
         # Build timeline
         timeline = []
         for row in interactions:
-            timeline.append({
-                "file_path": row[0],
-                "timestamp": row[1],
-                "session_id": row[2],
-                "action": row[3],
-                "project": row[4],
-                "branch": row[5],
-                "pr_number": row[6],
-            })
+            timeline.append(
+                {
+                    "file_path": row[0],
+                    "timestamp": row[1],
+                    "session_id": row[2],
+                    "action": row[3],
+                    "project": row[4],
+                    "branch": row[5],
+                    "pr_number": row[6],
+                }
+            )
 
         # Find last successful operation for this file
         # Check operations table for success outcomes
@@ -1436,24 +1458,22 @@ class VectorStore:
             sid = entry["session_id"]
             if not sid:
                 continue
-            ops = list(cursor.execute(
-                """SELECT outcome FROM operations
+            ops = list(
+                cursor.execute(
+                    """SELECT outcome FROM operations
                    WHERE session_id = ?
                    AND outcome = 'success'
                    LIMIT 1""",
-                (sid,),
-            ))
+                    (sid,),
+                )
+            )
             if ops:
                 last_success = entry
                 break
 
         # Get all entries after last success
         if last_success and last_success.get("timestamp"):
-            changes_after = [
-                e for e in timeline
-                if (e.get("timestamp") or "")
-                > last_success["timestamp"]
-            ]
+            changes_after = [e for e in timeline if (e.get("timestamp") or "") > last_success["timestamp"]]
 
         return {
             "file_path": file_path,
@@ -1465,27 +1485,24 @@ class VectorStore:
     def get_topic_chain_stats(self) -> Dict[str, Any]:
         """Get topic chain statistics."""
         cursor = self.conn.cursor()
-        total = list(cursor.execute(
-            "SELECT COUNT(*) FROM topic_chains"
-        ))[0][0]
-        files = list(cursor.execute(
-            """SELECT COUNT(DISTINCT file_path)
+        total = list(cursor.execute("SELECT COUNT(*) FROM topic_chains"))[0][0]
+        files = list(
+            cursor.execute(
+                """SELECT COUNT(DISTINCT file_path)
                FROM topic_chains"""
-        ))[0][0]
+            )
+        )[0][0]
         return {
             "total_chains": total,
             "unique_files": files,
         }
 
-    def clear_topic_chains(
-        self, project: Optional[str] = None
-    ) -> None:
+    def clear_topic_chains(self, project: Optional[str] = None) -> None:
         """Clear topic chains, optionally for a project."""
         cursor = self.conn.cursor()
         if project:
             cursor.execute(
-                "DELETE FROM topic_chains"
-                " WHERE project = ?",
+                "DELETE FROM topic_chains WHERE project = ?",
                 (project,),
             )
         else:
@@ -1493,7 +1510,7 @@ class VectorStore:
 
     def close(self) -> None:
         """Close database connection."""
-        if hasattr(self, 'conn'):
+        if hasattr(self, "conn"):
             self.conn.close()
 
     def __enter__(self):

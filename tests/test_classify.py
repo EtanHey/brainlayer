@@ -1,10 +1,9 @@
 """Tests for content classification."""
 
-import pytest
 from brainlayer.pipeline.classify import (
-    classify_content,
     ContentType,
     ContentValue,
+    classify_content,
 )
 
 
@@ -25,10 +24,7 @@ class TestClassifyContent:
 
     def test_classifies_user_message(self):
         """User messages should be classified as HIGH value."""
-        entry = {
-            "type": "user",
-            "message": {"role": "user", "content": "How do I implement auth?"}
-        }
+        entry = {"type": "user", "message": {"role": "user", "content": "How do I implement auth?"}}
         result = classify_content(entry)
         assert result is not None
         assert result.content_type == ContentType.USER_MESSAGE
@@ -37,10 +33,7 @@ class TestClassifyContent:
     def test_detects_system_prompt(self):
         """Long first messages are likely system prompts."""
         long_content = "CLAUDE.md instructions " * 500  # >2000 chars
-        entry = {
-            "type": "user",
-            "message": {"role": "user", "content": long_content}
-        }
+        entry = {"type": "user", "message": {"role": "user", "content": long_content}}
         result = classify_content(entry)
         assert result is not None
         assert result.metadata.get("is_system_prompt") is True
@@ -52,9 +45,12 @@ class TestClassifyContent:
             "message": {
                 "role": "assistant",
                 "content": [
-                    {"type": "text", "text": "Here's the code:\n```python\ndef foo():\n    pass\n```"}
-                ]
-            }
+                    {
+                        "type": "text",
+                        "text": "Here's the code:\n```python\ndef foo():\n    pass\n```",
+                    }
+                ],
+            },
         }
         result = classify_content(entry)
         assert result is not None
@@ -71,10 +67,7 @@ class TestClassifyContent:
 ValueError: oops"""
         entry = {
             "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": stack_trace}]
-            }
+            "message": {"role": "assistant", "content": [{"type": "text", "text": stack_trace}]},
         }
         result = classify_content(entry)
         assert result is not None
@@ -89,10 +82,7 @@ ValueError: oops"""
     at Object.<anonymous> (/app/src/main.js:5:1)"""
         entry = {
             "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": stack_trace}]
-            }
+            "message": {"role": "assistant", "content": [{"type": "text", "text": stack_trace}]},
         }
         result = classify_content(entry)
         assert result is not None

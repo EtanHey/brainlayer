@@ -21,6 +21,7 @@ BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 @dataclass
 class EmbeddedChunk:
     """A chunk with its embedding vector."""
+
     chunk: Chunk
     embedding: List[float]
 
@@ -44,7 +45,7 @@ class EmbeddingModel:
         self,
         chunks: List[Chunk],
         batch_size: int = 32,
-        on_progress: Optional[Callable[[int, int], None]] = None
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> List[EmbeddedChunk]:
         """Generate embeddings for chunks."""
         if not chunks:
@@ -60,26 +61,19 @@ class EmbeddingModel:
             content = chunk.content
             if len(content) > MAX_EMBEDDING_CHARS:
                 # Keep first part for context
-                content = content[:MAX_EMBEDDING_CHARS-50] + "..."
+                content = content[: MAX_EMBEDDING_CHARS - 50] + "..."
             texts.append(content)
 
         # Generate embeddings in batches
         for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            batch_chunks = chunks[i:i + batch_size]
+            batch_texts = texts[i : i + batch_size]
+            batch_chunks = chunks[i : i + batch_size]
 
             try:
-                embeddings = model.encode(
-                    batch_texts,
-                    convert_to_numpy=True,
-                    show_progress_bar=False
-                )
+                embeddings = model.encode(batch_texts, convert_to_numpy=True, show_progress_bar=False)
 
                 for chunk, embedding in zip(batch_chunks, embeddings):
-                    results.append(EmbeddedChunk(
-                        chunk=chunk,
-                        embedding=embedding.tolist()
-                    ))
+                    results.append(EmbeddedChunk(chunk=chunk, embedding=embedding.tolist()))
 
                 if on_progress:
                     on_progress(len(results), total)
@@ -96,7 +90,7 @@ class EmbeddingModel:
 
         # Truncate if too long
         if len(query) > MAX_EMBEDDING_CHARS:
-            query = query[:MAX_EMBEDDING_CHARS-3] + "..."
+            query = query[: MAX_EMBEDDING_CHARS - 3] + "..."
 
         # BGE models need query prefix for optimal retrieval
         prefixed_query = f"{BGE_QUERY_PREFIX}{query}"
@@ -124,7 +118,7 @@ def embed_chunks(
     chunks: List[Chunk],
     model_name: str = DEFAULT_MODEL,
     batch_size: int = 32,
-    on_progress: Optional[Callable[[int, int], None]] = None
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[EmbeddedChunk]:
     """Generate embeddings for chunks using global model."""
     model = get_embedding_model(model_name)

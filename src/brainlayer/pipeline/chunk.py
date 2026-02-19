@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # tree-sitter for AST parsing
 try:
     import tree_sitter_languages
+
     HAS_TREE_SITTER = True
 except ImportError:
     HAS_TREE_SITTER = False
@@ -28,6 +29,7 @@ from .classify import ClassifiedContent, ContentType, ContentValue
 @dataclass
 class Chunk:
     """A chunk of content ready for embedding."""
+
     content: str
     content_type: ContentType
     value: ContentValue
@@ -42,11 +44,11 @@ MAX_CHUNK_SIZE = 4000
 # Content-type-aware minimum chunk sizes
 # Note: Most filtering happens in classify.py, but this is a safety net
 MIN_CHUNK_SIZES = {
-    ContentType.USER_MESSAGE: 15,       # Short questions can be valuable
-    ContentType.ASSISTANT_TEXT: 80,     # Explanations need context
-    ContentType.AI_CODE: 30,            # Code can be short but meaningful
-    ContentType.STACK_TRACE: 0,         # Always keep stack traces
-    ContentType.FILE_READ: 50,          # Tool outputs need context
+    ContentType.USER_MESSAGE: 15,  # Short questions can be valuable
+    ContentType.ASSISTANT_TEXT: 80,  # Explanations need context
+    ContentType.AI_CODE: 30,  # Code can be short but meaningful
+    ContentType.STACK_TRACE: 0,  # Always keep stack traces
+    ContentType.FILE_READ: 50,  # Tool outputs need context
     ContentType.BUILD_LOG: 50,
     ContentType.DIRECTORY_LISTING: 50,
     ContentType.GIT_DIFF: 50,
@@ -83,20 +85,26 @@ def chunk_content(classified: ClassifiedContent) -> list[Chunk]:
 
     # Never split stack traces
     if content_type == ContentType.STACK_TRACE:
-        return [Chunk(
-            content=content,
-            content_type=content_type,
-            value=classified.value,
-            metadata=classified.metadata,
-            char_count=len(content)
-        )]
+        return [
+            Chunk(
+                content=content,
+                content_type=content_type,
+                value=classified.value,
+                metadata=classified.metadata,
+                char_count=len(content),
+            )
+        ]
 
     # AI-generated code: AST-aware chunking
     if content_type == ContentType.AI_CODE:
         return _chunk_code(classified)
 
     # Large tool outputs: Use observation masking
-    if content_type in (ContentType.FILE_READ, ContentType.BUILD_LOG, ContentType.DIRECTORY_LISTING):
+    if content_type in (
+        ContentType.FILE_READ,
+        ContentType.BUILD_LOG,
+        ContentType.DIRECTORY_LISTING,
+    ):
         if len(content) > MAX_CHUNK_SIZE:
             return _mask_large_output(classified)
 
@@ -123,44 +131,56 @@ def _chunk_code(classified: ClassifiedContent) -> list[Chunk]:
             ast_chunks = _ast_chunk(code, lang)
             if ast_chunks:
                 for chunk_text in ast_chunks:
-                    chunks.append(Chunk(
-                        content=chunk_text,
-                        content_type=classified.content_type,
-                        value=classified.value,
-                        metadata={**classified.metadata, "language": lang},
-                        char_count=len(chunk_text)
-                    ))
+                    chunks.append(
+                        Chunk(
+                            content=chunk_text,
+                            content_type=classified.content_type,
+                            value=classified.value,
+                            metadata={**classified.metadata, "language": lang},
+                            char_count=len(chunk_text),
+                        )
+                    )
                 continue
 
         # Fallback: line-based chunking
         line_chunks = _line_based_chunk(code)
         for chunk_text in line_chunks:
-            chunks.append(Chunk(
-                content=chunk_text,
-                content_type=classified.content_type,
-                value=classified.value,
-                metadata={**classified.metadata, "language": lang or "unknown"},
-                char_count=len(chunk_text)
-            ))
+            chunks.append(
+                Chunk(
+                    content=chunk_text,
+                    content_type=classified.content_type,
+                    value=classified.value,
+                    metadata={**classified.metadata, "language": lang or "unknown"},
+                    char_count=len(chunk_text),
+                )
+            )
 
     # Also include any text outside code blocks
     non_code = _extract_non_code(content)
     if non_code.strip():
-        chunks.append(Chunk(
-            content=non_code,
-            content_type=ContentType.ASSISTANT_TEXT,
-            value=ContentValue.MEDIUM,
-            metadata=classified.metadata,
-            char_count=len(non_code)
-        ))
+        chunks.append(
+            Chunk(
+                content=non_code,
+                content_type=ContentType.ASSISTANT_TEXT,
+                value=ContentValue.MEDIUM,
+                metadata=classified.metadata,
+                char_count=len(non_code),
+            )
+        )
 
-    return chunks if chunks else [Chunk(
-        content=content,
-        content_type=classified.content_type,
-        value=classified.value,
-        metadata=classified.metadata,
-        char_count=len(content)
-    )]
+    return (
+        chunks
+        if chunks
+        else [
+            Chunk(
+                content=content,
+                content_type=classified.content_type,
+                value=classified.value,
+                metadata=classified.metadata,
+                char_count=len(content),
+            )
+        ]
+    )
 
 
 def _ast_chunk(code: str, language: str) -> list[str] | None:
@@ -181,12 +201,16 @@ def _ast_chunk(code: str, language: str) -> list[str] | None:
 
             # Top-level definitions are natural chunk boundaries
             if node.type in (
-                "function_definition", "function_declaration",
-                "class_definition", "class_declaration",
-                "method_definition", "method_declaration",
-                "interface_declaration", "type_alias_declaration"
+                "function_definition",
+                "function_declaration",
+                "class_definition",
+                "class_declaration",
+                "method_definition",
+                "method_declaration",
+                "interface_declaration",
+                "type_alias_declaration",
             ):
-                text = code[node.start_byte:node.end_byte]
+                text = code[node.start_byte : node.end_byte]
 
                 # If adding this would exceed max, start new chunk
                 if current_size + len(text) > MAX_CHUNK_SIZE and current_chunk:
@@ -246,7 +270,7 @@ def _split_at_sentences(text: str, target_size: int = TARGET_CHUNK_SIZE) -> list
     Falls back to line boundaries if no sentences found.
     """
     # Match sentence endings: period/question/exclamation followed by space or newline
-    sentence_pattern = re.compile(r'(?<=[.!?])\s+')
+    sentence_pattern = re.compile(r"(?<=[.!?])\s+")
     sentences = sentence_pattern.split(text)
 
     if len(sentences) <= 1:
@@ -279,13 +303,15 @@ def _chunk_text(classified: ClassifiedContent) -> list[Chunk]:
     content = classified.content
 
     if len(content) <= TARGET_CHUNK_SIZE:
-        return [Chunk(
-            content=content,
-            content_type=classified.content_type,
-            value=classified.value,
-            metadata=classified.metadata,
-            char_count=len(content)
-        )]
+        return [
+            Chunk(
+                content=content,
+                content_type=classified.content_type,
+                value=classified.value,
+                metadata=classified.metadata,
+                char_count=len(content),
+            )
+        ]
 
     # Chunk by paragraphs first
     paragraphs = content.split("\n\n")
@@ -300,36 +326,42 @@ def _chunk_text(classified: ClassifiedContent) -> list[Chunk]:
         if para_size > TARGET_CHUNK_SIZE:
             # Flush current chunk first
             if current_chunk:
-                chunks.append(Chunk(
-                    content="\n\n".join(current_chunk),
-                    content_type=classified.content_type,
-                    value=classified.value,
-                    metadata=classified.metadata,
-                    char_count=current_size
-                ))
+                chunks.append(
+                    Chunk(
+                        content="\n\n".join(current_chunk),
+                        content_type=classified.content_type,
+                        value=classified.value,
+                        metadata=classified.metadata,
+                        char_count=current_size,
+                    )
+                )
                 current_chunk = []
                 current_size = 0
 
             # Split the oversized paragraph at sentence boundaries
             sub_chunks = _split_at_sentences(para)
             for sub in sub_chunks:
-                chunks.append(Chunk(
-                    content=sub,
-                    content_type=classified.content_type,
-                    value=classified.value,
-                    metadata=classified.metadata,
-                    char_count=len(sub)
-                ))
+                chunks.append(
+                    Chunk(
+                        content=sub,
+                        content_type=classified.content_type,
+                        value=classified.value,
+                        metadata=classified.metadata,
+                        char_count=len(sub),
+                    )
+                )
             continue
 
         if current_size + para_size > TARGET_CHUNK_SIZE and current_chunk:
-            chunks.append(Chunk(
-                content="\n\n".join(current_chunk),
-                content_type=classified.content_type,
-                value=classified.value,
-                metadata=classified.metadata,
-                char_count=current_size
-            ))
+            chunks.append(
+                Chunk(
+                    content="\n\n".join(current_chunk),
+                    content_type=classified.content_type,
+                    value=classified.value,
+                    metadata=classified.metadata,
+                    char_count=current_size,
+                )
+            )
             current_chunk = []
             current_size = 0
 
@@ -337,13 +369,15 @@ def _chunk_text(classified: ClassifiedContent) -> list[Chunk]:
         current_size += para_size
 
     if current_chunk:
-        chunks.append(Chunk(
-            content="\n\n".join(current_chunk),
-            content_type=classified.content_type,
-            value=classified.value,
-            metadata=classified.metadata,
-            char_count=current_size
-        ))
+        chunks.append(
+            Chunk(
+                content="\n\n".join(current_chunk),
+                content_type=classified.content_type,
+                value=classified.value,
+                metadata=classified.metadata,
+                char_count=current_size,
+            )
+        )
 
     return chunks
 
@@ -364,13 +398,15 @@ def _mask_large_output(classified: ClassifiedContent) -> list[Chunk]:
     elided_count = max(0, line_count - 8)
     masked = f"{first_lines}\n\n[... {elided_count} lines elided ...]\n\n{last_lines}"
 
-    return [Chunk(
-        content=masked,
-        content_type=classified.content_type,
-        value=ContentValue.LOW,
-        metadata={**classified.metadata, "masked": True, "original_lines": line_count},
-        char_count=len(masked)
-    )]
+    return [
+        Chunk(
+            content=masked,
+            content_type=classified.content_type,
+            value=ContentValue.LOW,
+            metadata={**classified.metadata, "masked": True, "original_lines": line_count},
+            char_count=len(masked),
+        )
+    ]
 
 
 def _extract_code_blocks(text: str) -> list[tuple[str | None, str]]:

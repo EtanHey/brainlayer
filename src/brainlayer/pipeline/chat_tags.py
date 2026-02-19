@@ -5,6 +5,7 @@ from typing import Optional
 
 try:
     import yaml
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -18,23 +19,23 @@ def get_chat_tags_path() -> Path:
 def load_chat_tags(config_path: Optional[Path] = None) -> dict[str, str]:
     """
     Load chat_id/contact_name -> tag mapping from YAML.
-    
+
     Returns:
         Dict mapping contact_name or chat_id to tag (family, friends, co-workers, etc.)
     """
     if not HAS_YAML:
         return {}
-    
+
     path = config_path or get_chat_tags_path()
     if not path.exists():
         return {}
-    
+
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    
+
     if not data or "tags" not in data:
         return {}
-    
+
     mapping = {}
     for entry in data["tags"]:
         tag = entry.get("tag")
@@ -45,7 +46,7 @@ def load_chat_tags(config_path: Optional[Path] = None) -> dict[str, str]:
         if "jid" in entry or "chat_id" in entry:
             jid = entry.get("jid") or entry.get("chat_id")
             mapping[jid] = tag
-    
+
     return mapping
 
 

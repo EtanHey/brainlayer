@@ -287,7 +287,13 @@ class Sanitizer:
         for path_prefix in self.config.owner_paths:
             if path_prefix in text:
                 path_matches = [
-                    (m.start(), m.end(), m.group(0).replace(path_prefix, "/Users/[OWNER]"), "file_path", "regex")
+                    (
+                        m.start(),
+                        m.end(),
+                        m.group(0).replace(path_prefix, "/Users/[OWNER]"),
+                        "file_path",
+                        "regex",
+                    )
                     for m in re.finditer(re.escape(path_prefix) + r"[^\s\"']*", text)
                 ]
                 text = _apply_replacements(text, path_matches)
@@ -302,10 +308,7 @@ class Sanitizer:
 
         # Owner names LAST (after emails/paths/github are already replaced)
         if self._owner_re:
-            matches = [
-                (m.start(), m.end(), "[OWNER]", "owner", "regex")
-                for m in self._owner_re.finditer(text)
-            ]
+            matches = [(m.start(), m.end(), "[OWNER]", "owner", "regex") for m in self._owner_re.finditer(text)]
             text = _apply_replacements(text, matches)
 
         # General emails
@@ -314,9 +317,7 @@ class Sanitizer:
             general_emails = []
             for m in _EMAIL_RE.finditer(text):
                 counter += 1
-                general_emails.append(
-                    (m.start(), m.end(), f"[EMAIL_{counter}]", "email", "regex")
-                )
+                general_emails.append((m.start(), m.end(), f"[EMAIL_{counter}]", "email", "regex"))
             text = _apply_replacements(text, general_emails)
 
         # IPs
@@ -325,33 +326,23 @@ class Sanitizer:
                 (m.start(), m.end(), "[IP_ADDR]", "ip", "regex")
                 for m in _IPV4_RE.finditer(text)
                 # Skip common non-PII IPs
-                if not m.group(0).startswith(("127.", "0.", "255."))
-                and m.group(0) != "0.0.0.0"
+                if not m.group(0).startswith(("127.", "0.", "255.")) and m.group(0) != "0.0.0.0"
             ]
             text = _apply_replacements(text, ip_matches)
 
         # JWTs
         if self.config.strip_jwts:
-            jwt_matches = [
-                (m.start(), m.end(), "[JWT_TOKEN]", "jwt", "regex")
-                for m in _JWT_RE.finditer(text)
-            ]
+            jwt_matches = [(m.start(), m.end(), "[JWT_TOKEN]", "jwt", "regex") for m in _JWT_RE.finditer(text)]
             text = _apply_replacements(text, jwt_matches)
 
         # 1Password refs
         if self.config.strip_op_refs:
-            op_matches = [
-                (m.start(), m.end(), "[OP_REF]", "op_ref", "regex")
-                for m in _OP_REF_RE.finditer(text)
-            ]
+            op_matches = [(m.start(), m.end(), "[OP_REF]", "op_ref", "regex") for m in _OP_REF_RE.finditer(text)]
             text = _apply_replacements(text, op_matches)
 
         # Phone numbers
         if self.config.strip_phone_numbers:
-            phone_matches = [
-                (m.start(), m.end(), "[PHONE]", "phone", "regex")
-                for m in _PHONE_RE.finditer(text)
-            ]
+            phone_matches = [(m.start(), m.end(), "[PHONE]", "phone", "regex") for m in _PHONE_RE.finditer(text)]
             text = _apply_replacements(text, phone_matches)
 
         # ── Layer 2: Known names dictionary ──
@@ -363,7 +354,13 @@ class Sanitizer:
                 # Hebrew text with nikud — match on stripped version, map positions back
                 omap = _nikud_offset_map(text)
                 name_matches = [
-                    (omap[m.start()], omap[m.end()], self._pseudonym(m.group(0)), "person_name", "name_dict")
+                    (
+                        omap[m.start()],
+                        omap[m.end()],
+                        self._pseudonym(m.group(0)),
+                        "person_name",
+                        "name_dict",
+                    )
                     for m in self._known_names_re.finditer(text_no_nikud)
                 ]
             else:
@@ -397,7 +394,13 @@ class Sanitizer:
                 if any(s <= ent.start_char < e for s, e in replaced_spans):
                     continue
                 ner_matches.append(
-                    (ent.start_char, ent.end_char, self._pseudonym(ent.text), "person_name", "spacy")
+                    (
+                        ent.start_char,
+                        ent.end_char,
+                        self._pseudonym(ent.text),
+                        "person_name",
+                        "spacy",
+                    )
                 )
             text = _apply_replacements(text, ner_matches)
 
@@ -497,6 +500,7 @@ class Sanitizer:
             self._name_to_pseudo.update(existing)
         except (json.JSONDecodeError, KeyError, OSError) as e:
             import sys
+
             print(f"  Warning: could not load PII mapping from {path}: {e}", file=sys.stderr)
 
     @classmethod
@@ -527,9 +531,7 @@ class Sanitizer:
             if p.strip()
         )
         extra_names = frozenset(
-            n.strip()
-            for n in os.environ.get("BRAINLAYER_SANITIZE_EXTRA_NAMES", "").split(",")
-            if n.strip()
+            n.strip() for n in os.environ.get("BRAINLAYER_SANITIZE_EXTRA_NAMES", "").split(",") if n.strip()
         )
         use_spacy = os.environ.get("BRAINLAYER_SANITIZE_USE_SPACY", "true").lower() in (
             "true",

@@ -16,12 +16,12 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Operation type definitions
-OP_EDIT_CYCLE = "edit-cycle"        # read → edit → test
-OP_RESEARCH = "research"            # search/grep → read multiple
+OP_EDIT_CYCLE = "edit-cycle"  # read → edit → test
+OP_RESEARCH = "research"  # search/grep → read multiple
 OP_FEATURE_CYCLE = "feature-cycle"  # user asks → plan → implement
-OP_DEBUG = "debug"                  # error → read → try fix → test
-OP_CONFIG = "config"                # write/edit config files
-OP_REVIEW = "review"               # read multiple files, no edits
+OP_DEBUG = "debug"  # error → read → try fix → test
+OP_CONFIG = "config"  # write/edit config files
+OP_REVIEW = "review"  # read multiple files, no edits
 
 # Tool action categories (tuples for deterministic order)
 SEARCH_TOOLS = ("Grep", "Glob")
@@ -86,6 +86,7 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
 
     # Extract file paths from content
     import re
+
     file_match = re.search(
         r'(?:file_path|path)[=:]\s*["\']?'
         r'([^\s"\']+\.\w+)',
@@ -96,7 +97,7 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # Also match bare file paths
         bare_match = re.search(
-            r'(?:^|\s)(/[^\s]+\.\w{1,5})',
+            r"(?:^|\s)(/[^\s]+\.\w{1,5})",
             content,
         )
         if bare_match:
@@ -105,14 +106,11 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
     # Detect tool calls from content patterns
     # Use word-boundary matching to avoid false positives
     # (e.g., "Read" matching "README")
-    has_tool_marker = (
-        "tool_use" in content
-        or "Tool:" in content
-    )
+    has_tool_marker = "tool_use" in content or "Tool:" in content
     if has_tool_marker or content_type == "assistant_text":
         for tool in ALL_FILE_TOOLS:
             # Match tool name as a whole word
-            pattern = r'\b' + re.escape(tool) + r'\b'
+            pattern = r"\b" + re.escape(tool) + r"\b"
             if re.search(pattern, content):
                 info["tool"] = tool
                 if tool in SEARCH_TOOLS:
@@ -134,9 +132,14 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
     if any(
         kw in content.lower()
         for kw in [
-            "bun test", "pytest", "npm test",
-            "jest", "vitest", "test passed",
-            "test failed", "tests pass",
+            "bun test",
+            "pytest",
+            "npm test",
+            "jest",
+            "vitest",
+            "test passed",
+            "test failed",
+            "tests pass",
         ]
     ):
         info["is_test"] = True
@@ -147,17 +150,15 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
     if any(
         kw in content_lower
         for kw in [
-            "error:", "exception:", "traceback",
+            "error:",
+            "exception:",
+            "traceback",
             "exit code 1",
         ]
     ):
         info["is_error"] = True
     # "failed" only counts as error if not in test summary
-    if (
-        "failed" in content_lower
-        and "0 fail" not in content_lower
-        and "pass" not in content_lower
-    ):
+    if "failed" in content_lower and "0 fail" not in content_lower and "pass" not in content_lower:
         info["is_error"] = True
 
     return info
@@ -240,6 +241,7 @@ def _generate_summary(
         if fp:
             # Extract just the filename
             import os
+
             basename = os.path.basename(fp)
             if basename and basename not in files:
                 files.append(basename)
@@ -248,7 +250,7 @@ def _generate_summary(
         shown = files[:3]
         file_ctx = " on " + ", ".join(shown)
         if len(files) > 3:
-            file_ctx += f" +{len(files)-3}"
+            file_ctx += f" +{len(files) - 3}"
 
     # Extract topic from first user message or snippet
     topic = ""
@@ -330,10 +332,7 @@ def group_session_chunks(
 
         # Check for natural boundaries
         # A new user message often starts a new operation
-        if (
-            step["is_user_message"]
-            and len(current_group) >= 3
-        ):
+        if step["is_user_message"] and len(current_group) >= 3:
             groups.append(current_group)
             current_group = [step]
             continue
@@ -353,24 +352,15 @@ def group_session_chunks(
     operations = []
     for group in groups:
         op_type = _classify_operation(group)
-        chunk_ids = [
-            s["chunk_id"] for s in group if s["chunk_id"]
-        ]
+        chunk_ids = [s["chunk_id"] for s in group if s["chunk_id"]]
 
-        timestamps = [
-            s["timestamp"]
-            for s in group
-            if s.get("timestamp")
-        ]
+        timestamps = [s["timestamp"] for s in group if s.get("timestamp")]
         started = timestamps[0] if timestamps else None
         ended = timestamps[-1] if timestamps else None
 
         # Determine outcome
         has_error = any(s["is_error"] for s in group)
-        has_test_pass = any(
-            s["is_test"] and not s["is_error"]
-            for s in group
-        )
+        has_test_pass = any(s["is_test"] and not s["is_error"] for s in group)
         if has_test_pass:
             outcome = "success"
         elif has_error:
@@ -378,17 +368,19 @@ def group_session_chunks(
         else:
             outcome = "unknown"
 
-        operations.append({
-            "id": str(uuid.uuid4()),
-            "session_id": session_id,
-            "operation_type": op_type,
-            "chunk_ids": chunk_ids,
-            "summary": _generate_summary(op_type, group),
-            "outcome": outcome,
-            "started_at": started,
-            "ended_at": ended,
-            "step_count": len(group),
-        })
+        operations.append(
+            {
+                "id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "operation_type": op_type,
+                "chunk_ids": chunk_ids,
+                "summary": _generate_summary(op_type, group),
+                "outcome": outcome,
+                "started_at": started,
+                "ended_at": ended,
+                "step_count": len(group),
+            }
+        )
 
     return operations
 
@@ -433,9 +425,7 @@ def run_operation_grouping(
 
         # Skip if already has operations (unless force)
         if not force:
-            existing = vector_store.get_session_operations(
-                session_id
-            )
+            existing = vector_store.get_session_operations(session_id)
             if existing:
                 continue
         else:
@@ -444,13 +434,15 @@ def run_operation_grouping(
 
         # Get chunks for this session
         source_file_pattern = f"%{session_id}%"
-        chunk_rows = list(cursor.execute(
-            """SELECT id, content, content_type, metadata
+        chunk_rows = list(
+            cursor.execute(
+                """SELECT id, content, content_type, metadata
                FROM chunks
                WHERE source_file LIKE ?
                ORDER BY ROWID""",
-            (source_file_pattern,),
-        ))
+                (source_file_pattern,),
+            )
+        )
 
         if not chunk_rows:
             continue
@@ -466,17 +458,17 @@ def run_operation_grouping(
             else:
                 meta_dict = meta
 
-            chunks.append({
-                "id": row[0],
-                "content": row[1],
-                "content_type": row[2],
-                "metadata": meta_dict,
-            })
+            chunks.append(
+                {
+                    "id": row[0],
+                    "content": row[1],
+                    "content_type": row[2],
+                    "metadata": meta_dict,
+                }
+            )
 
         # Group into operations
-        operations = group_session_chunks(
-            chunks, session_id
-        )
+        operations = group_session_chunks(chunks, session_id)
 
         if operations:
             count = vector_store.store_operations(operations)

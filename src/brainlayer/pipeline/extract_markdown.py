@@ -8,9 +8,7 @@ from .classify import ClassifiedContent, ContentType, ContentValue
 
 
 def find_markdown_files(
-    root: Path,
-    patterns: list[str] | None = None,
-    exclude: list[str] | None = None
+    root: Path, patterns: list[str] | None = None, exclude: list[str] | None = None
 ) -> Iterator[Path]:
     """
     Find markdown files matching glob patterns.
@@ -61,7 +59,7 @@ def parse_markdown(file_path: Path) -> list[dict]:
             for line in parts[1].strip().split("\n"):
                 if ":" in line:
                     key, _, value = line.partition(":")
-                    frontmatter[key.strip()] = value.strip().strip('"\'')
+                    frontmatter[key.strip()] = value.strip().strip("\"'")
             content = parts[2]
 
     # Extract tags from content (#tag patterns not in code blocks)
@@ -82,38 +80,44 @@ def parse_markdown(file_path: Path) -> list[dict]:
 
     if not h2_positions:
         # No h2 headers - treat entire file as one section
-        sections.append({
-            "content": content.strip(),
-            "header": h1_title,
-            "parent_headers": [],
-            "tags": list(tags),
-            "frontmatter": frontmatter
-        })
+        sections.append(
+            {
+                "content": content.strip(),
+                "header": h1_title,
+                "parent_headers": [],
+                "tags": list(tags),
+                "frontmatter": frontmatter,
+            }
+        )
     else:
         # Content before first h2
         if h2_positions[0][0] > 0:
-            intro = content[:h2_positions[0][0]].strip()
+            intro = content[: h2_positions[0][0]].strip()
             if intro and len(intro) > 50:  # Skip trivial intros
-                sections.append({
-                    "content": intro,
-                    "header": h1_title,
-                    "parent_headers": [],
-                    "tags": list(tags),
-                    "frontmatter": frontmatter
-                })
+                sections.append(
+                    {
+                        "content": intro,
+                        "header": h1_title,
+                        "parent_headers": [],
+                        "tags": list(tags),
+                        "frontmatter": frontmatter,
+                    }
+                )
 
         # Each h2 section
         for i, (pos, header) in enumerate(h2_positions):
             end_pos = h2_positions[i + 1][0] if i + 1 < len(h2_positions) else len(content)
             section_content = content[pos:end_pos].strip()
 
-            sections.append({
-                "content": section_content,
-                "header": header,
-                "parent_headers": [h1_title],
-                "tags": list(tags),
-                "frontmatter": frontmatter
-            })
+            sections.append(
+                {
+                    "content": section_content,
+                    "header": header,
+                    "parent_headers": [h1_title],
+                    "tags": list(tags),
+                    "frontmatter": frontmatter,
+                }
+            )
 
     return sections
 
@@ -173,17 +177,19 @@ def extract_markdown_content(file_path: Path) -> list[ClassifiedContent]:
         # Build context string with header hierarchy
         header_context = " > ".join(section["parent_headers"] + [section["header"]])
 
-        results.append(ClassifiedContent(
-            content=section["content"],
-            content_type=content_type,
-            value=value,
-            metadata={
-                "source_file": str(file_path),
-                "header": section["header"],
-                "header_context": header_context,
-                "tags": section["tags"],
-                "frontmatter": section.get("frontmatter", {})
-            }
-        ))
+        results.append(
+            ClassifiedContent(
+                content=section["content"],
+                content_type=content_type,
+                value=value,
+                metadata={
+                    "source_file": str(file_path),
+                    "header": section["header"],
+                    "header_context": header_context,
+                    "tags": section["tags"],
+                    "frontmatter": section.get("frontmatter", {}),
+                },
+            )
+        )
 
     return results

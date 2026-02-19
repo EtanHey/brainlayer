@@ -1,9 +1,5 @@
 """Test vector store functionality (FTS5, hybrid search, context view)."""
 
-import json
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from brainlayer.vector_store import VectorStore, serialize_f32
@@ -60,9 +56,7 @@ def populated_store(store):
 def test_fts5_table_created(store):
     """FTS5 virtual table should exist after init."""
     cursor = store.conn.cursor()
-    tables = [row[0] for row in cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )]
+    tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     assert "chunks_fts" in tables
 
 
@@ -78,9 +72,7 @@ def test_fts5_auto_populated_on_insert(populated_store):
 def test_fts5_keyword_search(populated_store):
     """FTS5 should find exact keyword matches."""
     cursor = populated_store.conn.cursor()
-    results = list(cursor.execute(
-        "SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH 'OTP' ORDER BY rank"
-    ))
+    results = list(cursor.execute("SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH 'OTP' ORDER BY rank"))
     # Both chunk-1 and chunk-2 contain "OTP"
     ids = [r[0] for r in results]
     assert "chunk-1" in ids
@@ -119,12 +111,8 @@ def test_get_context_with_conversation(populated_store):
     """Context view should return surrounding chunks."""
     cursor = populated_store.conn.cursor()
     # Manually set conversation_id and position
-    cursor.execute(
-        "UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 0 WHERE id = 'chunk-1'"
-    )
-    cursor.execute(
-        "UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 1 WHERE id = 'chunk-2'"
-    )
+    cursor.execute("UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 0 WHERE id = 'chunk-1'")
+    cursor.execute("UPDATE chunks SET conversation_id = '/session/conv1.jsonl', position = 1 WHERE id = 'chunk-2'")
 
     result = populated_store.get_context("chunk-1", before=0, after=5)
     assert result["target"] is not None

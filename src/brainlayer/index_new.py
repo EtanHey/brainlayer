@@ -1,12 +1,12 @@
 """New indexing pipeline using sqlite-vec and sentence-transformers."""
 
-from pathlib import Path
-from typing import List, Optional, Callable
 import logging
+from pathlib import Path
+from typing import Callable, List, Optional
 
-from .vector_store import VectorStore
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
+from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def index_chunks_to_sqlite(
     source_file: str,
     project: Optional[str] = None,
     db_path: Path = DEFAULT_DB_PATH,
-    on_progress: Optional[Callable[[int, int], None]] = None
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -34,6 +34,7 @@ def index_chunks_to_sqlite(
     created_at = None
     try:
         import json as _json
+
         with open(source_file) as _f:
             for _line in _f:
                 _line = _line.strip()
@@ -47,6 +48,7 @@ def index_chunks_to_sqlite(
         pass
     if not created_at:
         from datetime import datetime, timezone
+
         created_at = datetime.now(timezone.utc).isoformat()
 
     # Prepare data for vector store
@@ -58,20 +60,22 @@ def index_chunks_to_sqlite(
 
         chunk_id = f"{source_file}:{i}"
 
-        chunk_data.append({
-            "id": chunk_id,
-            "content": chunk.content,
-            "metadata": chunk.metadata,
-            "source_file": source_file,
-            "project": project,
-            "content_type": chunk.content_type.value,
-            "value_type": chunk.value.value,
-            "char_count": chunk.char_count,
-            "created_at": created_at,
-        })
-        
+        chunk_data.append(
+            {
+                "id": chunk_id,
+                "content": chunk.content,
+                "metadata": chunk.metadata,
+                "source_file": source_file,
+                "project": project,
+                "content_type": chunk.content_type.value,
+                "value_type": chunk.value.value,
+                "char_count": chunk.char_count,
+                "created_at": created_at,
+            }
+        )
+
         embeddings.append(ec.embedding)
-    
+
     # Store in database
     with VectorStore(db_path) as store:
         return store.upsert_chunks(chunk_data, embeddings)

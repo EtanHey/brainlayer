@@ -1,11 +1,9 @@
 """Tests for content chunking."""
 
-import pytest
 from brainlayer.pipeline.chunk import (
-    chunk_content,
-    Chunk,
     TARGET_CHUNK_SIZE,
     _extract_code_blocks,
+    chunk_content,
 )
 from brainlayer.pipeline.classify import (
     ClassifiedContent,
@@ -24,7 +22,7 @@ class TestChunkContent:
             content=large_trace,
             content_type=ContentType.STACK_TRACE,
             value=ContentValue.HIGH,
-            metadata={}
+            metadata={},
         )
         chunks = chunk_content(classified)
         assert len(chunks) == 1
@@ -32,12 +30,14 @@ class TestChunkContent:
 
     def test_small_content_single_chunk(self):
         """Content smaller than target size stays as single chunk."""
-        small_content = "This is a small piece of content that should be kept as a single chunk for the assistant text type."
+        small_content = (
+            "This is a small piece of content that should be kept as a single chunk for the assistant text type."
+        )
         classified = ClassifiedContent(
             content=small_content,
             content_type=ContentType.ASSISTANT_TEXT,
             value=ContentValue.MEDIUM,
-            metadata={}
+            metadata={},
         )
         chunks = chunk_content(classified)
         assert len(chunks) == 1
@@ -50,7 +50,7 @@ class TestChunkContent:
             content=large_content,
             content_type=ContentType.ASSISTANT_TEXT,
             value=ContentValue.MEDIUM,
-            metadata={}
+            metadata={},
         )
         chunks = chunk_content(classified)
         assert len(chunks) > 1
@@ -65,7 +65,7 @@ class TestChunkContent:
             content=large_output,
             content_type=ContentType.FILE_READ,
             value=ContentValue.MEDIUM,
-            metadata={}
+            metadata={},
         )
         chunks = chunk_content(classified)
         # Should be masked to single chunk

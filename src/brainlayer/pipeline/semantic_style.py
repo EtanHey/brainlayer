@@ -11,33 +11,36 @@ Key concepts:
 - Per-topic style metrics: formality, length, emoji, phrases
 - Cross-context comparisons: "more formal when discussing work"
 """
+
 from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
-import re
 
 logger = logging.getLogger(__name__)
 
 try:
     import numpy as np
+
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
 
 try:
     from sentence_transformers import SentenceTransformer
+
     HAS_SENTENCE_TRANSFORMERS = True
 except ImportError:
     HAS_SENTENCE_TRANSFORMERS = False
 
 try:
-    from sklearn.cluster import KMeans
     from sklearn.metrics.pairwise import cosine_similarity
+
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
@@ -111,6 +114,7 @@ TOPIC_SEEDS = {
 @dataclass
 class TopicCluster:
     """A cluster of messages grouped by topic."""
+
     name: str
     messages: list[str] = field(default_factory=list)
     centroid: Optional[list[float]] = None
@@ -129,6 +133,7 @@ class TopicCluster:
 @dataclass
 class SemanticStyleAnalysis:
     """Complete semantic style analysis result."""
+
     topic_clusters: dict[str, TopicCluster] = field(default_factory=dict)
     cross_topic_insights: list[str] = field(default_factory=list)
     style_rules_markdown: str = ""
@@ -139,17 +144,11 @@ class SemanticStyleAnalyzer:
 
     def __init__(self, model_name: str = SEMANTIC_MODEL):
         if not HAS_NUMPY:
-            raise ImportError(
-                "numpy required. Install: pip install numpy"
-            )
+            raise ImportError("numpy required. Install: pip install numpy")
         if not HAS_SENTENCE_TRANSFORMERS:
-            raise ImportError(
-                "sentence-transformers required. Install: pip install sentence-transformers"
-            )
+            raise ImportError("sentence-transformers required. Install: pip install sentence-transformers")
         if not HAS_SKLEARN:
-            raise ImportError(
-                "scikit-learn required. Install: pip install scikit-learn"
-            )
+            raise ImportError("scikit-learn required. Install: pip install scikit-learn")
         self.model_name = model_name
         self._model: Optional[SentenceTransformer] = None
         self._topic_seed_embeddings: Optional[dict[str, np.ndarray]] = None
@@ -236,13 +235,28 @@ class SemanticStyleAnalyzer:
 
         # Formality indicators
         informal_markers = [
-            r'\blol\b', r'\bhaha\b', r'\bחח\b', r'\bomg\b', r'\bbtw\b',
-            r'\bכן\b', r'\bלא\b', r'\bוואלה\b', r'\bסבבה\b', r'\bיאללה\b',
-            r'!!+', r'\?\?+', r'\.\.\.+',
+            r"\blol\b",
+            r"\bhaha\b",
+            r"\bחח\b",
+            r"\bomg\b",
+            r"\bbtw\b",
+            r"\bכן\b",
+            r"\bלא\b",
+            r"\bוואלה\b",
+            r"\bסבבה\b",
+            r"\bיאללה\b",
+            r"!!+",
+            r"\?\?+",
+            r"\.\.\.+",
         ]
         formal_markers = [
-            r'\bplease\b', r'\bkindly\b', r'\bregards\b', r'\bthank you\b',
-            r'\bבבקשה\b', r'\bתודה\b', r'\bלהלן\b',
+            r"\bplease\b",
+            r"\bkindly\b",
+            r"\bregards\b",
+            r"\bthank you\b",
+            r"\bבבקשה\b",
+            r"\bתודה\b",
+            r"\bלהלן\b",
         ]
 
         informal_count = 0
@@ -260,29 +274,29 @@ class SemanticStyleAnalyzer:
         # Emoji rate
         emoji_pattern = re.compile(
             "["
-            "\U0001F600-\U0001F64F"  # emoticons
-            "\U0001F300-\U0001F5FF"  # symbols & pictographs
-            "\U0001F680-\U0001F6FF"  # transport & map symbols
-            "\U0001F1E0-\U0001F1FF"  # flags
+            "\U0001f600-\U0001f64f"  # emoticons
+            "\U0001f300-\U0001f5ff"  # symbols & pictographs
+            "\U0001f680-\U0001f6ff"  # transport & map symbols
+            "\U0001f1e0-\U0001f1ff"  # flags
             "]+",
-            flags=re.UNICODE
+            flags=re.UNICODE,
         )
         emoji_count = sum(len(emoji_pattern.findall(m)) for m in messages)
         emoji_rate = emoji_count / len(messages)
 
         # Punctuation rates
-        question_count = sum(m.count('?') for m in messages)
-        exclamation_count = sum(m.count('!') for m in messages)
+        question_count = sum(m.count("?") for m in messages)
+        exclamation_count = sum(m.count("!") for m in messages)
         question_rate = question_count / len(messages)
         exclamation_rate = exclamation_count / len(messages)
 
         # Language detection (simple Hebrew/English check)
-        hebrew_pattern = re.compile(r'[\u0590-\u05FF]')
+        hebrew_pattern = re.compile(r"[\u0590-\u05FF]")
         english_count = 0
         hebrew_count = 0
         for msg in messages:
             has_hebrew = bool(hebrew_pattern.search(msg))
-            has_english = bool(re.search(r'[a-zA-Z]', msg))
+            has_english = bool(re.search(r"[a-zA-Z]", msg))
             if has_hebrew:
                 hebrew_count += 1
             if has_english:
@@ -296,23 +310,20 @@ class SemanticStyleAnalyzer:
         # Common phrases (bigrams and trigrams)
         words = []
         for msg in messages:
-            words.extend(re.findall(r'\b\w+\b', msg.lower()))
+            words.extend(re.findall(r"\b\w+\b", msg.lower()))
 
         # Guard against short word lists
-        bigrams = (
-            [f"{words[i]} {words[i+1]}" for i in range(len(words)-1)]
-            if len(words) >= 2 else []
-        )
+        bigrams = [f"{words[i]} {words[i + 1]}" for i in range(len(words) - 1)] if len(words) >= 2 else []
         trigrams = (
-            [f"{words[i]} {words[i+1]} {words[i+2]}" for i in range(len(words)-2)]
-            if len(words) >= 3 else []
+            [f"{words[i]} {words[i + 1]} {words[i + 2]}" for i in range(len(words) - 2)] if len(words) >= 3 else []
         )
 
         phrase_counts = Counter(bigrams + trigrams)
         # Filter to meaningful phrases (appear 3+ times, not just stopwords)
         min_phrase_count = 3
         common_phrases = [
-            phrase for phrase, count in phrase_counts.most_common(20)
+            phrase
+            for phrase, count in phrase_counts.most_common(20)
             if count >= min_phrase_count and len(phrase.split()) > 1
         ][:10]
 
@@ -413,9 +424,7 @@ class SemanticStyleAnalyzer:
         emoji_rates = [(t, c.emoji_rate) for t, c in clusters.items()]
         emoji_rates.sort(key=lambda x: x[1], reverse=True)
         if emoji_rates[0][1] > 0.1:
-            insights.append(
-                f"Uses most emoji in '{emoji_rates[0][0]}' contexts ({emoji_rates[0][1]:.2f} per message)"
-            )
+            insights.append(f"Uses most emoji in '{emoji_rates[0][0]}' contexts ({emoji_rates[0][1]:.2f} per message)")
 
         # Language switching patterns
         for topic, cluster in clusters.items():
@@ -466,10 +475,7 @@ class SemanticStyleAnalyzer:
             lines.append(f"- **Emoji rate:** {cluster.emoji_rate:.2f} per message")
 
             if cluster.language_mix:
-                lang_str = ", ".join(
-                    f"{lang}: {pct:.0%}"
-                    for lang, pct in cluster.language_mix.items()
-                )
+                lang_str = ", ".join(f"{lang}: {pct:.0%}" for lang, pct in cluster.language_mix.items())
                 lines.append(f"- **Language mix:** {lang_str}")
 
             if cluster.common_phrases:
@@ -478,12 +484,14 @@ class SemanticStyleAnalyzer:
 
             lines.append("")
 
-        lines.extend([
-            "## For Cover Letters & Professional Outreach",
-            "",
-            "Based on your patterns:",
-            "",
-        ])
+        lines.extend(
+            [
+                "## For Cover Letters & Professional Outreach",
+                "",
+                "Based on your patterns:",
+                "",
+            ]
+        )
 
         # Add recommendations based on analysis
         if "professional" in clusters:
