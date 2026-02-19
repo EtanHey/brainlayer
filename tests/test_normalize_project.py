@@ -1,9 +1,6 @@
 """Tests for project name normalization in MCP server."""
 
 import os
-from unittest.mock import patch
-
-import pytest
 
 from brainlayer.mcp import normalize_project_name
 

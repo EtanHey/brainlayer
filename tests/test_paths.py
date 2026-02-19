@@ -1,10 +1,7 @@
 """Tests for brainlayer.paths — DB path resolution."""
 
 import os
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from brainlayer.paths import get_db_path
 
@@ -48,5 +45,6 @@ class TestGetDbPath:
     def test_real_db_exists(self):
         """The real production DB exists at the resolved path."""
         from brainlayer.paths import DEFAULT_DB_PATH
+
         assert DEFAULT_DB_PATH.exists(), f"DB not found at {DEFAULT_DB_PATH}"
         assert DEFAULT_DB_PATH.stat().st_size > 1_000_000, "DB too small — might be empty"

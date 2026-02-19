@@ -9,16 +9,14 @@ Tests cover:
 """
 
 import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from brainlayer.paths import get_db_path, _LEGACY_DB_PATH, _CANONICAL_DB_PATH
-from brainlayer.vector_store import VectorStore, serialize_f32
 from brainlayer.mcp import normalize_project_name
-
+from brainlayer.paths import get_db_path
+from brainlayer.vector_store import VectorStore
 
 # ============================================================================
 # 1. DB Path Resolution
@@ -227,7 +225,7 @@ class TestProjectNameNormalization:
         # We need to mock the path correctly
         with patch("os.path.isdir") as mock_isdir:
             mock_isdir.side_effect = lambda p: p.endswith("/myproject")
-            result = normalize_project_name(f"-Users-etanheyman-Gits-myproject")
+            result = normalize_project_name("-Users-etanheyman-Gits-myproject")
             # Should try to match "myproject" against filesystem
             # Since we mock isdir to return True for myproject, it should return it
             assert result == "myproject"
