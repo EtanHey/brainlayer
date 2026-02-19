@@ -57,6 +57,11 @@ brain = [
     "leidenalg>=0.10.0",  # Leiden community detection (replaces graspologic)
     "umap-learn>=0.5.0",  # UMAP 3D layout
 ]
+youtube = [
+    "yt-dlp>=2024.1.0",  # YouTube video metadata + subtitle download
+    "youtube-transcript-api>=1.2.4",  # Primary transcript API (instance-based)
+    "certifi",  # SSL certificates for macOS
+]
 ast = [
     "tree-sitter-languages>=1.9.0",  # Better code chunking (falls back to line-based if unavailable)
 ]
