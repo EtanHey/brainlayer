@@ -56,6 +56,9 @@ def search_command(
             score = 1 - dist if dist is not None else None
             score_str = f"[dim](score: {score:.3f})[/]" if score is not None else "[dim](text match)[/]"
             proj = _clean_project_name(meta.get("project", "unknown"))
+            # Show contact name for WhatsApp/messaging sources
+            if proj == "unknown" and meta.get("contact_name"):
+                proj = meta["contact_name"]
             chunk_id = result_ids[i] if i < len(result_ids) else None
 
             # Truncate long content
