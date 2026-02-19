@@ -3,6 +3,8 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from brainlayer.paths import get_db_path
 
 
@@ -42,6 +44,7 @@ class TestGetDbPath:
             assert result == canonical
             assert canonical.parent.exists()  # Parent dir created
 
+    @pytest.mark.integration
     def test_real_db_exists(self):
         """The real production DB exists at the resolved path."""
         from brainlayer.paths import DEFAULT_DB_PATH

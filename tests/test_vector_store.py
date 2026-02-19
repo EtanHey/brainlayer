@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.vector_store import VectorStore
 

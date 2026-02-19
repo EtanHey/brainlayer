@@ -26,6 +26,7 @@ def store():
 # ── Session Tests (no embedding needed, fast) ───────────────────────
 
 
+@pytest.mark.integration
 class TestSessionsReal:
     """Test sessions() with real production DB."""
 
@@ -62,6 +63,7 @@ class TestSessionsReal:
         assert len(limited) <= 3
 
 
+@pytest.mark.integration
 class TestRecallFileReal:
     """Test file-based recall with real DB — no embedding needed."""
 
@@ -120,6 +122,7 @@ def embed_fn():
     return model.embed_query
 
 
+@pytest.mark.integration
 class TestThinkReal:
     """Test think() with real DB and embeddings."""
 
@@ -142,10 +145,7 @@ class TestThinkReal:
             embed_fn=embed_fn,
         )
         has_any = (
-            len(result.decisions) > 0
-            or len(result.patterns) > 0
-            or len(result.bugs) > 0
-            or len(result.context) > 0
+            len(result.decisions) > 0 or len(result.patterns) > 0 or len(result.bugs) > 0 or len(result.context) > 0
         )
         assert has_any, "Expected at least one category to have results"
 
@@ -190,6 +190,7 @@ class TestThinkReal:
         assert result.total <= 3
 
 
+@pytest.mark.integration
 class TestRecallTopicReal:
     """Test topic-based recall with real DB and embeddings."""
 
@@ -273,7 +274,11 @@ class TestMCPToolCount:
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        new_tools = [t for t in tools if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")]
+        new_tools = [
+            t
+            for t in tools
+            if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")
+        ]
         for tool in new_tools:
             assert tool.annotations is not None
             assert tool.annotations.readOnlyHint is True

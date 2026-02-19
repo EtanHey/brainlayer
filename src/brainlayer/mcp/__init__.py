@@ -464,9 +464,7 @@ async def handle_completion(ref, argument) -> CompleteResult:
                     normalized.append(norm)
             if arg_value:
                 normalized = [p for p in normalized if p.lower().startswith(arg_value.lower())]
-            return CompleteResult(
-                completion=Completion(values=sorted(normalized)[:20], hasMore=len(normalized) > 20)
-            )
+            return CompleteResult(completion=Completion(values=sorted(normalized)[:20], hasMore=len(normalized) > 20))
         except Exception:
             return CompleteResult(completion=Completion(values=[]))
 

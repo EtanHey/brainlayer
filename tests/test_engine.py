@@ -318,9 +318,7 @@ class TestFormatSessions:
 
     def test_session_count(self):
         """Total session count is shown."""
-        sessions_list = [
-            SessionInfo(session_id=f"id{i}", project="p", started_at="2026-02-15") for i in range(3)
-        ]
+        sessions_list = [SessionInfo(session_id=f"id{i}", project="p", started_at="2026-02-15") for i in range(3)]
         result = format_sessions(sessions_list)
         assert "3 sessions" in result
 
@@ -328,6 +326,7 @@ class TestFormatSessions:
 # ── Integration Tests: DB Queries ────────────────────────────────────
 
 
+@pytest.mark.integration
 class TestSessionsIntegration:
     """Test sessions() with real DB. Requires production DB."""
 
@@ -372,6 +371,7 @@ class TestSessionsIntegration:
                     assert s.project == project
 
 
+@pytest.mark.integration
 class TestRecallFileIntegration:
     """Test recall() with real DB for file-based recall (no embedding needed)."""
 
