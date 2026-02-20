@@ -243,16 +243,16 @@ class TestRecallTopicReal:
 
 
 class TestMCPToolCount:
-    """Verify MCP server has all 12 tools."""
+    """Verify MCP server has all 13 tools."""
 
     def test_tool_count(self):
-        """MCP server should have 12 tools."""
+        """MCP server should have 13 tools (including brainlayer_store)."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        assert len(tools) == 12
+        assert len(tools) == 13
 
     def test_new_tools_registered(self):
         """Think, recall, sessions, and current_context tools are registered."""
