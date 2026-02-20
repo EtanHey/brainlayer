@@ -252,6 +252,69 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_file ON topic_chains(file_path)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_session ON topic_chains(session_a)")
 
+        # Phase 7: Session-level enrichment table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_enrichments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL UNIQUE,
+                file_path TEXT,
+                enrichment_version TEXT NOT NULL DEFAULT '1.0',
+                enrichment_model TEXT,
+                enrichment_timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+                -- Timing (flat — for temporal queries)
+                session_start_time TEXT,
+                session_end_time TEXT,
+                duration_seconds INTEGER,
+
+                -- Message dynamics (flat — for aggregation dashboards)
+                message_count INTEGER NOT NULL DEFAULT 0,
+                user_message_count INTEGER NOT NULL DEFAULT 0,
+                assistant_message_count INTEGER NOT NULL DEFAULT 0,
+                tool_call_count INTEGER NOT NULL DEFAULT 0,
+
+                -- Content analysis (flat — for filtering)
+                session_summary TEXT,
+                primary_intent TEXT,
+                outcome TEXT CHECK(outcome IN ('success','partial_success','failure','abandoned','ongoing')),
+                complexity_score INTEGER CHECK(complexity_score BETWEEN 1 AND 10),
+
+                -- Quality scores (flat — for dashboards)
+                session_quality_score INTEGER CHECK(session_quality_score BETWEEN 1 AND 10),
+
+                -- Decisions, corrections, learnings (JSON — variable-length arrays)
+                decisions_made TEXT DEFAULT '[]',
+                corrections TEXT DEFAULT '[]',
+                learnings TEXT DEFAULT '[]',
+                mistakes TEXT DEFAULT '[]',
+                patterns TEXT DEFAULT '[]',
+
+                -- Topic tags (JSON array)
+                topic_tags TEXT DEFAULT '[]',
+
+                -- Tool usage (JSON — per-tool stats)
+                tool_usage_stats TEXT DEFAULT '[]',
+
+                -- Narrative (text — for human reading)
+                what_worked TEXT,
+                what_failed TEXT,
+
+                -- Embedding for session-level semantic search
+                summary_embedding BLOB
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_session ON session_enrichments(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_project ON session_enrichments(primary_intent)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_outcome ON session_enrichments(outcome)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_quality ON session_enrichments(session_quality_score)")
+
+        # Phase 7: FTS5 for session narrative search
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS session_enrichments_fts USING fts5(
+                session_summary, what_worked, what_failed, session_id UNINDEXED
+            )
+        """)
+
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
@@ -496,6 +559,55 @@ class VectorStore:
             "metadatas": [metadatas],
             "distances": [distances],
         }
+
+    def enrich_results_with_session_context(self, results: Dict[str, List]) -> Dict[str, List]:
+        """Add session enrichment metadata to search results.
+
+        For each result, if its session has been enriched, add session_summary,
+        session_outcome, and session_quality_score to the metadata.
+        """
+        if not results.get("metadatas") or not results["metadatas"][0]:
+            return results
+
+        cursor = self.conn.cursor()
+        # Cache session lookups to avoid repeated queries
+        session_cache: Dict[str, Optional[Dict]] = {}
+
+        for meta in results["metadatas"][0]:
+            source_file = meta.get("source_file", "")
+            if not source_file:
+                continue
+
+            # Extract session ID from source_file
+            import os
+            session_id = os.path.splitext(os.path.basename(source_file))[0]
+            if not session_id:
+                continue
+
+            if session_id not in session_cache:
+                rows = list(cursor.execute(
+                    """SELECT session_summary, primary_intent, outcome,
+                              session_quality_score
+                       FROM session_enrichments WHERE session_id = ?""",
+                    (session_id,),
+                ))
+                if rows:
+                    session_cache[session_id] = {
+                        "session_summary": rows[0][0],
+                        "session_intent": rows[0][1],
+                        "session_outcome": rows[0][2],
+                        "session_quality": rows[0][3],
+                    }
+                else:
+                    session_cache[session_id] = None
+
+            enrichment = session_cache[session_id]
+            if enrichment:
+                for k, v in enrichment.items():
+                    if v is not None:
+                        meta[k] = v
+
+        return results
 
     def count(self) -> int:
         """Get total number of chunks."""
@@ -1533,6 +1645,177 @@ class VectorStore:
             )
         else:
             cursor.execute("DELETE FROM topic_chains")
+
+    # --- Phase 7: Session Enrichment CRUD ---
+
+    def upsert_session_enrichment(self, enrichment: Dict[str, Any]) -> None:
+        """Insert or update a session enrichment record."""
+        cursor = self.conn.cursor()
+        session_id = enrichment["session_id"]
+
+        # Serialize JSON fields
+        json_fields = [
+            "decisions_made", "corrections", "learnings", "mistakes",
+            "patterns", "topic_tags", "tool_usage_stats",
+        ]
+        for field in json_fields:
+            if field in enrichment and not isinstance(enrichment[field], str):
+                enrichment[field] = json.dumps(enrichment[field])
+
+        cursor.execute(
+            """
+            INSERT INTO session_enrichments (
+                session_id, file_path, enrichment_version, enrichment_model,
+                session_start_time, session_end_time, duration_seconds,
+                message_count, user_message_count, assistant_message_count, tool_call_count,
+                session_summary, primary_intent, outcome, complexity_score,
+                session_quality_score,
+                decisions_made, corrections, learnings, mistakes, patterns,
+                topic_tags, tool_usage_stats,
+                what_worked, what_failed,
+                summary_embedding
+            ) VALUES (
+                ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                ?, ?, ?, ?, ?,
+                ?, ?,
+                ?, ?,
+                ?
+            )
+            ON CONFLICT(session_id) DO UPDATE SET
+                enrichment_version = excluded.enrichment_version,
+                enrichment_model = excluded.enrichment_model,
+                enrichment_timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                session_start_time = excluded.session_start_time,
+                session_end_time = excluded.session_end_time,
+                duration_seconds = excluded.duration_seconds,
+                message_count = excluded.message_count,
+                user_message_count = excluded.user_message_count,
+                assistant_message_count = excluded.assistant_message_count,
+                tool_call_count = excluded.tool_call_count,
+                session_summary = excluded.session_summary,
+                primary_intent = excluded.primary_intent,
+                outcome = excluded.outcome,
+                complexity_score = excluded.complexity_score,
+                session_quality_score = excluded.session_quality_score,
+                decisions_made = excluded.decisions_made,
+                corrections = excluded.corrections,
+                learnings = excluded.learnings,
+                mistakes = excluded.mistakes,
+                patterns = excluded.patterns,
+                topic_tags = excluded.topic_tags,
+                tool_usage_stats = excluded.tool_usage_stats,
+                what_worked = excluded.what_worked,
+                what_failed = excluded.what_failed,
+                summary_embedding = excluded.summary_embedding
+            """,
+            (
+                session_id,
+                enrichment.get("file_path"),
+                enrichment.get("enrichment_version", "1.0"),
+                enrichment.get("enrichment_model"),
+                enrichment.get("session_start_time"),
+                enrichment.get("session_end_time"),
+                enrichment.get("duration_seconds"),
+                enrichment.get("message_count", 0),
+                enrichment.get("user_message_count", 0),
+                enrichment.get("assistant_message_count", 0),
+                enrichment.get("tool_call_count", 0),
+                enrichment.get("session_summary"),
+                enrichment.get("primary_intent"),
+                enrichment.get("outcome"),
+                enrichment.get("complexity_score"),
+                enrichment.get("session_quality_score"),
+                enrichment.get("decisions_made", "[]"),
+                enrichment.get("corrections", "[]"),
+                enrichment.get("learnings", "[]"),
+                enrichment.get("mistakes", "[]"),
+                enrichment.get("patterns", "[]"),
+                enrichment.get("topic_tags", "[]"),
+                enrichment.get("tool_usage_stats", "[]"),
+                enrichment.get("what_worked"),
+                enrichment.get("what_failed"),
+                enrichment.get("summary_embedding"),
+            ),
+        )
+
+        # Update FTS5
+        cursor.execute(
+            "DELETE FROM session_enrichments_fts WHERE session_id = ?",
+            (session_id,),
+        )
+        if enrichment.get("session_summary") or enrichment.get("what_worked") or enrichment.get("what_failed"):
+            cursor.execute(
+                """INSERT INTO session_enrichments_fts
+                   (session_summary, what_worked, what_failed, session_id)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    enrichment.get("session_summary", ""),
+                    enrichment.get("what_worked", ""),
+                    enrichment.get("what_failed", ""),
+                    session_id,
+                ),
+            )
+
+    # Column names for session_enrichments (must match CREATE TABLE order)
+    _SESSION_ENRICHMENT_COLS = [
+        "id", "session_id", "file_path", "enrichment_version",
+        "enrichment_model", "enrichment_timestamp",
+        "session_start_time", "session_end_time", "duration_seconds",
+        "message_count", "user_message_count", "assistant_message_count",
+        "tool_call_count", "session_summary", "primary_intent",
+        "outcome", "complexity_score", "session_quality_score",
+        "decisions_made", "corrections", "learnings", "mistakes",
+        "patterns", "topic_tags", "tool_usage_stats",
+        "what_worked", "what_failed", "summary_embedding",
+    ]
+
+    def get_session_enrichment(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get enrichment data for a session."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            "SELECT * FROM session_enrichments WHERE session_id = ?",
+            (session_id,),
+        ))
+        if not rows:
+            return None
+        row = rows[0]
+        result = dict(zip(self._SESSION_ENRICHMENT_COLS, row))
+        # Parse JSON fields
+        for field in ["decisions_made", "corrections", "learnings", "mistakes",
+                      "patterns", "topic_tags", "tool_usage_stats"]:
+            result[field] = _safe_json_loads(result.get(field))
+        return result
+
+    def list_enriched_sessions(self) -> List[str]:
+        """Return session IDs that already have enrichment data."""
+        cursor = self.conn.cursor()
+        return [row[0] for row in cursor.execute(
+            "SELECT session_id FROM session_enrichments"
+        )]
+
+    def get_session_enrichment_stats(self) -> Dict[str, Any]:
+        """Get session enrichment statistics."""
+        cursor = self.conn.cursor()
+        total = list(cursor.execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
+        by_outcome = dict(cursor.execute(
+            "SELECT outcome, COUNT(*) FROM session_enrichments WHERE outcome IS NOT NULL GROUP BY outcome"
+        ))
+        by_intent = dict(cursor.execute(
+            "SELECT primary_intent, COUNT(*) FROM session_enrichments WHERE primary_intent IS NOT NULL GROUP BY primary_intent"
+        ))
+        avg_quality = list(cursor.execute(
+            "SELECT AVG(session_quality_score) FROM session_enrichments WHERE session_quality_score IS NOT NULL"
+        ))[0][0]
+        return {
+            "total_enriched_sessions": total,
+            "by_outcome": by_outcome,
+            "by_intent": by_intent,
+            "avg_quality_score": round(avg_quality, 1) if avg_quality else None,
+        }
 
     def close(self) -> None:
         """Close database connection."""
