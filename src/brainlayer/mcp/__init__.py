@@ -105,6 +105,135 @@ _READ_ONLY = ToolAnnotations(
 )
 
 
+# --- Output Schemas (MCP spec 2025-06-18+) ---
+# Tools with outputSchema MUST return structuredContent alongside text content.
+
+_MEMORY_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "content": {"type": "string"},
+        "intent": {"type": "string"},
+        "importance": {"type": "number"},
+        "project": {"type": "string"},
+        "date": {"type": "string"},
+        "content_type": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["content"],
+}
+
+_SEARCH_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string"},
+        "total": {"type": "integer"},
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "number"},
+                    "project": {"type": "string"},
+                    "content_type": {"type": "string"},
+                    "content": {"type": "string"},
+                    "source_file": {"type": "string"},
+                    "date": {"type": "string"},
+                    "source": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "intent": {"type": "string"},
+                    "importance": {"type": "number"},
+                    "chunk_id": {"type": "string"},
+                },
+                "required": ["content", "project", "content_type", "score"],
+            },
+        },
+    },
+    "required": ["query", "total", "results"],
+}
+
+_STATS_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "total_chunks": {"type": "integer"},
+        "projects": {"type": "array", "items": {"type": "string"}},
+        "content_types": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["total_chunks", "projects", "content_types"],
+}
+
+_THINK_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string"},
+        "total": {"type": "integer"},
+        "decisions": {"type": "array", "items": _MEMORY_ITEM_SCHEMA},
+        "patterns": {"type": "array", "items": _MEMORY_ITEM_SCHEMA},
+        "bugs": {"type": "array", "items": _MEMORY_ITEM_SCHEMA},
+        "context": {"type": "array", "items": _MEMORY_ITEM_SCHEMA},
+    },
+    "required": ["query", "total", "decisions", "patterns", "bugs", "context"],
+}
+
+_RECALL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "target": {"type": "string"},
+        "file_history": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "timestamp": {"type": "string"},
+                    "action": {"type": "string"},
+                    "session_id": {"type": "string"},
+                    "file_path": {"type": "string"},
+                },
+            },
+        },
+        "related_chunks": {"type": "array", "items": _MEMORY_ITEM_SCHEMA},
+        "session_summaries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "branch": {"type": "string"},
+                    "plan_name": {"type": "string"},
+                    "started_at": {"type": "string"},
+                },
+            },
+        },
+    },
+    "required": ["target", "file_history", "related_chunks", "session_summaries"],
+}
+
+_CURRENT_CONTEXT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "active_projects": {"type": "array", "items": {"type": "string"}},
+        "active_branches": {"type": "array", "items": {"type": "string"}},
+        "active_plan": {"type": "string"},
+        "recent_files": {"type": "array", "items": {"type": "string"}},
+        "recent_sessions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "project": {"type": "string"},
+                    "branch": {"type": "string"},
+                    "started_at": {"type": "string"},
+                    "plan_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    "required": ["active_projects", "active_branches", "active_plan", "recent_files", "recent_sessions"],
+}
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools."""
@@ -192,6 +321,7 @@ The knowledge base contains indexed conversations organized by:
                 },
                 "required": ["query"],
             },
+            outputSchema=_SEARCH_OUTPUT_SCHEMA,
         ),
         Tool(
             name="brainlayer_stats",
@@ -199,6 +329,7 @@ The knowledge base contains indexed conversations organized by:
             description="Get statistics about the knowledge base (total chunks, projects, content types).",
             annotations=_READ_ONLY,
             inputSchema={"type": "object", "properties": {}},
+            outputSchema=_STATS_OUTPUT_SCHEMA,
         ),
         Tool(
             name="brainlayer_list_projects",
@@ -361,6 +492,7 @@ Results are filtered by importance (3+) and grouped by intent.""",
                 },
                 "required": ["context"],
             },
+            outputSchema=_THINK_OUTPUT_SCHEMA,
         ),
         Tool(
             name="brainlayer_recall",
@@ -393,6 +525,7 @@ Use when opening a file or starting work on a familiar topic.""",
                     },
                 },
             },
+            outputSchema=_RECALL_OUTPUT_SCHEMA,
         ),
         Tool(
             name="brainlayer_sessions",
@@ -437,6 +570,7 @@ Use at conversation start to understand current state without asking the user.""
                     },
                 },
             },
+            outputSchema=_CURRENT_CONTEXT_OUTPUT_SCHEMA,
         ),
     ]
 
@@ -490,7 +624,7 @@ async def handle_completion(ref, argument) -> CompleteResult:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def call_tool(name: str, arguments: dict[str, Any]):
     """Handle tool calls."""
 
     if name == "brainlayer_search":
@@ -587,7 +721,7 @@ async def _search(
     importance_min: float | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-) -> list[TextContent]:
+):
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
         if num_results < 1:
@@ -598,12 +732,11 @@ async def _search(
         store = _get_vector_store()
 
         if store.count() == 0:
-            return [
-                TextContent(
-                    type="text",
-                    text="Knowledge base is empty. Run 'brainlayer index' to populate it.",
-                )
-            ]
+            empty = {"query": query, "total": 0, "results": []}
+            return (
+                [TextContent(type="text", text="Knowledge base is empty. Run 'brainlayer index' to populate it.")],
+                empty,
+            )
 
         # Normalize project name for consistent filtering
         normalized_project = normalize_project_name(project)
@@ -637,17 +770,44 @@ async def _search(
         )
 
         if not results["documents"][0]:
-            return [TextContent(type="text", text="No results found.")]
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
 
-        # Format results
+        # Build structured results + formatted text
         output_parts = [f"## Search Results for: {query}\n"]
+        structured_results = []
 
         for i, (doc, meta, dist) in enumerate(
             zip(results["documents"][0], results["metadatas"][0], results["distances"][0])
         ):
             score = 1 - dist if dist is not None else 0
+
+            # Build structured result item
+            item = {
+                "score": round(score, 4),
+                "project": normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
+                "content_type": meta.get("content_type", "unknown"),
+                "content": doc[:1000],
+                "source_file": meta.get("source_file", "unknown"),
+            }
+            if meta.get("created_at"):
+                item["date"] = meta["created_at"][:10] if len(meta.get("created_at", "")) >= 10 else meta["created_at"]
+            if meta.get("source") and meta["source"] != "claude_code":
+                item["source"] = meta["source"]
+            if meta.get("summary"):
+                item["summary"] = meta["summary"]
+            if meta.get("tags") and isinstance(meta["tags"], list):
+                item["tags"] = [str(t) for t in meta["tags"][:5]]
+            if meta.get("intent"):
+                item["intent"] = meta["intent"]
+            if meta.get("importance") is not None:
+                item["importance"] = meta["importance"]
+            if meta.get("chunk_id"):
+                item["chunk_id"] = meta["chunk_id"]
+            structured_results.append(item)
+
+            # Build text output (same as before)
             output_parts.append(f"\n### Result {i + 1} (score: {score:.3f})")
-            # Enrichment header line
             enrichment_parts = []
             if meta.get("intent"):
                 enrichment_parts.append(f"Intent: {meta['intent']}")
@@ -655,17 +815,14 @@ async def _search(
                 enrichment_parts.append(f"Importance: {meta['importance']:.0f}/10")
             if meta.get("tags") and isinstance(meta["tags"], list):
                 enrichment_parts.append(f"Tags: {', '.join(str(t) for t in meta['tags'][:5])}")
-            project_display = normalize_project_name(meta.get("project")) or meta.get("project", "unknown")
-            # For WhatsApp/non-code sources, show contact name instead of "unknown" project
+            project_display = item["project"]
             if project_display == "unknown" and meta.get("contact_name"):
                 project_display = meta["contact_name"]
             header = f"**Project:** {project_display} | **Type:** {meta.get('content_type', 'unknown')}"
-            if meta.get("created_at"):
-                # Show just the date portion for readability
-                date_str = meta["created_at"][:10] if len(meta.get("created_at", "")) >= 10 else meta["created_at"]
-                header += f" | **Date:** {date_str}"
-            if meta.get("source") and meta["source"] != "claude_code":
-                header += f" | **Source:** {meta['source']}"
+            if item.get("date"):
+                header += f" | **Date:** {item['date']}"
+            if item.get("source"):
+                header += f" | **Source:** {item['source']}"
             output_parts.append(header)
             if enrichment_parts:
                 output_parts.append(f"**{' | '.join(enrichment_parts)}**")
@@ -675,13 +832,18 @@ async def _search(
             output_parts.append(doc[:1000] + ("..." if len(doc) > 1000 else ""))
             output_parts.append("\n---")
 
-        return [TextContent(type="text", text="\n".join(output_parts))]
+        structured = {
+            "query": query,
+            "total": len(structured_results),
+            "results": structured_results,
+        }
+        return ([TextContent(type="text", text="\n".join(output_parts))], structured)
 
     except Exception as e:
         return [TextContent(type="text", text=f"Search error (query='{query[:50]}...'): {str(e)}")]
 
 
-async def _stats() -> list[TextContent]:
+async def _stats():
     """Get knowledge base statistics."""
     try:
         store = _get_vector_store()
@@ -693,7 +855,12 @@ async def _stats() -> list[TextContent]:
 - **Projects:** {", ".join(stats["projects"][:15])}{"..." if len(stats["projects"]) > 15 else ""}
 - **Content Types:** {", ".join(stats["content_types"])}
 """
-        return [TextContent(type="text", text=output)]
+        structured = {
+            "total_chunks": stats["total_chunks"],
+            "projects": stats["projects"],
+            "content_types": stats["content_types"],
+        }
+        return ([TextContent(type="text", text=output)], structured)
 
     except Exception as e:
         return [TextContent(type="text", text=f"Stats error: {str(e)}")]
@@ -951,7 +1118,7 @@ async def _think(
     context: str,
     project: str | None = None,
     max_results: int = 10,
-) -> list[TextContent]:
+):
     """Execute think — retrieve relevant memories for current task."""
     try:
         from ..engine import think
@@ -979,7 +1146,26 @@ async def _think(
             ),
         )
 
-        return [TextContent(type="text", text=result.format())]
+        def _memory_to_dict(item: dict) -> dict:
+            d: dict = {"content": item.get("content", "")}
+            for key in ("summary", "intent", "importance", "project", "content_type"):
+                if item.get(key) is not None:
+                    d[key] = item[key]
+            if item.get("created_at"):
+                d["date"] = item["created_at"][:10]
+            if item.get("tags") and isinstance(item["tags"], list):
+                d["tags"] = [str(t) for t in item["tags"]]
+            return d
+
+        structured = {
+            "query": result.query,
+            "total": result.total,
+            "decisions": [_memory_to_dict(i) for i in result.decisions],
+            "patterns": [_memory_to_dict(i) for i in result.patterns],
+            "bugs": [_memory_to_dict(i) for i in result.bugs],
+            "context": [_memory_to_dict(i) for i in result.context],
+        }
+        return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
         return [TextContent(type="text", text=f"Think error: {str(e)}")]
@@ -990,7 +1176,7 @@ async def _recall(
     topic: str | None = None,
     project: str | None = None,
     max_results: int = 10,
-) -> list[TextContent]:
+):
     """Execute recall — proactive context retrieval."""
     try:
         from ..engine import recall
@@ -1016,7 +1202,40 @@ async def _recall(
             ),
         )
 
-        return [TextContent(type="text", text=result.format())]
+        def _memory_to_dict(item: dict) -> dict:
+            d: dict = {"content": item.get("content", "")}
+            for key in ("summary", "intent", "importance", "project", "content_type"):
+                if item.get(key) is not None:
+                    d[key] = item[key]
+            if item.get("created_at"):
+                d["date"] = item["created_at"][:10]
+            if item.get("tags") and isinstance(item["tags"], list):
+                d["tags"] = [str(t) for t in item["tags"]]
+            return d
+
+        structured = {
+            "target": result.target,
+            "file_history": [
+                {
+                    "timestamp": (h.get("timestamp") or "")[:19],
+                    "action": h.get("action", ""),
+                    "session_id": h.get("session_id", ""),
+                    "file_path": h.get("file_path", ""),
+                }
+                for h in result.file_history
+            ],
+            "related_chunks": [_memory_to_dict(c) for c in result.related_chunks],
+            "session_summaries": [
+                {
+                    "session_id": s.get("session_id", ""),
+                    "branch": s.get("branch", ""),
+                    "plan_name": s.get("plan_name", ""),
+                    "started_at": (s.get("started_at") or "")[:19],
+                }
+                for s in result.session_summaries
+            ],
+        }
+        return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
         return [TextContent(type="text", text=f"Recall error: {str(e)}")]
@@ -1049,14 +1268,31 @@ async def _sessions(
 
 async def _current_context(
     hours: int = 24,
-) -> list[TextContent]:
+):
     """Execute current_context — lightweight session awareness."""
     try:
         from ..engine import current_context
 
         store = _get_vector_store()
         result = current_context(store=store, hours=hours)
-        return [TextContent(type="text", text=result.format())]
+
+        structured = {
+            "active_projects": result.active_projects,
+            "active_branches": result.active_branches,
+            "active_plan": result.active_plan,
+            "recent_files": result.recent_files,
+            "recent_sessions": [
+                {
+                    "session_id": s.session_id,
+                    "project": s.project,
+                    "branch": s.branch,
+                    "started_at": s.started_at[:19] if s.started_at else "",
+                    "plan_name": s.plan_name,
+                }
+                for s in result.recent_sessions
+            ],
+        }
+        return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
         return [TextContent(type="text", text=f"Current context error: {str(e)}")]
