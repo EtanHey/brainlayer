@@ -6,6 +6,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
+    CallToolResult,
     CompleteResult,
     Completion,
     TextContent,
@@ -103,6 +104,24 @@ _READ_ONLY = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=False,
 )
+
+
+def _error_result(message: str) -> CallToolResult:
+    """Return a CallToolResult with isError=True. Bypasses outputSchema validation."""
+    return CallToolResult(content=[TextContent(type="text", text=message)], isError=True)
+
+
+def _memory_to_dict(item: dict) -> dict:
+    """Convert a memory item dict to structured output format."""
+    d: dict = {"content": item.get("content", "")}
+    for key in ("summary", "intent", "importance", "project", "content_type"):
+        if item.get(key) is not None:
+            d[key] = item[key]
+    if item.get("created_at"):
+        d["date"] = item["created_at"][:10]
+    if item.get("tags") and isinstance(item["tags"], list):
+        d["tags"] = [str(t) for t in item["tags"]]
+    return d
 
 
 # --- Output Schemas (MCP spec 2025-06-18+) ---
@@ -840,7 +859,7 @@ async def _search(
         return ([TextContent(type="text", text="\n".join(output_parts))], structured)
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Search error (query='{query[:50]}...'): {str(e)}")]
+        return _error_result(f"Search error (query='{query[:50]}...'): {str(e)}")
 
 
 async def _stats():
@@ -863,7 +882,7 @@ async def _stats():
         return ([TextContent(type="text", text=output)], structured)
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Stats error: {str(e)}")]
+        return _error_result(f"Stats error: {str(e)}")
 
 
 async def _list_projects() -> list[TextContent]:
@@ -1146,17 +1165,6 @@ async def _think(
             ),
         )
 
-        def _memory_to_dict(item: dict) -> dict:
-            d: dict = {"content": item.get("content", "")}
-            for key in ("summary", "intent", "importance", "project", "content_type"):
-                if item.get(key) is not None:
-                    d[key] = item[key]
-            if item.get("created_at"):
-                d["date"] = item["created_at"][:10]
-            if item.get("tags") and isinstance(item["tags"], list):
-                d["tags"] = [str(t) for t in item["tags"]]
-            return d
-
         structured = {
             "query": result.query,
             "total": result.total,
@@ -1168,7 +1176,7 @@ async def _think(
         return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Think error: {str(e)}")]
+        return _error_result(f"Think error: {str(e)}")
 
 
 async def _recall(
@@ -1202,17 +1210,6 @@ async def _recall(
             ),
         )
 
-        def _memory_to_dict(item: dict) -> dict:
-            d: dict = {"content": item.get("content", "")}
-            for key in ("summary", "intent", "importance", "project", "content_type"):
-                if item.get(key) is not None:
-                    d[key] = item[key]
-            if item.get("created_at"):
-                d["date"] = item["created_at"][:10]
-            if item.get("tags") and isinstance(item["tags"], list):
-                d["tags"] = [str(t) for t in item["tags"]]
-            return d
-
         structured = {
             "target": result.target,
             "file_history": [
@@ -1238,7 +1235,7 @@ async def _recall(
         return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Recall error: {str(e)}")]
+        return _error_result(f"Recall error: {str(e)}")
 
 
 async def _sessions(
@@ -1295,7 +1292,7 @@ async def _current_context(
         return ([TextContent(type="text", text=result.format())], structured)
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Current context error: {str(e)}")]
+        return _error_result(f"Current context error: {str(e)}")
 
 
 def serve():
