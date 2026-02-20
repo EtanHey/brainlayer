@@ -434,6 +434,10 @@ def current_context(
     Designed for voice assistants and quick context injection.
     Lightweight — no embedding model needed.
 
+    Uses two data sources:
+    1. session_context table (git overlay data — may be sparse)
+    2. chunks table (always populated from indexing)
+
     Args:
         store: VectorStore instance
         hours: How many hours back to look (default: 24)
@@ -442,15 +446,31 @@ def current_context(
         CurrentContext with recent sessions, files, projects, branches
     """
     result = CurrentContext()
+    cursor = store.conn.cursor()
+    date_from = (datetime.now() - timedelta(hours=hours)).isoformat()
 
-    # Get recent sessions
-    recent = sessions(store, days=max(1, hours // 24) or 1, limit=10)
+    # 1. Try session_context first (richest data)
+    # Convert hours to days properly — ceil division, minimum 1
+    days = max(1, -(-hours // 24))  # ceiling division trick
+    recent = sessions(store, days=days, limit=10)
     result.recent_sessions = recent
 
-    if not recent:
-        return result
+    # 2. Also query chunks table directly for recent projects
+    # This catches sessions that haven't been through git_overlay yet
+    chunk_projects = list(
+        cursor.execute(
+            """
+        SELECT DISTINCT project
+        FROM chunks
+        WHERE created_at >= ? AND project IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 10
+    """,
+            (date_from,),
+        )
+    )
 
-    # Extract active projects and branches
+    # Extract active projects and branches from session_context
     projects = []
     branches = []
     plans = []
@@ -462,15 +482,17 @@ def current_context(
         if s.plan_name and s.plan_name not in plans:
             plans.append(s.plan_name)
 
+    # Merge in projects from chunks table (may have projects not in session_context)
+    for row in chunk_projects:
+        if row[0] and row[0] not in projects:
+            projects.append(row[0])
+
     result.active_projects = projects[:5]
     result.active_branches = branches[:5]
     if plans:
         result.active_plan = plans[0]  # Most recent plan
 
-    # Get recent files from file_interactions
-    cursor = store.conn.cursor()
-    date_from = (datetime.now() - timedelta(hours=hours)).isoformat()
-
+    # 3. Get recent files from file_interactions
     rows = list(
         cursor.execute(
             """
@@ -484,6 +506,22 @@ def current_context(
         )
     )
     result.recent_files = [r[0] for r in rows if r[0]]
+
+    # 4. If no files from interactions, try chunks metadata for file references
+    if not result.recent_files:
+        file_rows = list(
+            cursor.execute(
+                """
+            SELECT DISTINCT source_file
+            FROM chunks
+            WHERE created_at >= ? AND source_file IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 20
+        """,
+                (date_from,),
+            )
+        )
+        result.recent_files = [r[0] for r in file_rows if r[0]]
 
     return result
 

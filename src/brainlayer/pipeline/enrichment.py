@@ -52,14 +52,41 @@ def _get_thread_store(db_path: Path) -> VectorStore:
 
 
 # AIDEV-NOTE: Uses local LLM only — never sends chunk content to cloud APIs
-# Backend selection: ollama (default) or mlx
-ENRICH_BACKEND = os.environ.get("BRAINLAYER_ENRICH_BACKEND", "ollama")
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+# Backend selection: auto-detect by default
+# - arm64 Mac → mlx (lighter, faster on Apple Silicon)
+# - Other → ollama (universal fallback)
+# Override with BRAINLAYER_ENRICH_BACKEND=ollama|mlx
+
+
+def _detect_default_backend() -> str:
+    """Auto-detect the best enrichment backend for this platform.
+
+    arm64 Mac → mlx (native Apple Silicon, no Docker overhead)
+    Everything else → ollama (universal, works everywhere)
+    """
+    import platform
+
+    explicit = os.environ.get("BRAINLAYER_ENRICH_BACKEND")
+    if explicit:
+        return explicit
+
+    if platform.machine() == "arm64" and platform.system() == "Darwin":
+        return "mlx"
+    return "ollama"
+
+
+ENRICH_BACKEND = _detect_default_backend()
+OLLAMA_URL = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 # MLX URL: scripts also check MLX_URL for health, so accept both env vars
 MLX_URL = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http://127.0.0.1:8080/v1/chat/completions"))
 MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
 MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
 MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
+
+# Stall detection: max seconds a single chunk can take before being considered stalled
+STALL_TIMEOUT = int(os.environ.get("BRAINLAYER_STALL_TIMEOUT", "300"))  # 5 minutes default
+# Heartbeat: log progress every N chunks
+HEARTBEAT_INTERVAL = int(os.environ.get("BRAINLAYER_HEARTBEAT_INTERVAL", "25"))
 from ..paths import DEFAULT_DB_PATH
 
 # Supabase usage logging — track GLM calls even though they're free
@@ -384,9 +411,14 @@ def call_mlx(prompt: str, timeout: int = 240) -> Optional[str]:
         return None
 
 
-def call_llm(prompt: str, timeout: int = 240) -> Optional[str]:
-    """Call local LLM using configured backend (ollama or mlx)."""
-    if ENRICH_BACKEND == "mlx":
+def call_llm(prompt: str, timeout: int = 240, backend: Optional[str] = None) -> Optional[str]:
+    """Call local LLM using configured backend (ollama or mlx).
+
+    Args:
+        backend: Override backend for this call. If None, uses ENRICH_BACKEND.
+    """
+    effective = backend or ENRICH_BACKEND
+    if effective == "mlx":
         return call_mlx(prompt, timeout=timeout)
     return call_glm(prompt, timeout=timeout)
 
@@ -474,11 +506,17 @@ def _enrich_one(
     store_or_path,
     chunk: Dict[str, Any],
     with_context: bool = True,
+    backend: Optional[str] = None,
 ) -> bool:
     """Enrich a single chunk. Returns True on success, False on failure.
 
     Args:
         store_or_path: VectorStore instance (sequential) or Path (parallel, uses thread-local store).
+        backend: Override backend for LLM calls.
+
+    Stall detection: if the LLM call takes longer than STALL_TIMEOUT, it's logged
+    as a stall. The requests timeout in call_llm/call_glm already handles HTTP-level
+    timeouts, but this adds observability at the enrichment layer.
     """
     # In parallel mode, each thread gets its own VectorStore connection.
     if isinstance(store_or_path, Path):
@@ -492,7 +530,18 @@ def _enrich_one(
         context_chunks = [c for c in ctx.get("context", []) if not c.get("is_target")]
 
     prompt = build_prompt(chunk, context_chunks)
-    response = call_llm(prompt)
+
+    chunk_start = time.time()
+    response = call_llm(prompt, backend=backend)
+    chunk_duration = time.time() - chunk_start
+
+    # Stall detection: log warning if chunk took too long
+    if chunk_duration > STALL_TIMEOUT:
+        print(
+            f"  STALL: chunk {chunk['id'][:12]} took {chunk_duration:.0f}s "
+            f"(threshold: {STALL_TIMEOUT}s, chars: {chunk.get('char_count', '?')})",
+            file=sys.stderr,
+        )
 
     enrichment = parse_enrichment(response)
     if enrichment:
@@ -519,12 +568,14 @@ def enrich_batch(
     content_types: Optional[List[str]] = None,
     with_context: bool = True,
     parallel: int = 1,
+    backend: Optional[str] = None,
 ) -> Dict[str, int]:
     """Process one batch of unenriched chunks. Returns counts.
 
     Args:
         parallel: Number of concurrent workers (1=sequential, >1=ThreadPoolExecutor).
                   MLX server supports concurrent requests. Ollama may not benefit.
+        backend: Override backend for LLM calls (used when run_enrichment detects fallback).
     """
     types = content_types or HIGH_VALUE_TYPES
     chunks = store.get_unenriched_chunks(batch_size=batch_size, content_types=types)
@@ -535,12 +586,15 @@ def enrich_batch(
     success = 0
     failed = 0
 
+    batch_start = time.time()
+    last_heartbeat = batch_start
+
     if parallel > 1:
         # Parallel: pass db_path so each thread gets its own VectorStore connection.
         # APSW connections are not safe for concurrent use from multiple threads.
         db_path = store.db_path
         with ThreadPoolExecutor(max_workers=parallel) as pool:
-            futures = {pool.submit(_enrich_one, db_path, chunk, with_context): chunk for chunk in chunks}
+            futures = {pool.submit(_enrich_one, db_path, chunk, with_context, backend): chunk for chunk in chunks}
             for future in as_completed(futures):
                 try:
                     if future.result():
@@ -552,13 +606,16 @@ def enrich_batch(
                     failed += 1
 
                 done = success + failed
-                if done % 10 == 0:
-                    print(f"  [{done}/{len(chunks)}] ok={success} fail={failed}")
+                now = time.time()
+                if done % HEARTBEAT_INTERVAL == 0 or now - last_heartbeat > 60:
+                    rate = done / (now - batch_start) if now > batch_start else 0
+                    print(f"  HEARTBEAT [{done}/{len(chunks)}] ok={success} fail={failed} rate={rate:.1f}/s")
+                    last_heartbeat = now
     else:
         # Sequential: one chunk at a time (original behavior)
         for chunk in chunks:
             start = time.time()
-            ok = _enrich_one(store, chunk, with_context)
+            ok = _enrich_one(store, chunk, with_context, backend=backend)
             duration = time.time() - start
 
             if ok:
@@ -567,8 +624,14 @@ def enrich_batch(
                 failed += 1
 
             done = success + failed
-            if done % 10 == 0:
-                print(f"  [{done}/{len(chunks)}] {duration:.1f}s | ok={success} fail={failed}")
+            now = time.time()
+            if done % HEARTBEAT_INTERVAL == 0 or now - last_heartbeat > 60:
+                rate = done / (now - batch_start) if now > batch_start else 0
+                print(
+                    f"  HEARTBEAT [{done}/{len(chunks)}] {duration:.1f}s | "
+                    f"ok={success} fail={failed} rate={rate:.1f}/s"
+                )
+                last_heartbeat = now
 
     return {"processed": len(chunks), "success": success, "failed": failed}
 
@@ -586,24 +649,39 @@ def run_enrichment(
     store = VectorStore(path)
 
     try:
-        # Check LLM backend is running
-        if ENRICH_BACKEND == "mlx":
+        # Check LLM backend is running — with auto-fallback
+        active_backend = ENRICH_BACKEND
+        if active_backend == "mlx":
             try:
                 resp = requests.get(f"{MLX_BASE_URL}/v1/models", timeout=5)
                 resp.raise_for_status()
                 print(f"Backend: MLX ({MLX_BASE_URL})")
             except Exception:
-                raise RuntimeError(
-                    f"MLX server not running at {MLX_BASE_URL}. Start with: "
-                    "python3 -m mlx_lm.server --model <model> --port 8080"
-                )
+                # MLX not running — try falling back to Ollama
+                print(f"MLX not available at {MLX_BASE_URL}, trying Ollama fallback...", file=sys.stderr)
+                try:
+                    ollama_base = OLLAMA_URL.replace("/api/generate", "")
+                    resp = requests.get(f"{ollama_base}/api/tags", timeout=5)
+                    resp.raise_for_status()
+                    active_backend = "ollama"
+                    print(f"Backend: Ollama ({MODEL}) [fallback from MLX]")
+                except Exception:
+                    raise RuntimeError(
+                        f"Neither MLX ({MLX_BASE_URL}) nor Ollama is running.\n"
+                        f"Start MLX: python3 -m mlx_lm.server --model {MLX_MODEL} --port 8080\n"
+                        f"Start Ollama: ollama serve"
+                    )
         else:
             try:
-                resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+                ollama_base = OLLAMA_URL.replace("/api/generate", "")
+                resp = requests.get(f"{ollama_base}/api/tags", timeout=5)
                 resp.raise_for_status()
                 print(f"Backend: Ollama ({MODEL})")
             except Exception:
                 raise RuntimeError("Ollama is not running. Start it with: ollama serve")
+
+        # Override module-level backend for this run if fallback was used
+        _run_backend = active_backend
 
         stats = store.get_enrichment_stats()
         print(f"Enrichment status: {stats['enriched']}/{stats['total_chunks']} ({stats['percent']}%)")
@@ -625,6 +703,7 @@ def run_enrichment(
                 content_types=content_types,
                 with_context=with_context,
                 parallel=parallel,
+                backend=_run_backend,
             )
 
             if result["processed"] == 0:
