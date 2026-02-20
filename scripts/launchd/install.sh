@@ -13,6 +13,13 @@ LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/.local/share/brainlayer/logs"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 
+if [ ! -x "$BRAINLAYER_BIN" ]; then
+    echo "ERROR: brainlayer binary not found at $BRAINLAYER_BIN"
+    echo "Install with: pip install -e . (from brainlayer repo)"
+    echo "Or set BRAINLAYER_BIN=/path/to/brainlayer"
+    exit 1
+fi
+
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR"
 
 install_plist() {

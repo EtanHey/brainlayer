@@ -77,6 +77,7 @@ def _detect_default_backend() -> str:
 
 ENRICH_BACKEND = _detect_default_backend()
 OLLAMA_URL = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
+OLLAMA_BASE_URL = OLLAMA_URL.rsplit("/api/", 1)[0] if "/api/" in OLLAMA_URL else OLLAMA_URL.rstrip("/")
 # MLX URL: scripts also check MLX_URL for health, so accept both env vars
 MLX_URL = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http://127.0.0.1:8080/v1/chat/completions"))
 MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
@@ -85,8 +86,8 @@ MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-
 
 # Stall detection: max seconds a single chunk can take before being considered stalled
 STALL_TIMEOUT = int(os.environ.get("BRAINLAYER_STALL_TIMEOUT", "300"))  # 5 minutes default
-# Heartbeat: log progress every N chunks
-HEARTBEAT_INTERVAL = int(os.environ.get("BRAINLAYER_HEARTBEAT_INTERVAL", "25"))
+# Heartbeat: log progress every N chunks (min 1 to avoid ZeroDivisionError)
+HEARTBEAT_INTERVAL = max(1, int(os.environ.get("BRAINLAYER_HEARTBEAT_INTERVAL", "25")))
 from ..paths import DEFAULT_DB_PATH
 
 # Supabase usage logging — track GLM calls even though they're free
@@ -660,7 +661,7 @@ def run_enrichment(
                 # MLX not running — try falling back to Ollama
                 print(f"MLX not available at {MLX_BASE_URL}, trying Ollama fallback...", file=sys.stderr)
                 try:
-                    ollama_base = OLLAMA_URL.replace("/api/generate", "")
+                    ollama_base = OLLAMA_BASE_URL
                     resp = requests.get(f"{ollama_base}/api/tags", timeout=5)
                     resp.raise_for_status()
                     active_backend = "ollama"
@@ -673,7 +674,7 @@ def run_enrichment(
                     )
         else:
             try:
-                ollama_base = OLLAMA_URL.replace("/api/generate", "")
+                ollama_base = OLLAMA_BASE_URL
                 resp = requests.get(f"{ollama_base}/api/tags", timeout=5)
                 resp.raise_for_status()
                 print(f"Backend: Ollama ({MODEL})")

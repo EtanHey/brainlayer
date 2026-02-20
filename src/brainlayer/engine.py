@@ -393,7 +393,7 @@ class CurrentContext:
 
     def format(self) -> str:
         """Format as concise markdown — designed for voice/quick context."""
-        if not self.recent_sessions:
+        if not self.recent_sessions and not self.active_projects and not self.recent_files:
             return "No recent session context available."
 
         parts = ["## Current Context\n"]
@@ -460,10 +460,11 @@ def current_context(
     chunk_projects = list(
         cursor.execute(
             """
-        SELECT DISTINCT project
+        SELECT project
         FROM chunks
         WHERE created_at >= ? AND project IS NOT NULL
-        ORDER BY created_at DESC
+        GROUP BY project
+        ORDER BY MAX(created_at) DESC
         LIMIT 10
     """,
             (date_from,),
