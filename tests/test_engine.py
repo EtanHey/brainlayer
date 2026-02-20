@@ -231,9 +231,19 @@ class TestCurrentContextFormat:
     """Test CurrentContext formatting."""
 
     def test_empty_context(self):
-        """No sessions returns message."""
+        """Fully empty context returns message."""
         ctx = CurrentContext()
         assert "No recent session" in ctx.format()
+
+    def test_projects_without_sessions_still_shown(self):
+        """Projects from chunks fallback are shown even without sessions."""
+        ctx = CurrentContext(
+            active_projects=["golems", "brainlayer"],
+            recent_files=["src/auth.py"],
+        )
+        formatted = ctx.format()
+        assert "golems" in formatted
+        assert "No recent session" not in formatted
 
     def test_with_projects(self):
         """Active projects are shown."""
