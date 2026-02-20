@@ -938,7 +938,6 @@ def enrich(
 def enrich_sessions(
     project: str = typer.Option(None, "--project", "-p", help="Only enrich sessions from this project"),
     since: str = typer.Option(None, "--since", "-s", help="Only sessions after this date (ISO 8601)"),
-    batch_size: int = typer.Option(10, "--batch-size", "-b", help="Sessions per batch"),
     max_sessions: int = typer.Option(0, "--max", "-m", help="Max sessions to process (0=unlimited)"),
     stats_only: bool = typer.Option(False, "--stats", help="Show enrichment stats and exit"),
 ) -> None:

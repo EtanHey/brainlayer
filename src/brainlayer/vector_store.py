@@ -1651,6 +1651,8 @@ class VectorStore:
     def upsert_session_enrichment(self, enrichment: Dict[str, Any]) -> None:
         """Insert or update a session enrichment record."""
         cursor = self.conn.cursor()
+        # Work on a copy to avoid mutating caller's dict
+        enrichment = dict(enrichment)
         session_id = enrichment["session_id"]
 
         # Serialize JSON fields

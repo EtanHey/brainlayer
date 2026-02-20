@@ -332,6 +332,15 @@ def list_sessions_for_enrichment(
     for row in cursor.execute(query, params):
         sid, proj = row[0], row[1]
         if sid not in already_enriched:
+            # Apply 'since' filter if provided
+            if since:
+                first_time = list(cursor.execute(
+                    "SELECT MIN(created_at) FROM chunks WHERE source_file LIKE ?",
+                    (f"%{sid}%",),
+                ))[0][0]
+                if first_time and first_time < since:
+                    continue
+
             # Count chunks for this session
             count = list(cursor.execute(
                 "SELECT COUNT(*) FROM chunks WHERE source_file LIKE ?",
@@ -410,7 +419,6 @@ def enrich_session(
 
     # Determine project from chunks if not provided
     if not project:
-        projects = [c.get("source_file", "") for c in session_data["chunks"][:5]]
         # Try to get project from session_context
         ctx = store.get_session_context(session_id)
         if ctx:
