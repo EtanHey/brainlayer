@@ -934,6 +934,93 @@ def enrich(
         raise typer.Exit(1)
 
 
+@app.command("enrich-sessions")
+def enrich_sessions(
+    project: str = typer.Option(None, "--project", "-p", help="Only enrich sessions from this project"),
+    since: str = typer.Option(None, "--since", "-s", help="Only sessions after this date (ISO 8601)"),
+    max_sessions: int = typer.Option(0, "--max", "-m", help="Max sessions to process (0=unlimited)"),
+    stats_only: bool = typer.Option(False, "--stats", help="Show enrichment stats and exit"),
+) -> None:
+    """Enrich sessions with LLM-generated analysis (summary, decisions, corrections, learnings)."""
+    try:
+        from ..paths import DEFAULT_DB_PATH
+        from ..pipeline.enrichment import ENRICH_BACKEND, call_llm
+        from ..pipeline.session_enrichment import (
+            enrich_session,
+            list_sessions_for_enrichment,
+        )
+        from ..vector_store import VectorStore
+
+        store = VectorStore(DEFAULT_DB_PATH)
+
+        if stats_only:
+            try:
+                stats = store.get_session_enrichment_stats()
+                console.print(f"[bold]Enriched sessions:[/] {stats['total_enriched_sessions']}")
+                if stats["by_outcome"]:
+                    console.print(f"[bold]By outcome:[/] {stats['by_outcome']}")
+                if stats["by_intent"]:
+                    console.print(f"[bold]By intent:[/] {stats['by_intent']}")
+                if stats["avg_quality_score"]:
+                    console.print(f"[bold]Avg quality:[/] {stats['avg_quality_score']}/10")
+            finally:
+                store.close()
+            return
+
+        sessions = list_sessions_for_enrichment(store, project=project, since=since)
+        if max_sessions > 0:
+            sessions = sessions[:max_sessions]
+
+        if not sessions:
+            console.print("[yellow]No sessions to enrich.[/]")
+            store.close()
+            return
+
+        console.print(f"[bold]Found {len(sessions)} sessions to enrich[/] (backend: {ENRICH_BACKEND})")
+
+        enriched = 0
+        failed = 0
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Enriching sessions...", total=len(sessions))
+
+            for i, (session_id, proj, chunk_count) in enumerate(sessions):
+                progress.update(task, description=f"Session {session_id[:8]}... ({chunk_count} chunks)")
+
+                try:
+                    result = enrich_session(
+                        store=store,
+                        session_id=session_id,
+                        call_llm_fn=call_llm,
+                        project=proj or project,
+                        model_name=ENRICH_BACKEND,
+                    )
+                    if result:
+                        enriched += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    console.print(f"  [red]Error on {session_id[:8]}: {e}[/]")
+                    failed += 1
+
+                progress.advance(task)
+
+        store.close()
+
+        console.print(f"\n[bold green]Done![/] Enriched: {enriched}, Failed: {failed}")
+
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
 @app.command("git-overlay")
 def git_overlay(
     project: str = typer.Option(None, "--project", "-p", help="Only process specific project slug"),

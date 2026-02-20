@@ -622,6 +622,29 @@ Use at conversation start to understand current state without asking the user.""
             outputSchema=_CURRENT_CONTEXT_OUTPUT_SCHEMA,
         ),
         Tool(
+            name="brainlayer_session_summary",
+            title="Session Summary",
+            description=(
+                "Get the enriched summary of a session."
+                " Returns decisions made, corrections,"
+                " learnings, mistakes, outcome, quality score,"
+                " and session narrative."
+                " Requires sessions to have been enriched"
+                " via 'brainlayer enrich-sessions'."
+            ),
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to get summary for",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
             name="brainlayer_store",
             title="Store Memory",
             description="""Persistently store a memory into BrainLayer.
@@ -803,6 +826,9 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             hours=arguments.get("hours", 24),
         )
 
+    elif name == "brainlayer_session_summary":
+        return await _session_summary(session_id=arguments["session_id"])
+
     elif name == "brainlayer_store":
         return await _store(
             content=arguments["content"],
@@ -879,6 +905,9 @@ async def _search(
             empty = {"query": query, "total": 0, "results": []}
             return ([TextContent(type="text", text="No results found.")], empty)
 
+        # Enrich results with session-level context (Phase 7)
+        results = store.enrich_results_with_session_context(results)
+
         # Build structured results + formatted text
         output_parts = [f"## Search Results for: {query}\n"]
         structured_results = []
@@ -910,6 +939,13 @@ async def _search(
                 item["importance"] = meta["importance"]
             if meta.get("chunk_id"):
                 item["chunk_id"] = meta["chunk_id"]
+            # Session-level enrichment (Phase 7)
+            if meta.get("session_summary"):
+                item["session_summary"] = meta["session_summary"]
+            if meta.get("session_outcome"):
+                item["session_outcome"] = meta["session_outcome"]
+            if meta.get("session_quality") is not None:
+                item["session_quality"] = meta["session_quality"]
             structured_results.append(item)
 
             # Build text output (same as before)
@@ -934,6 +970,8 @@ async def _search(
                 output_parts.append(f"**{' | '.join(enrichment_parts)}**")
             if meta.get("summary"):
                 output_parts.append(f"> {meta['summary']}")
+            if meta.get("session_summary"):
+                output_parts.append(f"**Session:** {meta['session_summary'][:200]}")
             output_parts.append(f"**File:** `{meta.get('source_file', 'unknown')}`\n")
             output_parts.append(doc[:1000] + ("..." if len(doc) > 1000 else ""))
             output_parts.append("\n---")
@@ -1348,6 +1386,77 @@ async def _sessions(
 
     except Exception as e:
         return [TextContent(type="text", text=f"Sessions error: {str(e)}")]
+
+
+async def _session_summary(session_id: str):
+    """Get enriched session summary."""
+    try:
+        store = _get_vector_store()
+        enrichment = store.get_session_enrichment(session_id)
+
+        if not enrichment:
+            return [TextContent(
+                type="text",
+                text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.",
+            )]
+
+        parts = [f"## Session Summary: {session_id[:8]}...\n"]
+
+        if enrichment.get("session_summary"):
+            parts.append(f"**Summary:** {enrichment['session_summary']}\n")
+        if enrichment.get("primary_intent"):
+            parts.append(f"**Intent:** {enrichment['primary_intent']}")
+        if enrichment.get("outcome"):
+            parts.append(f"**Outcome:** {enrichment['outcome']}")
+        if enrichment.get("session_quality_score"):
+            parts.append(f"**Quality:** {enrichment['session_quality_score']}/10")
+        if enrichment.get("complexity_score"):
+            parts.append(f"**Complexity:** {enrichment['complexity_score']}/10")
+        if enrichment.get("duration_seconds"):
+            mins = enrichment["duration_seconds"] // 60
+            parts.append(f"**Duration:** {mins} min")
+        parts.append(f"**Messages:** {enrichment.get('message_count', 0)} "
+                     f"(user: {enrichment.get('user_message_count', 0)}, "
+                     f"assistant: {enrichment.get('assistant_message_count', 0)})\n")
+
+        if enrichment.get("decisions_made"):
+            parts.append("### Decisions")
+            for d in enrichment["decisions_made"]:
+                if isinstance(d, dict):
+                    parts.append(f"- {d.get('decision', '?')} — *{d.get('rationale', '')}*")
+                else:
+                    parts.append(f"- {d}")
+
+        if enrichment.get("corrections"):
+            parts.append("\n### Corrections")
+            for c in enrichment["corrections"]:
+                if isinstance(c, dict):
+                    parts.append(f"- Wrong: {c.get('what_was_wrong', '?')} → Wanted: {c.get('what_user_wanted', '?')}")
+                else:
+                    parts.append(f"- {c}")
+
+        if enrichment.get("learnings"):
+            parts.append("\n### Learnings")
+            for l in enrichment["learnings"]:
+                parts.append(f"- {l}")
+
+        if enrichment.get("mistakes"):
+            parts.append("\n### Mistakes")
+            for m in enrichment["mistakes"]:
+                parts.append(f"- {m}")
+
+        if enrichment.get("what_worked"):
+            parts.append(f"\n**What worked:** {enrichment['what_worked']}")
+        if enrichment.get("what_failed"):
+            parts.append(f"**What failed:** {enrichment['what_failed']}")
+
+        if enrichment.get("topic_tags"):
+            parts.append(f"\n**Tags:** {', '.join(enrichment['topic_tags'][:10])}")
+
+        return [TextContent(type="text", text="\n".join(parts))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"Session summary error: {str(e)}")]
 
 
 async def _current_context(

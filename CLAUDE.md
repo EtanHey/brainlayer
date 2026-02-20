@@ -95,6 +95,7 @@ brainlayer/
 │       ├── classify.py          # Stage 2: Content classification
 │       ├── chunk.py             # Stage 3: AST-aware chunking
 │       ├── enrichment.py        # LLM enrichment (summaries, tags, importance)
+│       ├── session_enrichment.py # Session-level LLM analysis (Phase 7)
 │       ├── brain_graph.py       # Brain graph generation (nodes + edges)
 │       ├── obsidian_export.py   # Obsidian vault export
 │       ├── operation_grouping.py # read→edit→test cycle detection
@@ -146,9 +147,15 @@ brainlayer serve --http 8787               # Start daemon (HTTP mode for dashboa
 ```bash
 brainlayer enrich                          # Run LLM enrichment (GLM-4.7-Flash via Ollama)
 brainlayer enrich --batch-size 50          # Custom batch size
+
+brainlayer enrich-sessions                 # Session-level LLM analysis
+brainlayer enrich-sessions --project golems --since 2026-01-01
+brainlayer enrich-sessions --stats         # Show session enrichment stats
 ```
 
-Enrichment adds to each chunk: summary, tags, importance score (1-10), intent classification. Uses local GLM-4.7-Flash with `"think": false` for speed (~1s/chunk for short, ~13s for long).
+**Chunk enrichment** adds to each chunk: summary, tags, importance score (1-10), intent classification. Uses local GLM-4.7-Flash with `"think": false` for speed (~1s/chunk for short, ~13s for long).
+
+**Session enrichment** (Phase 7) analyzes full conversations to extract: session summary, decisions, corrections, learnings, mistakes, patterns, outcome, quality scores.
 
 ### Analysis & Export
 
@@ -233,7 +240,7 @@ The daemon (`brainlayer serve --http 8787`) exposes a FastAPI server used by the
 
 ---
 
-## MCP Server (8 Tools)
+## MCP Server (14 Tools)
 
 Add to `~/.claude/settings.json`:
 
@@ -260,6 +267,7 @@ Add to `~/.claude/settings.json`:
 | `brainlayer_operations` | `session_id` | — | Logical operation groups (read→edit→test) |
 | `brainlayer_regression` | `file_path` | `project` | Regression analysis (what changed since last success) |
 | `brainlayer_plan_links` | — | `plan_name`, `session_id`, `project` | Session ↔ plan linkage |
+| `brainlayer_session_summary` | `session_id` | — | Session enrichment: decisions, corrections, learnings |
 
 ### Search Parameters
 
