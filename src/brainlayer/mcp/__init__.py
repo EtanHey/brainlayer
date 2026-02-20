@@ -105,6 +105,14 @@ _READ_ONLY = ToolAnnotations(
     openWorldHint=False,
 )
 
+# Write tool annotation — for brainlayer_store
+_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+
 
 def _error_result(message: str) -> CallToolResult:
     """Return a CallToolResult with isError=True. Bypasses outputSchema validation."""
@@ -250,6 +258,28 @@ _CURRENT_CONTEXT_OUTPUT_SCHEMA = {
         },
     },
     "required": ["active_projects", "active_branches", "active_plan", "recent_files", "recent_sessions"],
+}
+
+_STORE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "related": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "project": {"type": "string"},
+                    "type": {"type": "string"},
+                    "date": {"type": "string"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    "required": ["id", "related"],
 }
 
 
@@ -591,6 +621,54 @@ Use at conversation start to understand current state without asking the user.""
             },
             outputSchema=_CURRENT_CONTEXT_OUTPUT_SCHEMA,
         ),
+        Tool(
+            name="brainlayer_store",
+            title="Store Memory",
+            description="""Persistently store a memory into BrainLayer.
+
+Use this to save:
+- Ideas: "We could use WebSockets instead of polling"
+- Mistakes: "Never use rm -rf without confirmation"
+- Decisions: "JWT with RS256 for API auth"
+- Learnings: "Always use exponential backoff for retries"
+- Todos: "Refactor the auth module to use middleware"
+- Bookmarks: "Good pattern in auth.ts line 42"
+- Notes: General observations
+- Journal: Session summaries and reflections
+
+Stored items are embedded at write time and immediately searchable.
+Returns the chunk ID and any related existing memories.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The text content to store (e.g., a decision, learning, idea)",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"],
+                        "description": "What kind of memory this is",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional: project name to scope the memory",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional: tags for categorization (e.g., ['reliability', 'api'])",
+                    },
+                    "importance": {
+                        "type": "integer",
+                        "description": "Optional: importance score 1-10 (clamped)",
+                    },
+                },
+                "required": ["content", "type"],
+            },
+            outputSchema=_STORE_OUTPUT_SCHEMA,
+        ),
     ]
 
 
@@ -723,6 +801,15 @@ async def call_tool(name: str, arguments: dict[str, Any]):
     elif name == "brainlayer_current_context":
         return await _current_context(
             hours=arguments.get("hours", 24),
+        )
+
+    elif name == "brainlayer_store":
+        return await _store(
+            content=arguments["content"],
+            memory_type=arguments["type"],
+            project=arguments.get("project"),
+            tags=arguments.get("tags"),
+            importance=arguments.get("importance"),
         )
 
     else:
@@ -1293,6 +1380,59 @@ async def _current_context(
 
     except Exception as e:
         return _error_result(f"Current context error: {str(e)}")
+
+
+async def _store(
+    content: str,
+    memory_type: str,
+    project: str | None = None,
+    tags: list[str] | None = None,
+    importance: int | None = None,
+):
+    """Store a memory into BrainLayer."""
+    try:
+        from ..store import store_memory
+
+        store = _get_vector_store()
+        model = _get_embedding_model()
+        normalized_project = normalize_project_name(project)
+
+        loop = asyncio.get_running_loop()
+
+        def _embed(text: str) -> list[float]:
+            return model.embed_query(text)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: store_memory(
+                store=store,
+                embed_fn=_embed,
+                content=content,
+                memory_type=memory_type,
+                project=normalized_project,
+                tags=tags,
+                importance=importance,
+            ),
+        )
+
+        # Format text response
+        parts = [f"Stored memory `{result['id']}`"]
+        if result["related"]:
+            parts.append(f"\n**Related memories ({len(result['related'])}):**")
+            for r in result["related"]:
+                summary = r.get("summary") or r.get("content", "")[:100]
+                parts.append(f"- {summary}")
+
+        structured = {
+            "id": result["id"],
+            "related": result["related"],
+        }
+        return ([TextContent(type="text", text="\n".join(parts))], structured)
+
+    except ValueError as e:
+        return _error_result(f"Validation error: {str(e)}")
+    except Exception as e:
+        return _error_result(f"Store error: {str(e)}")
 
 
 def serve():
