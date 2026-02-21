@@ -637,6 +637,31 @@ def enrich_batch(
     return {"processed": len(chunks), "success": success, "failed": failed}
 
 
+def mark_unenrichable(store: VectorStore) -> int:
+    """Tag chunks that are too short for their source as 'skipped:too_short'.
+
+    Uses source-aware thresholds: 15 chars for WhatsApp/Telegram, 50 for everything else.
+    Returns the number of newly tagged chunks.
+    """
+    cursor = store.conn.cursor()
+    # Tag chunks below their source-specific threshold
+    # WhatsApp/Telegram: 15 chars. Everything else: 50 chars.
+    cursor.execute("""
+        UPDATE chunks SET enriched_at = 'skipped:too_short'
+        WHERE enriched_at IS NULL
+        AND (
+            (source IN ('whatsapp', 'telegram') AND char_count < 15)
+            OR (source NOT IN ('whatsapp', 'telegram') AND char_count < 50)
+            OR (source IS NULL AND char_count < 50)
+        )
+    """)
+    # apsw doesn't have rowcount, count via separate query
+    tagged = list(cursor.execute(
+        "SELECT COUNT(*) FROM chunks WHERE enriched_at = 'skipped:too_short'"
+    ))[0][0]
+    return tagged
+
+
 def run_enrichment(
     db_path: Optional[Path] = None,
     batch_size: int = 50,
@@ -684,9 +709,12 @@ def run_enrichment(
         # Override module-level backend for this run if fallback was used
         _run_backend = active_backend
 
+        # Auto-tag unenrichable chunks (too short for their source)
+        mark_unenrichable(store)
+
         stats = store.get_enrichment_stats()
-        print(f"Enrichment status: {stats['enriched']}/{stats['total_chunks']} ({stats['percent']}%)")
-        print(f"Remaining: {stats['remaining']}")
+        print(f"Enrichment: {stats['enriched']:,}/{stats['enrichable']:,} ({stats['percent']}%)")
+        print(f"Remaining: {stats['remaining']:,} | Skipped: {stats['skipped']:,} (too short)")
         if stats["by_intent"]:
             print(f"Intent distribution: {stats['by_intent']}")
         print(f"Batch size: {batch_size}, Max: {max_chunks or 'unlimited'}, Parallel: {parallel}")
@@ -736,7 +764,8 @@ def run_enrichment(
         print(f"Time: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
 
         final_stats = store.get_enrichment_stats()
-        print(f"Progress: {final_stats['enriched']}/{final_stats['total_chunks']} ({final_stats['percent']}%)")
+        print(f"Progress: {final_stats['enriched']:,}/{final_stats['enrichable']:,} ({final_stats['percent']}%)")
+        print(f"Skipped: {final_stats['skipped']:,} | Remaining: {final_stats['remaining']:,}")
 
         # Final sync to Supabase
         _sync_stats_to_supabase(store)
@@ -766,9 +795,11 @@ if __name__ == "__main__":
     if args.stats:
         store = VectorStore(db or DEFAULT_DB_PATH)
         stats = store.get_enrichment_stats()
-        print(f"Total: {stats['total_chunks']}")
-        print(f"Enriched: {stats['enriched']} ({stats['percent']}%)")
-        print(f"Remaining: {stats['remaining']}")
+        print(f"Total chunks:  {stats['total_chunks']:,}")
+        print(f"Skipped:       {stats['skipped']:,} (too short)")
+        print(f"Enrichable:    {stats['enrichable']:,}")
+        print(f"Enriched:      {stats['enriched']:,} ({stats['percent']}%)")
+        print(f"Remaining:     {stats['remaining']:,}")
         if stats["by_intent"]:
             print(f"Intent: {stats['by_intent']}")
         store.close()
