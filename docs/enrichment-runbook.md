@@ -152,6 +152,7 @@ The LLM sometimes returns malformed JSON. The parser tries to extract JSON from 
 **Before any bulk operation**, back up the database:
 ```bash
 # WAL-safe copy using SQLite VACUUM INTO
+mkdir -p ~/.local/share/brainlayer/backups
 sqlite3 ~/.local/share/brainlayer/brainlayer.db \
   "VACUUM INTO '$HOME/.local/share/brainlayer/backups/brainlayer-$(date +%Y%m%d-%H%M).db'"
 ```

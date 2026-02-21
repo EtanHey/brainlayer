@@ -23,7 +23,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-
 from .vector_store import VectorStore, serialize_f32
 
 logger = logging.getLogger(__name__)

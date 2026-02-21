@@ -4,8 +4,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from rich import box
-
-logger = logging.getLogger(__name__)
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Group
@@ -14,6 +12,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .search import HybridSearchEngine
+
+logger = logging.getLogger(__name__)
 
 
 class HomeView:

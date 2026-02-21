@@ -408,12 +408,14 @@ Returns: Markdown with conversation chunks showing position, content_type, and c
                     "before": {
                         "type": "integer",
                         "default": 3,
+                        "minimum": 0,
                         "maximum": 50,
                         "description": "Number of chunks before the target to include (default: 3, max: 50)",
                     },
                     "after": {
                         "type": "integer",
                         "default": 3,
+                        "minimum": 0,
                         "maximum": 50,
                         "description": "Number of chunks after the target to include (default: 3, max: 50)",
                     },
@@ -770,8 +772,8 @@ async def call_tool(name: str, arguments: dict[str, Any]):
     elif name == "brainlayer_context":
         return await _context(
             chunk_id=arguments["chunk_id"],
-            before=min(arguments.get("before", 3), 50),
-            after=min(arguments.get("after", 3), 50),
+            before=max(0, min(arguments.get("before", 3), 50)),
+            after=max(0, min(arguments.get("after", 3), 50)),
         )
 
     elif name == "brainlayer_file_timeline":
@@ -820,8 +822,8 @@ async def call_tool(name: str, arguments: dict[str, Any]):
     elif name == "brainlayer_sessions":
         return await _sessions(
             project=arguments.get("project"),
-            days=arguments.get("days", 7),
-            limit=arguments.get("limit", 20),
+            days=max(1, min(arguments.get("days", 7), 365)),
+            limit=max(1, min(arguments.get("limit", 20), 100)),
         )
 
     elif name == "brainlayer_current_context":
@@ -833,12 +835,13 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         return await _session_summary(session_id=arguments["session_id"])
 
     elif name == "brainlayer_store":
+        imp = arguments.get("importance")
         return await _store(
             content=arguments["content"],
             memory_type=arguments["type"],
             project=arguments.get("project"),
             tags=arguments.get("tags"),
-            importance=arguments.get("importance"),
+            importance=max(1, min(imp, 10)) if imp is not None else None,
         )
 
     else:

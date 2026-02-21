@@ -83,6 +83,7 @@ When users install BrainLayer fresh (no existing data), it uses the canonical pa
 ## Backups (Manual)
 
 Before any bulk operation, back up the database:
+
 ```bash
 # WAL-safe copy
 sqlite3 ~/.local/share/brainlayer/brainlayer.db "VACUUM INTO '/path/to/backup/brainlayer-$(date +%Y%m%d).db'"

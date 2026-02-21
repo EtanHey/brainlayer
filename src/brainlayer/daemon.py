@@ -275,7 +275,7 @@ async def health_services():
     # Health check URLs — use env vars matching enrichment.py, fallback to defaults
     ollama_base = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
     ollama_base = ollama_base.rsplit("/api/", 1)[0] if "/api/" in ollama_base else ollama_base.rstrip("/")
-    mlx_base = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http://127.0.0.1:8080/v1/chat/completions"))
+    mlx_base = os.environ.get("BRAINLAYER_MLX_URL", "http://127.0.0.1:8080/v1/chat/completions")
     mlx_base = mlx_base.rsplit("/v1/", 1)[0] if "/v1/" in mlx_base else mlx_base.rstrip("/")
 
     # Run all checks concurrently via thread pool (non-blocking)
