@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 
 ## Project Structure
 
-```
+```text
 src/brainlayer/
 ├── mcp/                  # MCP server (14 tools, stdio-based)
 │   └── __init__.py
