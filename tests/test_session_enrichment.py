@@ -29,9 +29,11 @@ def store(tmp_path):
 @pytest.fixture
 def mock_embed():
     """Mock embedding function that returns a fixed 1024-dim vector."""
+
     def _embed(text: str) -> list[float]:
         seed = sum(ord(c) for c in text[:50]) % 100
         return [float(seed + i) / 1000.0 for i in range(1024)]
+
     return _embed
 
 
@@ -44,7 +46,12 @@ def populated_store(store):
 
     chunks = [
         ("c1", "How do I set up authentication?", "user_message", "2026-02-20T10:00:00Z"),
-        ("c2", "I'll help you set up JWT authentication. First, install the jsonwebtoken package.", "assistant_text", "2026-02-20T10:00:05Z"),
+        (
+            "c2",
+            "I'll help you set up JWT authentication. First, install the jsonwebtoken package.",
+            "assistant_text",
+            "2026-02-20T10:00:05Z",
+        ),
         ("c3", "npm install jsonwebtoken bcrypt", "ai_code", "2026-02-20T10:00:10Z"),
         ("c4", "Actually, use bun instead of npm", "user_message", "2026-02-20T10:00:30Z"),
         ("c5", "Good point! Let me use bun. `bun add jsonwebtoken bcrypt`", "assistant_text", "2026-02-20T10:00:35Z"),
@@ -54,6 +61,7 @@ def populated_store(store):
     ]
 
     from brainlayer.vector_store import serialize_f32
+
     dummy_embedding = [0.1] * 1024
 
     for cid, content, ctype, created_at in chunks:
@@ -63,8 +71,18 @@ def populated_store(store):
                (id, content, metadata, source_file, project, content_type,
                 value_type, char_count, source, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (full_id, content, "{}", source_file, "test-project", ctype,
-             "HIGH", len(content), "claude_code", created_at),
+            (
+                full_id,
+                content,
+                "{}",
+                source_file,
+                "test-project",
+                ctype,
+                "HIGH",
+                len(content),
+                "claude_code",
+                created_at,
+            ),
         )
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (full_id,))
         cursor.execute(
@@ -86,17 +104,13 @@ class TestSessionEnrichmentsTable:
     def test_table_exists(self, store):
         """session_enrichments table is created on DB init."""
         cursor = store.conn.cursor()
-        tables = [row[0] for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )]
+        tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
         assert "session_enrichments" in tables
 
     def test_fts_table_exists(self, store):
         """session_enrichments_fts virtual table is created."""
         cursor = store.conn.cursor()
-        tables = [row[0] for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )]
+        tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
         assert "session_enrichments_fts" in tables
 
     def test_table_columns(self, store):
@@ -104,30 +118,53 @@ class TestSessionEnrichmentsTable:
         cursor = store.conn.cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(session_enrichments)")}
         expected = {
-            "id", "session_id", "file_path", "enrichment_version",
-            "enrichment_model", "enrichment_timestamp",
-            "session_start_time", "session_end_time", "duration_seconds",
-            "message_count", "user_message_count", "assistant_message_count",
-            "tool_call_count", "session_summary", "primary_intent",
-            "outcome", "complexity_score", "session_quality_score",
-            "decisions_made", "corrections", "learnings", "mistakes",
-            "patterns", "topic_tags", "tool_usage_stats",
-            "what_worked", "what_failed", "summary_embedding",
+            "id",
+            "session_id",
+            "file_path",
+            "enrichment_version",
+            "enrichment_model",
+            "enrichment_timestamp",
+            "session_start_time",
+            "session_end_time",
+            "duration_seconds",
+            "message_count",
+            "user_message_count",
+            "assistant_message_count",
+            "tool_call_count",
+            "session_summary",
+            "primary_intent",
+            "outcome",
+            "complexity_score",
+            "session_quality_score",
+            "decisions_made",
+            "corrections",
+            "learnings",
+            "mistakes",
+            "patterns",
+            "topic_tags",
+            "tool_usage_stats",
+            "what_worked",
+            "what_failed",
+            "summary_embedding",
         }
         assert expected.issubset(cols)
 
     def test_unique_session_id_constraint(self, store):
         """session_id is unique — second insert for same session updates."""
-        store.upsert_session_enrichment({
-            "session_id": "test-session-1",
-            "session_summary": "First version",
-            "message_count": 10,
-        })
-        store.upsert_session_enrichment({
-            "session_id": "test-session-1",
-            "session_summary": "Updated version",
-            "message_count": 20,
-        })
+        store.upsert_session_enrichment(
+            {
+                "session_id": "test-session-1",
+                "session_summary": "First version",
+                "message_count": 10,
+            }
+        )
+        store.upsert_session_enrichment(
+            {
+                "session_id": "test-session-1",
+                "session_summary": "Updated version",
+                "message_count": 20,
+            }
+        )
         result = store.get_session_enrichment("test-session-1")
         assert result["session_summary"] == "Updated version"
         assert result["message_count"] == 20
@@ -187,12 +224,20 @@ class TestSessionEnrichmentCRUD:
 
     def test_list_enriched_sessions(self, store):
         """list_enriched_sessions returns session IDs."""
-        store.upsert_session_enrichment({
-            "session_id": "s1", "session_summary": "First", "message_count": 5,
-        })
-        store.upsert_session_enrichment({
-            "session_id": "s2", "session_summary": "Second", "message_count": 3,
-        })
+        store.upsert_session_enrichment(
+            {
+                "session_id": "s1",
+                "session_summary": "First",
+                "message_count": 5,
+            }
+        )
+        store.upsert_session_enrichment(
+            {
+                "session_id": "s2",
+                "session_summary": "Second",
+                "message_count": 3,
+            }
+        )
         enriched = store.list_enriched_sessions()
         assert "s1" in enriched
         assert "s2" in enriched
@@ -200,16 +245,26 @@ class TestSessionEnrichmentCRUD:
 
     def test_enrichment_stats(self, store):
         """get_session_enrichment_stats returns aggregate data."""
-        store.upsert_session_enrichment({
-            "session_id": "s1", "session_summary": "Debug", "message_count": 5,
-            "primary_intent": "debugging", "outcome": "success",
-            "session_quality_score": 8,
-        })
-        store.upsert_session_enrichment({
-            "session_id": "s2", "session_summary": "Implement", "message_count": 10,
-            "primary_intent": "implementing", "outcome": "success",
-            "session_quality_score": 6,
-        })
+        store.upsert_session_enrichment(
+            {
+                "session_id": "s1",
+                "session_summary": "Debug",
+                "message_count": 5,
+                "primary_intent": "debugging",
+                "outcome": "success",
+                "session_quality_score": 8,
+            }
+        )
+        store.upsert_session_enrichment(
+            {
+                "session_id": "s2",
+                "session_summary": "Implement",
+                "message_count": 10,
+                "primary_intent": "implementing",
+                "outcome": "success",
+                "session_quality_score": 6,
+            }
+        )
         stats = store.get_session_enrichment_stats()
         assert stats["total_enriched_sessions"] == 2
         assert stats["by_outcome"]["success"] == 2
@@ -217,13 +272,15 @@ class TestSessionEnrichmentCRUD:
 
     def test_json_fields_serialized(self, store):
         """JSON array fields are properly serialized and deserialized."""
-        store.upsert_session_enrichment({
-            "session_id": "json-test",
-            "session_summary": "Testing JSON",
-            "message_count": 1,
-            "decisions_made": [{"decision": "A"}, {"decision": "B"}],
-            "topic_tags": ["tag1", "tag2", "tag3"],
-        })
+        store.upsert_session_enrichment(
+            {
+                "session_id": "json-test",
+                "session_summary": "Testing JSON",
+                "message_count": 1,
+                "decisions_made": [{"decision": "A"}, {"decision": "B"}],
+                "topic_tags": ["tag1", "tag2", "tag3"],
+            }
+        )
         result = store.get_session_enrichment("json-test")
         assert isinstance(result["decisions_made"], list)
         assert len(result["decisions_made"]) == 2
@@ -232,17 +289,21 @@ class TestSessionEnrichmentCRUD:
 
     def test_fts_search_on_summary(self, store):
         """FTS5 search works on session summaries."""
-        store.upsert_session_enrichment({
-            "session_id": "fts-test",
-            "session_summary": "Implemented authentication with JWT tokens",
-            "message_count": 1,
-            "what_worked": "Clean separation of concerns",
-            "what_failed": "Initial CORS configuration was wrong",
-        })
+        store.upsert_session_enrichment(
+            {
+                "session_id": "fts-test",
+                "session_summary": "Implemented authentication with JWT tokens",
+                "message_count": 1,
+                "what_worked": "Clean separation of concerns",
+                "what_failed": "Initial CORS configuration was wrong",
+            }
+        )
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT session_id FROM session_enrichments_fts WHERE session_enrichments_fts MATCH 'authentication'"
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT session_id FROM session_enrichments_fts WHERE session_enrichments_fts MATCH 'authentication'"
+            )
+        )
         assert len(rows) == 1
         assert rows[0][0] == "fts-test"
 
@@ -319,22 +380,24 @@ class TestParseSessionEnrichment:
         """Valid JSON response is parsed correctly."""
         from brainlayer.pipeline.session_enrichment import parse_session_enrichment
 
-        response = json.dumps({
-            "session_summary": "Fixed authentication bug in JWT middleware by adding proper token validation",
-            "primary_intent": "debugging",
-            "outcome": "success",
-            "complexity_score": 5,
-            "session_quality_score": 7,
-            "decisions_made": [{"decision": "Use RS256", "rationale": "More secure"}],
-            "corrections": [],
-            "learnings": ["JWT needs refresh logic"],
-            "mistakes": [],
-            "patterns": [],
-            "topic_tags": ["jwt", "auth"],
-            "tool_usage_stats": [{"tool": "Read", "count": 5}],
-            "what_worked": "Step-by-step approach",
-            "what_failed": "Initial logic wrong",
-        })
+        response = json.dumps(
+            {
+                "session_summary": "Fixed authentication bug in JWT middleware by adding proper token validation",
+                "primary_intent": "debugging",
+                "outcome": "success",
+                "complexity_score": 5,
+                "session_quality_score": 7,
+                "decisions_made": [{"decision": "Use RS256", "rationale": "More secure"}],
+                "corrections": [],
+                "learnings": ["JWT needs refresh logic"],
+                "mistakes": [],
+                "patterns": [],
+                "topic_tags": ["jwt", "auth"],
+                "tool_usage_stats": [{"tool": "Read", "count": 5}],
+                "what_worked": "Step-by-step approach",
+                "what_failed": "Initial logic wrong",
+            }
+        )
 
         result = parse_session_enrichment(response)
         assert result is not None
@@ -377,11 +440,13 @@ class TestParseSessionEnrichment:
         """Scores are clamped to 1-10 range."""
         from brainlayer.pipeline.session_enrichment import parse_session_enrichment
 
-        response = json.dumps({
-            "session_summary": "Valid session with out-of-range scores that need clamping",
-            "complexity_score": 15,
-            "session_quality_score": -3,
-        })
+        response = json.dumps(
+            {
+                "session_summary": "Valid session with out-of-range scores that need clamping",
+                "complexity_score": 15,
+                "session_quality_score": -3,
+            }
+        )
         result = parse_session_enrichment(response)
         assert result is not None
         assert result["complexity_score"] == 10
@@ -391,10 +456,12 @@ class TestParseSessionEnrichment:
         """Intent values are lowercased and trimmed."""
         from brainlayer.pipeline.session_enrichment import parse_session_enrichment
 
-        response = json.dumps({
-            "session_summary": "Valid session with uppercase intent value that needs normalizing",
-            "primary_intent": "  Debugging  ",
-        })
+        response = json.dumps(
+            {
+                "session_summary": "Valid session with uppercase intent value that needs normalizing",
+                "primary_intent": "  Debugging  ",
+            }
+        )
         result = parse_session_enrichment(response)
         assert result["primary_intent"] == "debugging"
 
@@ -402,10 +469,12 @@ class TestParseSessionEnrichment:
         """Invalid intent value is not included."""
         from brainlayer.pipeline.session_enrichment import parse_session_enrichment
 
-        response = json.dumps({
-            "session_summary": "Valid session but with an invalid intent that should be ignored",
-            "primary_intent": "invalid_intent",
-        })
+        response = json.dumps(
+            {
+                "session_summary": "Valid session but with an invalid intent that should be ignored",
+                "primary_intent": "invalid_intent",
+            }
+        )
         result = parse_session_enrichment(response)
         assert "primary_intent" not in result
 
@@ -413,10 +482,12 @@ class TestParseSessionEnrichment:
         """Arrays are capped at reasonable limits."""
         from brainlayer.pipeline.session_enrichment import parse_session_enrichment
 
-        response = json.dumps({
-            "session_summary": "Valid session with many learnings that should be capped at twenty max",
-            "learnings": [f"Learning #{i}" for i in range(50)],
-        })
+        response = json.dumps(
+            {
+                "session_summary": "Valid session with many learnings that should be capped at twenty max",
+                "learnings": [f"Learning #{i}" for i in range(50)],
+            }
+        )
         result = parse_session_enrichment(response)
         assert len(result["learnings"]) == 20
 
@@ -443,11 +514,13 @@ class TestListSessionsForEnrichment:
         sid = populated_store._test_session_id
 
         # Enrich the session first
-        populated_store.upsert_session_enrichment({
-            "session_id": sid,
-            "session_summary": "Already enriched",
-            "message_count": 8,
-        })
+        populated_store.upsert_session_enrichment(
+            {
+                "session_id": sid,
+                "session_summary": "Already enriched",
+                "message_count": 8,
+            }
+        )
 
         sessions = list_sessions_for_enrichment(populated_store)
         session_ids = [s[0] for s in sessions]
@@ -466,22 +539,24 @@ class TestEnrichSession:
 
         # Mock LLM that returns valid JSON
         def mock_llm(prompt: str) -> str:
-            return json.dumps({
-                "session_summary": "Set up JWT authentication with bun package manager instead of npm",
-                "primary_intent": "implementing",
-                "outcome": "success",
-                "complexity_score": 4,
-                "session_quality_score": 7,
-                "decisions_made": [{"decision": "Use bun over npm", "rationale": "User preference"}],
-                "corrections": [{"what_was_wrong": "Used npm", "what_user_wanted": "Use bun"}],
-                "learnings": ["User prefers bun package manager"],
-                "mistakes": [],
-                "patterns": [],
-                "topic_tags": ["jwt", "authentication", "bun"],
-                "tool_usage_stats": [],
-                "what_worked": "Responsive to user corrections",
-                "what_failed": "Initial package manager choice",
-            })
+            return json.dumps(
+                {
+                    "session_summary": "Set up JWT authentication with bun package manager instead of npm",
+                    "primary_intent": "implementing",
+                    "outcome": "success",
+                    "complexity_score": 4,
+                    "session_quality_score": 7,
+                    "decisions_made": [{"decision": "Use bun over npm", "rationale": "User preference"}],
+                    "corrections": [{"what_was_wrong": "Used npm", "what_user_wanted": "Use bun"}],
+                    "learnings": ["User prefers bun package manager"],
+                    "mistakes": [],
+                    "patterns": [],
+                    "topic_tags": ["jwt", "authentication", "bun"],
+                    "tool_usage_stats": [],
+                    "what_worked": "Responsive to user corrections",
+                    "what_failed": "Initial package manager choice",
+                }
+            )
 
         sid = populated_store._test_session_id
         result = enrich_session(

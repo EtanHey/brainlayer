@@ -304,9 +304,13 @@ class VectorStore:
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_session ON session_enrichments(session_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_project ON session_enrichments(primary_intent)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_enrichments_project ON session_enrichments(primary_intent)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_outcome ON session_enrichments(outcome)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_enrichments_quality ON session_enrichments(session_quality_score)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_enrichments_quality ON session_enrichments(session_quality_score)"
+        )
 
         # Phase 7: FTS5 for session narrative search
         cursor.execute("""
@@ -580,17 +584,20 @@ class VectorStore:
 
             # Extract session ID from source_file
             import os
+
             session_id = os.path.splitext(os.path.basename(source_file))[0]
             if not session_id:
                 continue
 
             if session_id not in session_cache:
-                rows = list(cursor.execute(
-                    """SELECT session_summary, primary_intent, outcome,
+                rows = list(
+                    cursor.execute(
+                        """SELECT session_summary, primary_intent, outcome,
                               session_quality_score
                        FROM session_enrichments WHERE session_id = ?""",
-                    (session_id,),
-                ))
+                        (session_id,),
+                    )
+                )
                 if rows:
                     session_cache[session_id] = {
                         "session_summary": rows[0][0],
@@ -1060,15 +1067,13 @@ class VectorStore:
         """
         cursor = self.conn.cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-        enriched = list(cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
-        ))[0][0]
-        skipped = list(cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"
-        ))[0][0]
-        remaining = list(cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL"
-        ))[0][0]
+        enriched = list(
+            cursor.execute(
+                "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
+            )
+        )[0][0]
+        skipped = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"))[0][0]
+        remaining = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL"))[0][0]
         enrichable = total - skipped
         by_intent = list(
             cursor.execute("""
@@ -1675,8 +1680,13 @@ class VectorStore:
 
         # Serialize JSON fields
         json_fields = [
-            "decisions_made", "corrections", "learnings", "mistakes",
-            "patterns", "topic_tags", "tool_usage_stats",
+            "decisions_made",
+            "corrections",
+            "learnings",
+            "mistakes",
+            "patterns",
+            "topic_tags",
+            "tool_usage_stats",
         ]
         for field in json_fields:
             if field in enrichment and not isinstance(enrichment[field], str):
@@ -1782,54 +1792,86 @@ class VectorStore:
 
     # Column names for session_enrichments (must match CREATE TABLE order)
     _SESSION_ENRICHMENT_COLS = [
-        "id", "session_id", "file_path", "enrichment_version",
-        "enrichment_model", "enrichment_timestamp",
-        "session_start_time", "session_end_time", "duration_seconds",
-        "message_count", "user_message_count", "assistant_message_count",
-        "tool_call_count", "session_summary", "primary_intent",
-        "outcome", "complexity_score", "session_quality_score",
-        "decisions_made", "corrections", "learnings", "mistakes",
-        "patterns", "topic_tags", "tool_usage_stats",
-        "what_worked", "what_failed", "summary_embedding",
+        "id",
+        "session_id",
+        "file_path",
+        "enrichment_version",
+        "enrichment_model",
+        "enrichment_timestamp",
+        "session_start_time",
+        "session_end_time",
+        "duration_seconds",
+        "message_count",
+        "user_message_count",
+        "assistant_message_count",
+        "tool_call_count",
+        "session_summary",
+        "primary_intent",
+        "outcome",
+        "complexity_score",
+        "session_quality_score",
+        "decisions_made",
+        "corrections",
+        "learnings",
+        "mistakes",
+        "patterns",
+        "topic_tags",
+        "tool_usage_stats",
+        "what_worked",
+        "what_failed",
+        "summary_embedding",
     ]
 
     def get_session_enrichment(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get enrichment data for a session."""
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT * FROM session_enrichments WHERE session_id = ?",
-            (session_id,),
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT * FROM session_enrichments WHERE session_id = ?",
+                (session_id,),
+            )
+        )
         if not rows:
             return None
         row = rows[0]
         result = dict(zip(self._SESSION_ENRICHMENT_COLS, row))
         # Parse JSON fields
-        for field in ["decisions_made", "corrections", "learnings", "mistakes",
-                      "patterns", "topic_tags", "tool_usage_stats"]:
+        for field in [
+            "decisions_made",
+            "corrections",
+            "learnings",
+            "mistakes",
+            "patterns",
+            "topic_tags",
+            "tool_usage_stats",
+        ]:
             result[field] = _safe_json_loads(result.get(field))
         return result
 
     def list_enriched_sessions(self) -> List[str]:
         """Return session IDs that already have enrichment data."""
         cursor = self.conn.cursor()
-        return [row[0] for row in cursor.execute(
-            "SELECT session_id FROM session_enrichments"
-        )]
+        return [row[0] for row in cursor.execute("SELECT session_id FROM session_enrichments")]
 
     def get_session_enrichment_stats(self) -> Dict[str, Any]:
         """Get session enrichment statistics."""
         cursor = self.conn.cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
-        by_outcome = dict(cursor.execute(
-            "SELECT outcome, COUNT(*) FROM session_enrichments WHERE outcome IS NOT NULL GROUP BY outcome"
-        ))
-        by_intent = dict(cursor.execute(
-            "SELECT primary_intent, COUNT(*) FROM session_enrichments WHERE primary_intent IS NOT NULL GROUP BY primary_intent"
-        ))
-        avg_quality = list(cursor.execute(
-            "SELECT AVG(session_quality_score) FROM session_enrichments WHERE session_quality_score IS NOT NULL"
-        ))[0][0]
+        by_outcome = dict(
+            cursor.execute(
+                "SELECT outcome, COUNT(*) FROM session_enrichments WHERE outcome IS NOT NULL GROUP BY outcome"
+            )
+        )
+        by_intent = dict(
+            cursor.execute(
+                "SELECT primary_intent, COUNT(*) FROM session_enrichments WHERE primary_intent IS NOT NULL GROUP BY primary_intent"
+            )
+        )
+        avg_quality = list(
+            cursor.execute(
+                "SELECT AVG(session_quality_score) FROM session_enrichments WHERE session_quality_score IS NOT NULL"
+            )
+        )[0][0]
         return {
             "total_enriched_sessions": total,
             "by_outcome": by_outcome,

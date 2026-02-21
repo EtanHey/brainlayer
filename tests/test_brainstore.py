@@ -31,10 +31,12 @@ def store(tmp_path):
 @pytest.fixture
 def mock_embed():
     """Mock embedding function that returns a fixed 1024-dim vector."""
+
     def _embed(text: str) -> list[float]:
         # Return a deterministic but text-dependent vector
         seed = sum(ord(c) for c in text[:50]) % 100
         return [float(seed + i) / 1000.0 for i in range(1024)]
+
     return _embed
 
 
@@ -105,9 +107,7 @@ class TestStoreMemory:
         )
 
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT content_type FROM chunks WHERE id = ?", (result["id"],)
-        ))
+        rows = list(cursor.execute("SELECT content_type FROM chunks WHERE id = ?", (result["id"],)))
         assert rows[0][0] == "decision"
 
     def test_store_with_tags(self, store, mock_embed):
@@ -143,9 +143,7 @@ class TestStoreMemory:
         )
 
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT importance FROM chunks WHERE id = ?", (result["id"],)
-        ))
+        rows = list(cursor.execute("SELECT importance FROM chunks WHERE id = ?", (result["id"],)))
         assert rows[0][0] == 9.0
 
     def test_store_creates_embedding(self, store, mock_embed):
@@ -162,9 +160,7 @@ class TestStoreMemory:
 
         # Verify embedding exists in chunk_vectors
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (result["id"],)
-        ))
+        rows = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (result["id"],)))
         assert rows[0][0] == 1
 
     def test_store_sets_timestamps(self, store, mock_embed):
@@ -182,9 +178,7 @@ class TestStoreMemory:
         after = datetime.now(timezone.utc).isoformat()
 
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT created_at, enriched_at FROM chunks WHERE id = ?", (result["id"],)
-        ))
+        rows = list(cursor.execute("SELECT created_at, enriched_at FROM chunks WHERE id = ?", (result["id"],)))
         created_at = rows[0][0]
         assert created_at >= before
         assert created_at <= after
@@ -272,9 +266,7 @@ class TestStoreValidation:
             importance=15,
         )
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT importance FROM chunks WHERE id = ?", (result["id"],)
-        ))
+        rows = list(cursor.execute("SELECT importance FROM chunks WHERE id = ?", (result["id"],)))
         assert rows[0][0] == 10.0
 
     def test_project_optional(self, store, mock_embed):
