@@ -629,8 +629,7 @@ def enrich_batch(
             if done % HEARTBEAT_INTERVAL == 0 or now - last_heartbeat > 60:
                 rate = done / (now - batch_start) if now > batch_start else 0
                 print(
-                    f"  HEARTBEAT [{done}/{len(chunks)}] {duration:.1f}s | "
-                    f"ok={success} fail={failed} rate={rate:.1f}/s"
+                    f"  HEARTBEAT [{done}/{len(chunks)}] {duration:.1f}s | ok={success} fail={failed} rate={rate:.1f}/s"
                 )
                 last_heartbeat = now
 
@@ -656,9 +655,7 @@ def mark_unenrichable(store: VectorStore) -> int:
         )
     """)
     # apsw doesn't have rowcount, count via separate query
-    tagged = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE enriched_at = 'skipped:too_short'"
-    ))[0][0]
+    tagged = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at = 'skipped:too_short'"))[0][0]
     return tagged
 
 

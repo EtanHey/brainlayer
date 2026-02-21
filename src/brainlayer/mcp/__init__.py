@@ -1042,9 +1042,7 @@ async def _context(chunk_id: str, before: int = 3, after: int = 3) -> list[TextC
         result = store.get_context(chunk_id, before=before, after=after)
 
         if result.get("error"):
-            return _error_result(
-                f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results."
-            )
+            return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
 
         if not result.get("context"):
             return [TextContent(type="text", text="No context available for this chunk.")]
@@ -1388,10 +1386,12 @@ async def _session_summary(session_id: str):
         enrichment = store.get_session_enrichment(session_id)
 
         if not enrichment:
-            return [TextContent(
-                type="text",
-                text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.",
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.",
+                )
+            ]
 
         parts = [f"## Session Summary: {session_id[:8]}...\n"]
 
@@ -1408,9 +1408,11 @@ async def _session_summary(session_id: str):
         if enrichment.get("duration_seconds"):
             mins = enrichment["duration_seconds"] // 60
             parts.append(f"**Duration:** {mins} min")
-        parts.append(f"**Messages:** {enrichment.get('message_count', 0)} "
-                     f"(user: {enrichment.get('user_message_count', 0)}, "
-                     f"assistant: {enrichment.get('assistant_message_count', 0)})\n")
+        parts.append(
+            f"**Messages:** {enrichment.get('message_count', 0)} "
+            f"(user: {enrichment.get('user_message_count', 0)}, "
+            f"assistant: {enrichment.get('assistant_message_count', 0)})\n"
+        )
 
         if enrichment.get("decisions_made"):
             parts.append("### Decisions")

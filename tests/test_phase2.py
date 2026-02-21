@@ -255,7 +255,9 @@ class TestParseEnrichment:
     def test_json_with_extra_text(self):
         from brainlayer.pipeline.enrichment import parse_enrichment
 
-        text = 'Here is the result:\n{"summary":"Found it","tags":["test"],"importance":5,"intent":"implementing"}\nDone.'
+        text = (
+            'Here is the result:\n{"summary":"Found it","tags":["test"],"importance":5,"intent":"implementing"}\nDone.'
+        )
         result = parse_enrichment(text)
         assert result is not None
         assert result["summary"] == "Found it"

@@ -26,6 +26,11 @@ htmlcov/
 *.db-wal
 *.db-shm
 
+# Secrets
+.env
+.env.local
+.env.*.local
+
 # IDE
 .idea/
 .vscode/
@@ -42,6 +47,9 @@ docs/plan/
 # OS
 .DS_Store
 Thumbs.db
+
+# Lock files (reproducible installs handled via pyproject.toml)
+uv.lock
 
 # Claude scratchpad
 claude.scratchpad.md

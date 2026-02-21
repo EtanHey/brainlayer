@@ -27,9 +27,16 @@ from ..vector_store import VectorStore
 
 # Valid values for structured fields
 VALID_INTENTS = [
-    "debugging", "designing", "configuring", "discussing",
-    "deciding", "implementing", "reviewing", "refactoring",
-    "deploying", "testing",
+    "debugging",
+    "designing",
+    "configuring",
+    "discussing",
+    "deciding",
+    "implementing",
+    "reviewing",
+    "refactoring",
+    "deploying",
+    "testing",
 ]
 VALID_OUTCOMES = ["success", "partial_success", "failure", "abandoned", "ongoing"]
 
@@ -47,14 +54,16 @@ def reconstruct_session(store: VectorStore, session_id: str) -> Dict[str, Any]:
 
     # Find chunks belonging to this session, ordered by creation time
     # Session ID maps to source_file (the JSONL filename stem) or conversation_id
-    rows = list(cursor.execute(
-        """SELECT id, content, content_type, source_file, created_at,
+    rows = list(
+        cursor.execute(
+            """SELECT id, content, content_type, source_file, created_at,
                   char_count, source, conversation_id
            FROM chunks
            WHERE (source_file LIKE ? OR conversation_id = ?)
            ORDER BY created_at, rowid""",
-        (f"%{session_id}%", session_id),
-    ))
+            (f"%{session_id}%", session_id),
+        )
+    )
 
     if not rows:
         return {"chunks": [], "conversation": "", "message_count": 0}
@@ -124,9 +133,7 @@ def reconstruct_session(store: VectorStore, session_id: str) -> Dict[str, Any]:
         elif ct == "file_read":
             # Summarize file reads (often very long)
             lines = content.split("\n")
-            conversation_parts.append(
-                f"FILE_READ ({len(lines)} lines): {content[:500]}"
-            )
+            conversation_parts.append(f"FILE_READ ({len(lines)} lines): {content[:500]}")
         else:
             conversation_parts.append(f"[{ct}]: {content[:500]}")
 
@@ -134,9 +141,7 @@ def reconstruct_session(store: VectorStore, session_id: str) -> Dict[str, Any]:
 
         # Stop if we've exceeded the character limit
         if total_chars > MAX_CONVERSATION_CHARS:
-            conversation_parts.append(
-                f"\n[... {len(chunks) - len(conversation_parts)} more chunks truncated]"
-            )
+            conversation_parts.append(f"\n[... {len(chunks) - len(conversation_parts)} more chunks truncated]")
             break
 
     conversation = "\n\n".join(conversation_parts)
@@ -240,7 +245,7 @@ def parse_session_enrichment(text: str) -> Optional[Dict[str, Any]]:
                 for end in range(len(text) - 1, start, -1):
                     if text[end] == "}":
                         try:
-                            match = json.loads(text[start:end + 1])
+                            match = json.loads(text[start : end + 1])
                             break
                         except json.JSONDecodeError:
                             continue
@@ -284,10 +289,7 @@ def parse_session_enrichment(text: str) -> Optional[Dict[str, Any]]:
         # Topic tags
         tags = match.get("topic_tags", [])
         if isinstance(tags, list):
-            result["topic_tags"] = [
-                str(t).lower().strip() for t in tags
-                if isinstance(t, str)
-            ][:15]
+            result["topic_tags"] = [str(t).lower().strip() for t in tags if isinstance(t, str)][:15]
 
         # Tool usage
         tool_stats = match.get("tool_usage_stats", [])
@@ -334,18 +336,22 @@ def list_sessions_for_enrichment(
         if sid not in already_enriched:
             # Apply 'since' filter if provided
             if since:
-                first_time = list(cursor.execute(
-                    "SELECT MIN(created_at) FROM chunks WHERE source_file LIKE ?",
-                    (f"%{sid}%",),
-                ))[0][0]
+                first_time = list(
+                    cursor.execute(
+                        "SELECT MIN(created_at) FROM chunks WHERE source_file LIKE ?",
+                        (f"%{sid}%",),
+                    )
+                )[0][0]
                 if first_time and first_time < since:
                     continue
 
             # Count chunks for this session
-            count = list(cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE source_file LIKE ?",
-                (f"%{sid}%",),
-            ))[0][0]
+            count = list(
+                cursor.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE source_file LIKE ?",
+                    (f"%{sid}%",),
+                )
+            )[0][0]
             if count > 0:
                 sessions.append((sid, proj or "", count))
                 already_enriched.add(sid)
@@ -368,16 +374,19 @@ def list_sessions_for_enrichment(
         # Extract session ID from source_file path
         # Typical format: /path/to/.claude/projects/-Users-janedev-Gits-project/abc123.jsonl
         import os
+
         sid = os.path.splitext(os.path.basename(source_file))[0] if source_file else ""
         if not sid or sid in already_enriched:
             continue
 
         # Apply 'since' filter if provided
         if since:
-            first_time = list(cursor.execute(
-                "SELECT MIN(created_at) FROM chunks WHERE source_file = ?",
-                (source_file,),
-            ))[0][0]
+            first_time = list(
+                cursor.execute(
+                    "SELECT MIN(created_at) FROM chunks WHERE source_file = ?",
+                    (source_file,),
+                )
+            )[0][0]
             if first_time and first_time < since:
                 continue
 
@@ -450,6 +459,7 @@ def enrich_session(
     if embed_fn and enrichment.get("session_summary"):
         try:
             from ..vector_store import serialize_f32
+
             embedding = embed_fn(enrichment["session_summary"])
             enrichment["summary_embedding"] = serialize_f32(embedding)
         except Exception:

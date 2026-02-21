@@ -30,6 +30,14 @@ console = Console()
 
 
 @app.command()
+def init() -> None:
+    """Interactive setup wizard — detects your environment and configures BrainLayer."""
+    from .wizard import run_wizard
+
+    run_wizard()
+
+
+@app.command()
 def index(
     source: Path = typer.Argument(
         Path.home() / ".claude" / "projects", help="Source directory containing JSONL conversations"

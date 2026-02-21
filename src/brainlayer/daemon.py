@@ -1052,6 +1052,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="BrainLayer daemon")
     parser.add_argument("--http", type=int, default=None, help="Also serve on HTTP port (e.g. --http 8787)")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind address (default: 127.0.0.1)")
     args = parser.parse_args()
 
     global http_port
@@ -1067,7 +1068,7 @@ def main():
 
     if args.http:
         # Dual mode: unix socket + HTTP port
-        asyncio.run(_run_dual(args.http))
+        asyncio.run(_run_dual(args.http, host=args.host))
     else:
         # Socket-only mode (backward compatible)
         config = uvicorn.Config(app, uds=str(SOCKET_PATH), log_level="info", access_log=False)
@@ -1081,15 +1082,15 @@ def main():
             sys.exit(1)
 
 
-async def _run_dual(port: int):
+async def _run_dual(port: int, host: str = "127.0.0.1"):
     """Run both unix socket and HTTP servers concurrently."""
     socket_config = uvicorn.Config(app, uds=str(SOCKET_PATH), log_level="info", access_log=False)
-    http_config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info", access_log=False)
+    http_config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
 
     socket_server = uvicorn.Server(socket_config)
     http_server = uvicorn.Server(http_config)
 
-    logger.info(f"Starting dual mode: socket={SOCKET_PATH}, http=0.0.0.0:{port}")
+    logger.info(f"Starting dual mode: socket={SOCKET_PATH}, http={host}:{port}")
 
     try:
         await asyncio.gather(
