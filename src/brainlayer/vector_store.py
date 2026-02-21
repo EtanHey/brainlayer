@@ -1051,10 +1051,25 @@ class VectorStore:
                     raise
 
     def get_enrichment_stats(self) -> Dict[str, Any]:
-        """Get enrichment progress statistics."""
+        """Get enrichment progress statistics.
+
+        Reports both naive (total) and accurate (enrichable-only) percentages.
+        Chunks marked 'skipped:too_short' are excluded from enrichable count.
+        WhatsApp/Telegram chunks use a lower threshold (15 chars) so they're
+        NOT marked as skipped even if under 50 chars.
+        """
         cursor = self.conn.cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-        enriched = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"))[0][0]
+        enriched = list(cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
+        ))[0][0]
+        skipped = list(cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"
+        ))[0][0]
+        remaining = list(cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL"
+        ))[0][0]
+        enrichable = total - skipped
         by_intent = list(
             cursor.execute("""
             SELECT intent, COUNT(*) FROM chunks
@@ -1064,9 +1079,12 @@ class VectorStore:
         )
         return {
             "total_chunks": total,
+            "enrichable": enrichable,
             "enriched": enriched,
-            "remaining": total - enriched,
-            "percent": round(enriched / total * 100, 1) if total > 0 else 0,
+            "skipped": skipped,
+            "remaining": remaining,
+            "percent": round(enriched / enrichable * 100, 1) if enrichable > 0 else 0,
+            "naive_percent": round((enriched + skipped) / total * 100, 1) if total > 0 else 0,
             "by_intent": {row[0]: row[1] for row in by_intent},
         }
 
