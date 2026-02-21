@@ -23,7 +23,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-import apsw
 
 from .vector_store import VectorStore, serialize_f32
 
@@ -151,7 +150,7 @@ def _find_related(
                 item["date"] = meta["created_at"][:10]
             related.append(item)
         return related
-    except (apsw.Error, RuntimeError) as e:
-        # Don't let related search failure block the store
+    except Exception as e:
+        # Don't let related search failure block the store — intentionally broad
         logger.warning("Related memory search failed: %s", e)
         return []
