@@ -84,7 +84,7 @@ brainlayer/
 │   │   ├── app.py
 │   │   ├── search.py
 │   │   └── views.py
-│   ├── mcp/                    # MCP server (8 tools)
+│   ├── mcp/                    # MCP server (14 tools)
 │   │   └── __init__.py
 │   └── pipeline/               # Processing stages
 │       ├── extract.py           # Stage 1: Parse JSONL conversations
@@ -267,7 +267,12 @@ Add to `~/.claude/settings.json`:
 | `brainlayer_operations` | `session_id` | — | Logical operation groups (read→edit→test) |
 | `brainlayer_regression` | `file_path` | `project` | Regression analysis (what changed since last success) |
 | `brainlayer_plan_links` | — | `plan_name`, `session_id`, `project` | Session ↔ plan linkage |
+| `brainlayer_think` | `context` | `project`, `max_results` (10) | Retrieve relevant past decisions, patterns, bugs for current task |
+| `brainlayer_recall` | — | `file_path`, `topic`, `project`, `max_results` (10) | Proactive context retrieval for a file or topic (one required) |
+| `brainlayer_sessions` | — | `project`, `days` (7), `limit` (20) | Browse recent Claude Code sessions with metadata |
+| `brainlayer_current_context` | — | `hours` (24) | Lightweight current working context (projects, branches, files) |
 | `brainlayer_session_summary` | `session_id` | — | Session enrichment: decisions, corrections, learnings |
+| `brainlayer_store` | `content`, `type` | `project`, `tags`, `importance` | Persistently store a memory (idea, decision, learning, etc.) |
 
 ### Search Parameters
 
