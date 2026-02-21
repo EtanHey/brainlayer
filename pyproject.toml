@@ -72,11 +72,14 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
 ]
+docs = [
+    "mkdocs-material>=9.5.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/EtanHey/brainlayer"
 Repository = "https://github.com/EtanHey/brainlayer"
-Documentation = "https://github.com/EtanHey/brainlayer#readme"
+Documentation = "https://etanhey.github.io/brainlayer"
 Issues = "https://github.com/EtanHey/brainlayer/issues"
 
 [project.scripts]
