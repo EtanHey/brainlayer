@@ -74,6 +74,7 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/EtanHey/brainlayer"
 Repository = "https://github.com/EtanHey/brainlayer"
+Documentation = "https://github.com/EtanHey/brainlayer#readme"
 Issues = "https://github.com/EtanHey/brainlayer/issues"
 
 [project.scripts]

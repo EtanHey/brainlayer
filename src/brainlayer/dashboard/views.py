@@ -1,8 +1,11 @@
 """Dashboard views for Home and Memory interfaces."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from rich import box
+
+logger = logging.getLogger(__name__)
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Group
@@ -222,6 +225,6 @@ class MemoryView:
             return self.search_results
 
         except Exception as e:
-            print(f"Search error: {e}")
+            logger.warning("Search error: %s", e)
             self.search_results = []
             return []

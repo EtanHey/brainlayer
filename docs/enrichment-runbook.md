@@ -149,12 +149,12 @@ The LLM sometimes returns malformed JSON. The parser tries to extract JSON from 
 
 ### Backup and Recovery
 
-**Before any bulk operation**, run the backup script:
+**Before any bulk operation**, back up the database:
 ```bash
-bash packages/ralph/scripts/backup-golem-system.sh
+# WAL-safe copy using SQLite VACUUM INTO
+sqlite3 ~/.local/share/brainlayer/brainlayer.db \
+  "VACUUM INTO '$HOME/.local/share/brainlayer/backups/brainlayer-$(date +%Y%m%d-%H%M).db'"
 ```
-
-This creates a WAL-safe copy of `brainlayer.db` + all JSONL session files in iCloud (`~/Library/Mobile Documents/com~apple~CloudDocs/golem-backup-*/`).
 
 **To restore from backup:**
 ```bash
@@ -163,7 +163,8 @@ pkill -f "brainlayer serve" || true
 rm /tmp/brainlayer-enrichment.lock 2>/dev/null || true
 
 # Copy backup over current DB
-cp ~/Library/Mobile\ Documents/com~apple~CloudDocs/golem-backup-YYYY-MM-DD-HHMM/brainlayer/brainlayer.db ~/.local/share/brainlayer/brainlayer.db
+cp ~/.local/share/brainlayer/backups/brainlayer-YYYYMMDD-HHMM.db \
+   ~/.local/share/brainlayer/brainlayer.db
 
 # Restart daemon
 brainlayer serve --http 8787

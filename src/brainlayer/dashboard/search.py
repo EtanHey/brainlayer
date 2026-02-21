@@ -1,10 +1,13 @@
 """Hybrid search engine combining BM25 and semantic search."""
 
+import logging
 import math
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..embeddings import EmbeddingModel
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..vector_store import VectorStore
@@ -121,7 +124,7 @@ class HybridSearchEngine:
                 self.is_fitted = True
 
         except Exception as e:
-            print(f"Error fitting search engine: {e}")
+            logger.warning("Error fitting search engine: %s", e)
             self.is_fitted = False
 
     def search(
@@ -201,7 +204,7 @@ class HybridSearchEngine:
             }
 
         except Exception as e:
-            print(f"Hybrid search error: {e}")
+            logger.warning("Hybrid search error: %s", e)
             return self._semantic_search_only(vector_store, query, n_results, project_filter, content_type_filter)
 
     def _semantic_search_only(
@@ -222,5 +225,5 @@ class HybridSearchEngine:
                 content_type_filter=content_type_filter,
             )
         except Exception as e:
-            print(f"Semantic search error: {e}")
+            logger.warning("Semantic search error: %s", e)
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
