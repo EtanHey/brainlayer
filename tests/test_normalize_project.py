@@ -2,7 +2,7 @@
 
 import os
 
-from brainlayer.mcp import normalize_project_name
+from brainlayer.mcp import _normalize_project_name as normalize_project_name
 
 
 class TestNormalizeProjectName:

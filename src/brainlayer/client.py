@@ -1,11 +1,14 @@
 """Client for communicating with brainlayer daemon."""
 
+import logging
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 SOCKET_PATH = Path("/tmp/brainlayer.sock")
 DAEMON_STARTUP_TIMEOUT = 30  # seconds
@@ -57,7 +60,7 @@ class DaemonClient:
             return False
 
         except Exception as e:
-            print(f"Failed to start daemon: {e}")
+            logger.warning("Failed to start daemon: %s", e)
             return False
 
     def _ensure_daemon(self) -> bool:
@@ -65,7 +68,7 @@ class DaemonClient:
         if self._is_daemon_running():
             return True
 
-        print("Starting brainlayer daemon...")
+        logger.info("Starting brainlayer daemon...")
         return self._start_daemon()
 
     def search(

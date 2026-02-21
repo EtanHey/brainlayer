@@ -27,8 +27,7 @@ When users install BrainLayer fresh (no existing data), it uses the canonical pa
 
 ## Session Archiver
 
-**Service:** `com.golems.session-archiver` (launchd, runs daily at 4am)
-**Script:** `golems/packages/services/src/session-archiver.ts`
+**Service:** `com.brainlayer.session-archiver` (launchd, runs daily at 4am)
 
 ### How it works:
 
@@ -42,7 +41,7 @@ When users install BrainLayer fresh (no existing data), it uses the canonical pa
 
 ```
 ~/.claude-archive/
-  golems/
+  my-project/
     archive-2026-02-09T02-00-05/
       {uuid}.jsonl           # Archived session transcript
       {uuid}/                # Optional: subagent files
@@ -60,8 +59,8 @@ When users install BrainLayer fresh (no existing data), it uses the canonical pa
 ```json
 {
   "archivedAt": "2026-02-09T02:00:05.123Z",
-  "projectId": "golems",
-  "originalPath": "/Users/janedev/Gits/golems",
+  "projectId": "my-project",
+  "originalPath": "/Users/username/Gits/my-project",
   "sessions": [
     {
       "uuid": "abc123...",
@@ -81,29 +80,24 @@ When users install BrainLayer fresh (no existing data), it uses the canonical pa
 }
 ```
 
-## iCloud Backups (Manual)
+## Backups (Manual)
 
-These are one-time manual backups, NOT session archives:
+Before any bulk operation, back up the database:
 
-| Directory | What | When |
-|-----------|------|------|
-| `iCloud/golem-backup-2026-02-01-2245/` | Config files, LaunchAgents, ralph config | Feb 1, 2026 |
-| `iCloud/golem-archives/2026-02-02/` | Old zikaron scripts, photorec recovery | Feb 2, 2026 |
-| `iCloud/golem-backup-2026-02-16-0223/` | zikaron.db snapshot (pre-Vertex backfill) | Feb 16, 2026 |
-| `iCloud/golems-backups/packages-zikaron-backup-20260219/` | packages/zikaron/ code before extraction | Feb 19, 2026 |
-| `iCloud/Golems/` | Symlinks to plans | Feb 6, 2026 |
+```bash
+# WAL-safe copy
+sqlite3 ~/.local/share/brainlayer/brainlayer.db "VACUUM INTO '/path/to/backup/brainlayer-$(date +%Y%m%d).db'"
+```
 
-(iCloud base: `~/Library/Mobile Documents/com~apple~CloudDocs/`)
-
-**None of these contain session JSONL files.** They're config, DB, and code backups.
+Store backups in your preferred location (iCloud, external drive, etc.).
 
 ## Historical: Data Migrations
 
 ### Repo path change (Jan-Feb 2026)
 
 Repos moved from `~/Desktop/Gits/` to `~/Gits/`. This means:
-- Old chunks reference `~/.claude/projects/-Users-janedev-Desktop-Gits-{repo}/`
-- New chunks reference `~/.claude/projects/-Users-janedev-Gits-{repo}/`
+- Old chunks reference `~/.claude/projects/-Users-username-Desktop-Gits-{repo}/`
+- New chunks reference `~/.claude/projects/-Users-username-Gits-{repo}/`
 - The old JSONL session files at the Desktop paths no longer exist
 
 ### Session archiver setup (Feb 9, 2026)
@@ -114,7 +108,7 @@ These chunks are still searchable — they just don't have `created_at` timestam
 
 ### BrainLayer extraction (Feb 19, 2026)
 
-Extracted from `golems/packages/zikaron/` to standalone `~/Gits/brainlayer/`.
+Extracted to standalone repository.
 Code moved, data stayed at `~/.local/share/zikaron/zikaron.db`.
 `paths.py` handles the legacy path transparently.
 

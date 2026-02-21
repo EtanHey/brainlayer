@@ -51,7 +51,12 @@ LEVEL_TARGETS = [40, 10, 10]  # L0: ~40 top, L1: ~10 per L0, L2: ~10 per L1
 
 
 def serialize_f32(vector) -> bytes:
-    """Serialize float32 vector to bytes for sqlite-vec."""
+    """Serialize float32 vector to bytes for sqlite-vec.
+
+    Note: Duplicated from vector_store.serialize_f32 because clustering.py
+    runs as a standalone script (python -m brainlayer.clustering) and
+    importing vector_store triggers heavy dependencies. Kept intentionally.
+    """
     return struct.pack(f"{len(vector)}f", *vector)
 
 

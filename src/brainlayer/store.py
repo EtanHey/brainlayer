@@ -12,17 +12,20 @@ Usage:
         embed_fn=model.embed_query,
         content="Always use exponential backoff for retries",
         memory_type="learning",
-        project="golems",
+        project="my-project",
         tags=["reliability", "api"],
     )
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from .vector_store import VectorStore, serialize_f32
+
+logger = logging.getLogger(__name__)
 
 VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"]
 
@@ -146,6 +149,7 @@ def _find_related(
                 item["date"] = meta["created_at"][:10]
             related.append(item)
         return related
-    except Exception:
-        # Don't let related search failure block the store
+    except Exception as e:
+        # Don't let related search failure block the store — intentionally broad
+        logger.warning("Related memory search failed: %s", e)
         return []

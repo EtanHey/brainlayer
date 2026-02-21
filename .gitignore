@@ -35,6 +35,12 @@ htmlcov/
 # Local working files (audit logs, prompts, scratch)
 docs.local/
 
+# Internal planning docs (contain cross-repo references)
+docs/plan/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude scratchpad
+claude.scratchpad.md

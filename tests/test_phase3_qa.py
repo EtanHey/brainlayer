@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from brainlayer.mcp import normalize_project_name
+from brainlayer.mcp import _normalize_project_name as normalize_project_name
 from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 

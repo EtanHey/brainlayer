@@ -1,5 +1,6 @@
 """Dashboard views for Home and Memory interfaces."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from rich import box
@@ -11,6 +12,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .search import HybridSearchEngine
+
+logger = logging.getLogger(__name__)
 
 
 class HomeView:
@@ -222,6 +225,6 @@ class MemoryView:
             return self.search_results
 
         except Exception as e:
-            print(f"Search error: {e}")
+            logger.warning("Search error: %s", e)
             self.search_results = []
             return []

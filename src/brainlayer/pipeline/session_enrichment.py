@@ -16,7 +16,7 @@ Usage:
 
 CLI:
     brainlayer enrich-sessions
-    brainlayer enrich-sessions --project golems --since 2026-01-01
+    brainlayer enrich-sessions --project my-project --since 2026-01-01
 """
 
 import json
