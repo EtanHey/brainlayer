@@ -15,28 +15,23 @@
   --md-typeset-a-color: #818CF8;
 }
 
-/* Header */
-.md-header {
+[data-md-color-scheme="slate"] .md-header {
   background-color: #080C18;
 }
 
-/* Navigation sidebar */
-.md-sidebar {
+[data-md-color-scheme="slate"] .md-sidebar {
   background-color: #080C18;
 }
 
-/* Code blocks */
-.md-typeset code {
+[data-md-color-scheme="slate"] .md-typeset code {
   background-color: #111827;
 }
 
-/* Admonitions */
-.md-typeset .admonition,
-.md-typeset details {
+[data-md-color-scheme="slate"] .md-typeset .admonition,
+[data-md-color-scheme="slate"] .md-typeset details {
   border-color: #6366F1;
 }
 
-/* Footer */
-.md-footer {
+[data-md-color-scheme="slate"] .md-footer {
   background-color: #080C18;
 }
