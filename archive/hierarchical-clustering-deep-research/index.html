@@ -1,0 +1,1515 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/archive/hierarchical-clustering-deep-research/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Hierarchical knowledge clustering for BrainLayer's personal knowledge graph - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#hierarchical-knowledge-clustering-for-brainlayers-personal-knowledge-graph" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Hierarchical knowledge clustering for BrainLayer's personal knowledge graph
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-recursive-leiden-wins-on-every-constraint-that-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Recursive Leiden wins on every constraint that matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-memory-and-compute-plan-everything-runs-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Memory and compute plan: everything runs locally
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-python-code-outline-with-key-functions-and-data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Python code outline with key functions and data flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-sqlite-schema-exact-ddl-for-hierarchy-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. SQLite schema: exact DDL for hierarchy tables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-incremental-update-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Incremental update strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-search-integration-concrete-changes-to-the-existing-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Search integration: concrete changes to the existing pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-labeling-5000-clusters-efficiently-with-a-tiered-hybrid-approach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Labeling 5,000 clusters efficiently with a tiered hybrid approach
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-content-automation-mcp-tools-n8n-hooks-and-topic-suggestions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Content automation: MCP tools, n8n hooks, and topic suggestions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-visualization-plotly-treemap-plus-threejs-hull-overlays" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Visualization: Plotly treemap plus Three.js hull overlays
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-migration-plan-flat-enrichment-to-hierarchical-step-by-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Migration plan: flat enrichment to hierarchical, step by step
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-risk-assessment-and-what-could-go-wrong" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Risk assessment and what could go wrong
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="hierarchical-knowledge-clustering-for-brainlayers-personal-knowledge-graph">Hierarchical knowledge clustering for BrainLayer's personal knowledge graph</h1>
+<p><strong>Recursive Leiden community detection on a Faiss-built KNN graph is the optimal algorithm for BrainLayer's 245K chunks</strong>, running entirely on an M1 Pro in under 30 minutes at ~3–4 GB peak memory. This approach delivers a clean 3-level hierarchy with direct control over cluster counts, supports incremental updates, and leverages the user's existing Leiden experience. The biggest risk isn't the clustering itself but the Hebrew embeddings: bge-large-en-v1.5 produces near-random vectors for Hebrew text, meaning <strong>16K WhatsApp chunks need re-embedding with BGE-M3</strong> before clustering can work cross-lingually.</p>
+<p>This report provides a complete implementation blueprint: algorithm with parameters, memory plan, Python code outline, SQLite schema, incremental strategy, search integration, labeling pipeline, content automation hooks, visualization approach, migration plan, and risk assessment.</p>
+<hr />
+<h2 id="1-recursive-leiden-wins-on-every-constraint-that-matters">1. Recursive Leiden wins on every constraint that matters</h2>
+<p><strong>HDBSCAN is infeasible at 245K × 1024 dimensions without dimensionality reduction.</strong> The generic algorithm (the only option at 1024 dims, since ball trees degrade past ~50 dims) needs the full pairwise distance matrix: 245K² × 8 bytes ≈ <strong>480 GB</strong>. Even with UMAP reducing to 50 dimensions first, HDBSCAN still requires ~6–15 GB and takes 1–2 hours—and critically, its condensed tree doesn't give direct control over target cluster counts. You'd need to binary-search over <code>min_cluster_size</code> or <code>cut_distance</code> to approximate 30–50 / 300–500 / 3000–5000 clusters.</p>
+<p><strong>Faiss K-Means is fast (~5 minutes) but assumes spherical clusters</strong>, which poorly fits semantic embedding spaces where clusters have irregular shapes. It also produces wildly uneven cluster sizes—some Voronoi cells getting 50K points while others get 100.</p>
+<p><strong>Recursive Leiden on a KNN graph is the clear winner</strong> for four reasons:</p>
+<ul>
+<li><strong>Memory</strong>: ~3–4 GB peak (embeddings + Faiss index + igraph + partitions), easily fits 32 GB</li>
+<li><strong>Speed</strong>: 15–30 minutes total on M1 Pro</li>
+<li><strong>Hierarchy control</strong>: Resolution parameter directly tunes cluster count; recursive application guarantees perfect nesting</li>
+<li><strong>Familiarity</strong>: The user already runs Leiden at 3 resolutions on session-level aggregates in <code>brain_graph.py</code></li>
+</ul>
+<p>The pipeline: L2-normalize all 245K embeddings → build a <strong>k=30 KNN graph via Faiss IndexFlatIP</strong> (5–15 minutes, ~2 GB) → convert to igraph → run Leiden recursively. Level 0 uses resolution ~0.005 for 30–50 clusters, then each Level 0 subgraph runs at ~0.05 for Level 1, then each Level 1 subgraph at ~0.5 for Level 2. These resolution values are starting points requiring binary-search tuning on the actual data, but the Leiden call itself takes only 1–3 minutes per level.</p>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Leiden</th>
+<th>HDBSCAN (w/ UMAP)</th>
+<th>Faiss K-Means</th>
+<th>Birch</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Memory (32 GB Mac)</td>
+<td><strong>~3–4 GB</strong></td>
+<td>~8–15 GB</td>
+<td>~2 GB</td>
+<td>~10 GB</td>
+</tr>
+<tr>
+<td>Time</td>
+<td><strong>15–30 min</strong></td>
+<td>1–2 hrs</td>
+<td>5 min</td>
+<td>30 min</td>
+</tr>
+<tr>
+<td>3-level hierarchy</td>
+<td><strong>Resolution control</strong></td>
+<td>Condensed tree (indirect)</td>
+<td>Forced nesting</td>
+<td>Not natural</td>
+</tr>
+<tr>
+<td>Cluster quality</td>
+<td><strong>Excellent</strong></td>
+<td>Excellent</td>
+<td>Spherical assumption</td>
+<td>CF tree limits</td>
+</tr>
+<tr>
+<td>Incremental updates</td>
+<td><strong>Add nodes/edges</strong></td>
+<td>Must re-fit</td>
+<td>Re-assign only</td>
+<td>partial_fit</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Optional RunPod validation</strong> (~$0.50): Run UMAP + HDBSCAN on an RTX 3090 instance (125 GB RAM, ~$0.25/hr) to get an independent clustering for comparison. Use HDBSCAN's condensed tree to identify noise points that Leiden may have forced into clusters. This is a useful quality check, not a requirement.</p>
+<hr />
+<h2 id="2-memory-and-compute-plan-everything-runs-locally">2. Memory and compute plan: everything runs locally</h2>
+<p>The entire pipeline fits comfortably on the M1 Pro with 32 GB unified memory. Before starting, <strong>kill Ollama, any running Claude sessions, and heavy processes</strong> to free ~20–24 GB for the pipeline.</p>
+<p><strong>Step-by-step execution:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Operation</th>
+<th>Memory</th>
+<th>Time</th>
+<th>Machine</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Extract embeddings from sqlite-vec (batched 10K reads)</td>
+<td>~1 GB (float32 matrix)</td>
+<td>2–3 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>2</td>
+<td>L2-normalize embeddings (in-place)</td>
+<td>+0 MB</td>
+<td>Seconds</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Build Faiss IndexFlatIP, search k=30</td>
+<td>~2 GB (index + results)</td>
+<td>5–15 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Construct igraph from KNN edges</td>
+<td>~400 MB</td>
+<td>1–2 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Recursive Leiden at 3 levels</td>
+<td>~200 MB overhead</td>
+<td>5–10 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Compute centroids per cluster</td>
+<td>~50 MB</td>
+<td>1 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Write hierarchy to SQLite</td>
+<td>Minimal</td>
+<td>1–2 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>8</td>
+<td>c-TF-IDF labeling (all clusters)</td>
+<td>~500 MB</td>
+<td>2–5 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td>9</td>
+<td>LLM labeling (top 2 levels, ~300–550 clusters)</td>
+<td>19 GB (Ollama)</td>
+<td>20–37 min</td>
+<td>Local</td>
+</tr>
+<tr>
+<td><strong>Peak</strong></td>
+<td><strong>Steps 1–5 concurrent</strong></td>
+<td><strong>~3.6 GB</strong></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td></td>
+<td><strong>~45–80 min</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Steps 1–7 run without Ollama. After the hierarchy is built, unload the Faiss index and igraph (freeing ~2.5 GB), then start Ollama for LLM labeling. The two phases never compete for memory.</p>
+<p><strong>If RunPod is used</strong> for UMAP + HDBSCAN validation: provision an RTX 3090 community instance ($0.25/hr), upload the ~1 GB embedding matrix via SCP, run UMAP (1024→50, ~30 min) + HDBSCAN (~30 min), download results. Total cost: <strong>~$0.50</strong>, well within the $5–20 budget.</p>
+<hr />
+<h2 id="3-python-code-outline-with-key-functions-and-data-flow">3. Python code outline with key functions and data flow</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># === PHASE 1: EXTRACT &amp; PREPARE ===</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">extract_embeddings</span><span class="p">(</span><span class="n">db_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10_000</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Read all embeddings from sqlite-vec into numpy arrays.</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    Returns (embeddings: float32[N, 1024], chunk_ids: int64[N])&quot;&quot;&quot;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">conn</span> <span class="o">=</span> <span class="n">apsw</span><span class="o">.</span><span class="n">Connection</span><span class="p">(</span><span class="n">db_path</span><span class="p">)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">all_embeddings</span><span class="p">,</span> <span class="n">all_ids</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">offset</span> <span class="o">=</span> <span class="mi">0</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        <span class="n">rows</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>            <span class="s2">&quot;SELECT chunk_id, embedding FROM vec_chunks LIMIT ? OFFSET ?&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>            <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">offset</span><span class="p">)</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="p">)</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">rows</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>            <span class="k">break</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="k">for</span> <span class="n">cid</span><span class="p">,</span> <span class="n">blob</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>            <span class="n">all_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">cid</span><span class="p">)</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            <span class="n">all_embeddings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">frombuffer</span><span class="p">(</span><span class="n">blob</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="n">offset</span> <span class="o">+=</span> <span class="n">batch_size</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">(</span><span class="n">all_embeddings</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">all_ids</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_knn_graph</span><span class="p">(</span><span class="n">embeddings</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Build k-NN graph using Faiss. Returns (indices[N, k], distances[N, k]).&quot;&quot;&quot;</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">faiss</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="n">n</span><span class="p">,</span> <span class="n">d</span> <span class="o">=</span> <span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="n">faiss</span><span class="o">.</span><span class="n">normalize_L2</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>  <span class="c1"># in-place for cosine similarity via IP</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>    <span class="n">index</span> <span class="o">=</span> <span class="n">faiss</span><span class="o">.</span><span class="n">IndexFlatIP</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    <span class="n">index</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">distances</span><span class="p">,</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">embeddings</span><span class="p">,</span> <span class="n">k</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="k">return</span> <span class="n">indices</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">:],</span> <span class="n">distances</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">:]</span>  <span class="c1"># drop self-match</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="k">def</span><span class="w"> </span><span class="nf">knn_to_igraph</span><span class="p">(</span><span class="n">indices</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">distances</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ig</span><span class="o">.</span><span class="n">Graph</span><span class="p">:</span>
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert KNN results to weighted undirected igraph.&quot;&quot;&quot;</span>
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">igraph</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ig</span>
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    <span class="n">k</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>    <span class="n">sources</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">),</span> <span class="n">k</span><span class="p">)</span>
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>    <span class="n">targets</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>    <span class="n">weights</span> <span class="o">=</span> <span class="n">distances</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>    <span class="n">edges</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">sources</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span> <span class="n">targets</span><span class="o">.</span><span class="n">tolist</span><span class="p">()))</span>
+<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>    <span class="n">g</span> <span class="o">=</span> <span class="n">ig</span><span class="o">.</span><span class="n">Graph</span><span class="p">(</span><span class="n">n</span><span class="o">=</span><span class="n">n</span><span class="p">,</span> <span class="n">edges</span><span class="o">=</span><span class="n">edges</span><span class="p">,</span> <span class="n">directed</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>    <span class="n">g</span><span class="o">.</span><span class="n">es</span><span class="p">[</span><span class="s1">&#39;weight&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">weights</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    <span class="n">g</span><span class="o">.</span><span class="n">to_undirected</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;collapse&#39;</span><span class="p">,</span> <span class="n">combine_edges</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;weight&#39;</span><span class="p">:</span> <span class="s1">&#39;max&#39;</span><span class="p">})</span>
+<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>    <span class="k">return</span> <span class="n">g</span>
+<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>
+<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>
+<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="c1"># === PHASE 2: RECURSIVE LEIDEN CLUSTERING ===</span>
+<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>
+<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="k">def</span><span class="w"> </span><span class="nf">find_resolution_for_target</span><span class="p">(</span><span class="n">graph</span><span class="p">:</span> <span class="n">ig</span><span class="o">.</span><span class="n">Graph</span><span class="p">,</span> <span class="n">target_clusters</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>                                <span class="n">lo</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0001</span><span class="p">,</span> <span class="n">hi</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5.0</span><span class="p">,</span>
+<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>                                <span class="n">tolerance</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Binary search for Leiden resolution parameter yielding target cluster count.&quot;&quot;&quot;</span>
+<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">leidenalg</span>
+<a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_iter</span><span class="p">):</span>
+<a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>        <span class="n">mid</span> <span class="o">=</span> <span class="p">(</span><span class="n">lo</span> <span class="o">+</span> <span class="n">hi</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
+<a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>        <span class="n">part</span> <span class="o">=</span> <span class="n">leidenalg</span><span class="o">.</span><span class="n">find_partition</span><span class="p">(</span>
+<a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>            <span class="n">graph</span><span class="p">,</span> <span class="n">leidenalg</span><span class="o">.</span><span class="n">RBConfigurationVertexPartition</span><span class="p">,</span>
+<a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>            <span class="n">weights</span><span class="o">=</span><span class="s1">&#39;weight&#39;</span><span class="p">,</span> <span class="n">resolution_parameter</span><span class="o">=</span><span class="n">mid</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">42</span>
+<a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>        <span class="p">)</span>
+<a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>        <span class="n">n_clusters</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">membership</span><span class="p">))</span>
+<a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>        <span class="k">if</span> <span class="nb">abs</span><span class="p">(</span><span class="n">n_clusters</span> <span class="o">-</span> <span class="n">target_clusters</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">tolerance</span><span class="p">:</span>
+<a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>            <span class="k">return</span> <span class="n">mid</span>
+<a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>        <span class="k">if</span> <span class="n">n_clusters</span> <span class="o">&lt;</span> <span class="n">target_clusters</span><span class="p">:</span>
+<a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>            <span class="n">lo</span> <span class="o">=</span> <span class="n">mid</span>
+<a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a>        <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a>            <span class="n">hi</span> <span class="o">=</span> <span class="n">mid</span>
+<a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a>    <span class="k">return</span> <span class="n">mid</span>
+<a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a>
+<a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a>
+<a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a><span class="k">def</span><span class="w"> </span><span class="nf">recursive_leiden</span><span class="p">(</span><span class="n">graph</span><span class="p">:</span> <span class="n">ig</span><span class="o">.</span><span class="n">Graph</span><span class="p">,</span> <span class="n">node_indices</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+<a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a>                     <span class="n">level_targets</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Run Leiden recursively for guaranteed nested hierarchy.</span>
+<a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="sd">    level_targets: [40, 10, 10] means 40 top clusters, ~10 sub per top, ~10 per mid.</span>
+<a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="sd">    Returns: {cluster_id: {level, parent_id, member_indices, children}}&quot;&quot;&quot;</span>
+<a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">leidenalg</span>
+<a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a>    <span class="n">hierarchy</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a>    <span class="n">cluster_counter</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<a id="__codelineno-0-79" name="__codelineno-0-79" href="#__codelineno-0-79"></a>
+<a id="__codelineno-0-80" name="__codelineno-0-80" href="#__codelineno-0-80"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_cluster_level</span><span class="p">(</span><span class="n">subgraph</span><span class="p">,</span> <span class="n">parent_indices</span><span class="p">,</span> <span class="n">parent_id</span><span class="p">,</span> <span class="n">level</span><span class="p">):</span>
+<a id="__codelineno-0-81" name="__codelineno-0-81" href="#__codelineno-0-81"></a>        <span class="k">if</span> <span class="n">level</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">level_targets</span><span class="p">):</span>
+<a id="__codelineno-0-82" name="__codelineno-0-82" href="#__codelineno-0-82"></a>            <span class="k">return</span>
+<a id="__codelineno-0-83" name="__codelineno-0-83" href="#__codelineno-0-83"></a>        <span class="n">target</span> <span class="o">=</span> <span class="n">level_targets</span><span class="p">[</span><span class="n">level</span><span class="p">]</span>
+<a id="__codelineno-0-84" name="__codelineno-0-84" href="#__codelineno-0-84"></a>        <span class="n">res</span> <span class="o">=</span> <span class="n">find_resolution_for_target</span><span class="p">(</span><span class="n">subgraph</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+<a id="__codelineno-0-85" name="__codelineno-0-85" href="#__codelineno-0-85"></a>        <span class="n">part</span> <span class="o">=</span> <span class="n">leidenalg</span><span class="o">.</span><span class="n">find_partition</span><span class="p">(</span>
+<a id="__codelineno-0-86" name="__codelineno-0-86" href="#__codelineno-0-86"></a>            <span class="n">subgraph</span><span class="p">,</span> <span class="n">leidenalg</span><span class="o">.</span><span class="n">RBConfigurationVertexPartition</span><span class="p">,</span>
+<a id="__codelineno-0-87" name="__codelineno-0-87" href="#__codelineno-0-87"></a>            <span class="n">weights</span><span class="o">=</span><span class="s1">&#39;weight&#39;</span><span class="p">,</span> <span class="n">resolution_parameter</span><span class="o">=</span><span class="n">res</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">42</span>
+<a id="__codelineno-0-88" name="__codelineno-0-88" href="#__codelineno-0-88"></a>        <span class="p">)</span>
+<a id="__codelineno-0-89" name="__codelineno-0-89" href="#__codelineno-0-89"></a>        <span class="n">communities</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-0-90" name="__codelineno-0-90" href="#__codelineno-0-90"></a>        <span class="k">for</span> <span class="n">local_idx</span><span class="p">,</span> <span class="n">comm</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">part</span><span class="o">.</span><span class="n">membership</span><span class="p">):</span>
+<a id="__codelineno-0-91" name="__codelineno-0-91" href="#__codelineno-0-91"></a>            <span class="n">communities</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">comm</span><span class="p">,</span> <span class="p">[])</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">local_idx</span><span class="p">)</span>
+<a id="__codelineno-0-92" name="__codelineno-0-92" href="#__codelineno-0-92"></a>
+<a id="__codelineno-0-93" name="__codelineno-0-93" href="#__codelineno-0-93"></a>        <span class="k">for</span> <span class="n">comm_id</span><span class="p">,</span> <span class="n">local_members</span> <span class="ow">in</span> <span class="n">communities</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+<a id="__codelineno-0-94" name="__codelineno-0-94" href="#__codelineno-0-94"></a>            <span class="n">cid</span> <span class="o">=</span> <span class="n">cluster_counter</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<a id="__codelineno-0-95" name="__codelineno-0-95" href="#__codelineno-0-95"></a>            <span class="n">cluster_counter</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+<a id="__codelineno-0-96" name="__codelineno-0-96" href="#__codelineno-0-96"></a>            <span class="n">global_members</span> <span class="o">=</span> <span class="n">parent_indices</span><span class="p">[</span><span class="n">local_members</span><span class="p">]</span>
+<a id="__codelineno-0-97" name="__codelineno-0-97" href="#__codelineno-0-97"></a>            <span class="n">hierarchy</span><span class="p">[</span><span class="n">cid</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-0-98" name="__codelineno-0-98" href="#__codelineno-0-98"></a>                <span class="s1">&#39;level&#39;</span><span class="p">:</span> <span class="n">level</span><span class="p">,</span> <span class="s1">&#39;parent_id&#39;</span><span class="p">:</span> <span class="n">parent_id</span><span class="p">,</span>
+<a id="__codelineno-0-99" name="__codelineno-0-99" href="#__codelineno-0-99"></a>                <span class="s1">&#39;member_indices&#39;</span><span class="p">:</span> <span class="n">global_members</span><span class="p">,</span> <span class="s1">&#39;children&#39;</span><span class="p">:</span> <span class="p">[]</span>
+<a id="__codelineno-0-100" name="__codelineno-0-100" href="#__codelineno-0-100"></a>            <span class="p">}</span>
+<a id="__codelineno-0-101" name="__codelineno-0-101" href="#__codelineno-0-101"></a>            <span class="k">if</span> <span class="n">parent_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-102" name="__codelineno-0-102" href="#__codelineno-0-102"></a>                <span class="n">hierarchy</span><span class="p">[</span><span class="n">parent_id</span><span class="p">][</span><span class="s1">&#39;children&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">cid</span><span class="p">)</span>
+<a id="__codelineno-0-103" name="__codelineno-0-103" href="#__codelineno-0-103"></a>            <span class="c1"># Recurse into subgraph</span>
+<a id="__codelineno-0-104" name="__codelineno-0-104" href="#__codelineno-0-104"></a>            <span class="k">if</span> <span class="n">level</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">level_targets</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">local_members</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">:</span>
+<a id="__codelineno-0-105" name="__codelineno-0-105" href="#__codelineno-0-105"></a>                <span class="n">sub</span> <span class="o">=</span> <span class="n">subgraph</span><span class="o">.</span><span class="n">subgraph</span><span class="p">(</span><span class="n">local_members</span><span class="p">)</span>
+<a id="__codelineno-0-106" name="__codelineno-0-106" href="#__codelineno-0-106"></a>                <span class="n">_cluster_level</span><span class="p">(</span><span class="n">sub</span><span class="p">,</span> <span class="n">global_members</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">level</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-0-107" name="__codelineno-0-107" href="#__codelineno-0-107"></a>
+<a id="__codelineno-0-108" name="__codelineno-0-108" href="#__codelineno-0-108"></a>    <span class="n">_cluster_level</span><span class="p">(</span><span class="n">graph</span><span class="p">,</span> <span class="n">node_indices</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-0-109" name="__codelineno-0-109" href="#__codelineno-0-109"></a>    <span class="k">return</span> <span class="n">hierarchy</span>
+<a id="__codelineno-0-110" name="__codelineno-0-110" href="#__codelineno-0-110"></a>
+<a id="__codelineno-0-111" name="__codelineno-0-111" href="#__codelineno-0-111"></a>
+<a id="__codelineno-0-112" name="__codelineno-0-112" href="#__codelineno-0-112"></a><span class="c1"># === PHASE 3: CENTROID COMPUTATION ===</span>
+<a id="__codelineno-0-113" name="__codelineno-0-113" href="#__codelineno-0-113"></a>
+<a id="__codelineno-0-114" name="__codelineno-0-114" href="#__codelineno-0-114"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_centroids</span><span class="p">(</span><span class="n">hierarchy</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">embeddings</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<a id="__codelineno-0-115" name="__codelineno-0-115" href="#__codelineno-0-115"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute mean embedding for each cluster.&quot;&quot;&quot;</span>
+<a id="__codelineno-0-116" name="__codelineno-0-116" href="#__codelineno-0-116"></a>    <span class="n">centroids</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-0-117" name="__codelineno-0-117" href="#__codelineno-0-117"></a>    <span class="k">for</span> <span class="n">cid</span><span class="p">,</span> <span class="n">info</span> <span class="ow">in</span> <span class="n">hierarchy</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+<a id="__codelineno-0-118" name="__codelineno-0-118" href="#__codelineno-0-118"></a>        <span class="n">member_embs</span> <span class="o">=</span> <span class="n">embeddings</span><span class="p">[</span><span class="n">info</span><span class="p">[</span><span class="s1">&#39;member_indices&#39;</span><span class="p">]]</span>
+<a id="__codelineno-0-119" name="__codelineno-0-119" href="#__codelineno-0-119"></a>        <span class="n">centroids</span><span class="p">[</span><span class="n">cid</span><span class="p">]</span> <span class="o">=</span> <span class="n">member_embs</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<a id="__codelineno-0-120" name="__codelineno-0-120" href="#__codelineno-0-120"></a>    <span class="k">return</span> <span class="n">centroids</span>
+<a id="__codelineno-0-121" name="__codelineno-0-121" href="#__codelineno-0-121"></a>
+<a id="__codelineno-0-122" name="__codelineno-0-122" href="#__codelineno-0-122"></a>
+<a id="__codelineno-0-123" name="__codelineno-0-123" href="#__codelineno-0-123"></a><span class="c1"># === PHASE 4: INCREMENTAL ASSIGNMENT ===</span>
+<a id="__codelineno-0-124" name="__codelineno-0-124" href="#__codelineno-0-124"></a>
+<a id="__codelineno-0-125" name="__codelineno-0-125" href="#__codelineno-0-125"></a><span class="k">def</span><span class="w"> </span><span class="nf">assign_new_chunk</span><span class="p">(</span><span class="n">embedding</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">db_conn</span><span class="p">,</span>
+<a id="__codelineno-0-126" name="__codelineno-0-126" href="#__codelineno-0-126"></a>                     <span class="n">level_order</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+<a id="__codelineno-0-127" name="__codelineno-0-127" href="#__codelineno-0-127"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Top-down nearest-centroid assignment for a single new chunk.&quot;&quot;&quot;</span>
+<a id="__codelineno-0-128" name="__codelineno-0-128" href="#__codelineno-0-128"></a>    <span class="n">assignments</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-0-129" name="__codelineno-0-129" href="#__codelineno-0-129"></a>    <span class="n">parent_id</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-0-130" name="__codelineno-0-130" href="#__codelineno-0-130"></a>    <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">level_order</span><span class="p">:</span>
+<a id="__codelineno-0-131" name="__codelineno-0-131" href="#__codelineno-0-131"></a>        <span class="k">if</span> <span class="n">parent_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-132" name="__codelineno-0-132" href="#__codelineno-0-132"></a>            <span class="n">query</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;SELECT cluster_id, distance FROM vec_cluster_centroids</span>
+<a id="__codelineno-0-133" name="__codelineno-0-133" href="#__codelineno-0-133"></a><span class="s2">                       WHERE centroid_embedding MATCH ? AND k=1 AND level=?&quot;&quot;&quot;</span>
+<a id="__codelineno-0-134" name="__codelineno-0-134" href="#__codelineno-0-134"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">db_conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="p">[</span><span class="n">embedding</span><span class="o">.</span><span class="n">tobytes</span><span class="p">(),</span> <span class="n">level</span><span class="p">])</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<a id="__codelineno-0-135" name="__codelineno-0-135" href="#__codelineno-0-135"></a>        <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-0-136" name="__codelineno-0-136" href="#__codelineno-0-136"></a>            <span class="n">query</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;SELECT cluster_id, distance FROM vec_cluster_centroids</span>
+<a id="__codelineno-0-137" name="__codelineno-0-137" href="#__codelineno-0-137"></a><span class="s2">                       WHERE centroid_embedding MATCH ? AND k=1</span>
+<a id="__codelineno-0-138" name="__codelineno-0-138" href="#__codelineno-0-138"></a><span class="s2">                       AND level=? AND parent_id=?&quot;&quot;&quot;</span>
+<a id="__codelineno-0-139" name="__codelineno-0-139" href="#__codelineno-0-139"></a>            <span class="n">row</span> <span class="o">=</span> <span class="n">db_conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="p">[</span><span class="n">embedding</span><span class="o">.</span><span class="n">tobytes</span><span class="p">(),</span> <span class="n">level</span><span class="p">,</span> <span class="n">parent_id</span><span class="p">])</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<a id="__codelineno-0-140" name="__codelineno-0-140" href="#__codelineno-0-140"></a>        <span class="n">assignments</span><span class="p">[</span><span class="n">level</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<a id="__codelineno-0-141" name="__codelineno-0-141" href="#__codelineno-0-141"></a>        <span class="n">parent_id</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<a id="__codelineno-0-142" name="__codelineno-0-142" href="#__codelineno-0-142"></a>    <span class="k">return</span> <span class="n">assignments</span>
+<a id="__codelineno-0-143" name="__codelineno-0-143" href="#__codelineno-0-143"></a>
+<a id="__codelineno-0-144" name="__codelineno-0-144" href="#__codelineno-0-144"></a>
+<a id="__codelineno-0-145" name="__codelineno-0-145" href="#__codelineno-0-145"></a><span class="k">def</span><span class="w"> </span><span class="nf">update_centroid_incremental</span><span class="p">(</span><span class="n">cluster_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">new_embedding</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+<a id="__codelineno-0-146" name="__codelineno-0-146" href="#__codelineno-0-146"></a>                                 <span class="n">db_conn</span><span class="p">):</span>
+<a id="__codelineno-0-147" name="__codelineno-0-147" href="#__codelineno-0-147"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Update centroid as running mean: new = (old * n + new_emb) / (n + 1).&quot;&quot;&quot;</span>
+<a id="__codelineno-0-148" name="__codelineno-0-148" href="#__codelineno-0-148"></a>    <span class="n">row</span> <span class="o">=</span> <span class="n">db_conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<a id="__codelineno-0-149" name="__codelineno-0-149" href="#__codelineno-0-149"></a>        <span class="s2">&quot;SELECT centroid_embedding, chunk_count FROM vec_cluster_centroids WHERE cluster_id=?&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-150" name="__codelineno-0-150" href="#__codelineno-0-150"></a>        <span class="p">[</span><span class="n">cluster_id</span><span class="p">]</span>
+<a id="__codelineno-0-151" name="__codelineno-0-151" href="#__codelineno-0-151"></a>    <span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<a id="__codelineno-0-152" name="__codelineno-0-152" href="#__codelineno-0-152"></a>    <span class="n">old_centroid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">frombuffer</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<a id="__codelineno-0-153" name="__codelineno-0-153" href="#__codelineno-0-153"></a>    <span class="n">n</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+<a id="__codelineno-0-154" name="__codelineno-0-154" href="#__codelineno-0-154"></a>    <span class="n">updated</span> <span class="o">=</span> <span class="p">((</span><span class="n">old_centroid</span> <span class="o">*</span> <span class="n">n</span><span class="p">)</span> <span class="o">+</span> <span class="n">new_embedding</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">n</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-0-155" name="__codelineno-0-155" href="#__codelineno-0-155"></a>    <span class="n">updated</span> <span class="o">=</span> <span class="n">updated</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<a id="__codelineno-0-156" name="__codelineno-0-156" href="#__codelineno-0-156"></a>    <span class="n">db_conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<a id="__codelineno-0-157" name="__codelineno-0-157" href="#__codelineno-0-157"></a>        <span class="s2">&quot;UPDATE vec_cluster_centroids SET centroid_embedding=?, chunk_count=? WHERE cluster_id=?&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-158" name="__codelineno-0-158" href="#__codelineno-0-158"></a>        <span class="p">[</span><span class="n">updated</span><span class="o">.</span><span class="n">tobytes</span><span class="p">(),</span> <span class="n">n</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">cluster_id</span><span class="p">]</span>
+<a id="__codelineno-0-159" name="__codelineno-0-159" href="#__codelineno-0-159"></a>    <span class="p">)</span>
+</code></pre></div>
+<p><strong>Data flow</strong>: <code>extract_embeddings</code> → <code>build_knn_graph</code> → <code>knn_to_igraph</code> → <code>recursive_leiden</code> → <code>compute_centroids</code> → write to SQLite tables + <code>vec_cluster_centroids</code>. New chunks enter via <code>assign_new_chunk</code> → <code>update_centroid_incremental</code>.</p>
+<hr />
+<h2 id="4-sqlite-schema-exact-ddl-for-hierarchy-tables">4. SQLite schema: exact DDL for hierarchy tables</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1">-- CLUSTER HIERARCHY (adjacency list + materialized path)</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">clusters</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="n">id</span><span class="w">            </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="k">level</span><span class="w">         </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">CHECK</span><span class="p">(</span><span class="k">level</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)),</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="n">parent_id</span><span class="w">     </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">REFERENCES</span><span class="w"> </span><span class="n">clusters</span><span class="p">(</span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">DELETE</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="n">path</span><span class="w">          </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w">               </span><span class="c1">-- &quot;/0003/0051/0551&quot; (zero-padded)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="n">label</span><span class="w">         </span><span class="nb">TEXT</span><span class="p">,</span><span class="w">                        </span><span class="c1">-- LLM-generated natural language label</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="n">ctfidf_label</span><span class="w">  </span><span class="nb">TEXT</span><span class="p">,</span><span class="w">                        </span><span class="c1">-- c-TF-IDF keyword label (always present)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="n">chunk_count</span><span class="w">   </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="n">avg_intra_dist</span><span class="w">   </span><span class="nb">REAL</span><span class="p">,</span><span class="w">                     </span><span class="c1">-- mean cosine dist to centroid</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="n">silhouette_score</span><span class="w"> </span><span class="nb">REAL</span><span class="p">,</span><span class="w">                     </span><span class="c1">-- cluster quality metric</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="n">created_at</span><span class="w">    </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="n">updated_at</span><span class="w">    </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">))</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="p">);</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_clusters_level</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">clusters</span><span class="p">(</span><span class="k">level</span><span class="p">);</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_clusters_parent</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">clusters</span><span class="p">(</span><span class="n">parent_id</span><span class="p">);</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_clusters_path</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">clusters</span><span class="p">(</span><span class="n">path</span><span class="p">);</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="c1">-- CHUNK-TO-CLUSTER MAPPING (normalized, survives re-clustering)</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">    </span><span class="n">chunk_id</span><span class="w">         </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w">          </span><span class="c1">-- FK to chunks table</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="w">    </span><span class="n">cluster_id</span><span class="w">       </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">REFERENCES</span><span class="w"> </span><span class="n">clusters</span><span class="p">(</span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">DELETE</span><span class="w"> </span><span class="k">CASCADE</span><span class="p">,</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="w">    </span><span class="k">level</span><span class="w">            </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w">           </span><span class="c1">-- denormalized for speed</span>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="w">    </span><span class="n">dist_to_centroid</span><span class="w"> </span><span class="nb">REAL</span><span class="p">,</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="w">    </span><span class="n">assignment_method</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;initial&#39;</span><span class="p">,</span><span class="w">    </span><span class="c1">-- &#39;initial&#39; | &#39;incremental&#39; | &#39;recluster&#39;</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="w">    </span><span class="n">assigned_at</span><span class="w">      </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">chunk_id</span><span class="p">,</span><span class="w"> </span><span class="k">level</span><span class="p">)</span>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="p">);</span>
+<a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_cc_cluster</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="p">(</span><span class="n">cluster_id</span><span class="p">);</span>
+<a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_cc_chunk</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="p">(</span><span class="n">chunk_id</span><span class="p">);</span>
+<a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
+<a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="c1">-- CLUSTER CENTROIDS (sqlite-vec, separate from chunk embeddings)</span>
+<a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a><span class="k">CREATE</span><span class="w"> </span><span class="n">VIRTUAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">vec_cluster_centroids</span><span class="w"> </span><span class="k">USING</span><span class="w"> </span><span class="n">vec0</span><span class="p">(</span>
+<a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a><span class="w">    </span><span class="n">cluster_id</span><span class="w">         </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span>
+<a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a><span class="w">    </span><span class="n">centroid_embedding</span><span class="w"> </span><span class="nb">float</span><span class="p">[</span><span class="mi">1024</span><span class="p">],</span>
+<a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a><span class="w">    </span><span class="k">level</span><span class="w">              </span><span class="nb">INTEGER</span><span class="w"> </span><span class="n">partition</span><span class="w"> </span><span class="k">key</span><span class="p">,</span><span class="w">    </span><span class="c1">-- fast level-filtered KNN</span>
+<a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a><span class="w">    </span><span class="n">parent_id</span><span class="w">          </span><span class="nb">INTEGER</span><span class="p">,</span><span class="w">                  </span><span class="c1">-- metadata: filter within parent</span>
+<a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a><span class="w">    </span><span class="n">chunk_count</span><span class="w">        </span><span class="nb">INTEGER</span><span class="p">,</span><span class="w">                  </span><span class="c1">-- metadata: cluster size</span>
+<a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a><span class="w">    </span><span class="o">+</span><span class="n">label</span><span class="w">             </span><span class="nb">TEXT</span><span class="p">,</span><span class="w">                     </span><span class="c1">-- auxiliary: human-readable</span>
+<a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a><span class="w">    </span><span class="o">+</span><span class="n">path</span><span class="w">              </span><span class="nb">TEXT</span><span class="w">                      </span><span class="c1">-- auxiliary: materialized path</span>
+<a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a><span class="p">);</span>
+<a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>
+<a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a><span class="c1">-- CLUSTERING AUDIT LOG</span>
+<a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a><span class="c1">-- ============================================================</span>
+<a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">clustering_runs</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a><span class="w">    </span><span class="n">id</span><span class="w">                 </span><span class="nb">INTEGER</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="n">AUTOINCREMENT</span><span class="p">,</span>
+<a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a><span class="w">    </span><span class="n">started_at</span><span class="w">         </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">(</span><span class="n">datetime</span><span class="p">(</span><span class="s1">&#39;now&#39;</span><span class="p">)),</span>
+<a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a><span class="w">    </span><span class="n">completed_at</span><span class="w">       </span><span class="nb">TEXT</span><span class="p">,</span>
+<a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="w">    </span><span class="n">algorithm</span><span class="w">          </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+<a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a><span class="w">    </span><span class="n">parameters_json</span><span class="w">    </span><span class="nb">TEXT</span><span class="p">,</span>
+<a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a><span class="w">    </span><span class="n">total_chunks</span><span class="w">       </span><span class="nb">INTEGER</span><span class="p">,</span>
+<a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a><span class="w">    </span><span class="n">num_clusters_l0</span><span class="w">    </span><span class="nb">INTEGER</span><span class="p">,</span>
+<a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a><span class="w">    </span><span class="n">num_clusters_l1</span><span class="w">    </span><span class="nb">INTEGER</span><span class="p">,</span>
+<a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a><span class="w">    </span><span class="n">num_clusters_l2</span><span class="w">    </span><span class="nb">INTEGER</span><span class="p">,</span>
+<a id="__codelineno-1-62" name="__codelineno-1-62" href="#__codelineno-1-62"></a><span class="w">    </span><span class="n">avg_silhouette</span><span class="w">     </span><span class="nb">REAL</span><span class="p">,</span>
+<a id="__codelineno-1-63" name="__codelineno-1-63" href="#__codelineno-1-63"></a><span class="w">    </span><span class="n">status</span><span class="w">             </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;running&#39;</span>
+<a id="__codelineno-1-64" name="__codelineno-1-64" href="#__codelineno-1-64"></a><span class="p">);</span>
+</code></pre></div>
+<p><strong>Design rationale</strong>: The <code>chunk_clusters</code> mapping table is preferred over adding <code>cluster_l0/l1/l2</code> columns to the chunks table because it cleanly separates concerns—the chunks table stays immutable during re-clustering, and you can atomically swap cluster assignments in a transaction. The materialized <code>path</code> column (zero-padded: <code>"/0003/0051/0551"</code>) enables fast subtree queries (<code>WHERE path LIKE '/0003/%'</code>) while <code>parent_id</code> handles direct parent lookups. The <code>vec_cluster_centroids</code> table uses <strong><code>level</code> as a partition key</strong>, meaning <code>WHERE level = 0</code> only searches the ~40 centroids at Level 0—instant even by brute force.</p>
+<hr />
+<h2 id="5-incremental-update-strategy">5. Incremental update strategy</h2>
+<p><strong>Daily new chunk assignment</strong> uses top-down nearest-centroid routing. For each new chunk: find nearest Level 0 centroid → find nearest Level 1 centroid within that parent → find nearest Level 2 centroid within that parent. This requires <strong>5,550 distance computations total</strong> (50 + 500 + 5000), which takes milliseconds. After assignment, update the leaf centroid incrementally: <code>new_centroid = (old × n + embedding) / (n + 1)</code>.</p>
+<p><strong>Quality safeguard</strong>: Also run KNN voting (find 10 nearest existing chunks, check their cluster assignments). If KNN vote disagrees with centroid assignment, flag the chunk in a <code>staging</code> table for manual review or next re-clustering batch.</p>
+<p><strong>Cluster health monitoring</strong> runs as a daily cron job checking three conditions:</p>
+<ul>
+<li><strong>Size split</strong>: Leaf cluster exceeds <strong>3× the average leaf size</strong> (~147 chunks at initial scale) → run 2-means on that cluster</li>
+<li><strong>Variance split</strong>: Cluster's average intra-distance exceeds <strong>2× the global average</strong> → BIC test for 1 vs 2 clusters</li>
+<li><strong>Merge detection</strong>: Two sibling clusters whose centroids are closer than cosine distance 0.1 → merge and relabel</li>
+</ul>
+<p><strong>Re-clustering schedule at ~750 chunks/day growth</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Frequency</th>
+<th>Trigger</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Centroid assignment + update</td>
+<td>Per-chunk (real-time)</td>
+<td>Every new chunk ingestion</td>
+</tr>
+<tr>
+<td>Split/merge health check</td>
+<td>Daily</td>
+<td>Cron job</td>
+</tr>
+<tr>
+<td>Local re-clustering (affected clusters)</td>
+<td>Weekly</td>
+<td>&gt;5% of leaf clusters flagged</td>
+</tr>
+<tr>
+<td>Full hierarchical re-clustering</td>
+<td>Every 4–6 weeks</td>
+<td>Silhouette score drops &gt;10% from baseline</td>
+</tr>
+</tbody>
+</table>
+<p>At 750 chunks/day, the dataset grows ~3% per week. Empirically, incremental centroid assignment degrades gracefully for 4–6 weeks before requiring a full rebuild. Track a <strong>sampled silhouette score</strong> (5K random chunks, weekly) as the quality metric that triggers re-clustering.</p>
+<hr />
+<h2 id="6-search-integration-concrete-changes-to-the-existing-pipeline">6. Search integration: concrete changes to the existing pipeline</h2>
+<p>The current BM25 (FTS5) + semantic (sqlite-vec cosine) → rerank pipeline should adopt a <strong>search-first with cluster expansion</strong> strategy. This preserves existing search quality while adding cluster context.</p>
+<p><strong>Modified search flow:</strong></p>
+<ol>
+<li><strong>Existing search</strong> — BM25 + semantic retrieval produces top-K candidates (unchanged)</li>
+<li><strong>Cluster annotation</strong> — For each result, look up its cluster path via <code>chunk_clusters</code> JOIN <code>clusters</code>. Attach the path as metadata: <code>"deployment / railway / dockerfile-optimization"</code></li>
+<li><strong>Sibling expansion</strong> — For the top-3 results, retrieve <strong>5 highest-cohesion siblings</strong> from the same leaf cluster (chunks closest to the cluster centroid, excluding already-returned results). This adds semantically related chunks the user didn't directly query for</li>
+<li><strong>Cluster-boosted reranking</strong> — When multiple results share a leaf cluster, boost their collective relevance (cluster coherence as a ranking signal). Replace the static importance score with a dynamic <strong>cluster relevance score</strong>: <code>0.3 × log(cluster_size) + 0.3 × cohesion + 0.2 × (1 - dist_to_centroid) + 0.2 × freshness</code></li>
+</ol>
+<p><strong>Cluster-first search</strong> (find nearest cluster → search within) is useful as an <strong>alternative mode for browsing</strong>, not as the default search path. The cluster hypothesis holds well for semantic embeddings, but boundary documents between clusters get missed. Offer it as <code>?mode=browse</code> for when users want to explore a topic rather than find a specific answer.</p>
+<p><strong>RAPTOR-style enhancement</strong> (future phase): Generate LLM summaries for each cluster and store them as searchable nodes. Queries can then match leaf chunks for factual retrieval OR cluster summaries for thematic retrieval—different abstraction levels serve different query types. The RAPTOR paper showed <strong>20% absolute accuracy improvement</strong> on the QuALITY benchmark using this approach.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">-- Cluster annotation query (fast, indexed)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">path</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">label</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">chunk_count</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">FROM</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="w"> </span><span class="n">cc</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">JOIN</span><span class="w"> </span><span class="n">clusters</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">cc</span><span class="p">.</span><span class="n">cluster_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">id</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">cc</span><span class="p">.</span><span class="n">chunk_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">cc</span><span class="p">.</span><span class="k">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1">-- Sibling expansion query</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">cc2</span><span class="p">.</span><span class="n">chunk_id</span><span class="p">,</span><span class="w"> </span><span class="n">cc2</span><span class="p">.</span><span class="n">dist_to_centroid</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="k">FROM</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="w"> </span><span class="n">cc1</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">JOIN</span><span class="w"> </span><span class="n">chunk_clusters</span><span class="w"> </span><span class="n">cc2</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">cc1</span><span class="p">.</span><span class="n">cluster_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cc2</span><span class="p">.</span><span class="n">cluster_id</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">cc1</span><span class="p">.</span><span class="n">chunk_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">cc1</span><span class="p">.</span><span class="k">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">cc2</span><span class="p">.</span><span class="n">chunk_id</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="o">?</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">cc2</span><span class="p">.</span><span class="n">dist_to_centroid</span><span class="w"> </span><span class="k">ASC</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="k">LIMIT</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+</code></pre></div>
+<hr />
+<h2 id="7-labeling-5000-clusters-efficiently-with-a-tiered-hybrid-approach">7. Labeling 5,000 clusters efficiently with a tiered hybrid approach</h2>
+<p>A pure LLM approach for all 5,000 clusters takes 5.5 hours at 4 seconds/call—feasible overnight but unnecessarily expensive for leaf clusters. The optimal strategy is <strong>tiered</strong>:</p>
+<p><strong>Tier 1: c-TF-IDF keywords for all 5,000 clusters</strong> (2–5 minutes, no LLM). Treat each cluster's chunks as a single document, compute class-based TF-IDF, extract top-5 keywords. Use BERTopic's enhancements: <code>bm25_weighting=True</code> and <code>reduce_frequent_words=True</code> to improve keyword quality. This produces labels like <code>"docker_railway_deploy_config_dockerfile"</code>.</p>
+<p><strong>Tier 2: LLM hybrid labeling for Level 0 + Level 1</strong> (~300–550 clusters, 20–37 minutes). For each cluster, pass the c-TF-IDF keywords + 5 representative chunks (nearest to centroid) + any existing enrichment tags to GLM-4.7-Flash with this prompt:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>I have a topic described by these keywords: {ctfidf_keywords}
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Enrichment tags found in this cluster: {enrichment_tags}
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>Representative content samples:
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>{5_closest_to_centroid_chunks, truncated_to_200_chars_each}
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>Provide a short descriptive label (2-5 words) for this topic.
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>topic:
+</code></pre></div>
+<p>Parse everything after <code>topic:</code> as the label. Research shows that <strong>including key terms plus representative snippets produces the best labels</strong>—better than either alone, and better than human naming in blind evaluations.</p>
+<p><strong>Labels should be hierarchical paths</strong>: <code>"Deployment / Railway / Dockerfile Config"</code>. Level 0 labels are the broad domain, Level 1 the sub-area, Level 2 uses c-TF-IDF keywords formatted as a short phrase. This supports breadcrumb navigation in the UI and filter-by-level in search.</p>
+<p><strong>Parallelizing Ollama</strong>: Set <code>OLLAMA_NUM_PARALLEL=2</code> to halve labeling time. Each parallel slot increases VRAM usage proportionally, but with a single 19 GB model and no other workloads, 2 slots should fit in 32 GB. This brings Level 0+1 labeling down to <strong>~10–18 minutes</strong>. For the full 5,000 clusters, overnight batch at 2 parallel slots takes ~2.75 hours.</p>
+<p><strong>Existing enrichment data</strong> (tags, intents) provides a powerful quality signal. Feed cluster-level tag distributions into the LLM prompt for better labels. Additionally, if any chunks already have manually assigned topic labels, use BERTopic's semi-supervised mode (pass labels as the <code>y</code> parameter) to steer the UMAP dimensionality reduction toward known categories.</p>
+<hr />
+<h2 id="8-content-automation-mcp-tools-n8n-hooks-and-topic-suggestions">8. Content automation: MCP tools, n8n hooks, and topic suggestions</h2>
+<p><strong>Five MCP tools</strong> expose the cluster hierarchy to AI agents in the content pipeline:</p>
+<ul>
+<li><strong><code>get_topic_clusters(level, parent_id?, min_chunks?)</code></strong> — Browse hierarchy. Level 0 returns ~40 top topics with labels and chunk counts. Pass <code>parent_id</code> to drill down.</li>
+<li><strong><code>get_cluster_details(cluster_id, include_chunks?)</code></strong> — Full cluster info: label, children, cohesion score, representative chunks. The content pipeline's Claude agent uses this to understand what a topic actually covers.</li>
+<li><strong><code>find_relevant_clusters(query, limit?)</code></strong> — Semantic search over cluster centroids via <code>vec_cluster_centroids</code>. Returns ranked clusters. Powers "find me everything related to Railway deployment."</li>
+<li><strong><code>get_expert_topics(min_chunks?, sort_by?)</code></strong> — Returns clusters where the user has demonstrable expertise, sorted by a composite score.</li>
+<li><strong><code>suggest_content_topics(type?, limit?)</code></strong> — Analyzes the knowledge graph to surface content opportunities across four categories.</li>
+</ul>
+<p><strong>Content suggestion categories</strong> the <code>suggest_content_topics</code> tool should implement:</p>
+<ul>
+<li><strong>Authority content</strong>: Clusters with &gt;50 chunks, high cohesion (silhouette &gt;0.5), multiple source types → "You have deep expertise in TypeScript monorepo patterns—write a technical guide"</li>
+<li><strong>Timely content</strong>: Clusters with spiking chunk velocity (&gt;5× their 30-day average) → "Railway deployment activity surged this week—share your setup"</li>
+<li><strong>Unique angles</strong>: Chunks bridging two distant clusters (high betweenness centrality) → "You've connected Telegram bots with real-estate scraping—that's a unique perspective"</li>
+<li><strong>Content gaps</strong>: Clusters with high query frequency but low chunk count → topics the user searches for but hasn't documented</li>
+</ul>
+<p><strong>Expertise scoring formula</strong>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>expertise = 0.30 × log(chunk_count)/log(max_count)  // depth
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>          + 0.20 × silhouette_score                   // focus
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>          + 0.20 × source_diversity/max_diversity      // breadth
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>          + 0.15 × temporal_span/365                   // sustained
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>          + 0.15 × exp(-0.01 × days_since_last)        // fresh
+</code></pre></div></p>
+<p><strong>n8n integration</strong>: Wrap the cluster SQLite queries in a lightweight <strong>FastAPI service</strong> (5 endpoints matching the MCP tools above). n8n's HTTP Request node calls these endpoints. Example workflow: Schedule Trigger (Monday 9am) → HTTP Request (<code>GET /api/suggest-content?type=all</code>) → Code Node (format suggestions) → Slack Node (post to #content-ideas). For Remotion/ComfyUI pipeline triggers, n8n Webhook nodes receive cluster data and fan out to the appropriate rendering pipeline based on content type.</p>
+<hr />
+<h2 id="9-visualization-plotly-treemap-plus-threejs-hull-overlays">9. Visualization: Plotly treemap plus Three.js hull overlays</h2>
+<p><strong>Start with a Plotly.js zoomable treemap</strong> — it handles 5,000 nodes natively, requires ~50 lines of code, and provides built-in click-to-zoom with a pathbar breadcrumb. The treemap is the highest insight-per-effort visualization: it fills 100% of screen space, rectangle sizes immediately communicate cluster importance, and drilling down reveals the topic hierarchy intuitively.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Plotly treemap data: three flat arrays from your clusters table</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nx">Plotly</span><span class="p">.</span><span class="nx">newPlot</span><span class="p">(</span><span class="s1">&#39;treemap&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">[{</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nx">type</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;treemap&#39;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nx">labels</span><span class="o">:</span><span class="w"> </span><span class="nx">clusterLabels</span><span class="p">,</span><span class="w">      </span><span class="c1">// [&quot;All&quot;, &quot;Deployment&quot;, &quot;Railway&quot;, ...]</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nx">parents</span><span class="o">:</span><span class="w"> </span><span class="nx">clusterParents</span><span class="p">,</span><span class="w">    </span><span class="c1">// [&quot;&quot;, &quot;All&quot;, &quot;Deployment&quot;, ...]</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nx">values</span><span class="o">:</span><span class="w"> </span><span class="nx">chunkCounts</span><span class="p">,</span><span class="w">        </span><span class="c1">// [245817, 5000, 1200, ...]</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nx">textinfo</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;label+value&#39;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nx">branchvalues</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;total&#39;</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}],</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">margin</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">t</span><span class="o">:</span><span class="w"> </span><span class="mf">30</span><span class="p">,</span><span class="w"> </span><span class="nx">l</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="p">,</span><span class="w"> </span><span class="nx">b</span><span class="o">:</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+<p><strong>Add a sunburst chart as an alternative view</strong> — same data structure, different visual. Sunbursts work especially well for exactly 3 levels: the inner ring shows broad domains, middle ring shows sub-topics, outer ring shows leaf clusters. Toggle between treemap and sunburst with a single button.</p>
+<p><strong>Integrate with the existing Three.js 3D brain graph</strong> by adding semi-transparent convex hull overlays per cluster. Use Three.js's built-in <code>ConvexGeometry</code> to compute hulls from member chunk 3D positions, then render with <code>MeshBasicMaterial({ transparent: true, opacity: 0.15 })</code>. For performance, only render hulls at the current zoom level—Level 0 hulls (~40 meshes) at default zoom, Level 1 hulls (~500) when zoomed into a cluster. UMAP 3D coordinates from the existing brain graph can be reused directly; compute cluster-level positions as the mean of member coordinates.</p>
+<p><strong>Linked views</strong>: Clicking a cluster in the treemap sidebar flies the 3D camera to that cluster's centroid and renders its hull. Hovering a chunk in the 3D graph highlights its cluster path in the treemap. This dual-view approach gives structural overview (treemap) plus spatial exploration (3D graph).</p>
+<hr />
+<h2 id="10-migration-plan-flat-enrichment-to-hierarchical-step-by-step">10. Migration plan: flat enrichment to hierarchical, step by step</h2>
+<p><strong>Phase 1 — Hebrew re-embedding (Day 1, ~2–4 hours)</strong></p>
+<p>bge-large-en-v1.5 produces <strong>near-random vectors for Hebrew</strong> because its BERT tokenizer has virtually zero Hebrew tokens—characters decompose to <code>[UNK]</code> with no learned semantics. The 16K WhatsApp Hebrew embeddings are effectively noise in the current vector space.</p>
+<p><strong>The practical fix</strong>: Re-embed at minimum all 16K WhatsApp chunks with <strong>BGE-M3</strong> (1024 dims, 100+ languages, MIRACL SOTA). On a RunPod T4 instance ($0.20/hr), this takes ~10 minutes. Ideally, re-embed the full 245K with BGE-M3 in a single RunPod session (~1–2 hours on an A100, ~$2). BGE-M3 matches bge-large-en-v1.5 on English while adding real Hebrew support and handling short-to-long text via its multi-granularity architecture.</p>
+<p><strong>Critical</strong>: Do not mix embeddings from different models in the same vector index. Either re-embed everything with BGE-M3, or maintain two separate <code>vec0</code> tables and cluster each independently, linking cross-source via temporal/entity overlap.</p>
+<p><strong>Phase 2 — Initial clustering (Day 1–2, ~1 hour)</strong></p>
+<ol>
+<li>Kill Ollama and heavy processes</li>
+<li>Run <code>extract_embeddings()</code> → <code>build_knn_graph()</code> → <code>knn_to_igraph()</code> → <code>recursive_leiden()</code></li>
+<li>Run <code>compute_centroids()</code></li>
+<li>Execute the DDL to create <code>clusters</code>, <code>chunk_clusters</code>, <code>vec_cluster_centroids</code> tables</li>
+<li>Populate all three tables from the clustering results</li>
+<li>Verify: <code>SELECT level, COUNT(*) FROM clusters GROUP BY level</code> should return ~40/~400/~4000</li>
+</ol>
+<p><strong>Phase 3 — Labeling (Day 2, ~1 hour)</strong></p>
+<ol>
+<li>Generate c-TF-IDF labels for all clusters (BERTopic vectorizer, 2–5 minutes)</li>
+<li>Start Ollama with GLM-4.7-Flash, <code>OLLAMA_NUM_PARALLEL=2</code></li>
+<li>LLM-label Level 0 + Level 1 clusters (~300–550 calls, ~15–30 minutes)</li>
+<li>Write all labels to <code>clusters.label</code> and <code>clusters.ctfidf_label</code></li>
+</ol>
+<p><strong>Phase 4 — Search integration (Day 3)</strong></p>
+<ol>
+<li>Modify the search reranker to JOIN <code>chunk_clusters</code> and annotate results with cluster paths</li>
+<li>Add sibling expansion: for top-3 results, query 5 siblings from the same leaf cluster</li>
+<li>Replace static importance score with cluster-derived relevance score</li>
+</ol>
+<p><strong>Phase 5 — Visualization + MCP tools (Week 2)</strong></p>
+<ol>
+<li>Add Plotly treemap to Ops Dashboard (generates from <code>clusters</code> table)</li>
+<li>Implement the 5 MCP tools as FastAPI endpoints</li>
+<li>Add convex hull overlays to existing Three.js brain graph</li>
+</ol>
+<p><strong>Phase 6 — Content automation (Week 3+)</strong></p>
+<ol>
+<li>Build expertise scoring query</li>
+<li>Implement content suggestion categories</li>
+<li>Create n8n workflows connecting to FastAPI endpoints</li>
+<li>Wire into Remotion/ComfyUI pipeline selection logic</li>
+</ol>
+<hr />
+<h2 id="11-risk-assessment-and-what-could-go-wrong">11. Risk assessment and what could go wrong</h2>
+<p><strong>Hebrew embedding quality is the highest-impact risk.</strong> bge-large-en-v1.5 fundamentally cannot process Hebrew—this isn't a "degraded quality" situation, it's near-random output. If Hebrew WhatsApp chunks aren't re-embedded with a multilingual model, they'll cluster randomly, corrupt any cross-source topic detection, and make the 16K WhatsApp chunks essentially invisible to the knowledge graph. <strong>Mitigation</strong>: Re-embed with BGE-M3. If full re-embedding is too costly, at minimum re-embed WhatsApp chunks and keep them in a separate vector index.</p>
+<p><strong>Short WhatsApp messages (5–20 words) produce noisier embeddings</strong> than long code blocks (200+ tokens). Even with BGE-M3, expect WhatsApp clusters to be looser with wider variance. <strong>Mitigation</strong>: Use HDBSCAN-style <code>min_cluster_size</code> thresholds during Leiden subclustering of WhatsApp-heavy subgraphs. Accept that some WhatsApp messages will land in catch-all clusters—this is inherent to short-text clustering, not a system failure.</p>
+<p><strong>Leiden resolution tuning is empirical, not deterministic.</strong> The resolution values (0.005 / 0.05 / 0.5) are starting estimates. The actual values for your data's graph structure could differ by 10×. <strong>Mitigation</strong>: The binary-search <code>find_resolution_for_target()</code> function automates this, but verify cluster quality manually for the first run. Inspect the 5 largest and 5 smallest clusters at each level.</p>
+<p><strong>Centroid drift during incremental updates</strong> is a slow-acting risk. The running-mean centroid update (<code>(old × n + new) / (n + 1)</code>) biases the centroid toward the temporal distribution of new chunks, which may not represent the cluster's semantic center. After 4–6 weeks of 750 chunks/day, cluster boundaries may no longer reflect the actual data distribution. <strong>Mitigation</strong>: Weekly silhouette sampling detects this early. Re-compute true centroids (mean of all member embeddings) monthly rather than relying solely on the running mean.</p>
+<p><strong>sqlite-vec partition key filtering</strong> in v0.1.6 works for the centroid table's ~5,500 rows but may behave unexpectedly for complex compound filters (<code>level AND parent_id</code>). The partition key creates separate internal indices per level, but metadata filtering happens post-KNN-search. With only ~50 centroids per Level 0 partition, this is fine—but test the <code>AND parent_id = ?</code> filter carefully. <strong>Mitigation</strong>: If compound filtering fails, fall back to fetching top-K per level and filtering in Python.</p>
+<p><strong>228K code chunks dominate the embedding space.</strong> With 93% of chunks being code conversations, the Level 0 clusters will likely all be code-related, with WhatsApp/YouTube squeezed into 1–2 clusters. <strong>Mitigation</strong>: Consider source-weighted sampling during KNN graph construction (e.g., upweight WhatsApp edges) or run a preliminary source-aware split before unified clustering. Alternatively, accept the imbalance and use the existing <code>content_type</code> metadata to surface non-code clusters in the UI regardless of their relative size.</p>
+<p><strong>SSD space is tight</strong> at 28 GB free. The clustering pipeline temporarily needs ~1 GB for the embedding matrix + ~200 MB for intermediate arrays. The new SQLite tables add ~50 MB (clusters) + ~25 MB (centroid vec0) + ~30 MB (chunk_clusters mapping). Total new storage: <strong>~100–150 MB permanent</strong>. This is negligible, but if a full BGE-M3 re-embedding is done, the new vec0 table replaces the old one (same 1024 dims, ~1 GB). <strong>No net SSD impact</strong> from re-embedding.</p>
+<p><strong>Code-switching in WhatsApp messages</strong> (Hebrew words mixed with English technical terms like "deploy," "push," "build") is actually a partial advantage: the English terms provide semantic signal even with the English-only model. But for pure-Hebrew messages (social, personal), the signal is zero. BGE-M3 handles code-switching natively via its XLM-RoBERTa backbone, which was trained on multilingual web data including mixed-language text.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

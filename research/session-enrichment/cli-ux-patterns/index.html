@@ -1,0 +1,1072 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/research/session-enrichment/cli-ux-patterns/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>CLI UX patterns for knowledge search tools - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-ux-patterns-for-knowledge-search-tools" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CLI UX patterns for knowledge search tools
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#six-foundational-display-patterns-power-every-great-cli-search-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Six foundational display patterns power every great CLI search tool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#building-with-rich-components-patterns-and-responsive-layouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Building with Rich: components, patterns, and responsive layouts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-hierarchy-the-search-filter-drill-down-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command hierarchy: the search → filter → drill-down workflow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interactive-patterns-that-avoid-full-tui-complexity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive patterns that avoid full TUI complexity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terminal-visualization-without-a-tui-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Terminal visualization without a TUI framework
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prioritizing-metadata-when-every-character-counts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prioritizing metadata when every character counts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion-a-concrete-blueprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion: a concrete blueprint
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cli-ux-patterns-for-knowledge-search-tools">CLI UX patterns for knowledge search tools</h1>
+<p><strong>The best CLI search tools converge on six proven display patterns, three levels of progressive disclosure, and a composable architecture that chains simple interactive elements rather than building monolithic TUI applications.</strong> This research synthesizes patterns from ripgrep, fzf, GitHub CLI, kubectl, and dozens of knowledge management tools to provide a concrete blueprint for building a terminal-based knowledge search interface. The Python <code>rich</code> library combined with <code>click</code>/<code>typer</code>, <code>plotext</code>, and <code>iterfzf</code> forms the ideal stack. What follows is a comprehensive pattern guide with ASCII mockups, code examples, library recommendations, and prioritization frameworks.</p>
+<hr />
+<h2 id="six-foundational-display-patterns-power-every-great-cli-search-tool">Six foundational display patterns power every great CLI search tool</h2>
+<p>Research across ripgrep, fzf, ag, gh, bat, fd, jq, httpie, and kubectl reveals <strong>six primary layout patterns</strong> that cover virtually all search result display needs:</p>
+<p><strong>Pattern 1 — Grouped-by-file with context</strong> (ripgrep, ag). Results cluster under filename headers with line numbers and highlighted matches. Blank lines separate file groups. This is the default TTY mode for both <code>rg</code> and <code>ag</code>, and the most natural pattern for code/content search:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>src/components/SearchBar.tsx
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a> 12:  function handleSearch(query: string) {
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a> 13-    const results = performSearch(query);
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a> 14-    setResults(results);
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>src/utils/api.ts
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a> 45:  export async function handleSearch(q) {
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a> 46-    const resp = await fetch(`/api?q=${q}`);
+</code></pre></div>
+<p>File paths render in <strong>magenta bold</strong>, line numbers in <strong>green</strong>, match text in <strong>red bold</strong>, and context lines appear dimmed with <code>-</code> separators. Match lines use <code>:</code> separators. The <code>--</code> divider separates non-adjacent context blocks within the same file.</p>
+<p><strong>Pattern 2 — Aligned tabular</strong> (kubectl, gh). Columnar data with aligned headers and whitespace-padded columns. GitHub CLI's <code>gh search repos</code> and kubectl's default output both use this for metadata-rich listings:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>NAME                  DESCRIPTION                   ★      LANG   UPDATED
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>BurntSushi/ripgrep    Recursively search director…   48.2k  Rust   2d ago
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>sharkdp/fd            A simple, fast alternative…    35.1k  Rust   1w ago
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>sharkdp/bat           A cat clone with wings         51.2k  Rust   5d ago
+</code></pre></div>
+<p><strong>Pattern 3 — Interactive filtered list</strong> (fzf). Real-time filtering with a prompt, scrollable list, match highlighting, and an optional preview pane. The user types to narrow results dynamically, with a <code>7/245</code> info line showing matches from total candidates.</p>
+<p><strong>Pattern 4 — Rich metadata cards</strong>. A composite pattern combining panels with inline badges, scores, tags, timestamps, and code snippets — ideal for knowledge search results:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>╭─ 1. auth/middleware.ts ────────────────── Score: 0.95 ── 2 days ago ─╮
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>│  Tags: [auth] [middleware] [security]    Category: Backend            │
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>│                                                                       │
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>│  14 │ export function authMiddleware(req, res, next) {                │
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>│  15 │   const token = req.headers.authorization;                      │
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>│  16 │   if (!validateToken(token)) {                                  │
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>╰──────────────────────────────────────────────────────────────────────╯
+</code></pre></div>
+<p><strong>Pattern 5 — Compact table with expandable rows</strong>. A hybrid that shows a scored, sortable table with the ability to expand individual results in-place — the best default for knowledge search:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a> #  FILE                        LINE  SCORE  UPDATED     TAGS
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a> 1  src/db/connection.ts          23  0.97   2d ago      db,core
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a> 2  src/db/pool.ts                45  0.91   1w ago      db,pool
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a> 3  tests/db/connection.test.ts   12  0.85   3d ago      db,test
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a> 5 of 23 results | [Enter] expand | [/] filter | [n] next page
+</code></pre></div>
+<p><strong>Pattern 6 — Structured data output</strong> (jq, httpie). Pretty-printed JSON/YAML with indentation and syntax coloring, used when piping to other tools. Every well-designed CLI should auto-detect TTY versus pipe and switch between human-readable and machine-readable output accordingly.</p>
+<p>A universal design principle emerges: <strong>all excellent CLI tools default to human-friendly output on TTY and machine-friendly output when piped</strong>. The <code>NO_COLOR</code> env var and <code>--color=auto|always|never</code> flag are now standard conventions.</p>
+<hr />
+<h2 id="building-with-rich-components-patterns-and-responsive-layouts">Building with Rich: components, patterns, and responsive layouts</h2>
+<p>The Python <strong><code>rich</code> library</strong> (55K+ GitHub stars) provides composable renderables that nest freely — the "Lego brick" approach. The key insight is matching Rich components to specific display needs.</p>
+<p><strong>For list views</strong>, <code>rich.table.Table</code> auto-resizes columns to fit terminal width. Use <code>ratio</code> for proportional columns and <code>no_wrap=True</code> for titles. Colored badges are created with console markup: <code>[bold white on blue] tag [/]</code>. Score badges can use conditional coloring — <strong>green for high</strong> (&gt;0.8), <strong>yellow for medium</strong> (0.5–0.8), <strong>red for low</strong> (&lt;0.5). Row styles like <code>row_styles=["", "dim"]</code> create zebra striping for scanability.</p>
+<p><strong>For detail views</strong>, <code>rich.panel.Panel</code> creates bordered cards with title and subtitle. Nest any renderable inside — tables, syntax-highlighted code via <code>rich.syntax.Syntax</code>, markdown via <code>rich.markdown.Markdown</code>, or compose multiple elements with <code>rich.console.group()</code>. The <code>Panel.fit()</code> method auto-sizes to content, while <code>Panel(expand=True)</code> fills the terminal width.</p>
+<p><strong>For hierarchical/categorized results</strong>, <code>rich.tree.Tree</code> provides visual hierarchy with guide lines — perfect for results grouped by project, tag, or category:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>🔍 Search Results
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── Python (5 results)
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>│   ├── Getting Started with Rich — Score: 95%
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   └── Advanced CLI Patterns — Score: 82%
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>└── Design (3 results)
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    └── Terminal UX Best Practices — Score: 78%
+</code></pre></div>
+<p><strong>For streaming results</strong>, <code>rich.live.Live</code> provides flicker-free live updates. Combine with <code>Layout</code> for dashboard-style multi-pane displays. The <code>Live</code> context manager supports printing above the live display and alternate-screen mode for fullscreen applications.</p>
+<p>A critical responsive pattern uses <code>Console.width</code> for adaptive layouts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">console</span> <span class="o">=</span> <span class="n">Console</span><span class="p">()</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">if</span> <span class="n">console</span><span class="o">.</span><span class="n">width</span> <span class="o">&gt;=</span> <span class="mi">120</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="c1"># Wide: multi-column card layout with Columns</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">console</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">Columns</span><span class="p">(</span><span class="n">cards</span><span class="p">,</span> <span class="n">equal</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">elif</span> <span class="n">console</span><span class="o">.</span><span class="n">width</span> <span class="o">&gt;=</span> <span class="mi">80</span><span class="p">:</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="c1"># Medium: table layout with full metadata</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">console</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">make_table</span><span class="p">(</span><span class="n">results</span><span class="p">))</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="c1"># Narrow: stacked compact cards, heavy truncation</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="n">console</span><span class="o">.</span><span class="n">print</span><span class="p">(</span><span class="n">make_compact_card</span><span class="p">(</span><span class="n">r</span><span class="p">))</span>
+</code></pre></div>
+<p>Rich auto-detects terminal capabilities (color depth, width, interactivity) and degrades gracefully. When piping to a file, it strips ANSI control codes automatically. Custom themes centralize styling decisions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">rich.theme</span><span class="w"> </span><span class="kn">import</span> <span class="n">Theme</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">custom_theme</span> <span class="o">=</span> <span class="n">Theme</span><span class="p">({</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="s2">&quot;result.title&quot;</span><span class="p">:</span> <span class="s2">&quot;bold cyan&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="s2">&quot;result.score.high&quot;</span><span class="p">:</span> <span class="s2">&quot;bold green&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="s2">&quot;result.score.low&quot;</span><span class="p">:</span> <span class="s2">&quot;red&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;bold white on dark_blue&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="s2">&quot;meta&quot;</span><span class="p">:</span> <span class="s2">&quot;dim italic&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">})</span>
+</code></pre></div>
+<p>Notable open-source projects demonstrating Rich's capabilities include <strong>rich-cli</strong> (file viewing with syntax highlighting), <strong>Memray</strong> (Bloomberg's memory profiler), <strong>Toolong</strong> (log file viewer), and <strong>ghtop</strong> (GitHub activity dashboard).</p>
+<hr />
+<h2 id="command-hierarchy-the-search-filter-drill-down-workflow">Command hierarchy: the search → filter → drill-down workflow</h2>
+<p>The most effective knowledge base CLI tools follow the <strong><code>APPNAME VERB NOUN --ADJECTIVE</code></strong> pattern (Cobra convention). Research across <code>nb</code>, <code>kb</code>, <code>tldr</code>, <code>cheat.sh</code>, and <code>howdoi</code> reveals a clear ideal command structure.</p>
+<p><strong>Core subcommands</strong> that every knowledge CLI needs: <code>search</code> (full-text with filters), <code>show</code>/<code>view</code> (single item detail), <code>list</code> (browse/filter), <code>tags</code> (list all tags with counts), <code>stats</code> (KB statistics and visualizations), and <code>explore</code> (interactive browsing mode). Single-letter aliases like <code>s</code>, <code>q</code>, <code>l</code> accelerate power users — <code>nb</code>'s approach of mapping <code>a</code>/<code>e</code>/<code>s</code>/<code>q</code>/<code>d</code> to add/edit/show/search/delete is proven effective.</p>
+<p>The <strong>progressive refinement</strong> workflow is the heart of knowledge search:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Stage 1: Broad search</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kb<span class="w"> </span>search<span class="w"> </span><span class="s2">&quot;python async&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Stage 2: Filter results</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>kb<span class="w"> </span>search<span class="w"> </span><span class="s2">&quot;python async&quot;</span><span class="w"> </span>--tag<span class="w"> </span>tutorial<span class="w"> </span>--after<span class="w"> </span><span class="m">2024</span>-01-01<span class="w"> </span>--sort<span class="w"> </span>score
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Stage 3: Drill into specific result</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>kb<span class="w"> </span>show<span class="w"> </span><span class="m">42</span><span class="w"> </span>--related
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="c1"># Interactive mode (combines all stages)</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>kb<span class="w"> </span>explore<span class="w"> </span><span class="s2">&quot;python async&quot;</span>
+</code></pre></div>
+<p><strong>Standard flags</strong> should be consistent across subcommands. Filtering uses <code>--tag/-t</code> (repeatable), <code>--category/-c</code>, <code>--after</code>/<code>--before</code> for dates, <code>--sort</code> (relevance|date|title), and <code>--limit/-n</code>. Output control uses <code>--json/-j</code>, <code>--format</code> (human|json|csv|plain), <code>--verbose/-v</code>, and <code>--quiet/-q</code>. The <code>--interactive/-i</code> flag or dedicated <code>explore</code> command enables fzf-style fuzzy browsing.</p>
+<p><strong>Output format switching</strong> should be automatic: detect <code>sys.stdout.isatty()</code> and emit rich colored output for humans, JSON when piped. Explicit <code>--json</code> overrides this. This pattern, used by <code>gh</code>, <code>kubectl</code>, and <code>nb</code>, is the gold standard.</p>
+<p>The <strong><code>nb</code> knowledge base tool</strong> stands out as the most comprehensive reference implementation with <strong>selector syntax</strong> (<code>notebook:item</code>), hierarchical tags (<code>#project/design/ui</code>), flexible identifiers (by ID, filename, title, or <code>--last</code>), and piped content support (<code>echo "content" | nb add</code>).</p>
+<hr />
+<h2 id="interactive-patterns-that-avoid-full-tui-complexity">Interactive patterns that avoid full TUI complexity</h2>
+<p>The most effective interactive CLIs compose simple elements rather than building monolithic TUI applications. Three tools define the landscape.</p>
+<p><strong>fzf</strong> is the canonical interactive filter. Its genius lies in operating as a Unix filter — it takes input on stdin, provides fuzzy selection, and outputs the selected item on stdout. Key patterns include <code>--preview 'bat --color=always {}'</code> for live content preview, <code>--height 50%</code> for partial-screen operation (avoiding full TUI), and composable keybindings via <code>--bind 'ctrl-e:execute(edit {})'</code>. The <code>--layout=reverse</code> flag places the list at top with input at bottom, which feels more natural.</p>
+<p><strong>gum</strong> (Charmbracelet) provides atomic interactive elements that compose in shell scripts. <code>gum filter</code> provides fzf-like fuzzy filtering, <code>gum choose</code> offers selection lists, <code>gum input</code> handles text entry, <code>gum confirm</code> adds yes/no dialogs, and <code>gum spin</code> wraps long operations with spinners. The real power is composition — chaining these into drill-down workflows:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">QUERY</span><span class="o">=</span><span class="k">$(</span>gum<span class="w"> </span>input<span class="w"> </span>--placeholder<span class="w"> </span><span class="s2">&quot;Search...&quot;</span><span class="k">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nv">SELECTED</span><span class="o">=</span><span class="k">$(</span>kb<span class="w"> </span>search<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$QUERY</span><span class="s2">&quot;</span><span class="w"> </span>--format<span class="w"> </span>plain<span class="w"> </span><span class="p">|</span><span class="w"> </span>gum<span class="w"> </span>filter<span class="k">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nv">ACTION</span><span class="o">=</span><span class="k">$(</span>gum<span class="w"> </span>choose<span class="w"> </span><span class="s2">&quot;View&quot;</span><span class="w"> </span><span class="s2">&quot;Edit&quot;</span><span class="w"> </span><span class="s2">&quot;Copy&quot;</span><span class="w"> </span><span class="s2">&quot;Delete&quot;</span><span class="k">)</span>
+</code></pre></div>
+<p><strong>For Python</strong>, the recommended interactive libraries are:</p>
+<ul>
+<li><strong><code>iterfzf</code></strong> — Bundles the fzf binary, streams items lazily, supports preview and multi-select. Best UX, but depends on fzf binary</li>
+<li><strong><code>InquirerPy</code></strong> — Most actively maintained Inquirer port with a <strong>fuzzy prompt</strong> that mimics fzf. Built on prompt_toolkit. Pure Python</li>
+<li><strong><code>questionary</code></strong> — Clean API for select/text/confirm/checkbox. Also built on prompt_toolkit</li>
+<li><strong><code>prompt_toolkit</code></strong> — Low-level foundation with FuzzyCompleter, keybindings, and auto-suggestions</li>
+</ul>
+<p>The <strong>recommended stack</strong> for a Python knowledge CLI combines <code>click</code> or <code>typer</code> for command structure, <code>rich</code> for output formatting (not interactive), and <code>iterfzf</code> or <code>InquirerPy</code> for interactive selection. This separation of concerns — framework for commands, library for display, tool for interaction — produces cleaner architecture than any monolithic TUI approach.</p>
+<p>The drill-down pattern across all these tools follows three stages: <strong>list view</strong> (scored, filterable results) → <strong>preview</strong> (inline or side-pane content preview) → <strong>detail view</strong> (full content with metadata and actions). Standard keyboard conventions include <code>↑/↓</code> for navigation, <code>Enter</code> for selection, <code>Tab</code> for multi-select, <code>Ctrl-/</code> for toggling preview, and <code>Esc</code> for cancellation.</p>
+<hr />
+<h2 id="terminal-visualization-without-a-tui-framework">Terminal visualization without a TUI framework</h2>
+<p>Activity graphs, score distributions, and per-project breakdowns are achievable in pure terminal output. <strong><code>plotext</code></strong> (2.1K GitHub stars) is the gold standard for Python terminal plotting — it supports bar charts, heatmaps, histograms, and scatter plots with matplotlib-like syntax, <strong>zero dependencies</strong>, and official Rich integration.</p>
+<p><strong>Sparklines</strong> are the highest-density visualization for inline use. A 10-line Python function using Unicode block characters (<code>▁▂▃▄▅▆▇█</code>) creates them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">sparkline</span><span class="p">(</span><span class="n">values</span><span class="p">):</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">chars</span> <span class="o">=</span> <span class="s2">&quot;▁▂▃▄▅▆▇█&quot;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">mn</span><span class="p">,</span> <span class="n">mx</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">values</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">mx</span> <span class="o">-</span> <span class="n">mn</span> <span class="ow">or</span> <span class="mi">1</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="k">return</span> <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">chars</span><span class="p">[</span><span class="nb">min</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">int</span><span class="p">((</span><span class="n">v</span> <span class="o">-</span> <span class="n">mn</span><span class="p">)</span> <span class="o">/</span> <span class="n">rng</span> <span class="o">*</span> <span class="mi">7</span><span class="p">))]</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">values</span><span class="p">)</span>
+</code></pre></div>
+<p>These embed directly in Rich tables for trend columns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Project     Notes  7-day trend   Avg Score
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>research      42   ▃▅▇█▆▄▇      0.82
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>work          28   ▅▃▆▇▅▄▃      0.74
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>personal      15   ▁▃▂▅▇▃▆      0.69
+</code></pre></div>
+<p><strong>GitHub-style activity heatmaps</strong> use Unicode block characters (<code>░▒▓█</code>) or colored spaces. <code>termgraph</code> has a built-in <code>--calendar</code> mode, and <code>plotext</code>'s <code>matrix_plot</code> handles arbitrary heatmap data. For embedding in Rich layouts, <code>termcharts</code> provides bar and pie charts that accept a <code>rich=True</code> parameter and return Rich-compatible renderables.</p>
+<p><strong>Horizontal bar charts</strong> are the most effective terminal visualization for category breakdowns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Notes by Tag
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>  python     ████████████████████ 42
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  research   █████████████▌       28
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>  terminal   ███████▌             15
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>  ux         ████▌                 9
+</code></pre></div>
+<p>The recommended visualization stack: <strong>plotext</strong> for full charts, <strong>custom sparkline function</strong> for inline trends, <strong>termcharts</strong> for Rich-integrated charts, and <strong>Rich tables with embedded Unicode</strong> for composite displays.</p>
+<hr />
+<h2 id="prioritizing-metadata-when-every-character-counts">Prioritizing metadata when every character counts</h2>
+<p>Terminal space is fundamentally constrained. Research from clig.dev, Nielsen Norman Group's progressive disclosure principles, and Algolia's search UX guidelines converge on a <strong>four-level metadata priority framework</strong>.</p>
+<p><strong>Level 1 — Always visible</strong> (works at 60 columns): title/name (truncated with ellipsis), relevance score (compact format like <code>0.92</code> or <code>★★★★☆</code>), and type indicator (single icon or character code).</p>
+<p><strong>Level 2 — Important</strong> (shown at 80+ columns): relative date (<code>2d ago</code>), primary tags (top 2–3, with <code>+N</code> overflow indicator), and source/project identifier.</p>
+<p><strong>Level 3 — Contextual</strong> (shown at 120+ columns or with <code>--verbose</code>): full tag list, summary snippet (first 80 characters), file path, and word count.</p>
+<p><strong>Level 4 — Detail</strong> (shown on item selection): full content preview, all metadata fields, related items, and edit history.</p>
+<p><strong>Graceful degradation</strong> follows specific truncation patterns. Dates compress from <code>2025-02-15 14:30:00</code> → <code>Feb 15, 2025</code> → <code>2d ago</code> → <code>2d</code>. Tags compress from full list → <code>#python #viz +3</code> → <code>#python +4</code>. Titles truncate with trailing ellipsis. Paths use middle truncation: <code>/home/user/.../project/file.md</code>.</p>
+<p>Here is the same search displayed at three terminal widths:</p>
+<p><strong>Wide (120 columns)</strong> — full table with all metadata columns:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a> Score  Title                                        Date       Tags                   Project
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a> 0.95   Plotext terminal charts research notes        Feb 15     #python #plotext #cli   research
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a> 0.87   Rich library visualization capabilities       Feb 12     #python #rich #tui      cli-tools
+</code></pre></div></p>
+<p><strong>Standard (80 columns)</strong> — two-line format, tags truncated with overflow count:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a> ★★★★★ Plotext terminal charts research notes
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>       Feb 15 · #python #plotext +1 · research
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a> ★★★★☆ Rich library visualization capabilities
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>       Feb 12 · #python #rich +1 · cli-tools
+</code></pre></div></p>
+<p><strong>Narrow (60 columns)</strong> — single-line with heavy truncation:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>.95 Plotext terminal charts rese…    2d ago
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>.87 Rich library visualization …    5d ago
+</code></pre></div></p>
+<p>Tools like <code>kubectl</code> use the <code>-o wide</code> flag for explicit width expansion. <code>eza</code> auto-calculates optimal grid columns from terminal width. <code>docker ps</code> truncates container IDs to 12 characters and commands with ellipsis. <strong>The pattern is consistent: fixed-width left columns for identifiers, elastic right columns for descriptions, and explicit flags for progressively wider output.</strong></p>
+<hr />
+<h2 id="conclusion-a-concrete-blueprint">Conclusion: a concrete blueprint</h2>
+<p>The optimal architecture for a CLI knowledge search tool combines <strong>five layers</strong>: <code>click</code>/<code>typer</code> for command structure with <code>VERB NOUN --ADJECTIVE</code> conventions; <code>rich</code> for all output formatting using Tables (list view), Panels (detail view), and Trees (categorized view); <code>iterfzf</code> or <code>InquirerPy</code> for interactive selection without TUI overhead; <code>plotext</code> with inline sparklines for terminal visualization; and width-aware rendering at three breakpoints (60/80/120 columns).</p>
+<p>The most important design insight across all researched tools is that <strong>composition beats monolithism</strong>. ripgrep pipes to fzf which pipes to bat. gum chains atomic interactive elements. Rich nests renderables inside renderables. The tools that achieve the best UX are those that do one thing excellently and compose with others — and the best knowledge CLIs will follow the same principle, offering <code>--json</code> output for piping, <code>--interactive</code> mode for exploration, and rich formatted output as the human-friendly default.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

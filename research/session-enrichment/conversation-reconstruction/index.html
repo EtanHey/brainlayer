@@ -1,0 +1,944 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/research/session-enrichment/conversation-reconstruction/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Reconstructing linear conversations from tree-structured dialogue data - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#reconstructing-linear-conversations-from-tree-structured-dialogue-data" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Reconstructing linear conversations from tree-structured dialogue data
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-canonical-path-extraction-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The canonical path extraction algorithm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#classifying-forks-three-distinct-patterns-require-different-detection-logic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classifying forks: three distinct patterns require different detection logic
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prior-art-spans-five-distinct-research-traditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prior art spans five distinct research traditions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compaction-boundaries-demand-a-hybrid-analysis-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compaction boundaries demand a hybrid analysis strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#abandoned-branches-are-an-underexploited-gold-mine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Abandoned branches are an underexploited gold mine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#concrete-implementation-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concrete implementation recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="reconstructing-linear-conversations-from-tree-structured-dialogue-data">Reconstructing linear conversations from tree-structured dialogue data</h1>
+<p><strong>The most effective algorithm for extracting the active conversation path from tree-structured JSONL data is leaf-to-root backtracking</strong>: build a UUID index in O(n), identify the active leaf (last message by file position), then walk backward via <code>parentUuid</code> pointers to root and reverse. This approach naturally ignores the ~92% of abandoned messages, requires no fork-point heuristics during traversal, and is used by every production implementation found — from ChatGPT's export parser to the <code>cchat</code> tool for Claude Code. Fork classification, compaction stitching, and abandoned branch analysis are layered on top of this core algorithm, and a rich body of prior art from email threading, chat platforms, dialogue systems research, and version control informs each layer.</p>
+<h2 id="the-canonical-path-extraction-algorithm">The canonical path extraction algorithm</h2>
+<p>The fundamental algorithm is simple and well-established across every system that processes tree-structured conversations. The ChatGPT export format stores an explicit <code>current_node</code> pointer to the active leaf; Claude Code's JSONL does not, so the leaf must be inferred. <strong>The last message by file position in the JSONL is the most reliable heuristic</strong> for identifying the active endpoint, with latest timestamp as a fallback. From there, the walk is mechanical:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">extract_active_path</span><span class="p">(</span><span class="n">messages</span><span class="p">):</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">by_uuid</span> <span class="o">=</span> <span class="p">{</span><span class="n">m</span><span class="p">[</span><span class="s1">&#39;uuid&#39;</span><span class="p">]:</span> <span class="n">m</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">messages</span><span class="p">}</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">leaf</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">messages</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">m</span><span class="p">:</span> <span class="n">m</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_line_num&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">path</span><span class="p">,</span> <span class="n">current</span> <span class="o">=</span> <span class="p">[],</span> <span class="n">leaf</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="k">while</span> <span class="n">current</span><span class="p">:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        <span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">current</span><span class="p">)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        <span class="n">current</span> <span class="o">=</span> <span class="n">by_uuid</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">current</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;parentUuid&#39;</span><span class="p">))</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="nb">reversed</span><span class="p">(</span><span class="n">path</span><span class="p">))</span>
+</code></pre></div>
+<p>This pattern appears identically in the ChatGPT community parser (walks from <code>current_node</code> via <code>parent</code> pointers, reverses), in OpenAssistant's tree dataset tools (<code>visit_messages_depth_first</code> with predicate filtering), and in the <code>cchat</code> CLI tool for Claude Code. The alternative — root-to-leaf forward traversal with child selection heuristics — is less reliable because it must make a heuristic decision at every fork point, whereas backtracking from a known endpoint produces a guaranteed single path with <strong>O(n) index build plus O(d) traversal</strong> where d is typically only ~8% of total messages.</p>
+<p>For cases where the active leaf is ambiguous, three fallback heuristics exist in order of reliability: deepest leaf by path length (longest conversation is usually the active one), leaf with the latest timestamp, and leaf with the most descendants in its subtree. The topological-sort longest-path algorithm provides a mathematically sound O(V+E) solution that finds the deepest leaf without heuristics, useful when file ordering or timestamps are unreliable.</p>
+<p>The version control analogy is precise. Git's <code>--first-parent</code> traversal solves the same problem: extracting the "mainline" from a DAG by ignoring merge history. Each conversation fork is analogous to a git branch, and the active path is analogous to following first-parent pointers from HEAD to the initial commit. Git's merge-base algorithm (finding the common ancestor of two branches) directly applies to identifying where user rewinds diverged.</p>
+<h2 id="classifying-forks-three-distinct-patterns-require-different-detection-logic">Classifying forks: three distinct patterns require different detection logic</h2>
+<p>The critical insight is that <strong>most apparent fork points are not real conversation branches</strong>. In Claude Code sessions, a parent assistant message that invokes multiple tools generates multiple <code>tool_result</code> children — these share the same parent but represent parallel execution, not divergent conversation paths. Real forks fall into exactly two categories: compaction events and user rewinds.</p>
+<p><strong>Parallel tool events</strong> are detected by checking whether all children of a multi-child parent are <code>tool_result</code> or progress messages with no <code>user</code>-role messages among them, and whether their timestamps cluster within seconds of each other. The <code>cchat</code> tool calls this "mechanical fan-out" and filters it explicitly. The detection logic checks content block types — if every child contains <code>tool_result</code> type content, the fork is parallel execution, not a branch.</p>
+<p><strong>Compaction events</strong> carry explicit signals: a <code>type: "system"</code> with <code>subtype: "compact_boundary"</code>, a <code>compactMetadata</code> field, content containing "This session is being continued from a previous conversation," or the presence of a <code>logicalParentUuid</code> field that links across compaction boundaries. The <code>cchat</code> tool stitches across these boundaries using <code>logicalParentUuid</code> with a positional fallback when that link is broken. Claude Code's auto-compact triggers at <strong>75-92% context window capacity</strong>, and the compaction summary replaces the full conversation history with a condensed version.</p>
+<p><strong>User rewinds</strong> are the residual category after eliminating parallel tools and compaction. The signal is multiple <code>user</code>-role messages sharing the same parent, or a new user message whose parent is an ancestor of (rather than the immediate predecessor of) the previous user message. These represent the user going back and trying a different approach. Kim et al. (2022) formalized this pattern as "turnback utterances" in dialogue state tracking, demonstrating that current DST models significantly degrade when users change their minds — performance only recovers when turnback scenarios are explicitly included in training data.</p>
+<p>A documented edge case: Claude Code issue #22526 reports "phantom" <code>parentUuid</code> references pointing to non-existent UUIDs, creating orphaned messages. The Claude Context Repair Tool handles this by linking orphans to the nearest valid message by timestamp, then filtering to the primary session ID.</p>
+<h2 id="prior-art-spans-five-distinct-research-traditions">Prior art spans five distinct research traditions</h2>
+<p><strong>Email threading</strong> provides the most directly applicable algorithmic precedent. Jamie Zawinski's threading algorithm (1997), formalized in RFC 5256, builds parent-child trees from Message-ID and References headers in a five-step process: index by ID, link via references, find roots, prune empty containers, and group by subject as fallback. The core data structure — a container holding parent-child relationships indexed by unique identifier — is identical to the UUID/parentUuid conversation tree. The JWZ algorithm's handling of missing intermediate messages through "dummy container" nodes parallels handling broken parent chains in conversation data.</p>
+<p><strong>Conversation disentanglement</strong> is a rich academic field. Elsner and Charniak's foundational work (2008, 2010) established the paradigm of predicting reply-to links in interleaved IRC chat using discourse features — speaker identity, time gaps, content similarity, and mention patterns. Kummerfeld et al. (2019) scaled this to 77,500 annotated Ubuntu IRC messages and found that reply-structure graph annotations (each message linked to its parent) form exactly the tree/forest structure present in Claude Code transcripts. Recent advances include BERT-based approaches (DialBERT, 2020), contrastive learning methods (2022), and zero-shot approaches that eliminate the need for labeled data (Chi &amp; Rudnicky, 2021). However, these methods solve the <em>inverse</em> problem — inferring tree structure from flat text — while the Claude Code problem starts with known structure and must select a path through it.</p>
+<p><strong>Dialogue state tracking with rollbacks</strong> directly addresses the rewind problem. Kim et al. (2022) defined four types of "turnback" situations in their "Oh My Mistake!" paper and showed that injecting turnback scenarios into MultiWOZ training data recovers the performance degradation. The S3-DST framework combines joint segmentation with state tracking for long conversations, using structured prompting with pre-analytical recollection — relevant for processing sessions that span compaction boundaries.</p>
+<p><strong>Branch prediction in tree-structured conversations</strong> is studied by Meital et al. (2024) in "The Branch Not Taken," which defines the task of predicting whether a new comment replies to a leaf (continuing linearly) or an intermediate node (creating a branch). Their GLOBS model uses DistilBERT reply-to scores combined with structural and temporal features. Key finding: <strong>branching correlates with more participants and occurs more at earlier tree levels</strong> — a pattern that may translate to coding sessions where early architectural decisions are more likely to spawn rewinds than late implementation details.</p>
+<p><strong>Chat platform engineering</strong> reveals a consistent industry convergence on shallow threading. Slack deliberately abandoned nested replies after extensive experimentation (2015-2017), settling on single-level parent-plus-flat-replies. Discord models threads as sub-channels. Matrix's MSC3440 implements single-level threads after the deeper MSC2836 proposal proved too complex for federation. Zulip uses topic-label threading with no parent-child linking at all. Reddit's open-sourced comment tree implementation uses the same adjacency-list pattern (<code>parent_id → [child_ids]</code>) with explicit orphan detection. The universal reconstruction pattern across all platforms is: build a lookup table, identify roots, walk the tree, select paths by score or pointer, reverse if walking bottom-up.</p>
+<h2 id="compaction-boundaries-demand-a-hybrid-analysis-strategy">Compaction boundaries demand a hybrid analysis strategy</h2>
+<p>The research strongly supports treating compaction events as <strong>explicit segmentation boundaries while attempting partial reconstruction across them</strong>. Three approaches exist for handling compacted segments, each with distinct tradeoffs.</p>
+<p><strong>Segmented analysis</strong> treats each inter-compaction segment independently, which is semantically honest because the AI literally had different context before and after compaction. This avoids the false precision of analyzing cross-boundary patterns with data that was summarized away. JetBrains' NeurIPS 2025 workshop paper found that <strong>observation masking</strong> (hiding environment outputs while preserving reasoning history) matched LLM summarization in both cost savings and problem-solving ability — suggesting that what's lost in compaction is often redundant observation data rather than critical reasoning context.</p>
+<p><strong>Unified analysis</strong> attempts to reconstruct the full session using compaction summaries as bridge context, supplemented by external artifacts (file changes, git commits, test results). Factory.ai's approach maintains "persistent, anchored summaries" rather than re-summarizing, and their key insight — <strong>"minimize tokens per task, not per request"</strong> — argues that over-compression forces agents to re-fetch information, actually increasing total costs. This implies that compaction summaries alone may be insufficient bridges, and external artifacts are necessary for accurate cross-boundary analysis.</p>
+<p><strong>The recommended hybrid</strong> uses segmented analysis for fine-grained metrics (error rates, correction patterns, tool usage frequency) where compaction genuinely changes the AI's available context, and unified analysis for high-level patterns (session productivity, task completion, user satisfaction trajectory) where compaction summaries provide adequate continuity. Robert Lavigne's layered compression taxonomy suggests using <strong>distilled representations of older context, summarized versions of recent context, and full detail for the current segment</strong> — a pattern that maps directly to how compaction creates a natural hierarchy of detail levels across a session.</p>
+<p>The SeCom framework (ICLR 2025) provides a concrete implementation: it partitions long conversations into topically coherent segments for memory management, then uses compression-based denoising on memory units to enhance retrieval across segment boundaries. The C-DIC system treats conversations as "interleaved contextual threads" with revisable per-thread compression states, using a retrieve-revise-write-back loop for cross-turn memory sharing — a pattern directly applicable to maintaining coherence across compaction boundaries.</p>
+<h2 id="abandoned-branches-are-an-underexploited-gold-mine">Abandoned branches are an underexploited gold mine</h2>
+<p>The evidence for analyzing abandoned branches is overwhelming, drawing from three converging research programs. The Dialogue Breakdown Detection Challenge (DBDC, five iterations from 2015-2022) established that <strong>detecting and analyzing conversation failures is both feasible and valuable</strong>, using a three-level annotation scheme (not-a-breakdown, possible breakdown, breakdown) with 30 annotators per turn. BERT-based approaches with continued pre-training achieved state-of-the-art results, beating baselines by over 12% accuracy.</p>
+<p><strong>Each branch abandonment creates a natural RLHF preference pair.</strong> The conversation state at the fork point is the context; the path the user continued on is the "chosen" response; the abandoned branch is the "rejected" response. With 92% of messages on abandoned branches, this represents an enormous untapped dataset of implicit negative feedback. Rafailov et al.'s DPO framework can consume these pairs directly without reward model training. The depth of an abandoned branch before abandonment serves as an implicit severity signal — <strong>short abandoned branches suggest quick user recognition of a bad approach, while long ones indicate the AI was confidently wrong for many turns</strong>.</p>
+<p>The "rewind distance" metric — how far back users go before trying a new approach — directly measures the AI's inability to self-correct. Lu, Zhang, and Chen (2019) demonstrated with Hindsight Experience Replay that <strong>learning from failed dialogues improves learning rate over standard experience replay</strong>, providing theoretical grounding for mining abandoned branches. IBM Watson's Dialog Flow Analysis provides production precedent: it visualizes where users abandon conversations, extracts keywords from abandoned paths, and uses this to identify improvement opportunities in intents, entities, and dialog implementations.</p>
+<p>Practical analysis of abandoned branches should classify abandonment causes into a coding-session-specific taxonomy (wrong algorithmic approach, stuck in error loops, scope creep, misunderstood requirements, tooling failures), measure branch depth before abandonment, identify recurring failure patterns using dialogue breakdown detection techniques, and track the relationship between rewind distance and task complexity.</p>
+<h2 id="concrete-implementation-recommendations">Concrete implementation recommendations</h2>
+<p>The complete pipeline for processing Claude Code session transcripts should proceed in five phases. First, <strong>parse and index</strong>: load JSONL, build the <code>uuid → message</code> hash map and <code>parent → [children]</code> adjacency list, detect and repair orphaned messages using timestamp-based linking. Second, <strong>extract the active path</strong>: identify the active leaf by file position, backtrack to root via <code>parentUuid</code>, and stitch across compaction boundaries using <code>logicalParentUuid</code> with positional fallback. Third, <strong>classify all fork points</strong>: iterate the children map, classify each multi-child node as parallel tools (all children are tool_results), compaction (system boundary markers present), or user rewind (residual category), and record metadata for each fork. Fourth, <strong>segment at compaction boundaries</strong>: split the active path at compaction events, preserve summaries as bridge context, and flag analysis confidence levels for within-segment versus cross-segment findings. Fifth, <strong>analyze abandoned branches</strong>: for each fork classified as a user rewind, extract the abandoned subtree, compute depth and rewind distance metrics, classify the abandonment cause, and structure as preference pairs for downstream training.</p>
+<p>The OpenAssistant (OASST) dataset provides the closest open-source precedent at scale: <strong>208,584 messages in 70,642 conversation trees</strong> with explicit <code>message_id</code>/<code>parent_id</code> structure, rank annotations at branch points, and established tooling for depth-first traversal and path extraction by rank. The <code>cchat</code> tool for Claude Code specifically handles compaction stitching, branch detection filtering of mechanical fan-out, and UUID tree resolution — making it the most directly relevant existing implementation. ChatTree provides real-time visualization of conversation trees with zoom and drag navigation, useful for debugging tree reconstruction algorithms.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>The tree-to-linear reconstruction problem is well-solved algorithmically — leaf-to-root backtracking is the universal approach — but <strong>the real complexity lies in fork classification and deciding what to do with the 92% of messages that aren't on the active path</strong>. The strongest finding from this research is that abandoned branches contain far more diagnostic value than the active path itself: they reveal failure modes, create natural preference training data, and encode implicit user feedback about AI behavior. No existing system fully exploits this signal. The compaction problem is best handled through hybrid segmented-unified analysis, treating compaction summaries as lossy bridges and supplementing with external artifacts. The most underexplored opportunity is applying RLHF preference learning frameworks to the natural chosen/rejected pairs that branch points create — a direction that connects tree-structured session data directly to model improvement pipelines.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

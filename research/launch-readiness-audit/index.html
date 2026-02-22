@@ -1,0 +1,1432 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/research/launch-readiness-audit/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>BrainLayer launch readiness audit - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#brainlayer-launch-readiness-audit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              BrainLayer launch readiness audit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-mcp-ecosystem-demands-more-than-working-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The MCP ecosystem demands more than working code
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-brainlayer-should-position-against-mem0-and-the-basic-memory-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How BrainLayer should position against mem0 and the basic memory MCP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#github-repo-and-pypi-listing-must-sell-in-seconds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub repo and PyPI listing must sell in seconds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mkdocs-material-is-the-clear-documentation-choice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MkDocs Material is the clear documentation choice
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#visual-identity-and-social-assets-need-to-be-ready-on-day-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Visual identity and social assets need to be ready on day one
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#distribution-requires-simultaneous-multi-channel-activation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distribution requires simultaneous multi-channel activation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#feature-roadmap-what-ships-before-launch-vs-after" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feature roadmap: what ships before launch vs. after
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-structured-launch-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The structured launch checklist
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The structured launch checklist">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#must-have-before-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MUST HAVE before launch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#should-have-significantly-improves-launch-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SHOULD HAVE — significantly improves launch impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nice-to-have-can-come-in-v11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NICE TO HAVE — can come in v1.1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-launch-roadmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST-LAUNCH roadmap
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#competitive-positioning-the-three-sentence-pitch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Competitive positioning: the three-sentence pitch
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="brainlayer-launch-readiness-audit">BrainLayer launch readiness audit</h1>
+<p><strong>BrainLayer enters a booming MCP ecosystem with a strong technical differentiator but needs strategic packaging to stand out.</strong> The MCP protocol now powers <strong>97 million monthly SDK downloads</strong> across <strong>10,000+ servers</strong>, backed by the Linux Foundation's Agentic AI Foundation with Anthropic, Google, Microsoft, AWS, and OpenAI as members. BrainLayer's 12-tool suite with hybrid semantic+keyword search and LLM enrichment offers a genuine leap over the official MCP memory server (basic text matching on a JSON file) and a compelling open-source alternative to mem0's cloud-centric model. The window is open: memory is the fastest-growing MCP category, the official MCP Registry launched just months ago, and no dominant open-source MCP-native memory server has yet emerged.</p>
+<p>This audit covers the full launch surface — ecosystem requirements, competitive positioning, documentation, branding, distribution, and a prioritized checklist with effort estimates.</p>
+<hr />
+<h2 id="the-mcp-ecosystem-demands-more-than-working-code">The MCP ecosystem demands more than working code</h2>
+<p>The MCP specification (latest: <strong>2025-11-25</strong>) has matured rapidly. Production-ready servers in 2026 must implement several features beyond basic tool definitions.</p>
+<p><strong>Tool annotations are now expected, not optional.</strong> Clients like VS Code and Claude Desktop use <code>readOnlyHint</code> to skip confirmation dialogs, and <code>destructiveHint</code> and <code>idempotentHint</code> signal safety properties to agent orchestrators. BrainLayer's read tools should set <code>readOnlyHint: true</code>; write tools need <code>destructiveHint</code> and <code>idempotentHint</code> configured accurately. The spec also supports <code>openWorldHint</code> for tools interacting with external services (relevant for LLM enrichment calls).</p>
+<p><strong>Structured content with <code>outputSchema</code></strong> (added June 2025) lets tools return typed JSON alongside traditional text blocks. This is increasingly important as agents chain MCP tool outputs into downstream processing. BrainLayer should define output schemas for search results, memory stats, and context retrieval tools.</p>
+<p><strong>The Official MCP Registry</strong> at <code>registry.modelcontextprotocol.io</code> is the single most important listing. Launched September 2025, it validates namespace ownership (GitHub username or DNS) and pings servers for uptime. Publishing requires a <code>server.json</code> metadata file and the <code>mcp-publisher</code> CLI. <strong>There is no formal certification program</strong> from Anthropic or third parties — the registry listing is the closest official stamp of legitimacy.</p>
+<p>Beyond the official registry, the directory landscape is fragmented but active. <strong>MCP.so</strong> lists 17,749 servers. <strong>PulseMCP</strong> tracks 8,610+ with weekly visitor estimates. <strong>awesome-mcp-servers</strong> on GitHub has <strong>79.9K stars</strong> and accepts PRs. <strong>Smithery</strong> hosts 2,200+ with automated install flows. <strong>Glama.ai</strong> manually reviews submissions across 5,867+ servers. BrainLayer should submit to all of these — each directory serves a different discovery audience.</p>
+<p>The top MCP servers share five patterns: <strong>single clear purpose</strong>, minimal configuration (zero-config or one API key), excellent documentation with JSON config examples, multi-transport support (stdio + Streamable HTTP), and active development cadence. Context7 (46K stars) succeeds by solving one universal pain point — outdated LLM training data. Playwright MCP (1.3M weekly visitors on PulseMCP) benefits from Microsoft backing and zero-config browser automation. Supabase MCP wraps a complete platform behind clear tool boundaries. BrainLayer should learn from these: <strong>lead with the single pain point</strong> (AI agents forget everything) rather than listing all 12 tools upfront.</p>
+<hr />
+<h2 id="how-brainlayer-should-position-against-mem0-and-the-basic-memory-mcp">How BrainLayer should position against mem0 and the basic memory MCP</h2>
+<p><strong>Mem0 is BrainLayer's most visible competitor</strong>, with <strong>~46,900 GitHub stars</strong>, $24M in funding, 14 million PyPI downloads, and an AWS partnership as the exclusive memory provider for the Strands Agent SDK. Their hybrid architecture combines vector, key-value, and graph databases with LLM-powered memory extraction. They offer both open-source self-hosting and a managed cloud starting at $19/month.</p>
+<p>But mem0 has exploitable weaknesses. <strong>It requires an external LLM API key</strong> (default: OpenAI's gpt-4.1-nano) for basic operation, adding cost and latency. Its free tier caps at 10,000 memories and 1,000 API calls/month. The Letta team publicly challenged mem0's LOCOMO benchmark claims without receiving a response. And critically, <strong>mem0 added MCP support as an afterthought</strong> via a separate <code>mem0-mcp</code> repository — it was not designed as an MCP server from the ground up.</p>
+<p>BrainLayer's differentiation should center on three angles:</p>
+<p><strong>"MCP-native, not MCP-bolted-on."</strong> BrainLayer IS an MCP server. Every design decision serves the MCP workflow. Mem0 is a memory platform that also exposes MCP tools. This distinction matters for developers who want memory that integrates seamlessly with Claude Code, Cursor, or VS Code without configuring separate services.</p>
+<p><strong>"No API keys required for core operation."</strong> If BrainLayer can run fully locally without mandatory third-party LLM calls, this is a powerful differentiator. Position against mem0's OpenAI dependency: "Full persistent memory without sending your data to OpenAI."</p>
+<p><strong>"Drop-in upgrade from the official MCP memory server."</strong> The official <code>@modelcontextprotocol/server-memory</code> stores entities, relations, and observations in a single JSON file with simple text matching. It has 9 CRUD tools and zero intelligence — no embeddings, no semantic search, no enrichment, no scalability. <strong>This is BrainLayer's most compelling comparison:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Official server-memory</th>
+<th>BrainLayer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Search type</td>
+<td>Text matching only</td>
+<td>Semantic + keyword hybrid</td>
+</tr>
+<tr>
+<td>Embeddings</td>
+<td>None</td>
+<td>Full vector embeddings</td>
+</tr>
+<tr>
+<td>LLM enrichment</td>
+<td>None</td>
+<td>Auto-extraction, summarization</td>
+</tr>
+<tr>
+<td>Scale</td>
+<td>Single JSON file</td>
+<td>268K+ chunks</td>
+</tr>
+<tr>
+<td>Multi-source indexing</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Tool count</td>
+<td>9 (basic CRUD)</td>
+<td>12 purpose-built tools</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>aitmpl.com "memory-integration"</strong> template (4,703 downloads, #2 most-downloaded MCP on the Claude Code Templates marketplace with ~20.9K GitHub stars) is likely a thin wrapper around similar basic key-value storage. BrainLayer should submit to aitmpl.com and position explicitly as the production-grade alternative. The submission process is via GitHub PR to <code>davila7/claude-code-templates</code>.</p>
+<p>The broader AI memory landscape includes <strong>Zep/Graphiti</strong> (temporal knowledge graphs, 20K stars for Graphiti, but community edition deprecated — now cloud-only), <strong>Letta/MemGPT</strong> (OS-inspired memory tiers, agent self-editing), and <strong>LangMem</strong> (framework-locked to LangGraph). The trend is clear: <strong>graph memory, temporal awareness, and cross-client memory sharing</strong> are becoming table stakes. BrainLayer's roadmap should account for these expectations.</p>
+<hr />
+<h2 id="github-repo-and-pypi-listing-must-sell-in-seconds">GitHub repo and PyPI listing must sell in seconds</h2>
+<p><strong>The "above the fold" content — what appears without scrolling — determines 80% of first impressions.</strong> Analysis of successful AI tool repos reveals a consistent structure:</p>
+<p>The README should open with a branded banner image, 1-2 rows of badges (CI status, PyPI version, Python versions, license, downloads), a one-line tagline, and a <strong>15-30 second demo GIF</strong> created with VHS (Charmbracelet's scriptable terminal recorder). VHS generates reproducible GIFs from <code>.tape</code> files and integrates with GitHub Actions for auto-regeneration. Below the fold: a "Why BrainLayer?" section with 2-3 pain→solution points, a 3-5 line quickstart, a feature comparison table (✅/❌ format against mem0 and official server-memory), and an architecture diagram.</p>
+<p><strong>Essential badges for BrainLayer:</strong> CI status (GitHub Actions), PyPI version, Python version support (3.10-3.13), license, monthly downloads (via pypistats), and code coverage (Codecov, aim for 80%+). Keep to two rows maximum.</p>
+<p><strong>PyPI optimization is straightforward but often neglected.</strong> Use <code>pyproject.toml</code> (PEP 621), set <code>long_description_content_type = "text/markdown"</code> so the README renders directly on PyPI, include classifiers for <code>Topic :: Scientific/Engineering :: Artificial Intelligence</code> and <code>Typing :: Typed</code>, and populate all project URLs (Homepage, Documentation, Repository, Bug Tracker, Changelog, Discord). Publish via <strong>Trusted Publishers</strong> (GitHub Actions OIDC integration — no API tokens needed) using <code>pypa/gh-action-pypi-publish</code>. PyPI has no trending feature — discovery happens on GitHub, not PyPI. The package name <code>brainlayer</code> should be memorable and keyword-rich in metadata.</p>
+<p><strong>CI/CD should include more than tests.</strong> The standard 2025 Python stack:
+- Test matrix across Python 3.10-3.13 on Ubuntu + macOS
+- <strong>Ruff</strong> for linting + formatting (replaces Black, isort, Flake8 — 10-100x faster)
+- <strong>Mypy</strong> or Pyright for type checking
+- <strong>CodeQL</strong> for security scanning (free for open-source, catches vulnerabilities in Python)
+- <strong>Dependabot</strong> with weekly schedule and auto-merge for patch updates
+- <strong>Gitleaks</strong> pre-commit hook to prevent secret leaks
+- Automated release workflow: git tag → tests → build → PyPI publish → GitHub Release with auto-generated notes</p>
+<p>SBOM generation via <code>cyclonedx-bom</code> signals enterprise readiness but is not critical for initial launch.</p>
+<hr />
+<h2 id="mkdocs-material-is-the-clear-documentation-choice">MkDocs Material is the clear documentation choice</h2>
+<p><strong>Every major Python AI project in 2025-2026 uses MkDocs with Material theme</strong> — FastAPI, Pydantic, LlamaIndex, UV, Ruff, Polars. It installs via pip (no Node.js), configures through a single <code>mkdocs.yml</code>, auto-generates API references via the <code>mkdocstrings</code> plugin, and supports versioning through the <code>mike</code> plugin. Sphinx remains powerful but has a steeper learning curve. Docusaurus and Astro Starlight require Node.js — a friction point for a Python project's contributor base.</p>
+<p><strong>Recommended documentation architecture for BrainLayer's 12 tools + CLI:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Getting Started (installation, quickstart, editor setup with tabs)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── Claude Code | Cursor | VS Code Copilot | Zed (tabbed content)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Concepts (how persistent memory works, MCP basics)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>Tool Reference (auto-generated schemas + hand-written examples)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── Memory tools | Context tools | Management tools
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>CLI Reference (auto-generated from Click/Typer)
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Python API Reference (auto-generated via mkdocstrings)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>Guides (configuration, advanced usage, multi-agent setups)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>Integrations (LangChain, CrewAI, LlamaIndex)
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>Contributing + Changelog
+</code></pre></div>
+<p><strong>Tool documentation should be hybrid</strong>: auto-generate the reference table (name, description, input/output schema) from MCP <code>tools/list</code> metadata, then hand-write usage examples, prompt suggestions, and use-case narratives around each auto-generated entry. The editor setup page should use MkDocs Material's <strong>content tabs</strong> feature to show configuration for Claude Code, Cursor, VS Code, and Zed side by side.</p>
+<p><strong>Start with docs-as-landing-page</strong> (the FastAPI/Pydantic model) rather than building a separate marketing site. MkDocs Material supports custom hero sections via template overrides. Split to a separate landing page only when you need marketing content, pricing pages, or a significant non-developer audience. This is the approach that FastAPI used to reach 70K+ stars — the documentation IS the product website.</p>
+<hr />
+<h2 id="visual-identity-and-social-assets-need-to-be-ready-on-day-one">Visual identity and social assets need to be ready on day one</h2>
+<p>Successful open-source AI projects converge on <strong>clean geometric SVG logos</strong> with gradient accents — typically purple/blue/teal palettes that convey intelligence and trust. LangChain uses a playful emoji-based identity (🦜🔗), ChromaDB uses a prismatic gradient, mem0 uses a minimalist purple wordmark, and FastAPI uses a lightning bolt in a hexagon. BrainLayer should target a <strong>layered brain/neural motif</strong> in SVG format, with monochrome variants for dark and light backgrounds. Use Figma for design (free tier) and avoid AI-generated logos for final branding — the U.S. Copyright Office has ruled AI-generated images cannot be copyrighted.</p>
+<p><strong>Social media asset dimensions</strong> (create these before launch):</p>
+<table>
+<thead>
+<tr>
+<th>Asset</th>
+<th>Dimensions</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GitHub social preview</td>
+<td><strong>1280 × 640 px</strong> (PNG)</td>
+<td>Repo link previews everywhere</td>
+</tr>
+<tr>
+<td>Open Graph / Twitter / LinkedIn</td>
+<td><strong>1200 × 630 px</strong> (PNG)</td>
+<td>Universal social card</td>
+</tr>
+</tbody>
+</table>
+<p>These two images cover all platforms. Center critical content (logo, name, tagline) to account for edge cropping. Use dark backgrounds — most developer audiences browse in dark mode. Test with Facebook Sharing Debugger and Twitter Card Validator before launch.</p>
+<p><strong>Demo strategy:</strong> VHS-scripted GIF for the GitHub README (auto-regenerated in CI), asciinema player embeds for docs pages (lightweight, text-selectable), and short MP4 screen captures (&lt;60 seconds) for Twitter/LinkedIn showing an agent conversation with persistent memory across sessions.</p>
+<hr />
+<h2 id="distribution-requires-simultaneous-multi-channel-activation">Distribution requires simultaneous multi-channel activation</h2>
+<p><strong>The launch sequence matters as much as the launch content.</strong> GitHub Trending's algorithm rewards star velocity relative to historical average — a new repo getting 30-50 stars in 1-2 hours has a strong chance of trending. The key is driving traffic from <strong>at least two external sources simultaneously</strong> (e.g., Hacker News + Reddit, or Twitter + Dev.to) to avoid single-source detection.</p>
+<p><strong>MCP-specific distribution (submit to ALL before launch day):</strong>
+- Official MCP Registry (<code>registry.modelcontextprotocol.io</code>) — publish via <code>mcp-publisher</code> CLI
+- awesome-mcp-servers PR (79.9K stars, the canonical list)
+- aitmpl.com / Claude Code Templates PR
+- PulseMCP, mcp.so, Glama.ai, Smithery, mcpservers.org, mcpserverfinder.com</p>
+<p><strong>Launch day execution:</strong>
+- <strong>Product Hunt</strong> at 12:01 AM PT — recruit an experienced Hunter (Flo Merian is active for dev tools), prepare maker comment under 800 characters, 4-6 image gallery showing workflow. Weekends can work well for dev tools due to less competition.
+- <strong>Show HN</strong> at 8-9 AM ET — title format: <code>Show HN: BrainLayer – Open-source persistent memory for AI agents</code>. Link to GitHub repo, not a website. Add a detailed first comment with backstory and technical details. Respond to every comment.
+- <strong>Twitter thread</strong> with demo GIF — hook tweet ("AI agents have amnesia. I built an open-source fix. 🧵"), followed by problem → solution → demo → features → GitHub link with star CTA. Tag Simon Willison, swyx, Alex Albert.
+- <strong>Reddit</strong> to r/ClaudeAI and r/Python (stagger by 1-2 hours). Frame as sharing something useful, not self-promotion. Tutorial-style posts outperform announcements.</p>
+<p><strong>Post-launch week:</strong> Cross-post blog to Dev.to and Medium with canonical URLs. Submit to There's An AI For That (2.5M subscribers), FutureTools, Ben's Bites, and the PulseMCP newsletter. Write a tutorial post: "How to Give Your AI Agent Persistent Memory in 5 Minutes." If Hacker News post underperforms, email <code>hn@ycombinator.com</code> for the second-chance pool.</p>
+<p><strong>MCP-specific communities to engage:</strong> Official MCP Discord, r/ClaudeAI, the MCP X Community, Glama.ai Discord, and GitHub Discussions on <code>modelcontextprotocol/registry</code>.</p>
+<hr />
+<h2 id="feature-roadmap-what-ships-before-launch-vs-after">Feature roadmap: what ships before launch vs. after</h2>
+<p>Based on patterns from mem0 (launched with simple API, added graph memory later), ChromaDB (launched with 4-function API, added cloud later), and LangChain (shipped fast, iterated weekly), the principle is clear: <strong>launch with a polished core, ship everything else fast afterward.</strong></p>
+<p><strong>Before launch (non-negotiable):</strong>
+- <strong>Public docs website</strong> (g) — every successful open-source AI tool has docs at launch. MkDocs Material can be deployed in a day.
+- <strong>Security audit of dependencies</strong> (e) — a single CVE in a dependency will torpedo credibility on Hacker News. Run <code>pip-audit</code>, CodeQL, and Dependabot before going public.
+- <strong>CLI UX refresh with rich library</strong> (d) — first impression from <code>pip install brainlayer</code> must be polished. Rich provides progress bars, tables, syntax highlighting with minimal effort.</p>
+<p><strong>Before launch (strongly recommended):</strong>
+- <strong>brainlayer_store write-side MCP tool</strong> (b) — a memory system without an obvious write path through MCP will confuse users on day one. Even a basic version ships the complete read+write story.
+- <strong>LLM backend flexibility</strong> (f) — if launch requires an OpenAI API key, the "no API keys required" positioning collapses. Support at least OpenAI + Anthropic + one local option (Ollama) before launch.</p>
+<p><strong>After launch (v1.1):</strong>
+- <strong>Session-level enrichment</strong> (a) — valuable but adds complexity. Ship after gathering user feedback on enrichment patterns.
+- <strong>Document archiving</strong> (c) — a power-user feature that can wait for the post-launch roadmap.</p>
+<hr />
+<h2 id="the-structured-launch-checklist">The structured launch checklist</h2>
+<h3 id="must-have-before-launch">MUST HAVE before launch</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Why it matters</th>
+<th>Effort</th>
+<th>Tools/services</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Public docs site</strong> on MkDocs Material</td>
+<td>Every top AI tool launches with docs. No docs = no trust.</td>
+<td><strong>8-12 hours</strong></td>
+<td>MkDocs Material, mkdocstrings, GitHub Pages</td>
+</tr>
+<tr>
+<td><strong>Security audit of all dependencies</strong></td>
+<td>One CVE kills HN credibility. 88% of MCP servers require credentials.</td>
+<td><strong>4-6 hours</strong></td>
+<td>pip-audit, CodeQL, Safety, Dependabot</td>
+</tr>
+<tr>
+<td><strong>Tool annotations on all 12 MCP tools</strong></td>
+<td>Spec-required for modern MCP compliance. VS Code skips confirmations based on readOnlyHint.</td>
+<td><strong>2-3 hours</strong></td>
+<td>MCP spec reference</td>
+</tr>
+<tr>
+<td><strong>Professional README</strong> with badges, demo GIF, comparison table</td>
+<td>Above-the-fold content determines 80% of first impressions.</td>
+<td><strong>6-8 hours</strong></td>
+<td>VHS (demo GIF), Shields.io (badges), Mermaid (diagrams)</td>
+</tr>
+<tr>
+<td><strong>PyPI listing with full metadata</strong></td>
+<td>Install via <code>pip install brainlayer</code> must work flawlessly with clean listing.</td>
+<td><strong>2-3 hours</strong></td>
+<td>pyproject.toml, Trusted Publishers, twine</td>
+</tr>
+<tr>
+<td><strong>CI/CD pipeline</strong> (tests, linting, security scanning)</td>
+<td>Green CI badge signals reliability. Automated publishing prevents release errors.</td>
+<td><strong>4-6 hours</strong></td>
+<td>GitHub Actions, Ruff, Mypy, CodeQL, Codecov</td>
+</tr>
+<tr>
+<td><strong>GitHub social preview image</strong> (1280×640)</td>
+<td>Every link share displays this image. No image = amateur signal.</td>
+<td><strong>2-3 hours</strong></td>
+<td>Figma or Canva</td>
+</tr>
+<tr>
+<td><strong>Open Graph image</strong> (1200×630)</td>
+<td>Twitter/LinkedIn/Discord link previews.</td>
+<td><strong>1-2 hours</strong></td>
+<td>Same design, different crop</td>
+</tr>
+<tr>
+<td><strong>Official MCP Registry submission</strong></td>
+<td>The canonical listing. Backed by Anthropic, GitHub, Microsoft.</td>
+<td><strong>2-3 hours</strong></td>
+<td>mcp-publisher CLI, server.json</td>
+</tr>
+<tr>
+<td><strong>Editor setup configs</strong> for Claude Code, Cursor, VS Code</td>
+<td>Users need copy-pasteable JSON to start. Blocks adoption without it.</td>
+<td><strong>3-4 hours</strong></td>
+<td>Test across all editors</td>
+</tr>
+<tr>
+<td><strong>CLI UX polish with Rich library</strong> (d)</td>
+<td>First <code>pip install</code> → first command must feel polished.</td>
+<td><strong>6-8 hours</strong></td>
+<td>Rich, Typer or Click</td>
+</tr>
+<tr>
+<td><strong>LICENSE file</strong> (Apache 2.0 or MIT)</td>
+<td>Non-negotiable for enterprise adoption and awesome-list submissions.</td>
+<td><strong>0.5 hours</strong></td>
+<td>Choose Apache 2.0 for maximum enterprise friendliness</td>
+</tr>
+<tr>
+<td><strong>CONTRIBUTING.md and CODE_OF_CONDUCT.md</strong></td>
+<td>Signals a healthy project. Required by many awesome-lists.</td>
+<td><strong>1-2 hours</strong></td>
+<td>Templates from GitHub</td>
+</tr>
+</tbody>
+</table>
+<h3 id="should-have-significantly-improves-launch-impact">SHOULD HAVE — significantly improves launch impact</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Why it matters</th>
+<th>Effort</th>
+<th>Tools/services</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>brainlayer_store write-side MCP tool</strong> (b)</td>
+<td>Completes the read+write story. Users expect to write memories through MCP.</td>
+<td><strong>8-16 hours</strong></td>
+<td>Internal development</td>
+</tr>
+<tr>
+<td><strong>LLM backend flexibility</strong> (f) — OpenAI + Anthropic + Ollama</td>
+<td>"No vendor lock-in" positioning requires multi-backend support at launch.</td>
+<td><strong>12-20 hours</strong></td>
+<td>LiteLLM or custom adapter layer</td>
+</tr>
+<tr>
+<td><strong>Logo</strong> — clean geometric SVG with variants</td>
+<td>Every link, social share, and directory listing displays a logo. No logo = forgettable.</td>
+<td><strong>4-8 hours</strong> (Figma DIY) or <strong>$200-500</strong> (Fiverr/designer)</td>
+<td>Figma, Inkscape</td>
+</tr>
+<tr>
+<td><strong>Comparison table</strong> in README (vs mem0, vs official server-memory)</td>
+<td>Developers deciding between options. Tables make the decision instant.</td>
+<td><strong>2-3 hours</strong></td>
+<td>Markdown table</td>
+</tr>
+<tr>
+<td><strong>Architecture diagram</strong> (Mermaid or SVG)</td>
+<td>Shows how BrainLayer fits between agents and storage. Builds understanding fast.</td>
+<td><strong>2-3 hours</strong></td>
+<td>Mermaid, Excalidraw, or Figma</td>
+</tr>
+<tr>
+<td><strong>awesome-mcp-servers PR submission</strong></td>
+<td>79.9K stars = massive visibility. PR process is straightforward.</td>
+<td><strong>1-2 hours</strong></td>
+<td>GitHub PR following CONTRIBUTING.md</td>
+</tr>
+<tr>
+<td><strong>Submit to 5+ MCP directories</strong></td>
+<td>Each directory serves a different audience segment.</td>
+<td><strong>3-4 hours</strong></td>
+<td>PulseMCP, mcp.so, Glama, Smithery, mcpservers.org</td>
+</tr>
+<tr>
+<td><strong>aitmpl.com / Claude Code Templates submission</strong></td>
+<td>500K+ npm downloads, 20.9K stars. Direct competitor channel to memory-integration.</td>
+<td><strong>2-3 hours</strong></td>
+<td>GitHub PR</td>
+</tr>
+<tr>
+<td><strong>Discord server</strong></td>
+<td>Every successful AI tool (mem0, ChromaDB, LangChain, Haystack) launched with Discord.</td>
+<td><strong>2-3 hours</strong></td>
+<td>Discord (free)</td>
+</tr>
+<tr>
+<td><strong>Launch blog post</strong> — tutorial format</td>
+<td>"How to give AI agents persistent memory in 5 minutes" outperforms announcements.</td>
+<td><strong>4-6 hours</strong></td>
+<td>Hashnode (custom domain) or own site</td>
+</tr>
+<tr>
+<td><strong>Pre-commit hooks</strong> (Ruff, Mypy, Gitleaks)</td>
+<td>Contributor experience + security hygiene.</td>
+<td><strong>1-2 hours</strong></td>
+<td>pre-commit framework</td>
+</tr>
+<tr>
+<td><strong>Output schemas</strong> (<code>structuredContent</code>) for key tools</td>
+<td>Modern MCP spec feature. Enables typed downstream processing of results.</td>
+<td><strong>4-6 hours</strong></td>
+<td>MCP SDK</td>
+</tr>
+</tbody>
+</table>
+<h3 id="nice-to-have-can-come-in-v11">NICE TO HAVE — can come in v1.1</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Why it matters</th>
+<th>Effort</th>
+<th>Tools/services</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Session-level enrichment</strong> (a)</td>
+<td>Adds intelligence to memory management but increases scope. Ship after user feedback.</td>
+<td><strong>16-24 hours</strong></td>
+<td>Internal development</td>
+</tr>
+<tr>
+<td><strong>Migration guide from official server-memory</strong></td>
+<td>Warmest audience = developers already using the basic MCP memory server.</td>
+<td><strong>4-6 hours</strong></td>
+<td>Docs page with step-by-step</td>
+</tr>
+<tr>
+<td><strong>Versioned docs</strong> via mike plugin</td>
+<td>Important once you have multiple releases. Not needed at v1.0.</td>
+<td><strong>2-3 hours</strong></td>
+<td>mike MkDocs plugin</td>
+</tr>
+<tr>
+<td><strong>Integration examples</strong> (LangChain, CrewAI, LlamaIndex)</td>
+<td>Expands BrainLayer's distribution through framework ecosystems.</td>
+<td><strong>8-12 hours</strong></td>
+<td>Per-framework code examples</td>
+</tr>
+<tr>
+<td><strong>SBOM generation</strong></td>
+<td>Enterprise credibility signal. Executive Order compliance.</td>
+<td><strong>2-3 hours</strong></td>
+<td>cyclonedx-bom in CI</td>
+</tr>
+<tr>
+<td><strong>Automated changelog generation</strong></td>
+<td>Professional release hygiene.</td>
+<td><strong>2-3 hours</strong></td>
+<td>python-semantic-release or release-drafter</td>
+</tr>
+<tr>
+<td><strong>YouTube demo video</strong> (2-3 min)</td>
+<td>Long-form discoverability. Embeddable in blog posts and directories.</td>
+<td><strong>4-6 hours</strong></td>
+<td>OBS Studio, simple editing</td>
+</tr>
+<tr>
+<td><strong>Streamable HTTP transport</strong> (in addition to stdio)</td>
+<td>Required for remote deployment and some IDE integrations.</td>
+<td><strong>8-12 hours</strong></td>
+<td>MCP SDK HTTP transport</td>
+</tr>
+</tbody>
+</table>
+<h3 id="post-launch-roadmap">POST-LAUNCH roadmap</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Why it matters</th>
+<th>Effort</th>
+<th>Tools/services</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Document archiving</strong> (c)</td>
+<td>Power-user feature for managing memory lifecycle.</td>
+<td><strong>12-20 hours</strong></td>
+<td>Internal development</td>
+</tr>
+<tr>
+<td><strong>Graph memory support</strong></td>
+<td>Market trend: mem0, Zep, Letta all have graph-based memory. Becoming table stakes.</td>
+<td><strong>40-60 hours</strong></td>
+<td>Neo4j or custom graph layer</td>
+</tr>
+<tr>
+<td><strong>Temporal awareness</strong> (bi-temporal model)</td>
+<td>Zep/Graphiti pioneered this. Tracks when events occurred vs. when ingested.</td>
+<td><strong>30-40 hours</strong></td>
+<td>Internal development</td>
+</tr>
+<tr>
+<td><strong>Cross-client memory sharing</strong></td>
+<td>Users expect memory to travel across Cursor → Claude → VS Code.</td>
+<td><strong>20-30 hours</strong></td>
+<td>Shared storage backend</td>
+</tr>
+<tr>
+<td><strong>Separate landing page</strong> (brainlayer.dev)</td>
+<td>Needed when non-developer audience grows or pricing/cloud tier is added.</td>
+<td><strong>16-24 hours</strong></td>
+<td>Astro or Next.js</td>
+</tr>
+<tr>
+<td><strong>Framework integrations as first-class packages</strong></td>
+<td>Distribution through LangChain/CrewAI/LlamaIndex ecosystems.</td>
+<td><strong>20-30 hours</strong></td>
+<td>Per-framework packages</td>
+</tr>
+<tr>
+<td><strong>Benchmarks</strong> (search quality, latency, memory accuracy)</td>
+<td>Credibility through data. Mem0 published benchmarks; BrainLayer should too.</td>
+<td><strong>12-16 hours</strong></td>
+<td>LOCOMO benchmark, custom eval suite</td>
+</tr>
+<tr>
+<td><strong>Multi-user/multi-agent scoping</strong></td>
+<td>Enterprise requirement. Mem0 has user_id/agent_id/run_id scoping.</td>
+<td><strong>20-30 hours</strong></td>
+<td>Internal development</td>
+</tr>
+<tr>
+<td><strong>Product Hunt launch</strong> (with prepared assets)</td>
+<td>500K+ possible reach. Save for when the product is polished and demo-ready.</td>
+<td><strong>8-12 hours</strong> prep</td>
+<td>Product Hunt, recruit a Hunter</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="competitive-positioning-the-three-sentence-pitch">Competitive positioning: the three-sentence pitch</h2>
+<p>For developer audiences: <strong>"The official MCP memory server stores notes in a JSON file. Mem0 requires an OpenAI API key and a cloud account. BrainLayer gives your AI agents real memory — hybrid semantic search, LLM enrichment, 268K+ chunks — fully open source, fully local, fully MCP-native."</strong></p>
+<p>This pitch works because it acknowledges the two alternatives developers already know, states their limitations factually, and positions BrainLayer as the solution without superlatives. Lead with this framing in the README, Hacker News post, and Twitter launch thread. The comparison table does the rest.</p>
+<p>The total estimated effort for all MUST HAVE items is <strong>42-61 hours</strong>. Adding all SHOULD HAVE items brings the total to roughly <strong>90-130 hours</strong>. For a solo developer, this represents 2-3 weeks of focused work. The MUST HAVE list alone produces a credible, professional launch. The SHOULD HAVE list transforms it from credible to compelling.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
