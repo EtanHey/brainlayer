@@ -1541,5 +1541,88 @@ def brain_export(
         raise typer.Exit(1)
 
 
+@app.command("hooks")
+def hooks(
+    action: str = typer.Argument(..., help="Action: install"),
+) -> None:
+    """Manage BrainLayer git hooks."""
+    if action != "install":
+        rprint(f"[red]Unknown action: {action}. Use 'install'.[/]")
+        raise typer.Exit(1)
+
+    import subprocess
+
+    # Find repo root
+    try:
+        repo_root = Path(
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL).decode().strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        rprint("[red]Not in a git repository.[/]")
+        raise typer.Exit(1)
+
+    hooks_dir = repo_root / ".git" / "hooks"
+    if not hooks_dir.exists():
+        rprint(f"[red]Git hooks directory not found: {hooks_dir}[/]")
+        raise typer.Exit(1)
+
+    # Find our post-commit hook
+    hook_source = Path(__file__).parent.parent.parent.parent / "hooks" / "post-commit.py"
+    if not hook_source.exists():
+        # Try relative to package
+        import brainlayer
+
+        pkg_root = Path(brainlayer.__file__).parent.parent.parent
+        hook_source = pkg_root / "hooks" / "post-commit.py"
+
+    if not hook_source.exists():
+        rprint("[red]Cannot find hooks/post-commit.py in BrainLayer repo.[/]")
+        raise typer.Exit(1)
+
+    target = hooks_dir / "post-commit"
+    if target.exists() or target.is_symlink():
+        rprint(f"[yellow]Existing post-commit hook found at {target}[/]")
+        rprint("[yellow]Backing up to post-commit.bak[/]")
+        target.rename(hooks_dir / "post-commit.bak")
+
+    target.symlink_to(hook_source.resolve())
+    hook_source.chmod(0o755)
+    rprint(f"[green]Installed post-commit hook: {target} → {hook_source.resolve()}[/]")
+
+
+@app.command("flush")
+def flush() -> None:
+    """Flush pending-stores.jsonl (queued items from DB lock errors)."""
+    from ..paths import DEFAULT_DB_PATH
+
+    queue_path = DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
+    if not queue_path.exists():
+        rprint("[dim]No pending stores to flush.[/]")
+        return
+
+    lines = queue_path.read_text().strip().splitlines()
+    if not lines:
+        rprint("[dim]Queue is empty.[/]")
+        queue_path.unlink(missing_ok=True)
+        return
+
+    rprint(f"[bold]Flushing {len(lines)} queued store(s)...[/]")
+
+    from ..embeddings import get_embedding_model
+    from ..mcp import _flush_pending_stores
+    from ..vector_store import VectorStore
+
+    store = VectorStore(DEFAULT_DB_PATH)
+    model = get_embedding_model()
+
+    flushed = _flush_pending_stores(store, model.embed_query)
+    store.close()
+
+    rprint(f"[green]Flushed {flushed} item(s).[/]")
+    remaining = len(lines) - flushed
+    if remaining > 0:
+        rprint(f"[yellow]{remaining} item(s) still pending (DB may still be locked).[/]")
+
+
 if __name__ == "__main__":
     app()

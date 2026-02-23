@@ -319,6 +319,25 @@ class VectorStore:
             )
         """)
 
+        # Phase 5: Phase commits table (decision tracking + commit history)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS phase_commits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                commit_hash TEXT NOT NULL,
+                commit_message TEXT,
+                phase_name TEXT,
+                session_id TEXT,
+                project TEXT,
+                files_changed TEXT,
+                confidence_score REAL,
+                outcome TEXT,
+                reversibility TEXT,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_project ON phase_commits(project)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_phase ON phase_commits(phase_name)")
+
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]

@@ -38,6 +38,10 @@ def store_memory(
     project: Optional[str] = None,
     tags: Optional[List[str]] = None,
     importance: Optional[int] = None,
+    confidence_score: Optional[float] = None,
+    outcome: Optional[str] = None,
+    reversibility: Optional[str] = None,
+    files_changed: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -49,6 +53,10 @@ def store_memory(
         project: Optional project name to scope the memory.
         tags: Optional list of tags for categorization.
         importance: Optional importance score (1-10, clamped).
+        confidence_score: Optional decision confidence (0-1).
+        outcome: Optional decision outcome (pending/validated/reversed).
+        reversibility: Optional reversibility (easy/hard/destructive).
+        files_changed: Optional list of affected file paths.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -78,6 +86,17 @@ def store_memory(
     # Search for related existing memories BEFORE inserting
     related = _find_related(store, embedding, project=project, limit=3)
 
+    # Build metadata dict
+    meta = {"memory_type": memory_type}
+    if confidence_score is not None:
+        meta["confidence_score"] = confidence_score
+    if outcome is not None:
+        meta["outcome"] = outcome
+    if reversibility is not None:
+        meta["reversibility"] = reversibility
+    if files_changed is not None:
+        meta["files_changed"] = files_changed
+
     # Insert into chunks table
     cursor = store.conn.cursor()
     cursor.execute(
@@ -91,7 +110,7 @@ def store_memory(
         (
             chunk_id,
             content,
-            json.dumps({"memory_type": memory_type}),
+            json.dumps(meta),
             "brainlayer-store",
             project,
             memory_type,  # content_type = memory_type for easy filtering
