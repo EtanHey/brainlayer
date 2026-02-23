@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-14%20tools-green.svg)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-3%20tools-green.svg)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-266%20passing-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
@@ -15,10 +15,10 @@
 BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-compatible AI agent the ability to remember, think, and recall across conversations.
 
 ```
-"What approach did I use for auth last month?"     →  brainlayer_think
-"Show me everything about this file's history"     →  brainlayer_recall
-"What was I working on yesterday?"                 →  brainlayer_current_context
-"Remember this decision for later"                 →  brainlayer_store
+"What approach did I use for auth last month?"     →  brain_search
+"Show me everything about this file's history"     →  brain_recall
+"What was I working on yesterday?"                 →  brain_recall
+"Remember this decision for later"                 →  brain_store
 ```
 
 ## Quick Start
@@ -86,7 +86,7 @@ That's it. Your agent now has persistent memory across every conversation.
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>14 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>3 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
 
@@ -106,31 +106,21 @@ graph LR
 | MCP Server | stdio-based, MCP SDK v1.26+, compatible with any MCP client |
 | Clustering | HDBSCAN + UMAP for brain graph visualization (optional) |
 
-## MCP Tools (14)
-
-### Intelligence Layer
+## MCP Tools (3)
 
 | Tool | Description |
 |------|-------------|
-| `brainlayer_think` | Given your current task context, retrieves relevant decisions, patterns, and bugs. Groups by intent. |
-| `brainlayer_recall` | File-based or topic-based recall. "What happened with this file?" or "What do I know about deployment?" |
-| `brainlayer_current_context` | Lightweight — recent projects, branches, files, and active plan. No embedding needed. |
-| `brainlayer_sessions` | Browse recent sessions by project and date range. |
-| `brainlayer_session_summary` | Session-level analysis: decisions made, corrections, learnings, quality scores. |
-| `brainlayer_store` | Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval. |
+| `brain_search` | Semantic search — unified search across query, file_path, chunk_id, filters. |
+| `brain_store` | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. |
+| `brain_recall` | Proactive retrieval — current context, sessions, session summaries. |
 
-### Search & Context
+### Backward Compatibility
 
-| Tool | Description |
-|------|-------------|
-| `brainlayer_search` | Hybrid semantic + keyword search with filters (project, type, source, tag, intent, importance, date range). |
-| `brainlayer_context` | Surrounding conversation chunks for a search result. |
-| `brainlayer_file_timeline` | Full interaction history of a file across all sessions. |
-| `brainlayer_operations` | Logical operation groups — read/edit/test cycles within a session. |
-| `brainlayer_regression` | What changed since a file last worked? Diff-based regression analysis. |
-| `brainlayer_plan_links` | Connect sessions to implementation plans and phases. |
-| `brainlayer_stats` | Knowledge base statistics (chunks, projects, content types). |
-| `brainlayer_list_projects` | List all indexed projects. |
+Old `brainlayer_*` names still work as aliases.
+
+- `brain_search` aliases: `brainlayer_search`, `brainlayer_context`, `brainlayer_stats`, `brainlayer_list_projects`, `brainlayer_file_timeline`, `brainlayer_operations`, `brainlayer_regression`, `brainlayer_plan_links`, `brainlayer_think`
+- `brain_store` alias: `brainlayer_store`
+- `brain_recall` aliases: `brainlayer_recall`, `brainlayer_current_context`, `brainlayer_sessions`, `brainlayer_session_summary`
 
 ## Enrichment
 
@@ -165,7 +155,7 @@ BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich --batch-size=100
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta | LangChain Memory |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **MCP native** | 14 tools | 1 server | 1 server | No | No |
+| **MCP native** | 3 tools | 1 server | 1 server | No | No |
 | **Think / Recall** | Yes | No | No | No | No |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG | Framework |
 | **Zero infra** | `pip install` | API key | API key | Docker | Multiple deps |
@@ -177,7 +167,7 @@ BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich --batch-size=100
 BrainLayer is the only memory layer that:
 1. **Thinks before answering** — categorizes past knowledge by intent (decisions, bugs, patterns) instead of raw search results
 2. **Runs on a single file** — no database servers, no Docker, no cloud accounts
-3. **Works with every MCP client** — 14 tools, instant integration, zero SDK
+3. **Works with every MCP client** — 3 tools, instant integration, zero SDK
 
 ## CLI Reference
 
@@ -231,7 +221,7 @@ BrainLayer can index conversations from multiple sources:
 | WhatsApp | Exported `.txt` chat | `brainlayer index --source whatsapp` |
 | YouTube | Transcripts via yt-dlp | `brainlayer index --source youtube` |
 | Markdown | Any `.md` files | `brainlayer index --source markdown` |
-| Manual | Via MCP tool | `brainlayer_store` |
+| Manual | Via MCP tool | `brain_store` |
 
 ## Testing
 

@@ -240,7 +240,7 @@ The daemon (`brainlayer serve --http 8787`) exposes a FastAPI server used by the
 
 ---
 
-## MCP Server (14 Tools)
+## MCP Server (3 Tools)
 
 Add to `~/.claude/settings.json`:
 
@@ -255,21 +255,23 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-### Available Tools
+### Available Tools (3)
 
-| Tool | Required Params | Optional Params | Description |
-|------|----------------|-----------------|-------------|
-| `brainlayer_search` | `query` | `project`, `content_type`, `num_results`, `source`, `tag`, `intent`, `importance_min` | Search past conversations |
-| `brainlayer_stats` | — | — | Knowledge base statistics |
-| `brainlayer_list_projects` | — | — | List indexed projects |
-| `brainlayer_context` | `chunk_id` | `before` (3), `after` (3) | Surrounding context for a result |
-| `brainlayer_file_timeline` | `file_path` | `project`, `limit` (50) | File interaction history across sessions |
-| `brainlayer_operations` | `session_id` | — | Logical operation groups (read→edit→test) |
-| `brainlayer_regression` | `file_path` | `project` | Regression analysis (what changed since last success) |
-| `brainlayer_plan_links` | — | `plan_name`, `session_id`, `project` | Session ↔ plan linkage |
-| `brainlayer_session_summary` | `session_id` | — | Session enrichment: decisions, corrections, learnings |
+| Tool | Description |
+|------|-------------|
+| `brain_search` | Unified semantic search — query, file_path, chunk_id, or filters. |
+| `brain_store` | Persist memories (ideas, decisions, learnings, mistakes). Auto-type/auto-importance. |
+| `brain_recall` | Proactive retrieval — current context, sessions, session summaries. |
 
-### Search Parameters
+### Backward Compatibility
+
+Old `brainlayer_*` names still work as aliases.
+
+- `brain_search` aliases: `brainlayer_search`, `brainlayer_context`, `brainlayer_stats`, `brainlayer_list_projects`, `brainlayer_file_timeline`, `brainlayer_operations`, `brainlayer_regression`, `brainlayer_plan_links`, `brainlayer_think`
+- `brain_store` alias: `brainlayer_store`
+- `brain_recall` aliases: `brainlayer_recall`, `brainlayer_current_context`, `brainlayer_sessions`, `brainlayer_session_summary`
+
+### Search Parameters (brain_search)
 
 - **`source`**: `claude_code` (default), `whatsapp`, `youtube`, `all`
 - **`content_type`**: `ai_code`, `stack_trace`, `user_message`, `assistant_text`, `file_read`, `git_diff`

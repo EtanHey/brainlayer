@@ -12,7 +12,7 @@ graph TD
         A3["YouTube<br/>transcripts"]
         A4["Markdown<br/>.md files"]
         A5["Claude Desktop<br/>JSON export"]
-        A6["Manual<br/>brainlayer_store MCP tool"]
+        A6["Manual<br/>brain_store MCP tool"]
     end
 
     subgraph Pipeline
@@ -33,7 +33,7 @@ graph TD
     end
 
     subgraph Interfaces
-        E1["MCP Server<br/>brainlayer-mcp (14 tools)"]
+        E1["MCP Server<br/>brainlayer-mcp (3 tools)"]
         E2["CLI<br/>brainlayer"]
         E3["FastAPI Daemon<br/>:8787"]
         E4["TUI Dashboard"]

@@ -45,7 +45,7 @@ I want to add SESSION-LEVEL enrichment — analyzing full conversations as a uni
 ```
 I'm building BrainLayer — an open-source memory layer for AI agents, exposed as an MCP (Model Context Protocol) server. Currently all 12 MCP tools are READ-ONLY (search, think, recall, context, etc).
 
-I want to add a WRITE-SIDE tool called brainlayer_store (or brainStore) that lets any Claude Code session quickly store:
+I want to add a WRITE-SIDE tool called brain_store (or brainStore) that lets any Claude Code session quickly store:
 - Feature ideas that come up during work
 - Mistakes/corrections (like "/learn-mistake" but automatic)
 - Decisions made ("we chose X over Y because Z")
@@ -61,9 +61,9 @@ I want to add a WRITE-SIDE tool called brainlayer_store (or brainStore) that let
 1. Schema: What table structure? Should stored items go into the existing `chunks` table or a new `notes`/`store` table?
 2. Should items be embedded at write time (slow, ~1-2s) or queued for batch embedding later?
 3. Categories: What types make sense? (idea, mistake, decision, learning, todo, bookmark?)
-4. Should brainlayer_store return confirmation or also return related existing memories? ("You stored X. FYI, you noted something similar 3 days ago: Y")
+4. Should brain_store return confirmation or also return related existing memories? ("You stored X. FYI, you noted something similar 3 days ago: Y")
 5. MCP tool signature — what parameters? (content, type, project, tags, priority?)
-6. How does this integrate with the existing search? Should stored items be searchable via brainlayer_search?
+6. How does this integrate with the existing search? Should stored items be searchable via brain_search?
 7. Security: Can any MCP client write? Should there be auth/scoping?
 8. Aggregation: How to cluster/summarize stored items periodically (nightly batch)?
 

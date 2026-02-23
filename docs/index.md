@@ -8,7 +8,7 @@ BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-co
 
 ## Key Features
 
-- **14 MCP tools** — think, recall, search, session analysis, file history, and more
+- **3 MCP tools** — brain_search, brain_store, brain_recall (old brainlayer_* names work as aliases)
 - **Local-first** — SQLite + sqlite-vec, single file, no cloud, no Docker
 - **Hybrid search** — semantic vectors + keyword, merged with Reciprocal Rank Fusion
 - **10-field enrichment** — summary, tags, importance, intent, and more via local LLM
@@ -36,16 +36,16 @@ Add to Claude Code (`~/.claude.json`):
 
 Your agent now has persistent memory. Ask it:
 
-- *"What approach did I use for auth last month?"* → `brainlayer_think`
-- *"Show me everything about this file"* → `brainlayer_recall`
-- *"What was I working on yesterday?"* → `brainlayer_current_context`
-- *"Remember this for later"* → `brainlayer_store`
+- *"What approach did I use for auth last month?"* → `brain_search`
+- *"Show me everything about this file"* → `brain_recall`
+- *"What was I working on yesterday?"* → `brain_recall`
+- *"Remember this for later"* → `brain_store`
 
 ## Architecture Overview
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>14 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>3 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
 
@@ -57,6 +57,6 @@ graph LR
 ## Next Steps
 
 - [Quick Start](quickstart.md) — full setup guide
-- [MCP Tools Reference](mcp-tools.md) — all 14 tools documented
+- [MCP Tools Reference](mcp-tools.md) — all 3 tools documented
 - [Configuration](configuration.md) — environment variables and options
 - [Architecture](architecture.md) — how it works under the hood
