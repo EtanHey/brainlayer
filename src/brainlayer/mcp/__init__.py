@@ -19,7 +19,17 @@ from ..paths import DEFAULT_DB_PATH
 from ..vector_store import VectorStore
 
 # Create MCP server
-server = Server("brainlayer")
+server = Server(
+    "brainlayer",
+    instructions=(
+        "BrainLayer provides persistent memory across Claude Code sessions.\n"
+        "3 tools: brain_search (find things), brain_store (remember things), brain_recall (current context).\n"
+        "brain_search auto-routes: file paths → timeline, 'what am I working on' → context, default → search.\n"
+        "brain_store auto-detects type from content (TODO→todo, Bug→mistake, Always→decision, etc.).\n"
+        "brain_recall defaults to current working context; pass mode/session_id/plan_name for other views.\n"
+        "Use brain_store proactively for decisions, mistakes, and learnings worth remembering."
+    ),
+)
 
 # Lazy-loaded globals
 _vector_store = None
@@ -130,6 +140,155 @@ def _memory_to_dict(item: dict) -> dict:
     if item.get("tags") and isinstance(item["tags"], list):
         d["tags"] = [str(t) for t in item["tags"]]
     return d
+
+
+# --- Routing Heuristics (Phase 4: brain_search auto-routing) ---
+
+import re
+
+FILE_EXTENSIONS = r"\.(ts|tsx|js|jsx|py|go|rs|java|kt|swift|rb|sh|md|json|yaml|yml|toml)$"
+
+
+def _extract_file_path(query: str) -> str | None:
+    """Extract a file path token from a query string."""
+    tokens = query.split()
+    for token in tokens:
+        token = token.strip("'\"(),")
+        if re.search(FILE_EXTENSIONS, token, re.IGNORECASE):
+            return token
+        if "/" in token and len(token) > 3:
+            return token
+    return None
+
+
+_CURRENT_CONTEXT_SIGNALS = [
+    "what am i working on",
+    "what's active",
+    "current task",
+    "what are you working on",
+    "active plan",
+    "recent sessions",
+    "what have i been doing",
+]
+
+_THINK_SIGNALS = [
+    "how did i implement",
+    "how have i",
+    "past decision",
+    "my pattern for",
+    "how do i usually",
+    "what did i decide",
+    "how did we handle",
+]
+
+_RECALL_SIGNALS = [
+    "history of",
+    "discussed about",
+    "thought about",
+    "worked on",
+    "context for",
+    "what about",
+]
+
+_REGRESSION_SIGNALS = [
+    "regression",
+    "broke",
+    "broken",
+    "last success",
+    "reverted",
+    "regressed",
+]
+
+
+def _query_signals_current_context(query: str) -> bool:
+    return any(s in query.lower() for s in _CURRENT_CONTEXT_SIGNALS)
+
+
+def _query_signals_think(query: str) -> bool:
+    return any(s in query.lower() for s in _THINK_SIGNALS)
+
+
+def _query_signals_recall(query: str) -> bool:
+    return any(s in query.lower() for s in _RECALL_SIGNALS)
+
+
+def _query_has_regression_signal(query: str) -> bool:
+    return any(s in query.lower() for s in _REGRESSION_SIGNALS)
+
+
+# --- Auto-type detection for brain_store ---
+
+_TYPE_RULES: list[tuple[str, list[str]]] = [
+    ("todo", [r"\bTODO\b", r"\bFIXME\b", r"\bHACK\b", r"^TODO:", r"add\b.*\bsoon\b"]),
+    (
+        "mistake",
+        [
+            r"\bBug\b",
+            r"\bError:\b",
+            r"\bbroke\b",
+            r"\bbroken\b",
+            r"\boverflow\b",
+            r"\bmistake\b",
+            r"\bwrong\b",
+            r"\bfailed\b",
+            r"\bregress",
+        ],
+    ),
+    (
+        "decision",
+        [
+            r"\bAlways\b",
+            r"\bNever\b",
+            r"\bshould\b.*\binstead\b",
+            r"\bdecided\b",
+            r"\bprefer\b",
+            r"\buse\b.*\bnot\b",
+            r"\bconvention\b",
+            r"\brule:\b",
+        ],
+    ),
+    (
+        "learning",
+        [
+            r"\blearned\b",
+            r"\brealized\b",
+            r"\bturns out\b",
+            r"\bdiscovered\b",
+            r"\bfound out\b",
+            r"\bnow I know\b",
+        ],
+    ),
+    ("bookmark", [r"https?://", r"github\.com", r"docs\.", r"\.dev\b"]),
+    (
+        "idea",
+        [
+            r"\bidea:\b",
+            r"\bwhat if\b",
+            r"\bcould\b.*\bbuild\b",
+            r"\bmaybe\b.*\badd\b",
+            r"\bfeature idea\b",
+        ],
+    ),
+    (
+        "journal",
+        [
+            r"\btoday\b",
+            r"\bthis week\b",
+            r"\bworked on\b",
+            r"\bfinished\b",
+            r"\bshipped\b",
+        ],
+    ),
+]
+
+
+def _detect_memory_type(content: str) -> str:
+    """Detect memory type from content using keyword patterns. No LLM call."""
+    for memory_type, patterns in _TYPE_RULES:
+        for pattern in patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                return memory_type
+    return "note"
 
 
 # --- Output Schemas (MCP spec 2025-06-18+) ---
@@ -285,28 +444,41 @@ _STORE_OUTPUT_SCHEMA = {
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """List available tools."""
+    """List available tools — 3 consolidated tools (Phase 4)."""
     return [
         Tool(
-            name="brainlayer_search",
+            name="brain_search",
             title="Search Knowledge Base",
             description="""Search through past Claude Code conversations and learnings.
 
-Use when: You need to find specific code, errors, or discussions from past sessions.
-Not for: Getting general context (use brainlayer_think) or file history (use brainlayer_recall).
+Auto-routes based on input:
+- chunk_id → expand surrounding context
+- file_path → file timeline + related knowledge (add regression signals like "broke" for regression analysis)
+- "what am I working on" → current context + relevant memories
+- "how did I implement X" → past decisions, patterns, code
+- "history of X" / "discussed about X" → topic recall
+- Default → hybrid semantic + keyword search
 
-Returns: Structured JSON with `query`, `total`, and `results[]`. Each result has `score`, `project`, `content_type`, `content` (truncated to 1000 chars), `chunk_id`, and optional enrichment fields (`summary`, `tags`, `intent`, `importance`, `session_summary`).""",
+Returns: Markdown text or structured JSON depending on the route taken.""",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language search query (e.g., 'how did I implement authentication' or 'React useEffect cleanup')",
+                        "description": "Natural language search query (e.g., 'how did I implement authentication', 'what happened with auth.ts', 'what am I working on')",
                     },
                     "project": {
                         "type": "string",
-                        "description": "Filter by project name. Use brainlayer_list_projects for valid values. Encoded/worktree names are auto-normalized.",
+                        "description": "Filter by project name. Encoded/worktree names are auto-normalized.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "File path to search for (e.g., 'auth.ts'). Triggers file-aware routing: timeline + related knowledge. Add regression signals in query for regression analysis.",
+                    },
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "Expand context around a specific chunk from a previous search result.",
                     },
                     "content_type": {
                         "type": "string",
@@ -318,21 +490,12 @@ Returns: Structured JSON with `query`, `total`, and `results[]`. Each result has
                             "file_read",
                             "git_diff",
                         ],
-                        "description": "Optional: filter by content type",
-                    },
-                    "num_results": {
-                        "type": "integer",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Number of results to return (default: 5, max: 100)",
+                        "description": "Filter by content type (search mode only)",
                     },
                     "source": {
                         "type": "string",
                         "enum": ["claude_code", "whatsapp", "youtube", "all"],
-                        "description": (
-                            "Filter by data source (default: claude_code). Use 'all' to search everything."
-                        ),
+                        "description": "Filter by data source (default: claude_code). Use 'all' to search everything.",
                     },
                     "tag": {
                         "type": "string",
@@ -363,304 +526,46 @@ Returns: Structured JSON with `query`, `total`, and `results[]`. Each result has
                         "type": "string",
                         "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')",
                     },
-                },
-                "required": ["query"],
-            },
-            outputSchema=_SEARCH_OUTPUT_SCHEMA,
-        ),
-        Tool(
-            name="brainlayer_stats",
-            title="Knowledge Base Stats",
-            description="""Get statistics about the knowledge base.
-
-Returns: Structured JSON with `total_chunks` (int), `projects` (string array), and `content_types` (string array). Also returns Markdown summary text.""",
-            annotations=_READ_ONLY,
-            inputSchema={"type": "object", "properties": {}},
-            outputSchema=_STATS_OUTPUT_SCHEMA,
-        ),
-        Tool(
-            name="brainlayer_list_projects",
-            title="List Projects",
-            description="""List all projects in the knowledge base. Human-friendly Markdown list.
-
-Use brainlayer_stats instead for a machine-friendly structured projects array.
-
-Returns: Markdown list of project names (no structured output).""",
-            annotations=_READ_ONLY,
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="brainlayer_context",
-            title="Get Chunk Context",
-            description="""Get surrounding conversation context for a search result.
-
-Given a chunk_id from brainlayer_search results, returns the chunks before and after it from the same conversation. Useful for understanding isolated search results.
-
-Returns: Markdown with conversation chunks showing position, content_type, and content. The target chunk is marked with [TARGET].""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "The chunk_id from a brainlayer_search result",
+                    "num_results": {
+                        "type": "integer",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Number of results to return (default: 5, max: 100)",
                     },
                     "before": {
                         "type": "integer",
                         "default": 3,
                         "minimum": 0,
                         "maximum": 50,
-                        "description": "Number of chunks before the target to include (default: 3, max: 50)",
+                        "description": "Context chunks before target (chunk_id mode only)",
                     },
                     "after": {
                         "type": "integer",
                         "default": 3,
                         "minimum": 0,
                         "maximum": 50,
-                        "description": "Number of chunks after the target to include (default: 3, max: 50)",
+                        "description": "Context chunks after target (chunk_id mode only)",
                     },
-                },
-                "required": ["chunk_id"],
-            },
-        ),
-        Tool(
-            name="brainlayer_file_timeline",
-            title="File Interaction Timeline",
-            description="""Get the interaction timeline for a specific file across sessions.
-
-Shows all Claude Code sessions that read, edited, or wrote to a file, ordered chronologically. Uses substring matching (e.g., 'auth.ts' matches 'src/auth.ts').
-
-Returns: Markdown list of interactions, each with action, file_path, timestamp, session ID, and project.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "File path or partial path (substring match, e.g. 'auth.ts' matches 'src/auth.ts')",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Optional: filter by project name",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 50,
-                        "description": "Maximum number of interactions to return",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        ),
-        Tool(
-            name="brainlayer_operations",
-            title="Session Operations",
-            description="""Get logical operation groups for a session. Operations are patterns like read-edit-test cycles, research chains, or debug sequences.
-
-Returns: Markdown list of operations, each with operation_type, summary, outcome (success/failure), step_count, and started_at timestamp.
-
-Get session_id from brainlayer_sessions or brainlayer_search result metadata.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID to query. Get from brainlayer_sessions or brainlayer_search results.",
-                    },
-                },
-                "required": ["session_id"],
-            },
-        ),
-        Tool(
-            name="brainlayer_regression",
-            title="Regression Analysis",
-            description="""Analyze a file for regressions — shows the last successful operation and all changes after it.
-
-Uses substring matching on file_path (same as brainlayer_file_timeline). "Last success" means the most recent operation with outcome=success for that file.
-
-Returns: Markdown with timeline count, last success details (timestamp, session_id, branch), and a list of changes after the last success (action, timestamp, branch).""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "File path or partial path (substring match)",
-                    },
-                    "project": {"type": "string", "description": "Optional: filter by project"},
-                },
-                "required": ["file_path"],
-            },
-        ),
-        Tool(
-            name="brainlayer_plan_links",
-            title="Plan-Session Links",
-            description="""Query plan-linked sessions. Two modes:
-
-1. **Session lookup** (session_id provided): Returns plan/phase/story for that session. Ignores plan_name.
-2. **Plan query** (plan_name provided or neither): Lists all sessions for that plan, or all plan-linked sessions.
-
-Returns: Markdown with session details (branch, PR, plan, phase, story).
-
-Get session_id from brainlayer_sessions or brainlayer_search results.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "plan_name": {
-                        "type": "string",
-                        "description": "Plan name to query (e.g. 'local-llm-integration')",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID to look up plan info for. Takes precedence over plan_name.",
-                    },
-                    "project": {"type": "string", "description": "Optional: filter by project"},
-                },
-            },
-        ),
-        Tool(
-            name="brainlayer_think",
-            title="Think — Retrieve Relevant Memories",
-            description="""Given your current task context, retrieve relevant past decisions, patterns, and code.
-
-Use when: Starting a task and you want informed context instead of cold-starting.
-Not for: Searching for specific code (use brainlayer_search) or file history (use brainlayer_recall).
-
-Returns: Structured JSON with `query`, `total`, and categorized arrays: `decisions[]`, `patterns[]`, `bugs[]`, `context[]`. Each item has `content` plus optional `summary`, `intent`, `importance`, `project`, `date`, `tags`.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "context": {
-                        "type": "string",
-                        "description": "Describe what you're working on — the engine will find relevant past knowledge",
-                    },
-                    "project": {"type": "string", "description": "Optional: filter by project"},
                     "max_results": {
                         "type": "integer",
                         "default": 10,
-                        "description": "Maximum memories to retrieve (default: 10)",
+                        "description": "Maximum results for think/recall modes (default: 10)",
                     },
                 },
-                "required": ["context"],
-            },
-            outputSchema=_THINK_OUTPUT_SCHEMA,
-        ),
-        Tool(
-            name="brainlayer_recall",
-            title="Recall — Proactive Context for File or Topic",
-            description="""Proactive smart retrieval. Requires at least one of file_path or topic.
-
-- file_path mode: "What happened with this file before?" Returns timeline, sessions, related knowledge.
-- topic mode: "What have I discussed about authentication?" Returns related discussions, decisions, patterns.
-
-Use when: Opening a file or starting work on a familiar topic.
-Not for: Searching for specific code (use brainlayer_search) or task-scoped context (use brainlayer_think).
-
-Returns: Structured JSON with `target`, `file_history[]` (timestamp, action, session_id, file_path), `related_chunks[]`, and `session_summaries[]` (session_id, branch, plan_name, started_at).""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "File path to recall context for (e.g., 'auth.ts')",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "Topic to recall context for (e.g., 'authentication', 'deployment')",
-                    },
-                    "project": {"type": "string", "description": "Optional: filter by project"},
-                    "max_results": {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Maximum results (default: 10)",
-                    },
-                },
-            },
-            outputSchema=_RECALL_OUTPUT_SCHEMA,
-        ),
-        Tool(
-            name="brainlayer_sessions",
-            title="Browse Recent Sessions",
-            description="""List recent Claude Code sessions with metadata.
-
-Shows session ID, project, branch, plan linkage, and timestamp. Use this to find session_id values for other tools.
-
-Returns: Markdown list of sessions with session_id, project, branch, plan, and started_at.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project": {"type": "string", "description": "Optional: filter by project"},
-                    "days": {
-                        "type": "integer",
-                        "default": 7,
-                        "minimum": 1,
-                        "maximum": 365,
-                        "description": "How many days back to look (default: 7, max: 365)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 20,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Maximum sessions to return (default: 20, max: 100)",
-                    },
-                },
+                "required": ["query"],
             },
         ),
         Tool(
-            name="brainlayer_current_context",
-            title="Current Working Context",
-            description="""Get what you're currently working on — recent sessions, projects, files, and active plan.
-
-Lightweight (no embedding needed). Use at conversation start to understand current state.
-
-Returns: Structured JSON with `active_projects` (string[]), `active_branches` (string[]), `active_plan` (string), `recent_files` (string[]), and `recent_sessions[]` (each with session_id, project, branch, started_at, plan_name). Arrays may be empty if no recent activity.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "default": 24,
-                        "description": "How many hours back to look (default: 24)",
-                    },
-                },
-            },
-            outputSchema=_CURRENT_CONTEXT_OUTPUT_SCHEMA,
-        ),
-        Tool(
-            name="brainlayer_session_summary",
-            title="Session Summary",
-            description="""Get the enriched summary of a session. Requires sessions to have been enriched via 'brainlayer enrich-sessions'.
-
-Returns: Markdown with summary, intent, outcome, quality score, complexity, duration, message counts, and sections for decisions, corrections, learnings, mistakes, what_worked, what_failed, and tags.
-
-Get session_id from brainlayer_sessions or brainlayer_search result metadata.""",
-            annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID to get summary for. Get from brainlayer_sessions or brainlayer_search results.",
-                    },
-                },
-                "required": ["session_id"],
-            },
-        ),
-        Tool(
-            name="brainlayer_store",
+            name="brain_store",
             title="Store Memory",
             description="""Persistently store a memory into BrainLayer.
 
 Use this to save ideas, mistakes, decisions, learnings, todos, bookmarks, notes, or journal entries. Stored items are embedded at write time and immediately searchable.
 
-Returns: Structured JSON with `chunk_id` (string, usable with brainlayer_context) and `related[]` (list of similar existing memories, each with content, summary, project, type, date).""",
+Type is auto-detected from content if omitted (e.g., "Always use bun" → decision, "Bug: overflow" → mistake, "TODO: add X" → todo).
+
+Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar existing memories).""",
             annotations=_WRITE,
             inputSchema={
                 "type": "object",
@@ -672,7 +577,7 @@ Returns: Structured JSON with `chunk_id` (string, usable with brainlayer_context
                     "type": {
                         "type": "string",
                         "enum": ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"],
-                        "description": "What kind of memory this is",
+                        "description": "Memory type. Auto-detected from content if omitted.",
                     },
                     "project": {
                         "type": "string",
@@ -690,9 +595,66 @@ Returns: Structured JSON with `chunk_id` (string, usable with brainlayer_context
                         "description": "Optional: importance score 1-10",
                     },
                 },
-                "required": ["content", "type"],
+                "required": ["content"],
             },
             outputSchema=_STORE_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="brain_recall",
+            title="Recall Context",
+            description="""Get current working context, browse sessions, or inspect session details.
+
+Modes (auto-inferred from params if omitted):
+- context: What am I working on? (default — recent sessions, projects, files, active plan)
+- sessions: Browse recent sessions (set days/limit to tune)
+- operations: Operation groups for a session (requires session_id)
+- plan: Plan-session linkage (requires plan_name or session_id)
+- summary: Enriched session summary (requires session_id)
+- stats: Knowledge base statistics + project list
+
+Returns: Structured JSON or Markdown depending on mode.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["context", "sessions", "operations", "plan", "summary", "stats"],
+                        "description": "Recall mode. Auto-inferred from other params if omitted.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional: filter by project name",
+                    },
+                    "hours": {
+                        "type": "integer",
+                        "default": 24,
+                        "description": "How many hours back to look (mode=context, default: 24)",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "default": 7,
+                        "minimum": 1,
+                        "maximum": 365,
+                        "description": "How many days back (mode=sessions, default: 7)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Max sessions to return (mode=sessions, default: 20)",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID (required for mode=operations/summary, optional for mode=plan)",
+                    },
+                    "plan_name": {
+                        "type": "string",
+                        "description": "Plan name (mode=plan, e.g. 'local-llm-integration')",
+                    },
+                },
+            },
         ),
     ]
 
@@ -700,7 +662,6 @@ Returns: Structured JSON with `chunk_id` (string, usable with brainlayer_context
 @server.completion()
 async def handle_completion(ref, argument) -> CompleteResult:
     """Provide completions for tool arguments."""
-    # Only handle tool argument completions
     if not hasattr(ref, "name"):
         return CompleteResult(completion=Completion(values=[]))
 
@@ -712,7 +673,6 @@ async def handle_completion(ref, argument) -> CompleteResult:
             store = _get_vector_store()
             stats = store.get_stats()
             projects = stats.get("projects", [])
-            # Normalize and filter by prefix
             normalized = []
             for p in projects:
                 norm = _normalize_project_name(p) or p
@@ -742,14 +702,70 @@ async def handle_completion(ref, argument) -> CompleteResult:
             intents = [i for i in intents if i.startswith(arg_value)]
         return CompleteResult(completion=Completion(values=intents))
 
+    elif arg_name == "mode":
+        modes = ["context", "sessions", "operations", "plan", "summary", "stats"]
+        if arg_value:
+            modes = [m for m in modes if m.startswith(arg_value)]
+        return CompleteResult(completion=Completion(values=modes))
+
+    elif arg_name == "type":
+        types = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"]
+        if arg_value:
+            types = [t for t in types if t.startswith(arg_value)]
+        return CompleteResult(completion=Completion(values=types))
+
     return CompleteResult(completion=Completion(values=[]))
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]):
-    """Handle tool calls."""
+    """Handle tool calls — 3 new tools + 14 backward-compat aliases."""
 
-    if name == "brainlayer_search":
+    # --- New consolidated tools ---
+
+    if name == "brain_search":
+        return await _brain_search(
+            query=arguments["query"],
+            project=arguments.get("project"),
+            file_path=arguments.get("file_path"),
+            chunk_id=arguments.get("chunk_id"),
+            content_type=arguments.get("content_type"),
+            source=arguments.get("source"),
+            tag=arguments.get("tag"),
+            intent=arguments.get("intent"),
+            importance_min=arguments.get("importance_min"),
+            date_from=arguments.get("date_from"),
+            date_to=arguments.get("date_to"),
+            num_results=arguments.get("num_results", 5),
+            before=max(0, min(arguments.get("before", 3), 50)),
+            after=max(0, min(arguments.get("after", 3), 50)),
+            max_results=arguments.get("max_results", 10),
+        )
+
+    elif name == "brain_store":
+        imp = arguments.get("importance")
+        return await _store_new(
+            content=arguments["content"],
+            memory_type=arguments.get("type"),
+            project=arguments.get("project"),
+            tags=arguments.get("tags"),
+            importance=max(1, min(imp, 10)) if imp is not None else None,
+        )
+
+    elif name == "brain_recall":
+        return await _brain_recall(
+            mode=arguments.get("mode"),
+            project=arguments.get("project"),
+            hours=arguments.get("hours", 24),
+            days=arguments.get("days", 7),
+            limit=arguments.get("limit", 20),
+            session_id=arguments.get("session_id"),
+            plan_name=arguments.get("plan_name"),
+        )
+
+    # --- Backward-compat aliases (old tool names route to same handlers) ---
+
+    elif name == "brainlayer_search":
         return await _search(
             query=arguments["query"],
             project=arguments.get("project"),
@@ -784,9 +800,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brainlayer_operations":
-        return await _operations(
-            session_id=arguments["session_id"],
-        )
+        return await _operations(session_id=arguments["session_id"])
 
     elif name == "brainlayer_regression":
         return await _regression(
@@ -809,7 +823,6 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brainlayer_recall":
-        # Validate: at least one of file_path or topic is required
         if not arguments.get("file_path") and not arguments.get("topic"):
             return _error_result("Validation error: provide at least one of 'file_path' or 'topic'.")
         return await _recall(
@@ -827,9 +840,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brainlayer_current_context":
-        return await _current_context(
-            hours=arguments.get("hours", 24),
-        )
+        return await _current_context(hours=arguments.get("hours", 24))
 
     elif name == "brainlayer_session_summary":
         return await _session_summary(session_id=arguments["session_id"])
@@ -846,6 +857,215 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
     else:
         return _error_result(f"Unknown tool: {name}")
+
+
+# --- Consolidated Dispatchers (Phase 4) ---
+
+
+async def _brain_search(
+    query: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    chunk_id: str | None = None,
+    content_type: str | None = None,
+    source: str | None = None,
+    tag: str | None = None,
+    intent: str | None = None,
+    importance_min: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    num_results: int = 5,
+    before: int = 3,
+    after: int = 3,
+    max_results: int = 10,
+):
+    """Unified search dispatcher — routes to the right internal handler."""
+
+    # Rule 1: chunk context expand
+    if chunk_id is not None:
+        return await _context(chunk_id=chunk_id, before=before, after=after)
+
+    # Rule 2: file_path + regression signals
+    if file_path is not None and _query_has_regression_signal(query):
+        regression_result = await _regression(file_path=file_path, project=project)
+        recall_result = await _recall(
+            file_path=file_path, project=project, max_results=max_results
+        )
+        # Merge: regression markdown + recall related chunks
+        merged_text = []
+        if isinstance(regression_result, list):
+            merged_text.extend(regression_result)
+        if isinstance(recall_result, tuple):
+            merged_text.extend(recall_result[0])
+        else:
+            merged_text.extend(recall_result)
+        return merged_text
+
+    # Rule 3: file_path (no regression signal)
+    if file_path is not None:
+        timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
+        recall_result = await _recall(
+            file_path=file_path, project=project, max_results=max_results
+        )
+        merged_text = []
+        if isinstance(timeline, list):
+            merged_text.extend(timeline)
+        if isinstance(recall_result, tuple):
+            merged_text.extend(recall_result[0])
+        else:
+            merged_text.extend(recall_result)
+        return merged_text
+
+    # Rule 4: file token in query text
+    extracted_file = _extract_file_path(query)
+    if extracted_file:
+        return await _brain_search(
+            query=query,
+            project=project,
+            file_path=extracted_file,
+            content_type=content_type,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            num_results=num_results,
+            max_results=max_results,
+        )
+
+    # Rule 5: current context signals
+    if _query_signals_current_context(query):
+        ctx = await _current_context(hours=24)
+        think_result = await _think(
+            context=query, project=project, max_results=max_results
+        )
+        merged_text = []
+        if isinstance(ctx, tuple):
+            merged_text.extend(ctx[0])
+        else:
+            merged_text.extend(ctx)
+        if isinstance(think_result, tuple):
+            merged_text.extend(think_result[0])
+        else:
+            merged_text.extend(think_result)
+        return merged_text
+
+    # Rule 6: think mode signals
+    if _query_signals_think(query):
+        return await _think(context=query, project=project, max_results=max_results)
+
+    # Rule 7: recall/history signals
+    if _query_signals_recall(query):
+        return await _recall(topic=query, project=project, max_results=max_results)
+
+    # Rule 8: default — hybrid semantic + FTS5 search
+    return await _search(
+        query=query,
+        project=project,
+        content_type=content_type,
+        num_results=num_results,
+        source=source,
+        tag=tag,
+        intent=intent,
+        importance_min=importance_min,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+def _infer_recall_mode(arguments: dict) -> str:
+    """Auto-infer recall mode from provided arguments."""
+    if arguments.get("session_id") and not arguments.get("plan_name"):
+        return "summary"
+    if arguments.get("plan_name"):
+        return "plan"
+    if arguments.get("days") or arguments.get("limit"):
+        return "sessions"
+    return "context"
+
+
+async def _brain_recall(
+    mode: str | None = None,
+    project: str | None = None,
+    hours: int = 24,
+    days: int = 7,
+    limit: int = 20,
+    session_id: str | None = None,
+    plan_name: str | None = None,
+):
+    """Unified recall dispatcher — routes to session/context handlers."""
+
+    resolved_mode = mode or _infer_recall_mode(
+        {
+            "session_id": session_id,
+            "plan_name": plan_name,
+            "days": days if days != 7 else None,
+            "limit": limit if limit != 20 else None,
+        }
+    )
+
+    if resolved_mode == "context":
+        return await _current_context(hours=hours)
+
+    elif resolved_mode == "sessions":
+        return await _sessions(
+            project=project,
+            days=max(1, min(days, 365)),
+            limit=max(1, min(limit, 100)),
+        )
+
+    elif resolved_mode == "operations":
+        if not session_id:
+            return _error_result("session_id required for mode=operations")
+        return await _operations(session_id=session_id)
+
+    elif resolved_mode == "plan":
+        return await _plan_links(
+            plan_name=plan_name, session_id=session_id, project=project
+        )
+
+    elif resolved_mode == "summary":
+        if not session_id:
+            return _error_result("session_id required for mode=summary")
+        return await _session_summary(session_id=session_id)
+
+    elif resolved_mode == "stats":
+        stats_result = await _stats()
+        projects_result = await _list_projects()
+        # Merge stats structured + projects markdown
+        merged_text = []
+        if isinstance(stats_result, tuple):
+            merged_text.extend(stats_result[0])
+        else:
+            merged_text.extend(stats_result)
+        if isinstance(projects_result, list):
+            merged_text.extend(projects_result)
+        return merged_text
+
+    else:
+        return _error_result(f"Unknown recall mode: {resolved_mode}")
+
+
+async def _store_new(
+    content: str,
+    memory_type: str | None = None,
+    project: str | None = None,
+    tags: list[str] | None = None,
+    importance: int | None = None,
+):
+    """Wrapper for _store with auto-type detection."""
+    resolved_type = memory_type or _detect_memory_type(content)
+    return await _store(
+        content=content,
+        memory_type=resolved_type,
+        project=project,
+        tags=tags,
+        importance=importance,
+    )
+
+
+# --- Original Handler Functions ---
 
 
 async def _search(

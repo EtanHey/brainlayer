@@ -283,39 +283,40 @@ class TestStoreValidation:
 
 
 class TestStoreMCPIntegration:
-    """Test that brainlayer_store is properly wired into the MCP server."""
+    """Test that brain_store is properly wired into the MCP server."""
 
     def test_store_tool_listed(self):
-        """brainlayer_store appears in the tool list."""
+        """brain_store appears in the tool list."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
         tool_names = [t.name for t in tools]
-        assert "brainlayer_store" in tool_names
+        assert "brain_store" in tool_names
 
     def test_store_tool_has_write_annotations(self):
-        """brainlayer_store has destructive/non-read-only annotations."""
+        """brain_store has destructive/non-read-only annotations."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        store_tool = next(t for t in tools if t.name == "brainlayer_store")
+        store_tool = next(t for t in tools if t.name == "brain_store")
         # Write tool should NOT be read-only
         assert store_tool.annotations.readOnlyHint is False
 
     def test_store_tool_input_schema(self):
-        """brainlayer_store has correct required fields."""
+        """brain_store has correct required fields — only content required, type is optional."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        store_tool = next(t for t in tools if t.name == "brainlayer_store")
+        store_tool = next(t for t in tools if t.name == "brain_store")
         schema = store_tool.inputSchema
         assert "content" in schema["properties"]
         assert "type" in schema["properties"]
         assert "content" in schema["required"]
-        assert "type" in schema["required"]
+        # type is now optional (auto-detected from content)
+        assert "type" not in schema["required"]

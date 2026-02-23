@@ -243,42 +243,37 @@ class TestRecallTopicReal:
 
 
 class TestMCPToolCount:
-    """Verify MCP server has all 14 tools."""
+    """Verify MCP server has 3 consolidated tools (Phase 4)."""
 
     def test_tool_count(self):
-        """MCP server should have 14 tools (including brainlayer_store + brainlayer_session_summary)."""
+        """MCP server should have 3 tools: brain_search, brain_store, brain_recall."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        assert len(tools) == 14
+        assert len(tools) == 3
 
-    def test_new_tools_registered(self):
-        """Think, recall, sessions, and current_context tools are registered."""
+    def test_consolidated_tools_registered(self):
+        """brain_search, brain_store, brain_recall are registered."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
         names = {t.name for t in tools}
-        assert "brainlayer_think" in names
-        assert "brainlayer_recall" in names
-        assert "brainlayer_sessions" in names
-        assert "brainlayer_current_context" in names
+        assert "brain_search" in names
+        assert "brain_store" in names
+        assert "brain_recall" in names
 
-    def test_new_tools_have_annotations(self):
-        """New tools have read-only annotations."""
+    def test_read_tools_have_annotations(self):
+        """brain_search and brain_recall have read-only annotations."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        new_tools = [
-            t
-            for t in tools
-            if t.name in ("brainlayer_think", "brainlayer_recall", "brainlayer_sessions", "brainlayer_current_context")
-        ]
-        for tool in new_tools:
+        read_tools = [t for t in tools if t.name in ("brain_search", "brain_recall")]
+        for tool in read_tools:
             assert tool.annotations is not None
             assert tool.annotations.readOnlyHint is True
