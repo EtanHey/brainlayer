@@ -1555,11 +1555,7 @@ def hooks(
     # Find repo root
     try:
         repo_root = Path(
-            subprocess.check_output(
-                ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
-            )
-            .decode()
-            .strip()
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL).decode().strip()
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         rprint("[red]Not in a git repository.[/]")

@@ -57,14 +57,14 @@ def _parse_scopes_simple(path: Path) -> dict:
                 in_scopes = True
                 continue
             if stripped.startswith("default:"):
-                scopes["default"] = stripped.split(":", 1)[1].strip().strip('"\'')
+                scopes["default"] = stripped.split(":", 1)[1].strip().strip("\"'")
                 in_scopes = False
                 continue
             if in_scopes and ":" in stripped:
                 # Parse "  ~/Gits/golems: golems" or "  ~/Gits/golems: \"golems\""
                 key, _, val = stripped.partition(":")
-                key = key.strip().strip('"\'')
-                val = val.strip().strip('"\'')
+                key = key.strip().strip("\"'")
+                val = val.strip().strip("\"'")
                 # Expand ~ in the key
                 key = str(Path(key).expanduser())
                 scopes["scopes"][key] = val

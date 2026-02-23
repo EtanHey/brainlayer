@@ -81,7 +81,10 @@ class TestAutoImportance:
         from brainlayer.mcp import _auto_importance
 
         # Stack everything: architectural + prohibition + long + file path
-        content = "Never use raw SQL in the database migration auth.ts layer, always validate security API schema deploy infrastructure " + "x" * 150
+        content = (
+            "Never use raw SQL in the database migration auth.ts layer, always validate security API schema deploy infrastructure "
+            + "x" * 150
+        )
         score = _auto_importance(content)
         assert score == 10
 
@@ -187,9 +190,7 @@ class TestProjectScoping:
         from brainlayer import scoping
 
         config = tmp_path / "scopes.yaml"
-        config.write_text(
-            'scopes:\n  /Users/test/Gits/golems: "golems"\ndefault: "all"\n'
-        )
+        config.write_text('scopes:\n  /Users/test/Gits/golems: "golems"\ndefault: "all"\n')
 
         # Patch the config path and CWD
         with patch.object(scoping, "_SCOPES_PATH", config):
@@ -208,12 +209,7 @@ class TestPhaseCommitsTable:
     def test_table_exists(self, store):
         """phase_commits table exists after VectorStore init."""
         cursor = store.conn.cursor()
-        tables = [
-            row[0]
-            for row in cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        ]
+        tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
         assert "phase_commits" in tables
 
     def test_table_schema(self, store):
@@ -273,11 +269,7 @@ class TestDecisionTrackingFields:
 
         # Verify the fields are in metadata
         cursor = store.conn.cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT metadata FROM chunks WHERE id = ?", (result["id"],)
-            )
-        )
+        rows = list(cursor.execute("SELECT metadata FROM chunks WHERE id = ?", (result["id"],)))
         metadata = json.loads(rows[0][0])
         assert metadata["confidence_score"] == 0.9
         assert metadata["outcome"] == "validated"
@@ -297,11 +289,7 @@ class TestDecisionTrackingFields:
         )
 
         cursor = store.conn.cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT metadata FROM chunks WHERE id = ?", (result["id"],)
-            )
-        )
+        rows = list(cursor.execute("SELECT metadata FROM chunks WHERE id = ?", (result["id"],)))
         metadata = json.loads(rows[0][0])
         assert "confidence_score" not in metadata
         assert metadata["memory_type"] == "note"

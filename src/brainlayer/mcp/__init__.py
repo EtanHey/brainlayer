@@ -294,8 +294,17 @@ def _detect_memory_type(content: str) -> str:
 # --- Auto-importance scoring for brain_store ---
 
 _ARCH_KEYWORDS = [
-    "database", "schema", "migration", "auth", "security", "api",
-    "deploy", "infrastructure", "architecture", "pipeline", "config",
+    "database",
+    "schema",
+    "migration",
+    "auth",
+    "security",
+    "api",
+    "deploy",
+    "infrastructure",
+    "architecture",
+    "pipeline",
+    "config",
 ]
 _PROHIBITION_KEYWORDS = ["never", "always", "must", "critical", "important", "do not", "don't"]
 
@@ -946,6 +955,7 @@ async def _brain_search(
     if project is None:
         try:
             from ..scoping import resolve_project_scope
+
             project = resolve_project_scope()
         except Exception:
             pass  # Scoping failure should never block search
@@ -957,9 +967,7 @@ async def _brain_search(
     # Rule 2: file_path + regression signals
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
-        recall_result = await _recall(
-            file_path=file_path, project=project, max_results=max_results
-        )
+        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
         # Merge: regression markdown + recall related chunks
         merged_text = []
         if isinstance(regression_result, list):
@@ -973,9 +981,7 @@ async def _brain_search(
     # Rule 3: file_path (no regression signal)
     if file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
-        recall_result = await _recall(
-            file_path=file_path, project=project, max_results=max_results
-        )
+        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
         merged_text = []
         if isinstance(timeline, list):
             merged_text.extend(timeline)
@@ -1006,9 +1012,7 @@ async def _brain_search(
     # Rule 5: current context signals
     if _query_signals_current_context(query):
         ctx = await _current_context(hours=24)
-        think_result = await _think(
-            context=query, project=project, max_results=max_results
-        )
+        think_result = await _think(context=query, project=project, max_results=max_results)
         merged_text = []
         if isinstance(ctx, tuple):
             merged_text.extend(ctx[0])
@@ -1090,9 +1094,7 @@ async def _brain_recall(
         return await _operations(session_id=session_id)
 
     elif resolved_mode == "plan":
-        return await _plan_links(
-            plan_name=plan_name, session_id=session_id, project=project
-        )
+        return await _plan_links(plan_name=plan_name, session_id=session_id, project=project)
 
     elif resolved_mode == "summary":
         if not session_id:
@@ -1787,12 +1789,14 @@ async def _current_context(
 def _get_pending_store_path():
     """Path for the store queue buffer file."""
     from ..paths import DEFAULT_DB_PATH
+
     return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
 
 
 def _queue_store(item: dict) -> None:
     """Buffer a store request to JSONL when DB is locked."""
     import json as _json
+
     path = _get_pending_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
@@ -1891,9 +1895,7 @@ async def _store(
 
         # Try flushing any pending stores on success
         try:
-            flushed = await loop.run_in_executor(
-                None, lambda: _flush_pending_stores(store, _embed)
-            )
+            flushed = await loop.run_in_executor(None, lambda: _flush_pending_stores(store, _embed))
         except Exception:
             flushed = 0
 
@@ -1919,17 +1921,19 @@ async def _store(
     except Exception as e:
         # Check if this is a DB lock error — queue instead of failing
         if "locked" in str(e).lower() or "busy" in str(e).lower():
-            _queue_store({
-                "content": content,
-                "memory_type": memory_type,
-                "project": project,
-                "tags": tags,
-                "importance": importance,
-                "confidence_score": confidence_score,
-                "outcome": outcome,
-                "reversibility": reversibility,
-                "files_changed": files_changed,
-            })
+            _queue_store(
+                {
+                    "content": content,
+                    "memory_type": memory_type,
+                    "project": project,
+                    "tags": tags,
+                    "importance": importance,
+                    "confidence_score": confidence_score,
+                    "outcome": outcome,
+                    "reversibility": reversibility,
+                    "files_changed": files_changed,
+                }
+            )
             structured = {"chunk_id": "queued", "related": []}
             return (
                 [TextContent(type="text", text="Memory queued (DB busy). Will flush on next successful store.")],
