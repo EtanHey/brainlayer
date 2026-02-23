@@ -291,6 +291,42 @@ def _detect_memory_type(content: str) -> str:
     return "note"
 
 
+# --- Auto-importance scoring for brain_store ---
+
+_ARCH_KEYWORDS = [
+    "database", "schema", "migration", "auth", "security", "api",
+    "deploy", "infrastructure", "architecture", "pipeline", "config",
+]
+_PROHIBITION_KEYWORDS = ["never", "always", "must", "critical", "important", "do not", "don't"]
+
+
+def _auto_importance(content: str) -> int:
+    """Keyword-based importance scoring. No LLM call.
+
+    Baseline 3, cap 10. Only used when user doesn't provide explicit importance.
+    """
+    score = 3
+    lower = content.lower()
+
+    # Architectural keywords: +3 (once)
+    if any(kw in lower for kw in _ARCH_KEYWORDS):
+        score += 3
+
+    # Prohibition/imperative keywords: +2 (once)
+    if any(kw in lower for kw in _PROHIBITION_KEYWORDS):
+        score += 2
+
+    # Long content (>100 chars): +1
+    if len(content) > 100:
+        score += 1
+
+    # File path reference: +1
+    if re.search(r"[\w/]+\.\w{1,5}", content):
+        score += 1
+
+    return min(score, 10)
+
+
 # --- Output Schemas (MCP spec 2025-06-18+) ---
 # Tools with outputSchema MUST return structuredContent alongside text content.
 
@@ -592,7 +628,28 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 10,
-                        "description": "Optional: importance score 1-10",
+                        "description": "Optional: importance score 1-10. Auto-scored from content if omitted.",
+                    },
+                    "confidence_score": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "Decision confidence (0-1). Only for type=decision.",
+                    },
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["pending", "validated", "reversed"],
+                        "description": "Decision outcome. Only for type=decision.",
+                    },
+                    "reversibility": {
+                        "type": "string",
+                        "enum": ["easy", "hard", "destructive"],
+                        "description": "How hard to reverse. Only for type=decision.",
+                    },
+                    "files_changed": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Files affected by this decision.",
                     },
                 },
                 "required": ["content"],
@@ -750,6 +807,10 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             project=arguments.get("project"),
             tags=arguments.get("tags"),
             importance=max(1, min(imp, 10)) if imp is not None else None,
+            confidence_score=arguments.get("confidence_score"),
+            outcome=arguments.get("outcome"),
+            reversibility=arguments.get("reversibility"),
+            files_changed=arguments.get("files_changed"),
         )
 
     elif name == "brain_recall":
@@ -880,6 +941,14 @@ async def _brain_search(
     max_results: int = 10,
 ):
     """Unified search dispatcher — routes to the right internal handler."""
+
+    # Auto-scope project from CWD if not provided and not "all"
+    if project is None:
+        try:
+            from ..scoping import resolve_project_scope
+            project = resolve_project_scope()
+        except Exception:
+            pass  # Scoping failure should never block search
 
     # Rule 1: chunk context expand
     if chunk_id is not None:
@@ -1053,15 +1122,24 @@ async def _store_new(
     project: str | None = None,
     tags: list[str] | None = None,
     importance: int | None = None,
+    confidence_score: float | None = None,
+    outcome: str | None = None,
+    reversibility: str | None = None,
+    files_changed: list[str] | None = None,
 ):
-    """Wrapper for _store with auto-type detection."""
+    """Wrapper for _store with auto-type detection and auto-importance."""
     resolved_type = memory_type or _detect_memory_type(content)
+    resolved_importance = importance if importance is not None else _auto_importance(content)
     return await _store(
         content=content,
         memory_type=resolved_type,
         project=project,
         tags=tags,
-        importance=importance,
+        importance=resolved_importance,
+        confidence_score=confidence_score,
+        outcome=outcome,
+        reversibility=reversibility,
+        files_changed=files_changed,
     )
 
 
@@ -1706,14 +1784,82 @@ async def _current_context(
         return _error_result(f"Current context error: {str(e)}")
 
 
+def _get_pending_store_path():
+    """Path for the store queue buffer file."""
+    from ..paths import DEFAULT_DB_PATH
+    return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
+
+
+def _queue_store(item: dict) -> None:
+    """Buffer a store request to JSONL when DB is locked."""
+    import json as _json
+    path = _get_pending_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(_json.dumps(item) + "\n")
+
+
+def _flush_pending_stores(store, embed_fn) -> int:
+    """Flush pending-stores.jsonl (FIFO). Returns count flushed."""
+    import json as _json
+
+    from ..store import store_memory
+
+    path = _get_pending_store_path()
+    if not path.exists():
+        return 0
+
+    try:
+        lines = path.read_text().strip().splitlines()
+    except Exception:
+        return 0
+
+    if not lines:
+        return 0
+
+    flushed = 0
+    remaining = []
+    for line in lines:
+        try:
+            item = _json.loads(line)
+            store_memory(
+                store=store,
+                embed_fn=embed_fn,
+                content=item["content"],
+                memory_type=item["memory_type"],
+                project=item.get("project"),
+                tags=item.get("tags"),
+                importance=item.get("importance"),
+                confidence_score=item.get("confidence_score"),
+                outcome=item.get("outcome"),
+                reversibility=item.get("reversibility"),
+                files_changed=item.get("files_changed"),
+            )
+            flushed += 1
+        except Exception:
+            remaining.append(line)
+
+    # Rewrite file with only failed items
+    if remaining:
+        path.write_text("\n".join(remaining) + "\n")
+    else:
+        path.unlink(missing_ok=True)
+
+    return flushed
+
+
 async def _store(
     content: str,
     memory_type: str,
     project: str | None = None,
     tags: list[str] | None = None,
     importance: int | None = None,
+    confidence_score: float | None = None,
+    outcome: str | None = None,
+    reversibility: str | None = None,
+    files_changed: list[str] | None = None,
 ):
-    """Store a memory into BrainLayer."""
+    """Store a memory into BrainLayer. Buffers to JSONL on DB lock."""
     try:
         from ..store import store_memory
 
@@ -1736,12 +1882,26 @@ async def _store(
                 project=normalized_project,
                 tags=tags,
                 importance=importance,
+                confidence_score=confidence_score,
+                outcome=outcome,
+                reversibility=reversibility,
+                files_changed=files_changed,
             ),
         )
+
+        # Try flushing any pending stores on success
+        try:
+            flushed = await loop.run_in_executor(
+                None, lambda: _flush_pending_stores(store, _embed)
+            )
+        except Exception:
+            flushed = 0
 
         # Format text response
         chunk_id = result["id"]
         parts = [f"Stored memory `{chunk_id}`"]
+        if flushed > 0:
+            parts.append(f"(also flushed {flushed} queued items)")
         if result["related"]:
             parts.append(f"\n**Related memories ({len(result['related'])}):**")
             for r in result["related"]:
@@ -1757,6 +1917,24 @@ async def _store(
     except ValueError as e:
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
+        # Check if this is a DB lock error — queue instead of failing
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            _queue_store({
+                "content": content,
+                "memory_type": memory_type,
+                "project": project,
+                "tags": tags,
+                "importance": importance,
+                "confidence_score": confidence_score,
+                "outcome": outcome,
+                "reversibility": reversibility,
+                "files_changed": files_changed,
+            })
+            structured = {"chunk_id": "queued", "related": []}
+            return (
+                [TextContent(type="text", text="Memory queued (DB busy). Will flush on next successful store.")],
+                structured,
+            )
         return _error_result(f"Store error: {str(e)}")
 
 
