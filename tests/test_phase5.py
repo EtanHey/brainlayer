@@ -17,7 +17,6 @@ import pytest
 
 from brainlayer.vector_store import VectorStore
 
-
 # ── Fixtures ────────────────────────────────────────────────────
 
 
