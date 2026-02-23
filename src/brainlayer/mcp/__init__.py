@@ -22,12 +22,18 @@ from ..vector_store import VectorStore
 server = Server(
     "brainlayer",
     instructions=(
-        "BrainLayer provides persistent memory across Claude Code sessions.\n"
-        "3 tools: brain_search (find things), brain_store (remember things), brain_recall (current context).\n"
-        "brain_search auto-routes: file paths → timeline, 'what am I working on' → context, default → search.\n"
-        "brain_store auto-detects type from content (TODO→todo, Bug→mistake, Always→decision, etc.).\n"
-        "brain_recall defaults to current working context; pass mode/session_id/plan_name for other views.\n"
-        "Use brain_store proactively for decisions, mistakes, and learnings worth remembering."
+        "Memory layer for Claude Code. 3 tools:\n"
+        "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
+        "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
+        "Routing is automatic — pass file_path for file history, chunk_id to expand context, no args for current work.\n"
+        "- brain_store(content): save decisions, learnings, mistakes, ideas, todos. "
+        "type is auto-detected from content. Pass importance (1-10) for critical items.\n"
+        "- brain_recall(mode): session/operational context. "
+        "mode=context (default, what am I working on), sessions, operations, plan, summary, stats.\n"
+        "Use brain_search at the start of tasks to retrieve past decisions and patterns.\n"
+        "Use brain_store when you make a decision, hit a bug, learn something, or finish a phase.\n"
+        'project scoping: auto-inferred from cwd. Override with project="all" for cross-project search.\n'
+        "All 14 old brainlayer_* tool names still work (backward compat aliases)."
     ),
 )
 
