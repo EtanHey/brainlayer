@@ -148,7 +148,7 @@ Based on patterns from mem0 (launched with simple API, added graph memory later)
 - **CLI UX refresh with rich library** (d) — first impression from `pip install brainlayer` must be polished. Rich provides progress bars, tables, syntax highlighting with minimal effort.
 
 **Before launch (strongly recommended):**
-- **brainlayer_store write-side MCP tool** (b) — a memory system without an obvious write path through MCP will confuse users on day one. Even a basic version ships the complete read+write story.
+- **brain_store write-side MCP tool** (b) — a memory system without an obvious write path through MCP will confuse users on day one. Even a basic version ships the complete read+write story.
 - **LLM backend flexibility** (f) — if launch requires an OpenAI API key, the "no API keys required" positioning collapses. Support at least OpenAI + Anthropic + one local option (Ollama) before launch.
 
 **After launch (v1.1):**
@@ -181,7 +181,7 @@ Based on patterns from mem0 (launched with simple API, added graph memory later)
 
 | Item | Why it matters | Effort | Tools/services |
 |---|---|---|---|
-| **brainlayer_store write-side MCP tool** (b) | Completes the read+write story. Users expect to write memories through MCP. | **8-16 hours** | Internal development |
+| **brain_store write-side MCP tool** (b) | Completes the read+write story. Users expect to write memories through MCP. | **8-16 hours** | Internal development |
 | **LLM backend flexibility** (f) — OpenAI + Anthropic + Ollama | "No vendor lock-in" positioning requires multi-backend support at launch. | **12-20 hours** | LiteLLM or custom adapter layer |
 | **Logo** — clean geometric SVG with variants | Every link, social share, and directory listing displays a logo. No logo = forgettable. | **4-8 hours** (Figma DIY) or **$200-500** (Fiverr/designer) | Figma, Inkscape |
 | **Comparison table** in README (vs mem0, vs official server-memory) | Developers deciding between options. Tables make the decision instant. | **2-3 hours** | Markdown table |

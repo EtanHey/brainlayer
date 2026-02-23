@@ -37,6 +37,8 @@ Or if you have brainlayer installed globally:
    ```
 
 2. In Claude Code, the tools should appear:
-   - `brainlayer_search` - Search past conversations
-   - `brainlayer_stats` - Knowledge base statistics
-   - `brainlayer_list_projects` - List indexed projects
+   - `brain_search` - Unified semantic search (query, file_path, chunk_id, filters)
+   - `brain_store` - Persist memories (ideas, decisions, learnings)
+   - `brain_recall` - Proactive retrieval (context, sessions, summaries)
+
+   *Old `brainlayer_*` names still work as backward-compat aliases.*

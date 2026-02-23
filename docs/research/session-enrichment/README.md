@@ -12,7 +12,7 @@ BrainLayer currently has **chunk-level enrichment** (summary, tags, importance, 
 |------|-------|--------|
 | [prompts.md](prompts.md) | 5 research prompts used for web AI research | Claude Code |
 | [session-enrichment-architecture.md](session-enrichment-architecture.md) | Schema design, pipeline, metadata fields | Web AI research |
-| [brainstore-write-tools.md](brainstore-write-tools.md) | Write-side MCP tool (`brainlayer_store`) design | Web AI research |
+| [brainstore-write-tools.md](brainstore-write-tools.md) | Write-side MCP tool (`brain_store`) design | Web AI research |
 | [conversation-reconstruction.md](conversation-reconstruction.md) | JSONL fork/branch detection, UUID tree reconstruction | Web AI research |
 | [auto-extracting-learnings.md](auto-extracting-learnings.md) | Mining corrections and patterns from 268K chunks | Web AI research |
 | [cli-ux-patterns.md](cli-ux-patterns.md) | CLI display design with rich library | Web AI research |
@@ -39,5 +39,5 @@ BrainLayer currently has **chunk-level enrichment** (summary, tags, importance, 
 
 - Write formal design doc in `brainlayer/docs/session-enrichment-design.md`
 - Implement session reconstruction algorithm
-- Add `brainlayer_store` MCP tool
+- Add `brain_store` MCP tool
 - Build session enrichment pipeline (Gemini Flash for long sessions)

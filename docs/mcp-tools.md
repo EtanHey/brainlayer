@@ -1,99 +1,41 @@
 # MCP Tools Reference
 
-BrainLayer exposes 14 MCP tools, organized into two categories.
+BrainLayer exposes **3 MCP tools** (Phase 4 consolidation).
 
-## Intelligence Layer
+## brain_search
 
-These tools go beyond raw search — they understand intent and context.
-
-### brainlayer_think
-
-Given your current task context, retrieves relevant past decisions, patterns, and bugs. Groups results by intent category.
+Unified semantic search — pass `query`, `file_path`, `chunk_id`, or filters. Auto-routes to the right view.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `context` | string | Yes | What you're currently working on |
-| `project` | string | No | Filter to a specific project |
-| `max_results` | integer | No | Maximum results (default: 10) |
+| `query` | string | No* | Search query (semantic + keyword) |
+| `file_path` | string | No* | File to get timeline/history for |
+| `chunk_id` | string | No* | Chunk ID for surrounding context |
+| `project` | string | No | Filter by project |
+| `content_type` | string | No | Filter: `ai_code`, `stack_trace`, `user_message`, etc. |
+| `num_results` | integer | No | Max results (default: 5, max: 100) |
+| `source` | string | No | Filter: `claude_code`, `whatsapp`, `youtube`, `all` |
+| `tag` | string | No | Filter by enrichment tag |
+| `intent` | string | No | Filter: `debugging`, `designing`, `implementing`, etc. |
+| `importance_min` | integer | No | Minimum importance (1-10) |
 
-**Returns:** Markdown with results grouped by category (decisions, bugs, patterns, implementations).
+*At least one of `query`, `file_path`, or `chunk_id` typically used; filters apply when relevant.
 
-**Use when:** Starting a new task, making architectural decisions, or debugging.
-
----
-
-### brainlayer_recall
-
-File-based or topic-based recall. "What happened with this file?" or "What do I know about deployment?"
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `file_path` | string | No* | File to recall history for |
-| `topic` | string | No* | Topic to recall knowledge about |
-| `project` | string | No | Filter to a specific project |
-| `max_results` | integer | No | Maximum results (default: 10) |
-
-*At least one of `file_path` or `topic` is required.
-
-**Returns:** Markdown with relevant chunks, session context, and file interactions.
-
-**Use when:** Investigating a file's history, or gathering knowledge about a specific topic.
+**Returns:** Markdown with matched chunks, context, or timeline depending on input.
 
 ---
 
-### brainlayer_current_context
+## brain_store
 
-Lightweight — what projects, branches, files, and active plan were you working on recently? No embedding needed.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `hours` | integer | No | How many hours back to look (default: 24) |
-
-**Returns:** Structured summary of recent activity.
-
-**Use when:** Starting a conversation, to understand current state.
-
----
-
-### brainlayer_sessions
-
-Browse recent sessions by project and date range.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `project` | string | No | Filter to a specific project |
-| `days` | integer | No | How many days back (default: 7, max: 365) |
-| `limit` | integer | No | Maximum sessions (default: 20, max: 100) |
-
-**Returns:** Markdown list of sessions with ID, project, branch, plan, and start time.
-
----
-
-### brainlayer_session_summary
-
-Session-level analysis: decisions made, corrections, learnings, quality scores.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `session_id` | string | Yes | Session ID to summarize |
-
-**Returns:** Markdown with decisions, corrections, learnings, patterns, and quality metrics.
-
-**Use when:** Reviewing what happened in a specific session.
-
----
-
-### brainlayer_store
-
-Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval.
+Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval. Auto-type and auto-importance from content.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `content` | string | Yes | The memory content to store |
-| `type` | string | Yes | Memory type: idea, mistake, decision, learning, todo, bookmark, note, journal |
+| `type` | string | No | Memory type: idea, mistake, decision, learning, todo, bookmark, note, journal (auto-detected if omitted) |
 | `project` | string | No | Project to scope the memory |
 | `tags` | array[string] | No | Tags for categorization |
-| `importance` | integer | No | Importance score 1-10 |
+| `importance` | integer | No | Importance score 1-10 (auto-detected if omitted) |
 
 **Returns:** Chunk ID and related existing memories.
 
@@ -101,106 +43,29 @@ Persist a memory (idea, decision, learning, mistake, etc.) for future retrieval.
 
 ---
 
-## Search & Context
+## brain_recall
 
-Core search and retrieval tools.
-
-### brainlayer_search
-
-Hybrid semantic + keyword search with filters.
+Proactive retrieval — current context, sessions, session summaries. Mode defaults to "context".
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | Yes | Search query |
+| `mode` | string | No | `context` (default), `sessions`, `session_summary` |
+| `session_id` | string | No | For session_summary mode |
 | `project` | string | No | Filter by project |
-| `content_type` | string | No | Filter: `ai_code`, `stack_trace`, `user_message`, `assistant_text`, `file_read`, `git_diff` |
-| `num_results` | integer | No | Results to return (default: 5, max: 100) |
-| `source` | string | No | Filter: `claude_code`, `whatsapp`, `youtube`, `all` |
-| `tag` | string | No | Filter by enrichment tag |
-| `intent` | string | No | Filter: `debugging`, `designing`, `configuring`, `discussing`, `deciding`, `implementing`, `reviewing` |
-| `importance_min` | integer | No | Minimum importance score (1-10) |
+| `days` | integer | No | Days back for sessions (default: 7, max: 365) |
+| `hours` | integer | No | Hours back for context (default: 24) |
+| `limit` | integer | No | Max sessions (default: 20, max: 100) |
 
-**Returns:** Matched chunks with content, metadata, similarity scores.
+**Returns:** Structured summary of recent activity, session list, or session-level analysis.
 
----
-
-### brainlayer_context
-
-Get surrounding conversation chunks for a search result.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `chunk_id` | string | Yes | Chunk ID from a search result |
-| `before` | integer | No | Chunks before (default: 3, max: 50) |
-| `after` | integer | No | Chunks after (default: 3, max: 50) |
-
-**Returns:** The target chunk plus surrounding conversation context.
+**Use when:** Starting a conversation, reviewing sessions, or understanding current state.
 
 ---
 
-### brainlayer_file_timeline
+## Aliases
 
-Full interaction history of a file across all sessions.
+Old `brainlayer_*` names still work as backward-compat aliases.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `file_path` | string | Yes | File path to look up |
-| `project` | string | No | Filter by project |
-| `limit` | integer | No | Maximum entries (default: 50) |
-
-**Returns:** Chronological timeline of all interactions with the file.
-
----
-
-### brainlayer_operations
-
-Logical operation groups — read/edit/test cycles within a session.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `session_id` | string | Yes | Session to analyze |
-
-**Returns:** Grouped operations showing the read→edit→test workflow patterns.
-
----
-
-### brainlayer_regression
-
-What changed since a file last worked? Diff-based regression analysis.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `file_path` | string | Yes | File to analyze |
-| `project` | string | No | Filter by project |
-
-**Returns:** Changes since the file's last known-good state.
-
----
-
-### brainlayer_plan_links
-
-Connect sessions to implementation plans and phases.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `plan_name` | string | No | Filter by plan name |
-| `session_id` | string | No | Filter by session |
-| `project` | string | No | Filter by project |
-
-**Returns:** Session-to-plan linkage with phase information.
-
----
-
-### brainlayer_stats
-
-Knowledge base statistics.
-
-**Returns:** Total chunks, projects, content types, enrichment progress, and source breakdown.
-
----
-
-### brainlayer_list_projects
-
-List all indexed projects.
-
-**Returns:** Project names with chunk counts.
+- `brain_search` aliases: `brainlayer_search`, `brainlayer_context`, `brainlayer_stats`, `brainlayer_list_projects`, `brainlayer_file_timeline`, `brainlayer_operations`, `brainlayer_regression`, `brainlayer_plan_links`, `brainlayer_think`
+- `brain_store` alias: `brainlayer_store`
+- `brain_recall` aliases: `brainlayer_recall`, `brainlayer_current_context`, `brainlayer_sessions`, `brainlayer_session_summary`
