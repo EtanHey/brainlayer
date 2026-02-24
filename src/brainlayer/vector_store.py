@@ -89,6 +89,7 @@ class VectorStore:
         # AIDEV-NOTE: busy_timeout is critical for multi-process access (daemon + MCP + enrichment).
         # Without this, concurrent writes get SQLITE_BUSY immediately and crash silently.
         cursor.execute("PRAGMA busy_timeout = 5000")
+        cursor.execute("PRAGMA journal_mode = WAL")
 
         # Create tables
         cursor.execute("""
@@ -1921,7 +1922,9 @@ class VectorStore:
         }
 
     def close(self) -> None:
-        """Close database connection."""
+        """Close database connections."""
+        if hasattr(self, "read_conn"):
+            self.read_conn.close()
         if hasattr(self, "conn"):
             self.conn.close()
 

@@ -842,19 +842,19 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brain_store":
+        # AIDEV-NOTE: No timeout wrapper on writes — non-idempotent (UUID-based IDs).
+        # If timeout fires but executor thread completes, user retries = duplicate memory.
         imp = arguments.get("importance")
-        return await _with_timeout(
-            _store_new(
-                content=arguments["content"],
-                memory_type=arguments.get("type"),
-                project=arguments.get("project"),
-                tags=arguments.get("tags"),
-                importance=max(1, min(imp, 10)) if imp is not None else None,
-                confidence_score=arguments.get("confidence_score"),
-                outcome=arguments.get("outcome"),
-                reversibility=arguments.get("reversibility"),
-                files_changed=arguments.get("files_changed"),
-            )
+        return await _store_new(
+            content=arguments["content"],
+            memory_type=arguments.get("type"),
+            project=arguments.get("project"),
+            tags=arguments.get("tags"),
+            importance=max(1, min(imp, 10)) if imp is not None else None,
+            confidence_score=arguments.get("confidence_score"),
+            outcome=arguments.get("outcome"),
+            reversibility=arguments.get("reversibility"),
+            files_changed=arguments.get("files_changed"),
         )
 
     elif name == "brain_recall":
@@ -969,15 +969,14 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         return await _with_timeout(_session_summary(session_id=arguments["session_id"]))
 
     elif name == "brainlayer_store":
+        # AIDEV-NOTE: No timeout wrapper on writes — same reason as brain_store above.
         imp = arguments.get("importance")
-        return await _with_timeout(
-            _store(
-                content=arguments["content"],
-                memory_type=arguments["type"],
-                project=arguments.get("project"),
-                tags=arguments.get("tags"),
-                importance=max(1, min(imp, 10)) if imp is not None else None,
-            )
+        return await _store(
+            content=arguments["content"],
+            memory_type=arguments["type"],
+            project=arguments.get("project"),
+            tags=arguments.get("tags"),
+            importance=max(1, min(imp, 10)) if imp is not None else None,
         )
 
     else:
