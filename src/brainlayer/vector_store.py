@@ -347,6 +347,28 @@ class VectorStore:
                 SELECT content, id FROM chunks
             """)
 
+        # AIDEV-NOTE: Readonly connection for concurrent read access (P0 fix for MCP hangs).
+        # In WAL mode, readers don't block writers and vice versa.
+        # Using a SEPARATE readonly connection ensures MCP server reads never contend
+        # with enrichment pipeline writes on the same connection object.
+        # Without this, apsw serializes operations on a shared connection, causing
+        # MCP to hang when enrichment holds a write lock.
+        self.read_conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
+        self.read_conn.enableloadextension(True)
+        self.read_conn.loadextension(sqlite_vec.loadable_path())
+        self.read_conn.enableloadextension(False)
+        self.read_conn.cursor().execute("PRAGMA busy_timeout = 5000")
+
+    def _read_cursor(self):
+        """Return a cursor for read operations using the readonly connection.
+
+        Falls back to write connection if readonly isn't available (e.g., during init).
+        The readonly connection in WAL mode never blocks on concurrent writes.
+        """
+        if hasattr(self, "read_conn"):
+            return self.read_conn.cursor()
+        return self.conn.cursor()
+
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
         """Upsert chunks with embeddings."""
         if len(chunks) != len(embeddings):
@@ -419,7 +441,7 @@ class VectorStore:
     ) -> Dict[str, List]:
         """Search chunks by embedding or text."""
 
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
 
         if query_embedding is not None:
             # Vector similarity search
@@ -592,7 +614,7 @@ class VectorStore:
         if not results.get("metadatas") or not results["metadatas"][0]:
             return results
 
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         # Cache session lookups to avoid repeated queries
         session_cache: Dict[str, Optional[Dict]] = {}
 
@@ -637,7 +659,7 @@ class VectorStore:
 
     def count(self) -> int:
         """Get total number of chunks."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         result = list(cursor.execute("SELECT COUNT(*) FROM chunks"))
         return result[0][0] if result else 0
 
@@ -648,7 +670,7 @@ class VectorStore:
         if count == 0:
             return {"total_chunks": 0, "projects": [], "content_types": []}
 
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
 
         # Get unique projects and content types
         results = list(
@@ -675,7 +697,7 @@ class VectorStore:
 
     def get_all_chunks(self, limit: int = 10000) -> List[Dict[str, Any]]:
         """Get all chunks for BM25 fitting (limited for performance)."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         results = list(
             cursor.execute(
                 """
@@ -718,7 +740,7 @@ class VectorStore:
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
 
-        # 1. Semantic search — get more results for fusion
+        # 1. Semantic search — get more results for fusion (uses _read_cursor via search())
         semantic = self.search(
             query_embedding=query_embedding,
             n_results=n_results * 3,
@@ -741,7 +763,7 @@ class VectorStore:
             semantic_ranks[key] = i
 
         # 2. FTS5 keyword search
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         fts_extra = []
         # AIDEV-NOTE: FTS5 MATCH requires escaped query text. Special chars like
         # '.', '*', '"', '(', ')' cause syntax errors if passed raw.
@@ -897,7 +919,7 @@ class VectorStore:
 
     def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
 
         # Get the target chunk's conversation_id and position
         target = list(
@@ -965,7 +987,7 @@ class VectorStore:
         If min_char_count is not specified, uses source_aware_min_chars()
         to pick an appropriate threshold for the given source.
         """
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
 
         effective_min = min_char_count if min_char_count is not None else source_aware_min_chars(source)
         where = ["enriched_at IS NULL", "char_count >= ?"]
@@ -1084,7 +1106,7 @@ class VectorStore:
         WhatsApp/Telegram chunks use a lower threshold (15 chars) so they're
         NOT marked as skipped even if under 50 chars.
         """
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
         enriched = list(
             cursor.execute(
@@ -1203,7 +1225,7 @@ class VectorStore:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get ordered timeline of interactions with a file."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         query = """
             SELECT fi.file_path, fi.timestamp, fi.session_id, fi.action,
                    fi.project, sc.branch, sc.pr_number
@@ -1235,7 +1257,7 @@ class VectorStore:
 
     def get_session_context(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get git context for a session."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         rows = list(cursor.execute("SELECT * FROM session_context WHERE session_id = ?", (session_id,)))
         if not rows:
             return None
@@ -1294,7 +1316,7 @@ class VectorStore:
         project: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all sessions linked to a plan (or all linked sessions)."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         query = (
             "SELECT session_id, project, branch, pr_number,"
             " started_at, ended_at, plan_name, plan_phase, story_id"
@@ -1329,7 +1351,7 @@ class VectorStore:
 
     def get_plan_linking_stats(self) -> Dict[str, Any]:
         """Get plan linking statistics."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
         linked = list(cursor.execute("SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL"))[0][0]
         plans = list(
@@ -1367,7 +1389,7 @@ class VectorStore:
 
     def get_git_overlay_stats(self) -> Dict[str, Any]:
         """Get git overlay statistics."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         sessions = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
         interactions = list(cursor.execute("SELECT COUNT(*) FROM file_interactions"))[0][0]
         unique_files = list(cursor.execute("SELECT COUNT(DISTINCT file_path) FROM file_interactions"))[0][0]
@@ -1433,7 +1455,7 @@ class VectorStore:
         session_id: str,
     ) -> List[Dict[str, Any]]:
         """Get all operations for a session."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         rows = list(
             cursor.execute(
                 """SELECT id, session_id, operation_type,
@@ -1470,7 +1492,7 @@ class VectorStore:
 
     def get_operations_stats(self) -> Dict[str, Any]:
         """Get operation grouping statistics."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM operations"))[0][0]
         by_type = list(
             cursor.execute(
@@ -1538,7 +1560,7 @@ class VectorStore:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Get topic chains for a file (sessions linked by file)."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         rows = list(
             cursor.execute(
                 """SELECT tc.file_path, tc.session_a,
@@ -1584,7 +1606,7 @@ class VectorStore:
         Returns:
             Dict with last_success, changes_after, and timeline.
         """
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
 
         # Get all interactions for this file, ordered by time
         query = """
@@ -1664,7 +1686,7 @@ class VectorStore:
 
     def get_topic_chain_stats(self) -> Dict[str, Any]:
         """Get topic chain statistics."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM topic_chains"))[0][0]
         files = list(
             cursor.execute(
@@ -1843,7 +1865,7 @@ class VectorStore:
 
     def get_session_enrichment(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get enrichment data for a session."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         rows = list(
             cursor.execute(
                 "SELECT * FROM session_enrichments WHERE session_id = ?",
@@ -1869,12 +1891,12 @@ class VectorStore:
 
     def list_enriched_sessions(self) -> List[str]:
         """Return session IDs that already have enrichment data."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         return [row[0] for row in cursor.execute("SELECT session_id FROM session_enrichments")]
 
     def get_session_enrichment_stats(self) -> Dict[str, Any]:
         """Get session enrichment statistics."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
         by_outcome = dict(
             cursor.execute(
