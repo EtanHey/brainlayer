@@ -18,6 +18,31 @@ from ..embeddings import get_embedding_model
 from ..paths import DEFAULT_DB_PATH
 from ..vector_store import VectorStore
 
+# AIDEV-NOTE: MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
+# Without this, apsw blocks forever and the entire MCP server freezes, blocking Claude sessions.
+MCP_QUERY_TIMEOUT = 15  # seconds — fail fast, return error instead of hanging
+
+
+async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
+    """Wrap an async operation with a timeout. Returns error result on timeout."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=(
+                        f"BrainLayer timeout ({timeout}s): DB may be locked by enrichment pipeline. "
+                        "Try again in a few minutes, or kill enrichment: "
+                        "pkill -f 'brainlayer.pipeline.enrichment'"
+                    ),
+                )
+            ],
+            isError=True,
+        )
+
+
 # Create MCP server
 server = Server(
     "brainlayer",
@@ -796,25 +821,29 @@ async def call_tool(name: str, arguments: dict[str, Any]):
     # --- New consolidated tools ---
 
     if name == "brain_search":
-        return await _brain_search(
-            query=arguments["query"],
-            project=arguments.get("project"),
-            file_path=arguments.get("file_path"),
-            chunk_id=arguments.get("chunk_id"),
-            content_type=arguments.get("content_type"),
-            source=arguments.get("source"),
-            tag=arguments.get("tag"),
-            intent=arguments.get("intent"),
-            importance_min=arguments.get("importance_min"),
-            date_from=arguments.get("date_from"),
-            date_to=arguments.get("date_to"),
-            num_results=arguments.get("num_results", 5),
-            before=max(0, min(arguments.get("before", 3), 50)),
-            after=max(0, min(arguments.get("after", 3), 50)),
-            max_results=arguments.get("max_results", 10),
+        return await _with_timeout(
+            _brain_search(
+                query=arguments["query"],
+                project=arguments.get("project"),
+                file_path=arguments.get("file_path"),
+                chunk_id=arguments.get("chunk_id"),
+                content_type=arguments.get("content_type"),
+                source=arguments.get("source"),
+                tag=arguments.get("tag"),
+                intent=arguments.get("intent"),
+                importance_min=arguments.get("importance_min"),
+                date_from=arguments.get("date_from"),
+                date_to=arguments.get("date_to"),
+                num_results=arguments.get("num_results", 5),
+                before=max(0, min(arguments.get("before", 3), 50)),
+                after=max(0, min(arguments.get("after", 3), 50)),
+                max_results=arguments.get("max_results", 10),
+            )
         )
 
     elif name == "brain_store":
+        # AIDEV-NOTE: No timeout wrapper on writes — non-idempotent (UUID-based IDs).
+        # If timeout fires but executor thread completes, user retries = duplicate memory.
         imp = arguments.get("importance")
         return await _store_new(
             content=arguments["content"],
@@ -829,99 +858,118 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brain_recall":
-        return await _brain_recall(
-            mode=arguments.get("mode"),
-            project=arguments.get("project"),
-            hours=arguments.get("hours", 24),
-            days=arguments.get("days", 7),
-            limit=arguments.get("limit", 20),
-            session_id=arguments.get("session_id"),
-            plan_name=arguments.get("plan_name"),
+        return await _with_timeout(
+            _brain_recall(
+                mode=arguments.get("mode"),
+                project=arguments.get("project"),
+                hours=arguments.get("hours", 24),
+                days=arguments.get("days", 7),
+                limit=arguments.get("limit", 20),
+                session_id=arguments.get("session_id"),
+                plan_name=arguments.get("plan_name"),
+            )
         )
 
     # --- Backward-compat aliases (old tool names route to same handlers) ---
 
     elif name == "brainlayer_search":
-        return await _search(
-            query=arguments["query"],
-            project=arguments.get("project"),
-            content_type=arguments.get("content_type"),
-            num_results=arguments.get("num_results", 5),
-            source=arguments.get("source"),
-            tag=arguments.get("tag"),
-            intent=arguments.get("intent"),
-            importance_min=arguments.get("importance_min"),
-            date_from=arguments.get("date_from"),
-            date_to=arguments.get("date_to"),
+        return await _with_timeout(
+            _search(
+                query=arguments["query"],
+                project=arguments.get("project"),
+                content_type=arguments.get("content_type"),
+                num_results=arguments.get("num_results", 5),
+                source=arguments.get("source"),
+                tag=arguments.get("tag"),
+                intent=arguments.get("intent"),
+                importance_min=arguments.get("importance_min"),
+                date_from=arguments.get("date_from"),
+                date_to=arguments.get("date_to"),
+            )
         )
 
     elif name == "brainlayer_stats":
-        return await _stats()
+        return await _with_timeout(_stats())
 
     elif name == "brainlayer_list_projects":
-        return await _list_projects()
+        return await _with_timeout(_list_projects())
 
     elif name == "brainlayer_context":
-        return await _context(
-            chunk_id=arguments["chunk_id"],
-            before=max(0, min(arguments.get("before", 3), 50)),
-            after=max(0, min(arguments.get("after", 3), 50)),
+        return await _with_timeout(
+            _context(
+                chunk_id=arguments["chunk_id"],
+                before=max(0, min(arguments.get("before", 3), 50)),
+                after=max(0, min(arguments.get("after", 3), 50)),
+            )
         )
 
     elif name == "brainlayer_file_timeline":
-        return await _file_timeline(
-            file_path=arguments["file_path"],
-            project=arguments.get("project"),
-            limit=arguments.get("limit", 50),
+        return await _with_timeout(
+            _file_timeline(
+                file_path=arguments["file_path"],
+                project=arguments.get("project"),
+                limit=arguments.get("limit", 50),
+            )
         )
 
     elif name == "brainlayer_operations":
-        return await _operations(session_id=arguments["session_id"])
+        return await _with_timeout(_operations(session_id=arguments["session_id"]))
 
     elif name == "brainlayer_regression":
-        return await _regression(
-            file_path=arguments["file_path"],
-            project=arguments.get("project"),
+        return await _with_timeout(
+            _regression(
+                file_path=arguments["file_path"],
+                project=arguments.get("project"),
+            )
         )
 
     elif name == "brainlayer_plan_links":
-        return await _plan_links(
-            plan_name=arguments.get("plan_name"),
-            session_id=arguments.get("session_id"),
-            project=arguments.get("project"),
+        return await _with_timeout(
+            _plan_links(
+                plan_name=arguments.get("plan_name"),
+                session_id=arguments.get("session_id"),
+                project=arguments.get("project"),
+            )
         )
 
     elif name == "brainlayer_think":
-        return await _think(
-            context=arguments["context"],
-            project=arguments.get("project"),
-            max_results=arguments.get("max_results", 10),
+        return await _with_timeout(
+            _think(
+                context=arguments["context"],
+                project=arguments.get("project"),
+                max_results=arguments.get("max_results", 10),
+            )
         )
 
     elif name == "brainlayer_recall":
         if not arguments.get("file_path") and not arguments.get("topic"):
             return _error_result("Validation error: provide at least one of 'file_path' or 'topic'.")
-        return await _recall(
-            file_path=arguments.get("file_path"),
-            topic=arguments.get("topic"),
-            project=arguments.get("project"),
-            max_results=arguments.get("max_results", 10),
+        return await _with_timeout(
+            _recall(
+                file_path=arguments.get("file_path"),
+                topic=arguments.get("topic"),
+                project=arguments.get("project"),
+                max_results=arguments.get("max_results", 10),
+            )
         )
 
     elif name == "brainlayer_sessions":
-        return await _sessions(
-            project=arguments.get("project"),
-            days=max(1, min(arguments.get("days", 7), 365)),
-            limit=max(1, min(arguments.get("limit", 20), 100)),
+        return await _with_timeout(
+            _sessions(
+                project=arguments.get("project"),
+                days=max(1, min(arguments.get("days", 7), 365)),
+                limit=max(1, min(arguments.get("limit", 20), 100)),
+            )
         )
 
     elif name == "brainlayer_current_context":
-        return await _current_context(hours=arguments.get("hours", 24))
+        return await _with_timeout(_current_context(hours=arguments.get("hours", 24)))
 
     elif name == "brainlayer_session_summary":
-        return await _session_summary(session_id=arguments["session_id"])
+        return await _with_timeout(_session_summary(session_id=arguments["session_id"]))
 
     elif name == "brainlayer_store":
+        # AIDEV-NOTE: No timeout wrapper on writes — same reason as brain_store above.
         imp = arguments.get("importance")
         return await _store(
             content=arguments["content"],
