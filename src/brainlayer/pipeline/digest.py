@@ -138,16 +138,18 @@ def digest_content(
     chunk_id = f"digest-{uuid.uuid4().hex[:12]}"
     embedding = embed_fn(content)
 
-    chunks = [{
-        "id": chunk_id,
-        "content": content,
-        "metadata": {"title": title} if title else {},
-        "source_file": "digest",
-        "project": project,
-        "content_type": "user_message",
-        "char_count": len(content),
-        "source": "digest",
-    }]
+    chunks = [
+        {
+            "id": chunk_id,
+            "content": content,
+            "metadata": {"title": title} if title else {},
+            "source_file": "digest",
+            "project": project,
+            "content_type": "user_message",
+            "char_count": len(content),
+            "source": "digest",
+        }
+    ]
     store.upsert_chunks(chunks, [embedding])
 
     # 2. Entity extraction (Phase 2 pipeline)
@@ -161,22 +163,26 @@ def digest_content(
     for ext_entity in extraction_result.entities:
         eid = entity_ids.get(ext_entity.text)
         entity_data = store.get_entity(eid) if eid else None
-        entities.append({
-            "name": entity_data["name"] if entity_data else ext_entity.text,
-            "entity_type": entity_data["entity_type"] if entity_data else ext_entity.entity_type,
-            "confidence": ext_entity.confidence,
-            "entity_id": eid,
-        })
+        entities.append(
+            {
+                "name": entity_data["name"] if entity_data else ext_entity.text,
+                "entity_type": entity_data["entity_type"] if entity_data else ext_entity.entity_type,
+                "confidence": ext_entity.confidence,
+                "entity_id": eid,
+            }
+        )
 
     # Build relation list for response
     relations = []
     for ext_rel in extraction_result.relations:
-        relations.append({
-            "source": ext_rel.source_text,
-            "target": ext_rel.target_text,
-            "relation_type": ext_rel.relation_type,
-            "confidence": ext_rel.confidence,
-        })
+        relations.append(
+            {
+                "source": ext_rel.source_text,
+                "target": ext_rel.target_text,
+                "relation_type": ext_rel.relation_type,
+                "confidence": ext_rel.confidence,
+            }
+        )
 
     # 3. Sentiment analysis (Phase 6)
     sentiment = analyze_sentiment(content)

@@ -1103,9 +1103,7 @@ async def _brain_digest(
                 participants=participants,
             ),
         )
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result, indent=2))]
-        )
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
     except ValueError as e:
         return _error_result(str(e))
     except Exception as e:
@@ -1139,12 +1137,8 @@ async def _brain_entity(
         return _error_result(f"Entity lookup failed: {e}")
 
     if result is None:
-        return CallToolResult(
-            content=[TextContent(type="text", text=f"No entity found matching '{query}'.")]
-        )
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(result, indent=2))]
-    )
+        return CallToolResult(content=[TextContent(type="text", text=f"No entity found matching '{query}'.")])
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
 
 
 # --- Consolidated Dispatchers (Phase 4) ---

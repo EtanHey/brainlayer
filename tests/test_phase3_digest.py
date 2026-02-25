@@ -10,21 +10,24 @@ def _dummy_embed(text):  # noqa: ARG001
     return [0.1] * 1024
 
 
-def _insert_chunks(store: VectorStore, ids: List[str], documents: List[str],
-                   metadatas: List[dict], embeddings: List[list]) -> None:
+def _insert_chunks(
+    store: VectorStore, ids: List[str], documents: List[str], metadatas: List[dict], embeddings: List[list]
+) -> None:
     """Helper to insert test chunks using upsert_chunks API."""
     chunks = []
     for cid, doc, meta in zip(ids, documents, metadatas):
-        chunks.append({
-            "id": cid,
-            "content": doc,
-            "metadata": meta,
-            "source_file": meta.get("source_file", "test.jsonl"),
-            "project": meta.get("project"),
-            "content_type": meta.get("content_type", "user_message"),
-            "char_count": len(doc),
-            "source": meta.get("source", "claude_code"),
-        })
+        chunks.append(
+            {
+                "id": cid,
+                "content": doc,
+                "metadata": meta,
+                "source_file": meta.get("source_file", "test.jsonl"),
+                "project": meta.get("project"),
+                "content_type": meta.get("content_type", "user_message"),
+                "char_count": len(doc),
+                "source": meta.get("source", "claude_code"),
+            }
+        )
     store.upsert_chunks(chunks, embeddings)
 
 
@@ -52,9 +55,7 @@ def test_user_verified_defaults_to_false(tmp_path):
     store = VectorStore(tmp_path / "test.db")
     eid = store.upsert_entity("test-ent-1", "person", "Test Person")
     cursor = store.conn.cursor()
-    row = list(cursor.execute(
-        "SELECT user_verified FROM kg_entities WHERE id = ?", [eid]
-    ))[0]
+    row = list(cursor.execute("SELECT user_verified FROM kg_entities WHERE id = ?", [eid]))[0]
     assert row[0] == 0
 
 
@@ -102,10 +103,7 @@ def test_digest_content_creates_chunk(tmp_path):
 
     # Verify chunk exists
     cursor = store.conn.cursor()
-    row = list(cursor.execute(
-        "SELECT id, source, content_type FROM chunks WHERE id = ?",
-        [result["digest_id"]]
-    ))
+    row = list(cursor.execute("SELECT id, source, content_type FROM chunks WHERE id = ?", [result["digest_id"]]))
     assert len(row) == 1
     assert row[0][1] == "digest"
     assert row[0][2] == "user_message"
@@ -174,6 +172,7 @@ def test_digest_content_empty_raises(tmp_path):
     dummy_embed = _dummy_embed
 
     import pytest
+
     with pytest.raises(ValueError, match="content must be non-empty"):
         digest_content(content="", store=store, embed_fn=dummy_embed)
 
@@ -260,10 +259,14 @@ def test_entity_lookup_returns_structured_data(tmp_path):
     dummy_embed = _dummy_embed
 
     # Create an entity with a chunk
-    eid = store.upsert_entity("person-etan", "person", "Etan Heyman",
-                              embedding=dummy_embed("Etan Heyman"))
-    _insert_chunks(store, ["c1"], ["Etan discussed brainlayer"],
-                   [{"source_file": "t.jsonl", "project": "test"}], [dummy_embed("test")])
+    eid = store.upsert_entity("person-etan", "person", "Etan Heyman", embedding=dummy_embed("Etan Heyman"))
+    _insert_chunks(
+        store,
+        ["c1"],
+        ["Etan discussed brainlayer"],
+        [{"source_file": "t.jsonl", "project": "test"}],
+        [dummy_embed("test")],
+    )
     store.link_entity_chunk(eid, "c1", relevance=0.9, context="discussed brainlayer")
 
     result = entity_lookup("Etan", store, dummy_embed)
