@@ -325,6 +325,15 @@ class TestEvalHarnessSeedOnly:
             )
 
 
+try:
+    import gliner  # noqa: F401
+
+    _HAS_GLINER = True
+except ImportError:
+    _HAS_GLINER = False
+
+
+@pytest.mark.skipif(not _HAS_GLINER, reason="gliner not installed")
 class TestEvalHarnessGLiNER:
     """Run GLiNER extraction against gold standard.
 

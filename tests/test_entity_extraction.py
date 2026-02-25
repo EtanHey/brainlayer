@@ -18,11 +18,17 @@ from brainlayer.pipeline.entity_extraction import (
     ExtractionResult,
     build_ner_prompt,
     extract_entities_combined,
-    extract_entities_gliner,
     extract_entities_llm,
     extract_seed_entities,
     parse_llm_ner_response,
 )
+
+try:
+    from brainlayer.pipeline.entity_extraction import extract_entities_gliner
+
+    _HAS_GLINER = True
+except ImportError:
+    _HAS_GLINER = False
 
 # ── Data classes ──
 
@@ -362,6 +368,7 @@ class TestCombinedExtraction:
 # ── GLiNER Extraction ──
 
 
+@pytest.mark.skipif(not _HAS_GLINER, reason="gliner not installed")
 class TestGLiNERExtraction:
     """Test GLiNER multi-lingual NER extraction.
 
