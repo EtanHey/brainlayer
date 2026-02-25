@@ -1005,8 +1005,10 @@ async def _brain_search(
 ):
     """Unified search dispatcher — routes to the right internal handler."""
 
-    # Auto-scope project from CWD if not provided and not "all"
-    if project is None:
+    # Auto-scope project from CWD if not provided — but ONLY for claude_code source.
+    # Non-claude_code sources (youtube, whatsapp, etc.) have null/different project values,
+    # so auto-scoping filters them out entirely (bug: brain_search(source="youtube") → 0 results).
+    if project is None and source not in ("youtube", "whatsapp", "telegram", "all"):
         try:
             from ..scoping import resolve_project_scope
 

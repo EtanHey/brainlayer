@@ -2,7 +2,7 @@
 
 import json
 import struct
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -338,6 +338,96 @@ class VectorStore:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_project ON phase_commits(project)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_phase ON phase_commits(phase_name)")
+
+        # Add source_project_id to chunks (critical issue #3 — links chunks to KG project entities)
+        if "source_project_id" not in existing_cols:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN source_project_id TEXT")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_project ON chunks(source_project_id)")
+
+        # ── Knowledge Graph tables (BrainLayer v3 Phase 1) ──────────────────
+
+        # Core entity storage — persons, companies, meetings, topics, projects, golems, skills
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kg_entities (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(entity_type, name)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_type ON kg_entities(entity_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_name ON kg_entities(name)")
+
+        # Explicit relationships between entities
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kg_relations (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                properties TEXT DEFAULT '{}',
+                confidence REAL DEFAULT 1.0,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(source_id, target_id, relation_type)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_source ON kg_relations(source_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_target ON kg_relations(target_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_type ON kg_relations(relation_type)")
+
+        # Bridge table — links entities to existing 270K chunks with relevance scoring
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kg_entity_chunks (
+                entity_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                relevance REAL DEFAULT 1.0,
+                context TEXT,
+                PRIMARY KEY (entity_id, chunk_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_ec_entity ON kg_entity_chunks(entity_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_ec_chunk ON kg_entity_chunks(chunk_id)")
+
+        # Semantic search on entities via sqlite-vec (~5K vectors, 50x cheaper than chunk search)
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_vec_entities USING vec0(
+                entity_id TEXT PRIMARY KEY,
+                embedding FLOAT[1024]
+            )
+        """)
+
+        # FTS5 full-text search on entity names and metadata
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_fts USING fts5(
+                name, metadata, entity_id UNINDEXED
+            )
+        """)
+
+        # Triggers to keep kg_entities_fts in sync with kg_entities
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS kg_entities_fts_insert AFTER INSERT ON kg_entities BEGIN
+                INSERT INTO kg_entities_fts(name, metadata, entity_id)
+                VALUES (new.name, new.metadata, new.id);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS kg_entities_fts_delete AFTER DELETE ON kg_entities BEGIN
+                DELETE FROM kg_entities_fts WHERE entity_id = old.id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS kg_entities_fts_update
+            AFTER UPDATE OF name, metadata ON kg_entities BEGIN
+                DELETE FROM kg_entities_fts WHERE entity_id = old.id;
+                INSERT INTO kg_entities_fts(name, metadata, entity_id)
+                VALUES (new.name, new.metadata, new.id);
+            END
+        """)
+
+        # ── End Knowledge Graph tables ──────────────────────────────────────
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
@@ -1919,6 +2009,373 @@ class VectorStore:
             "by_outcome": by_outcome,
             "by_intent": by_intent,
             "avg_quality_score": round(avg_quality, 1) if avg_quality else None,
+        }
+
+    # ── Knowledge Graph CRUD ──────────────────────────────────────────
+
+    def upsert_entity(
+        self,
+        entity_id: str,
+        entity_type: str,
+        name: str,
+        metadata: Optional[Dict] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> str:
+        """Insert or update a KG entity. Returns the entity ID."""
+        cursor = self.conn.cursor()
+        meta_json = json.dumps(metadata or {})
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        cursor.execute(
+            """
+            INSERT INTO kg_entities (id, entity_type, name, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, name) DO UPDATE SET
+                metadata = excluded.metadata,
+                updated_at = excluded.updated_at
+            """,
+            (entity_id, entity_type, name, meta_json, now, now),
+        )
+
+        # Retrieve the actual stored ID (may differ from entity_id on conflict)
+        stored_id = list(
+            cursor.execute(
+                "SELECT id FROM kg_entities WHERE entity_type = ? AND name = ?",
+                (entity_type, name),
+            )
+        )[0][0]
+
+        if embedding is not None:
+            embedding_bytes = serialize_f32(embedding)
+            cursor.execute(
+                "INSERT OR REPLACE INTO kg_vec_entities (entity_id, embedding) VALUES (?, ?)",
+                (stored_id, embedding_bytes),
+            )
+
+        return stored_id
+
+    def add_relation(
+        self,
+        relation_id: str,
+        source_id: str,
+        target_id: str,
+        relation_type: str,
+        properties: Optional[Dict] = None,
+        confidence: float = 1.0,
+    ) -> str:
+        """Add a relationship between two entities. Returns the relation ID."""
+        cursor = self.conn.cursor()
+        props_json = json.dumps(properties or {})
+
+        cursor.execute(
+            """
+            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
+                properties = excluded.properties,
+                confidence = excluded.confidence
+            """,
+            (relation_id, source_id, target_id, relation_type, props_json, confidence),
+        )
+
+        # Retrieve the actual stored ID (may differ from relation_id on conflict)
+        stored_id = list(
+            cursor.execute(
+                "SELECT id FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+                (source_id, target_id, relation_type),
+            )
+        )[0][0]
+        return stored_id
+
+    def link_entity_chunk(
+        self,
+        entity_id: str,
+        chunk_id: str,
+        relevance: float = 1.0,
+        context: Optional[str] = None,
+    ) -> None:
+        """Link an entity to an existing chunk."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(entity_id, chunk_id) DO UPDATE SET
+                relevance = excluded.relevance,
+                context = excluded.context
+            """,
+            (entity_id, chunk_id, relevance, context),
+        )
+
+    def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single entity by ID."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT id, entity_type, name, metadata, created_at, updated_at FROM kg_entities WHERE id = ?",
+                (entity_id,),
+            )
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+
+    def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
+        """Get an entity by type and name."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT id, entity_type, name, metadata, created_at, updated_at FROM kg_entities WHERE entity_type = ? AND name = ?",
+                (entity_type, name),
+            )
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+
+    def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
+        """Get all relations for an entity.
+
+        Args:
+            entity_id: Entity to query
+            direction: 'outgoing', 'incoming', or 'both'
+        """
+        cursor = self._read_cursor()
+        results = []
+
+        if direction in ("outgoing", "both"):
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
+                           e.name as target_name, e.entity_type as target_type
+                    FROM kg_relations r
+                    JOIN kg_entities e ON r.target_id = e.id
+                    WHERE r.source_id = ?
+                    """,
+                    (entity_id,),
+                )
+            )
+            for row in rows:
+                results.append(
+                    {
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
+                        "relation_type": row[3],
+                        "properties": json.loads(row[4]) if row[4] else {},
+                        "confidence": row[5],
+                        "target_name": row[6],
+                        "target_type": row[7],
+                        "direction": "outgoing",
+                    }
+                )
+
+        if direction in ("incoming", "both"):
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
+                           e.name as source_name, e.entity_type as source_type
+                    FROM kg_relations r
+                    JOIN kg_entities e ON r.source_id = e.id
+                    WHERE r.target_id = ?
+                    """,
+                    (entity_id,),
+                )
+            )
+            for row in rows:
+                results.append(
+                    {
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
+                        "relation_type": row[3],
+                        "properties": json.loads(row[4]) if row[4] else {},
+                        "confidence": row[5],
+                        "source_name": row[6],
+                        "source_type": row[7],
+                        "direction": "incoming",
+                    }
+                )
+
+        return results
+
+    def get_entity_chunks(self, entity_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get chunks linked to an entity, ordered by relevance."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """
+                SELECT ec.chunk_id, ec.relevance, ec.context,
+                       c.content, c.source_file, c.project, c.content_type, c.created_at
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON ec.chunk_id = c.id
+                WHERE ec.entity_id = ?
+                ORDER BY ec.relevance DESC
+                LIMIT ?
+                """,
+                (entity_id, limit),
+            )
+        )
+        return [
+            {
+                "chunk_id": row[0],
+                "relevance": row[1],
+                "context": row[2],
+                "content": row[3],
+                "source_file": row[4],
+                "project": row[5],
+                "content_type": row[6],
+                "created_at": row[7],
+            }
+            for row in rows
+        ]
+
+    def search_entities(
+        self,
+        query: str,
+        entity_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search entities using FTS5 full-text search."""
+        cursor = self._read_cursor()
+        fts_query = _escape_fts5_query(query)
+
+        if entity_type:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
+                           f.rank
+                    FROM kg_entities_fts f
+                    JOIN kg_entities e ON f.entity_id = e.id
+                    WHERE kg_entities_fts MATCH ? AND e.entity_type = ?
+                    ORDER BY f.rank
+                    LIMIT ?
+                    """,
+                    (fts_query, entity_type, limit),
+                )
+            )
+        else:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
+                           f.rank
+                    FROM kg_entities_fts f
+                    JOIN kg_entities e ON f.entity_id = e.id
+                    WHERE kg_entities_fts MATCH ?
+                    ORDER BY f.rank
+                    LIMIT ?
+                    """,
+                    (fts_query, limit),
+                )
+            )
+
+        return [
+            {
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "created_at": row[4],
+                "updated_at": row[5],
+                "rank": row[6],
+            }
+            for row in rows
+        ]
+
+    def search_entities_semantic(
+        self,
+        query_embedding: List[float],
+        entity_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search entities using vector similarity."""
+        cursor = self._read_cursor()
+        query_bytes = serialize_f32(query_embedding)
+
+        if entity_type:
+            # Over-fetch since vec0 applies k before WHERE filter on entity_type
+            fetch_k = min(max(limit * 3, limit + 50), 500)
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
+                           v.distance
+                    FROM kg_vec_entities v
+                    JOIN kg_entities e ON v.entity_id = e.id
+                    WHERE v.embedding MATCH ? AND k = ? AND e.entity_type = ?
+                    ORDER BY v.distance
+                    """,
+                    (query_bytes, fetch_k, entity_type),
+                )
+            )
+            rows = rows[:limit]
+        else:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
+                           v.distance
+                    FROM kg_vec_entities v
+                    JOIN kg_entities e ON v.entity_id = e.id
+                    WHERE v.embedding MATCH ? AND k = ?
+                    ORDER BY v.distance
+                    """,
+                    (query_bytes, limit),
+                )
+            )
+
+        return [
+            {
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "created_at": row[4],
+                "updated_at": row[5],
+                "distance": row[6],
+            }
+            for row in rows
+        ]
+
+    def kg_stats(self) -> Dict[str, Any]:
+        """Get KG statistics."""
+        cursor = self._read_cursor()
+
+        entity_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entities"))[0][0]
+        relation_count = list(cursor.execute("SELECT COUNT(*) FROM kg_relations"))[0][0]
+        link_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks"))[0][0]
+
+        type_counts = dict(cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type"))
+        relation_type_counts = dict(
+            cursor.execute("SELECT relation_type, COUNT(*) FROM kg_relations GROUP BY relation_type")
+        )
+
+        return {
+            "entities": entity_count,
+            "relations": relation_count,
+            "entity_chunk_links": link_count,
+            "entity_types": type_counts,
+            "relation_types": relation_type_counts,
         }
 
     def close(self) -> None:
