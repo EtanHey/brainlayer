@@ -29,9 +29,7 @@ def _spans_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
 
-def _compute_ner_metrics(
-    gold_entities: list[dict], pred_entities: list[dict]
-) -> dict[str, dict[str, float]]:
+def _compute_ner_metrics(gold_entities: list[dict], pred_entities: list[dict]) -> dict[str, dict[str, float]]:
     """Compute NER evaluation metrics at three granularities.
 
     Returns dict with keys: exact, partial, type_only.
@@ -50,9 +48,7 @@ def _compute_ner_metrics(
 
                 if mode == "exact":
                     match = (
-                        gold["type"] == pred["type"]
-                        and gold["start"] == pred["start"]
-                        and gold["end"] == pred["end"]
+                        gold["type"] == pred["type"] and gold["start"] == pred["start"] and gold["end"] == pred["end"]
                     )
                 elif mode == "partial":
                     match = gold["type"] == pred["type"] and _spans_overlap(
@@ -72,11 +68,7 @@ def _compute_ner_metrics(
 
         precision = correct / actual if actual > 0 else 0.0
         recall = correct / possible if possible > 0 else 0.0
-        f1 = (
-            2 * precision * recall / (precision + recall)
-            if (precision + recall) > 0
-            else 0.0
-        )
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
         results[mode] = {
             "precision": precision,
@@ -90,9 +82,7 @@ def _compute_ner_metrics(
     return results
 
 
-def _compute_per_type_metrics(
-    gold_entities: list[dict], pred_entities: list[dict]
-) -> dict[str, dict[str, float]]:
+def _compute_per_type_metrics(gold_entities: list[dict], pred_entities: list[dict]) -> dict[str, dict[str, float]]:
     """Compute exact-match metrics per entity type."""
     types = {e["type"] for e in gold_entities} | {e["type"] for e in pred_entities}
     results = {}
@@ -142,9 +132,7 @@ class TestGoldStandardIntegrity:
         samples = _load_gold_standard()
         for s in samples:
             for e in s["entities"]:
-                assert e["start"] < e["end"], (
-                    f"Invalid span in {s['id']}: start={e['start']} >= end={e['end']}"
-                )
+                assert e["start"] < e["end"], f"Invalid span in {s['id']}: start={e['start']} >= end={e['end']}"
                 span_text = s["text"][e["start"] : e["end"]]
                 assert span_text == e["text"], (
                     f"Span mismatch in {s['id']}: "
@@ -158,9 +146,7 @@ class TestGoldStandardIntegrity:
         samples = _load_gold_standard()
         for s in samples:
             for e in s["entities"]:
-                assert e["type"] in valid_types, (
-                    f"Unknown type '{e['type']}' in {s['id']}"
-                )
+                assert e["type"] in valid_types, f"Unknown type '{e['type']}' in {s['id']}"
 
     def test_gold_has_diverse_entity_types(self):
         """Gold set should cover at least 4 entity types."""
@@ -172,9 +158,7 @@ class TestGoldStandardIntegrity:
         """At least some samples should have relations."""
         samples = _load_gold_standard()
         with_relations = [s for s in samples if s.get("relations")]
-        assert len(with_relations) >= 5, (
-            f"Need >= 5 samples with relations, got {len(with_relations)}"
-        )
+        assert len(with_relations) >= 5, f"Need >= 5 samples with relations, got {len(with_relations)}"
 
 
 # ── Metric Computation ──
@@ -284,10 +268,7 @@ def _run_extraction(text: str) -> list[dict]:
     from brainlayer.pipeline.entity_extraction import extract_entities_combined
 
     result = extract_entities_combined(text, DEFAULT_SEED_ENTITIES, use_llm=False)
-    return [
-        {"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end}
-        for e in result.entities
-    ]
+    return [{"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end} for e in result.entities]
 
 
 class TestEvalHarnessSeedOnly:
@@ -332,10 +313,16 @@ class TestEvalHarnessSeedOnly:
         print("\n=== Seed-Only Eval ===")
         print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")
         print(f"Exact:   P={m['exact']['precision']:.3f}  R={m['exact']['recall']:.3f}  F1={m['exact']['f1']:.3f}")
-        print(f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}")
-        print(f"Type:    P={m['type_only']['precision']:.3f}  R={m['type_only']['recall']:.3f}  F1={m['type_only']['f1']:.3f}")
+        print(
+            f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}"
+        )
+        print(
+            f"Type:    P={m['type_only']['precision']:.3f}  R={m['type_only']['recall']:.3f}  F1={m['type_only']['f1']:.3f}"
+        )
         for etype, scores in per_type.items():
-            print(f"  {etype}: P={scores['precision']:.3f} R={scores['recall']:.3f} F1={scores['f1']:.3f} ({scores['correct']}/{scores['possible']})")
+            print(
+                f"  {etype}: P={scores['precision']:.3f} R={scores['recall']:.3f} F1={scores['f1']:.3f} ({scores['correct']}/{scores['possible']})"
+            )
 
 
 class TestEvalHarnessGLiNER:
@@ -361,13 +348,8 @@ class TestEvalHarnessGLiNER:
         all_pred = []
         for sample in gold_samples:
             all_gold.extend(sample["entities"])
-            result = extract_entities_combined(
-                sample["text"], DEFAULT_SEED_ENTITIES, use_llm=False, use_gliner=True
-            )
-            pred = [
-                {"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end}
-                for e in result.entities
-            ]
+            result = extract_entities_combined(sample["text"], DEFAULT_SEED_ENTITIES, use_llm=False, use_gliner=True)
+            pred = [{"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end} for e in result.entities]
             all_pred.extend(pred)
 
         m = _compute_ner_metrics(all_gold, all_pred)
@@ -376,11 +358,15 @@ class TestEvalHarnessGLiNER:
         print("\n=== GLiNER + Seed Eval ===")
         print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")
         print(f"Exact:   P={m['exact']['precision']:.3f}  R={m['exact']['recall']:.3f}  F1={m['exact']['f1']:.3f}")
-        print(f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}")
-        print(f"Type:    P={m['type_only']['precision']:.3f}  R={m['type_only']['recall']:.3f}  F1={m['type_only']['f1']:.3f}")
-        for etype, scores in per_type.items():
-            print(f"  {etype}: P={scores['precision']:.3f} R={scores['recall']:.3f} F1={scores['f1']:.3f} ({scores['correct']}/{scores['possible']})")
-
-        assert m["partial"]["f1"] >= 0.4, (
-            f"GLiNER+seed partial F1 {m['partial']['f1']:.3f} below quality bar 0.4"
+        print(
+            f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}"
         )
+        print(
+            f"Type:    P={m['type_only']['precision']:.3f}  R={m['type_only']['recall']:.3f}  F1={m['type_only']['f1']:.3f}"
+        )
+        for etype, scores in per_type.items():
+            print(
+                f"  {etype}: P={scores['precision']:.3f} R={scores['recall']:.3f} F1={scores['f1']:.3f} ({scores['correct']}/{scores['possible']})"
+            )
+
+        assert m["partial"]["f1"] >= 0.4, f"GLiNER+seed partial F1 {m['partial']['f1']:.3f} below quality bar 0.4"

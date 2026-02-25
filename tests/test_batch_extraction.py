@@ -172,11 +172,7 @@ class TestStoreExtractionResult:
 
         # Entity should be linked to chunk
         cursor = store.conn.cursor()
-        links = list(
-            cursor.execute(
-                "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id LIKE 'project%'"
-            )
-        )
+        links = list(cursor.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id LIKE 'project%'"))
         assert any(l[0] == "chunk-42" for l in links)
 
     def test_dedup_across_chunks(self, store):
@@ -213,11 +209,7 @@ class TestStoreExtractionResult:
         store_extraction_result(result, store)
 
         cursor = store.conn.cursor()
-        links = list(
-            cursor.execute(
-                "SELECT relevance FROM kg_entity_chunks WHERE chunk_id = 'chunk-1'"
-            )
-        )
+        links = list(cursor.execute("SELECT relevance FROM kg_entity_chunks WHERE chunk_id = 'chunk-1'"))
         assert len(links) == 1
         assert abs(links[0][0] - 0.85) < 0.01
 

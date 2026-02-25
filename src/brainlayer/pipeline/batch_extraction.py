@@ -93,9 +93,7 @@ def store_extraction_result(
 
         # Link entity to source chunk
         if result.chunk_id:
-            store.link_entity_chunk(
-                entity_id, result.chunk_id, relevance=entity.confidence
-            )
+            store.link_entity_chunk(entity_id, result.chunk_id, relevance=entity.confidence)
 
     # 2. Store relations
     for relation in result.relations:

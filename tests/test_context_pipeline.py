@@ -37,9 +37,7 @@ class TestClassifyExtractsSessionId:
             "sessionId": "abc-123-def",
             "message": {
                 "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "Here is a detailed explanation of authentication patterns."}
-                ],
+                "content": [{"type": "text", "text": "Here is a detailed explanation of authentication patterns."}],
             },
         }
         result = classify_content(entry)
@@ -181,9 +179,7 @@ class TestIndexPopulatesContext:
         # Verify conversation_id and position are stored
         store = VectorStore(db_path)
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT id, conversation_id, position FROM chunks ORDER BY position"
-        ))
+        rows = list(cursor.execute("SELECT id, conversation_id, position FROM chunks ORDER BY position"))
         assert len(rows) == 2
 
         # conversation_id should be set
@@ -222,15 +218,11 @@ class TestIndexPopulatesContext:
         with patch("brainlayer.index_new.embed_chunks") as mock_embed:
             from brainlayer.embeddings import EmbeddedChunk
 
-            mock_embed.return_value = [
-                EmbeddedChunk(chunk=c, embedding=e) for c, e in zip(chunks, fake_embeddings)
-            ]
+            mock_embed.return_value = [EmbeddedChunk(chunk=c, embedding=e) for c, e in zip(chunks, fake_embeddings)]
 
             from brainlayer.index_new import index_chunks_to_sqlite
 
-            index_chunks_to_sqlite(
-                chunks, source_file="test.jsonl", project="test", db_path=db_path
-            )
+            index_chunks_to_sqlite(chunks, source_file="test.jsonl", project="test", db_path=db_path)
 
         store = VectorStore(db_path)
         cursor = store.conn.cursor()
@@ -259,9 +251,7 @@ class TestIndexPopulatesContext:
         with patch("brainlayer.index_new.embed_chunks") as mock_embed:
             from brainlayer.embeddings import EmbeddedChunk
 
-            mock_embed.return_value = [
-                EmbeddedChunk(chunk=chunk, embedding=[0.1] * 1024)
-            ]
+            mock_embed.return_value = [EmbeddedChunk(chunk=chunk, embedding=[0.1] * 1024)]
 
             from brainlayer.index_new import index_chunks_to_sqlite
 
@@ -417,14 +407,10 @@ class TestFullPipelineIntegration:
 
             # All chunks should have session_id in metadata
             for chunk in all_chunks:
-                assert chunk.metadata.get("session_id") == "sess-001", (
-                    f"Chunk missing session_id: {chunk.metadata}"
-                )
+                assert chunk.metadata.get("session_id") == "sess-001", f"Chunk missing session_id: {chunk.metadata}"
 
             # Mock the embeddings
-            mock_embed.return_value = [
-                EmbeddedChunk(chunk=c, embedding=[0.1] * 1024) for c in all_chunks
-            ]
+            mock_embed.return_value = [EmbeddedChunk(chunk=c, embedding=[0.1] * 1024) for c in all_chunks]
 
             count = index_chunks_to_sqlite(
                 all_chunks,
@@ -437,9 +423,7 @@ class TestFullPipelineIntegration:
         # Verify DB state
         store = VectorStore(db_path)
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT conversation_id, position FROM chunks ORDER BY position"
-        ))
+        rows = list(cursor.execute("SELECT conversation_id, position FROM chunks ORDER BY position"))
 
         # All chunks should have conversation_id set
         for row in rows:

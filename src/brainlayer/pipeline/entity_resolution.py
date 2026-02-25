@@ -45,9 +45,7 @@ def _normalize_name(name: str) -> str:
     """Normalize a name for comparison: lowercase, strip whitespace, remove accents."""
     name = name.strip().lower()
     # Remove Unicode accents/diacritics (nikud for Hebrew)
-    name = "".join(
-        c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn"
-    )
+    name = "".join(c for c in unicodedata.normalize("NFD", name) if unicodedata.category(c) != "Mn")
     return name
 
 
@@ -125,44 +123,34 @@ def merge_entities(store: VectorStore, keep_id: str, merge_id: str) -> None:
         (keep_id, merge_id),
     )
     # Delete any remaining (duplicates that couldn't be updated due to UNIQUE constraint)
-    cursor.execute(
-        "DELETE FROM kg_entity_chunks WHERE entity_id = ?", (merge_id,)
-    )
+    cursor.execute("DELETE FROM kg_entity_chunks WHERE entity_id = ?", (merge_id,))
 
     # 2. Move relations (source side)
     cursor.execute(
         "UPDATE OR IGNORE kg_relations SET source_id = ? WHERE source_id = ?",
         (keep_id, merge_id),
     )
-    cursor.execute(
-        "DELETE FROM kg_relations WHERE source_id = ?", (merge_id,)
-    )
+    cursor.execute("DELETE FROM kg_relations WHERE source_id = ?", (merge_id,))
 
     # 2b. Move relations (target side)
     cursor.execute(
         "UPDATE OR IGNORE kg_relations SET target_id = ? WHERE target_id = ?",
         (keep_id, merge_id),
     )
-    cursor.execute(
-        "DELETE FROM kg_relations WHERE target_id = ?", (merge_id,)
-    )
+    cursor.execute("DELETE FROM kg_relations WHERE target_id = ?", (merge_id,))
 
     # 3. Move aliases from merged entity to kept entity
     cursor.execute(
         "UPDATE OR IGNORE kg_entity_aliases SET entity_id = ? WHERE entity_id = ?",
         (keep_id, merge_id),
     )
-    cursor.execute(
-        "DELETE FROM kg_entity_aliases WHERE entity_id = ?", (merge_id,)
-    )
+    cursor.execute("DELETE FROM kg_entity_aliases WHERE entity_id = ?", (merge_id,))
 
     # Store merged entity's name as alias
     store.add_entity_alias(merged["name"], keep_id, alias_type="merged")
 
     # 4. Delete vector embedding for merged entity
-    cursor.execute(
-        "DELETE FROM kg_vec_entities WHERE entity_id = ?", (merge_id,)
-    )
+    cursor.execute("DELETE FROM kg_vec_entities WHERE entity_id = ?", (merge_id,))
 
     # 5. Delete the merged entity (FTS5 trigger handles cleanup)
     cursor.execute("DELETE FROM kg_entities WHERE id = ?", (merge_id,))

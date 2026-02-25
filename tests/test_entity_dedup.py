@@ -8,7 +8,6 @@ Covers:
 - Hebrew prefix stripping
 """
 
-
 import pytest
 
 from brainlayer.vector_store import VectorStore
@@ -39,12 +38,7 @@ class TestAliasTableSchema:
     def test_alias_table_exists(self, store):
         """The alias table should exist after init."""
         cursor = store.conn.cursor()
-        tables = [
-            row[0]
-            for row in cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        ]
+        tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")]
         assert "kg_entity_aliases" in tables
 
     def test_alias_table_columns(self, store):
@@ -238,9 +232,7 @@ class TestMergeEntities:
 
         # All links should now point to keep_id
         cursor = store.conn.cursor()
-        links = list(cursor.execute(
-            "SELECT entity_id, chunk_id FROM kg_entity_chunks ORDER BY chunk_id"
-        ))
+        links = list(cursor.execute("SELECT entity_id, chunk_id FROM kg_entity_chunks ORDER BY chunk_id"))
         entity_ids = {l[0] for l in links}
         assert entity_ids == {keep_id}
         assert len(links) == 3
@@ -259,9 +251,7 @@ class TestMergeEntities:
 
         # Relation should now reference keep_id
         cursor = store.conn.cursor()
-        rels = list(cursor.execute(
-            "SELECT source_id, target_id, relation_type FROM kg_relations"
-        ))
+        rels = list(cursor.execute("SELECT source_id, target_id, relation_type FROM kg_relations"))
         assert len(rels) == 1
         assert rels[0][0] == keep_id
         assert rels[0][1] == company_id

@@ -442,9 +442,7 @@ class VectorStore:
                 PRIMARY KEY (alias, entity_id)
             )
         """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)")
 
         # ── End Knowledge Graph tables ──────────────────────────────────────
 
@@ -2459,9 +2457,7 @@ class VectorStore:
 
     # ── Entity Alias CRUD ──────────────────────────────────────────────
 
-    def add_entity_alias(
-        self, alias: str, entity_id: str, alias_type: str = "name"
-    ) -> None:
+    def add_entity_alias(self, alias: str, entity_id: str, alias_type: str = "name") -> None:
         """Add an alias for an entity. Idempotent."""
         from datetime import datetime, timezone
 
@@ -2512,10 +2508,7 @@ class VectorStore:
                 (entity_id,),
             )
         )
-        return [
-            {"alias": row[0], "alias_type": row[1], "created_at": row[2]}
-            for row in rows
-        ]
+        return [{"alias": row[0], "alias_type": row[1], "created_at": row[2]} for row in rows]
 
     def close(self) -> None:
         """Close database connections."""

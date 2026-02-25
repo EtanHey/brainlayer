@@ -134,9 +134,7 @@ def build_ner_prompt(text: str) -> str:
     return _NER_PROMPT_TEMPLATE.format(text=text)
 
 
-def parse_llm_ner_response(
-    response: str, source_text: str
-) -> tuple[list[ExtractedEntity], list[ExtractedRelation]]:
+def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[ExtractedEntity], list[ExtractedRelation]]:
     """Parse LLM NER response into entities and relations with spans.
 
     The LLM returns entity names and types. We locate the actual character

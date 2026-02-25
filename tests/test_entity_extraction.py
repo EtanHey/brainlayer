@@ -209,9 +209,7 @@ class TestLLMResponseParsing:
                     {"text": "Dor Zohar", "type": "person"},
                     {"text": "Domica", "type": "company"},
                 ],
-                "relations": [
-                    {"source": "Dor Zohar", "target": "Domica", "type": "works_at"}
-                ],
+                "relations": [{"source": "Dor Zohar", "target": "Domica", "type": "works_at"}],
             }
         )
         source = "Dor Zohar is CEO of Domica."
@@ -223,7 +221,9 @@ class TestLLMResponseParsing:
 
     def test_parse_json_in_text(self):
         """LLM sometimes wraps JSON in explanation text."""
-        response = 'Here are the entities:\n{"entities": [{"text": "brainlayer", "type": "project"}], "relations": []}\nDone.'
+        response = (
+            'Here are the entities:\n{"entities": [{"text": "brainlayer", "type": "project"}], "relations": []}\nDone.'
+        )
         source = "We use brainlayer for memory."
         entities, _ = parse_llm_ner_response(response, source)
         assert len(entities) == 1
@@ -337,9 +337,7 @@ class TestCombinedExtraction:
     def test_seed_wins_over_llm(self):
         """Seed matches should be preferred over LLM for the same entity."""
         text = "Etan Heyman deploys to Railway."
-        result = extract_entities_combined(
-            text, SEED_ENTITIES, llm_caller=self._mock_llm
-        )
+        result = extract_entities_combined(text, SEED_ENTITIES, llm_caller=self._mock_llm)
         # "Etan Heyman" should come from seed (higher confidence)
         etan = [e for e in result.entities if "Etan" in e.text][0]
         assert etan.source == "seed"
@@ -348,18 +346,14 @@ class TestCombinedExtraction:
     def test_llm_adds_new_entities(self):
         """LLM should find entities that seeds miss."""
         text = "Etan Heyman deploys to Railway."
-        result = extract_entities_combined(
-            text, SEED_ENTITIES, llm_caller=self._mock_llm
-        )
+        result = extract_entities_combined(text, SEED_ENTITIES, llm_caller=self._mock_llm)
         names = {e.text for e in result.entities}
         assert "Railway" in names
 
     def test_no_llm_mode(self):
         """With use_llm=False, only seed entities are returned."""
         text = "Etan Heyman deploys to Railway."
-        result = extract_entities_combined(
-            text, SEED_ENTITIES, use_llm=False
-        )
+        result = extract_entities_combined(text, SEED_ENTITIES, use_llm=False)
         names = {e.text for e in result.entities}
         assert "Etan Heyman" in names
         assert "Railway" not in names  # Not a seed entity
@@ -411,7 +405,7 @@ class TestGLiNERExtraction:
     @pytest.mark.slow
     def test_hebrew_text(self):
         """GLiNER multi should handle Hebrew text."""
-        text = "אילון מאסק הוא המנכ\"ל של טסלה."
+        text = 'אילון מאסק הוא המנכ"ל של טסלה.'
         entities = extract_entities_gliner(text)
         # Should find at least one entity (person or company)
         # Hebrew support varies, so just check it doesn't crash
