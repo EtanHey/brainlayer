@@ -193,6 +193,7 @@ VALID_INTENTS = [
 ]
 VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
 VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
+VALID_SENTIMENTS = ["frustration", "confusion", "positive", "satisfaction", "neutral"]
 
 ENRICHMENT_PROMPT = """You are a metadata extraction assistant. Analyze this conversation chunk and return ONLY a JSON object.
 
@@ -214,7 +215,10 @@ Return this exact JSON structure:
   "epistemic_level": "<one of: hypothesis, substantiated, validated>",
   "version_scope": "<version or system state discussed, or null>",
   "debt_impact": "<one of: introduction, resolution, none>",
-  "external_deps": ["<libraries or external APIs used>"]
+  "external_deps": ["<libraries or external APIs used>"],
+  "sentiment_label": "<one of: frustration, confusion, positive, satisfaction, neutral>",
+  "sentiment_score": <float from -1.0 (max frustration) to 1.0 (max positive)>,
+  "sentiment_signals": ["<words/phrases that indicate the sentiment>"]
 }}
 
 TAG RULES:
@@ -245,6 +249,18 @@ DEBT_IMPACT:
 - none: Neither introducing nor resolving debt
 
 EXTERNAL_DEPS: Libraries, APIs, services referenced (e.g., "ollama", "supabase", "react-force-graph-3d"). Empty array if none.
+
+SENTIMENT_LABEL: Detect the emotional tone of the human user in this chunk.
+- frustration: Anger, annoyance, things not working ("damn", "wtf", "broken again")
+- confusion: Not understanding, asking for clarification ("I don't understand", "wait what?")
+- positive: Excitement, praise, amazement ("amazing", "incredible", "wow")
+- satisfaction: Task done, gratitude, approval ("thanks", "perfect", "exactly what I needed")
+- neutral: No strong emotion (most code/config chunks)
+Note: Only user_message chunks have meaningful sentiment. For ai_code/assistant_text, use "neutral".
+
+SENTIMENT_SCORE: -1.0 = maximum frustration, 0.0 = neutral, 1.0 = maximum positive.
+
+SENTIMENT_SIGNALS: List the specific words or phrases that indicate the sentiment. Empty array if neutral.
 
 Return ONLY the JSON object, no other text."""
 
@@ -546,6 +562,20 @@ def _enrich_one(
 
     enrichment = parse_enrichment(response)
     if enrichment:
+        # Only set sentiment from LLM if rule-based hasn't already set it
+        # (rule-based is high-confidence for obvious cases)
+        sentiment_label = enrichment.get("sentiment_label")
+        sentiment_score = enrichment.get("sentiment_score")
+        sentiment_signals = enrichment.get("sentiment_signals")
+        if sentiment_label and sentiment_label not in VALID_SENTIMENTS:
+            sentiment_label = None
+        existing_sentiment = chunk.get("sentiment_label")
+        if existing_sentiment:
+            # Rule-based already classified — don't overwrite
+            sentiment_label = None
+            sentiment_score = None
+            sentiment_signals = None
+
         store.update_enrichment(
             chunk_id=chunk["id"],
             summary=enrichment.get("summary"),
@@ -558,6 +588,9 @@ def _enrich_one(
             version_scope=enrichment.get("version_scope"),
             debt_impact=enrichment.get("debt_impact"),
             external_deps=enrichment.get("external_deps"),
+            sentiment_label=sentiment_label,
+            sentiment_score=sentiment_score,
+            sentiment_signals=sentiment_signals,
         )
         return True
     return False

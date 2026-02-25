@@ -136,6 +136,10 @@ class VectorStore:
             ("external_deps", "TEXT"),  # JSON array of libraries/APIs
             # Phase 3: created_at for date filtering
             ("created_at", "TEXT"),  # ISO 8601 timestamp of when chunk was created/ingested
+            # Phase 6: Sentiment columns
+            ("sentiment_label", "TEXT"),   # frustration|confusion|positive|satisfaction|neutral
+            ("sentiment_score", "REAL"),   # -1.0 (frustration) to +1.0 (positive)
+            ("sentiment_signals", "TEXT"), # JSON array of matched signal strings
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -149,6 +153,7 @@ class VectorStore:
             ("idx_chunks_importance", "importance"),
             ("idx_chunks_enriched", "enriched_at"),
             ("idx_chunks_created", "created_at"),
+            ("idx_chunks_sentiment", "sentiment_label"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -529,6 +534,7 @@ class VectorStore:
         importance_min: Optional[float] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        sentiment_filter: Optional[str] = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text."""
 
@@ -573,6 +579,9 @@ class VectorStore:
             if date_to:
                 where_clauses.append("c.created_at <= ?")
                 filter_params.append(date_to)
+            if sentiment_filter:
+                where_clauses.append("c.sentiment_label = ?")
+                filter_params.append(sentiment_filter)
 
             where_sql = ""
             if where_clauses:
@@ -827,6 +836,7 @@ class VectorStore:
         importance_min: Optional[float] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        sentiment_filter: Optional[str] = None,
         k: int = 60,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
@@ -845,6 +855,7 @@ class VectorStore:
             importance_min=importance_min,
             date_from=date_from,
             date_to=date_to,
+            sentiment_filter=sentiment_filter,
         )
 
         # Build semantic rank map: chunk_content -> rank
@@ -878,6 +889,9 @@ class VectorStore:
         if date_to:
             fts_extra.append("AND c.created_at <= ?")
             fts_params.append(date_to)
+        if sentiment_filter:
+            fts_extra.append("AND c.sentiment_label = ?")
+            fts_params.append(sentiment_filter)
         fts_params.append(n_results * 3)
 
         fts_results = list(
@@ -1136,6 +1150,9 @@ class VectorStore:
         version_scope: Optional[str] = None,
         debt_impact: Optional[str] = None,
         external_deps: Optional[List[str]] = None,
+        sentiment_label: Optional[str] = None,
+        sentiment_score: Optional[float] = None,
+        sentiment_signals: Optional[List[str]] = None,
     ) -> None:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
@@ -1174,6 +1191,15 @@ class VectorStore:
         if external_deps is not None:
             sets.append("external_deps = ?")
             params.append(json.dumps(external_deps))
+        if sentiment_label is not None:
+            sets.append("sentiment_label = ?")
+            params.append(sentiment_label)
+        if sentiment_score is not None:
+            sets.append("sentiment_score = ?")
+            params.append(sentiment_score)
+        if sentiment_signals is not None:
+            sets.append("sentiment_signals = ?")
+            params.append(json.dumps(sentiment_signals))
 
         params.append(chunk_id)
         # Retry on SQLITE_BUSY — concurrent access from daemon/MCP/enrichment
@@ -1182,6 +1208,38 @@ class VectorStore:
         for attempt in range(3):
             try:
                 cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+                return
+            except apsw.BusyError:
+                if attempt < 2:
+                    _time.sleep(0.5 * (attempt + 1))
+                else:
+                    raise
+
+    def update_sentiment(
+        self,
+        chunk_id: str,
+        label: str,
+        score: float,
+        signals: Optional[List[str]] = None,
+    ) -> None:
+        """Update sentiment metadata for a chunk.
+
+        Args:
+            chunk_id: Chunk to update
+            label: frustration|confusion|positive|satisfaction|neutral
+            score: -1.0 to +1.0
+            signals: List of matched signal strings
+        """
+        cursor = self.conn.cursor()
+        import time as _time
+
+        params: list = [label, score, json.dumps(signals or []), chunk_id]
+        for attempt in range(3):
+            try:
+                cursor.execute(
+                    "UPDATE chunks SET sentiment_label = ?, sentiment_score = ?, sentiment_signals = ? WHERE id = ?",
+                    params,
+                )
                 return
             except apsw.BusyError:
                 if attempt < 2:

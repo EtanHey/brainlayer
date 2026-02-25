@@ -602,6 +602,11 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
                         "type": "string",
                         "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')",
                     },
+                    "sentiment": {
+                        "type": "string",
+                        "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
+                        "description": "Filter by sentiment label (Phase 6)",
+                    },
                     "num_results": {
                         "type": "integer",
                         "default": 5,
@@ -834,6 +839,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 importance_min=arguments.get("importance_min"),
                 date_from=arguments.get("date_from"),
                 date_to=arguments.get("date_to"),
+                sentiment=arguments.get("sentiment"),
                 num_results=arguments.get("num_results", 5),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
@@ -885,6 +891,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 importance_min=arguments.get("importance_min"),
                 date_from=arguments.get("date_from"),
                 date_to=arguments.get("date_to"),
+                sentiment=arguments.get("sentiment"),
             )
         )
 
@@ -998,6 +1005,7 @@ async def _brain_search(
     importance_min: float | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    sentiment: str | None = None,
     num_results: int = 5,
     before: int = 3,
     after: int = 3,
@@ -1061,6 +1069,7 @@ async def _brain_search(
             importance_min=importance_min,
             date_from=date_from,
             date_to=date_to,
+            sentiment=sentiment,
             num_results=num_results,
             max_results=max_results,
         )
@@ -1100,6 +1109,7 @@ async def _brain_search(
         importance_min=importance_min,
         date_from=date_from,
         date_to=date_to,
+        sentiment=sentiment,
     )
 
 
@@ -1215,6 +1225,7 @@ async def _search(
     importance_min: float | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    sentiment: str | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
@@ -1261,6 +1272,7 @@ async def _search(
             importance_min=importance_min,
             date_from=date_from,
             date_to=date_to,
+            sentiment_filter=sentiment,
         )
 
         if not results["documents"][0]:

@@ -301,6 +301,67 @@ def clear(confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirma
 
 
 @app.command()
+def sentiment(
+    batch_size: int = typer.Option(500, "--batch-size", "-b", help="Chunks per batch"),
+    max_chunks: int = typer.Option(0, "--max", "-m", help="Max chunks (0=unlimited)"),
+    stats_only: bool = typer.Option(False, "--stats", help="Show sentiment stats and exit"),
+) -> None:
+    """Run rule-based sentiment analysis on user_message chunks."""
+    try:
+        from ..paths import DEFAULT_DB_PATH
+        from ..pipeline.sentiment import batch_analyze_sentiment
+        from ..vector_store import VectorStore
+
+        store = VectorStore(DEFAULT_DB_PATH)
+
+        if stats_only:
+            cursor = store.conn.cursor()
+            total_user = list(cursor.execute(
+                "SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message'"
+            ))[0][0]
+            analyzed = list(cursor.execute(
+                "SELECT COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL"
+            ))[0][0]
+            by_label = dict(cursor.execute(
+                "SELECT sentiment_label, COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL GROUP BY sentiment_label"
+            ))
+            console.print(f"[bold]User messages:[/] {total_user}")
+            console.print(f"[bold]Analyzed:[/] {analyzed}")
+            console.print(f"[bold]Remaining:[/] {total_user - analyzed}")
+            if by_label:
+                for label, count in sorted(by_label.items(), key=lambda x: -x[1]):
+                    console.print(f"  {label}: {count}")
+            store.close()
+            return
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            # Count total to process
+            cursor = store.conn.cursor()
+            remaining = list(cursor.execute(
+                "SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message' AND sentiment_label IS NULL"
+            ))[0][0]
+            if max_chunks > 0:
+                remaining = min(remaining, max_chunks)
+
+            task = progress.add_task("Analyzing sentiment...", total=remaining)
+            processed = batch_analyze_sentiment(store, batch_size=batch_size, max_chunks=max_chunks)
+            progress.update(task, completed=processed)
+
+        console.print(f"[bold green]Done![/] Processed {processed} chunks.")
+        store.close()
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def analyze_style(
     whatsapp_limit: int = typer.Option(1000, "--whatsapp-limit", "-w", help="Number of WhatsApp messages to analyze"),
     claude_export: Path = typer.Option(
