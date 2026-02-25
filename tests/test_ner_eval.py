@@ -122,7 +122,7 @@ class TestGoldStandardIntegrity:
     def test_gold_sample_has_required_fields(self):
         samples = _load_gold_standard()
         for s in samples:
-            assert "id" in s, f"Missing id in sample"
+            assert "id" in s, "Missing id in sample"
             assert "text" in s, f"Missing text in {s['id']}"
             assert "entities" in s, f"Missing entities in {s['id']}"
             assert isinstance(s["entities"], list)
@@ -280,8 +280,8 @@ class TestPerTypeMetrics:
 
 def _run_extraction(text: str) -> list[dict]:
     """Run extraction pipeline on text, return entities in gold-standard format."""
-    from brainlayer.pipeline.entity_extraction import extract_entities_combined
     from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
+    from brainlayer.pipeline.entity_extraction import extract_entities_combined
 
     result = extract_entities_combined(text, DEFAULT_SEED_ENTITIES, use_llm=False)
     return [
@@ -329,7 +329,7 @@ class TestEvalHarnessSeedOnly:
         per_type = _compute_per_type_metrics(all_gold, all_pred)
 
         # Print metrics for debugging (visible with pytest -v -s)
-        print(f"\n=== Seed-Only Eval ===")
+        print("\n=== Seed-Only Eval ===")
         print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")
         print(f"Exact:   P={m['exact']['precision']:.3f}  R={m['exact']['recall']:.3f}  F1={m['exact']['f1']:.3f}")
         print(f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}")
@@ -354,8 +354,8 @@ class TestEvalHarnessGLiNER:
     @pytest.mark.slow
     def test_gliner_partial_f1(self, gold_samples):
         """GLiNER + seed partial F1 should meet quality bar."""
-        from brainlayer.pipeline.entity_extraction import extract_entities_combined
         from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
+        from brainlayer.pipeline.entity_extraction import extract_entities_combined
 
         all_gold = []
         all_pred = []
@@ -373,7 +373,7 @@ class TestEvalHarnessGLiNER:
         m = _compute_ner_metrics(all_gold, all_pred)
         per_type = _compute_per_type_metrics(all_gold, all_pred)
 
-        print(f"\n=== GLiNER + Seed Eval ===")
+        print("\n=== GLiNER + Seed Eval ===")
         print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")
         print(f"Exact:   P={m['exact']['precision']:.3f}  R={m['exact']['recall']:.3f}  F1={m['exact']['f1']:.3f}")
         print(f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}")

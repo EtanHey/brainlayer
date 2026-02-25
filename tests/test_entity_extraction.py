@@ -9,7 +9,6 @@ Covers:
 
 import json
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 
@@ -24,8 +23,6 @@ from brainlayer.pipeline.entity_extraction import (
     extract_seed_entities,
     parse_llm_ner_response,
 )
-from brainlayer.vector_store import VectorStore
-
 
 # ── Data classes ──
 

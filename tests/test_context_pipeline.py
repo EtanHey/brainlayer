@@ -6,15 +6,11 @@ entity extraction can use surrounding context for disambiguation.
 """
 
 import json
-import tempfile
 from pathlib import Path
 
-import pytest
-
-from brainlayer.pipeline.classify import ClassifiedContent, ContentType, classify_content
 from brainlayer.pipeline.chunk import Chunk, chunk_content
+from brainlayer.pipeline.classify import ClassifiedContent, ContentType, classify_content
 from brainlayer.vector_store import VectorStore
-
 
 # ── classify_content should extract session_id ──
 

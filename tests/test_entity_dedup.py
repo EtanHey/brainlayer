@@ -8,8 +8,6 @@ Covers:
 - Hebrew prefix stripping
 """
 
-import json
-from pathlib import Path
 
 import pytest
 

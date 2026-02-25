@@ -9,20 +9,19 @@ Covers:
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
+from brainlayer.pipeline.batch_extraction import (
+    DEFAULT_SEED_ENTITIES,
+    process_batch,
+    process_chunk,
+    store_extraction_result,
+)
 from brainlayer.pipeline.entity_extraction import (
     ExtractedEntity,
     ExtractedRelation,
     ExtractionResult,
-)
-from brainlayer.pipeline.batch_extraction import (
-    DEFAULT_SEED_ENTITIES,
-    process_chunk,
-    process_batch,
-    store_extraction_result,
 )
 from brainlayer.vector_store import VectorStore
 
