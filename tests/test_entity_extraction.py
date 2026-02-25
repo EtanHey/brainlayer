@@ -24,6 +24,8 @@ from brainlayer.pipeline.entity_extraction import (
 )
 
 try:
+    import gliner  # noqa: F401
+
     from brainlayer.pipeline.entity_extraction import extract_entities_gliner
 
     _HAS_GLINER = True
