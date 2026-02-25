@@ -366,6 +366,11 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_type ON kg_entities(entity_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_name ON kg_entities(name)")
 
+        # Phase 3: Add user_verified to kg_entities (migration for existing DBs)
+        kg_entity_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
+        if "user_verified" not in kg_entity_cols:
+            cursor.execute("ALTER TABLE kg_entities ADD COLUMN user_verified INTEGER DEFAULT 0")
+
         # Explicit relationships between entities
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kg_relations (
@@ -382,6 +387,11 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_source ON kg_relations(source_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_target ON kg_relations(target_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_type ON kg_relations(relation_type)")
+
+        # Phase 3: Add user_verified to kg_relations (migration for existing DBs)
+        kg_rel_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
+        if "user_verified" not in kg_rel_cols:
+            cursor.execute("ALTER TABLE kg_relations ADD COLUMN user_verified INTEGER DEFAULT 0")
 
         # Bridge table — links entities to existing 270K chunks with relevance scoring
         cursor.execute("""

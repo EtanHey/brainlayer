@@ -47,7 +47,7 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 3 tools:\n"
+        "Memory layer for Claude Code. 5 tools:\n"
         "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
         "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
         "Routing is automatic — pass file_path for file history, chunk_id to expand context, no args for current work.\n"
@@ -55,6 +55,11 @@ server = Server(
         "type is auto-detected from content. Pass importance (1-10) for critical items.\n"
         "- brain_recall(mode): session/operational context. "
         "mode=context (default, what am I working on), sessions, operations, plan, summary, stats.\n"
+        "- brain_digest(content): ingest raw content (transcripts, docs, articles). "
+        "Extracts entities, relations, sentiment, action items, decisions, questions. "
+        "Creates a new searchable chunk with source='digest'.\n"
+        "- brain_entity(query): look up a known entity in the knowledge graph. "
+        "Returns entity type, relations, and evidence chunks.\n"
         "Use brain_search at the start of tasks to retrieve past decisions and patterns.\n"
         "Use brain_store when you make a decision, hit a bug, learn something, or finish a phase.\n"
         'project scoping: auto-inferred from cwd. Override with project="all" for cross-project search.\n'
@@ -758,6 +763,67 @@ Returns: Structured JSON or Markdown depending on mode.""",
                 },
             },
         ),
+        Tool(
+            name="brain_digest",
+            title="Digest Content",
+            description="""Ingest raw content (transcripts, documents, articles) and extract structured knowledge.
+
+Creates a new chunk with source="digest", extracts entities and relations (KG),
+analyzes sentiment, and identifies action items, decisions, and questions.
+
+Returns: Structured JSON with digest_id, summary, entities, relations,
+action_items, decisions, questions, sentiment, and stats.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Raw text content to digest (transcript, document, article, meeting notes)",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional title for the content",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name to associate with",
+                    },
+                    "participants": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of known participant names (improves entity extraction)",
+                    },
+                },
+                "required": ["content"],
+            },
+        ),
+        Tool(
+            name="brain_entity",
+            title="Entity Lookup",
+            description="""Look up a known entity in the knowledge graph.
+
+Searches by name (FTS + semantic), returns structured info including
+entity type, relations to other entities, and evidence chunks.
+
+Returns: Structured JSON with name, entity_type, relations[], evidence[], or null if not found.""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Entity name or search query (e.g., 'Etan Heyman', 'brainlayer', 'Cantaloupe AI')",
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["person", "company", "project", "golem", "technology", "concept"],
+                        "description": "Optional: filter by entity type",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -876,6 +942,22 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             )
         )
 
+    elif name == "brain_digest":
+        return await _brain_digest(
+            content=arguments["content"],
+            title=arguments.get("title"),
+            project=arguments.get("project"),
+            participants=arguments.get("participants"),
+        )
+
+    elif name == "brain_entity":
+        return await _with_timeout(
+            _brain_entity(
+                query=arguments["query"],
+                entity_type=arguments.get("entity_type"),
+            )
+        )
+
     # --- Backward-compat aliases (old tool names route to same handlers) ---
 
     elif name == "brainlayer_search":
@@ -988,6 +1070,68 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
     else:
         return _error_result(f"Unknown tool: {name}")
+
+
+# --- Phase 3: Brain Digest + Brain Entity ---
+
+
+async def _brain_digest(
+    content: str,
+    title: str | None = None,
+    project: str | None = None,
+    participants: list[str] | None = None,
+) -> CallToolResult:
+    """Handle brain_digest tool call."""
+    import json
+
+    from ..pipeline.digest import digest_content
+
+    store = _get_vector_store()
+    model = _get_embedding_model()
+
+    try:
+        result = digest_content(
+            content=content,
+            store=store,
+            embed_fn=model.embed,
+            title=title,
+            project=_normalize_project_name(project) if project else None,
+            participants=participants,
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result, indent=2))]
+        )
+    except ValueError as e:
+        return _error_result(str(e))
+    except Exception as e:
+        return _error_result(f"Digest failed: {e}")
+
+
+async def _brain_entity(
+    query: str,
+    entity_type: str | None = None,
+) -> CallToolResult:
+    """Handle brain_entity tool call."""
+    import json
+
+    from ..pipeline.digest import entity_lookup
+
+    store = _get_vector_store()
+    model = _get_embedding_model()
+
+    result = entity_lookup(
+        query=query,
+        store=store,
+        embed_fn=model.embed,
+        entity_type=entity_type,
+    )
+    if result is None:
+        return CallToolResult(
+            content=[TextContent(type="text", text=f"No entity found matching '{query}'.")]
+        )
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(result, indent=2))]
+    )
 
 
 # --- Consolidated Dispatchers (Phase 4) ---

@@ -362,6 +362,76 @@ def sentiment(
 
 
 @app.command()
+def digest(
+    content: str = typer.Argument(None, help="Text content to digest (or use --file)"),
+    file: Path = typer.Option(None, "--file", "-f", help="Read content from file"),
+    title: str = typer.Option(None, "--title", "-t", help="Title for the content"),
+    project: str = typer.Option(None, "--project", "-p", help="Project name"),
+    participants: str = typer.Option(None, "--participants", help="Comma-separated participant names"),
+) -> None:
+    """Digest raw content into structured knowledge (entities, sentiment, actions)."""
+    try:
+        from ..embeddings import get_embedding_model
+        from ..paths import DEFAULT_DB_PATH
+        from ..pipeline.digest import digest_content
+        from ..vector_store import VectorStore
+
+        # Get content from argument or file
+        text = content
+        if file:
+            text = file.read_text(encoding="utf-8")
+        if not text or not text.strip():
+            rprint("[bold red]Error:[/] Provide content as argument or via --file")
+            raise typer.Exit(1)
+
+        store = VectorStore(DEFAULT_DB_PATH)
+        model = get_embedding_model()
+        participant_list = [p.strip() for p in participants.split(",")] if participants else None
+
+        with console.status("Digesting content..."):
+            result = digest_content(
+                content=text,
+                store=store,
+                embed_fn=model.embed,
+                title=title,
+                project=project,
+                participants=participant_list,
+            )
+
+        console.print(f"[bold green]Digest complete![/] ID: {result['digest_id']}")
+        console.print(f"[bold]Summary:[/] {result['summary']}")
+        console.print(f"[bold]Sentiment:[/] {result['sentiment']['label']} ({result['sentiment']['score']:.2f})")
+        console.print(f"[bold]Entities:[/] {result['stats']['entities_found']}")
+        console.print(f"[bold]Relations:[/] {result['stats']['relations_found']}")
+
+        if result["entities"]:
+            table = Table(title="Entities")
+            table.add_column("Name")
+            table.add_column("Type")
+            table.add_column("Confidence")
+            for e in result["entities"]:
+                table.add_row(e["name"], e["entity_type"], f"{e['confidence']:.2f}")
+            console.print(table)
+
+        if result["action_items"]:
+            console.print("[bold]Action Items:[/]")
+            for item in result["action_items"]:
+                console.print(f"  - {item}")
+
+        if result["decisions"]:
+            console.print("[bold]Decisions:[/]")
+            for d in result["decisions"]:
+                console.print(f"  - {d}")
+
+        store.close()
+    except typer.Exit:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def analyze_style(
     whatsapp_limit: int = typer.Option(1000, "--whatsapp-limit", "-w", help="Number of WhatsApp messages to analyze"),
     claude_export: Path = typer.Option(
