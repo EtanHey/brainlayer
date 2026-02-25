@@ -110,6 +110,9 @@ def merge_entities(store: VectorStore, keep_id: str, merge_id: str) -> None:
     4. Delete merge_id entity
     5. Clean up duplicate links/relations
     """
+    if keep_id == merge_id:
+        return
+
     cursor = store.conn.cursor()
 
     # Get the merged entity's name before deleting it

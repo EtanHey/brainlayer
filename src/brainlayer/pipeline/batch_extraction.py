@@ -4,8 +4,11 @@ Processes chunks through entity extraction and stores results in the KG.
 Ties together: entity_extraction (NER) + entity_resolution (dedup) + VectorStore (storage).
 """
 
+import logging
 import uuid
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from ..vector_store import VectorStore
 from .entity_extraction import (
@@ -139,6 +142,7 @@ def process_batch(
             stats["entities_found"] += len(result.entities)
             stats["relations_found"] += len(result.relations)
         except Exception:
+            logger.exception("Error processing chunk %s", chunk.get("id", "unknown"))
             stats["chunks_processed"] += 1
             stats["errors"] += 1
 

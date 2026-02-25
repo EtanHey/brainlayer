@@ -96,6 +96,58 @@ def _compute_per_type_metrics(gold_entities: list[dict], pred_entities: list[dic
     return results
 
 
+def _micro_average_metrics(
+    gold_samples: list[dict[str, Any]],
+    extract_fn,
+    per_type: bool = False,
+) -> dict[str, dict[str, float]] | tuple[dict, dict]:
+    """Compute micro-averaged NER metrics across samples.
+
+    Evaluates per-sample to avoid span offset collision, then aggregates
+    correct/possible/actual counts before computing precision/recall/F1.
+    """
+    totals: dict[str, dict[str, int]] = {}
+    all_gold_flat: list[dict] = []
+    all_pred_flat: list[dict] = []
+
+    for sample in gold_samples:
+        gold_entities = sample["entities"]
+        pred_entities = extract_fn(sample["text"])
+        sample_m = _compute_ner_metrics(gold_entities, pred_entities)
+
+        # Accumulate counts for micro-averaging
+        for mode in ("exact", "partial", "type_only"):
+            if mode not in totals:
+                totals[mode] = {"correct": 0, "possible": 0, "actual": 0}
+            totals[mode]["correct"] += sample_m[mode]["correct"]
+            totals[mode]["possible"] += sample_m[mode]["possible"]
+            totals[mode]["actual"] += sample_m[mode]["actual"]
+
+        # Collect for per-type breakdown (type matching is not span-dependent)
+        all_gold_flat.extend(gold_entities)
+        all_pred_flat.extend(pred_entities)
+
+    # Compute micro-averaged P/R/F1
+    results = {}
+    for mode, counts in totals.items():
+        c, p, a = counts["correct"], counts["possible"], counts["actual"]
+        precision = c / a if a > 0 else 0.0
+        recall = c / p if p > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        results[mode] = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "correct": c,
+            "possible": p,
+            "actual": a,
+        }
+
+    if per_type:
+        return results, _compute_per_type_metrics(all_gold_flat, all_pred_flat)
+    return results
+
+
 # ── Gold Standard Integrity ──
 
 
@@ -284,14 +336,7 @@ class TestEvalHarnessSeedOnly:
 
     def test_seed_baseline_partial_f1(self, gold_samples):
         """Seed-only partial F1 should be reasonable for known entities."""
-        all_gold = []
-        all_pred = []
-        for sample in gold_samples:
-            all_gold.extend(sample["entities"])
-            pred = _run_extraction(sample["text"])
-            all_pred.extend(pred)
-
-        m = _compute_ner_metrics(all_gold, all_pred)
+        m = _micro_average_metrics(gold_samples, _run_extraction)
         # Seed matching should find most known entities
         assert m["partial"]["f1"] >= 0.3, (
             f"Seed partial F1 {m['partial']['f1']:.3f} below 0.3 — seed entities may need updating"
@@ -299,15 +344,7 @@ class TestEvalHarnessSeedOnly:
 
     def test_seed_baseline_reports_metrics(self, gold_samples):
         """Report full metrics for visibility (always passes)."""
-        all_gold = []
-        all_pred = []
-        for sample in gold_samples:
-            all_gold.extend(sample["entities"])
-            pred = _run_extraction(sample["text"])
-            all_pred.extend(pred)
-
-        m = _compute_ner_metrics(all_gold, all_pred)
-        per_type = _compute_per_type_metrics(all_gold, all_pred)
+        m, per_type = _micro_average_metrics(gold_samples, _run_extraction, per_type=True)
 
         # Print metrics for debugging (visible with pytest -v -s)
         print("\n=== Seed-Only Eval ===")
@@ -353,16 +390,11 @@ class TestEvalHarnessGLiNER:
         from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
         from brainlayer.pipeline.entity_extraction import extract_entities_combined
 
-        all_gold = []
-        all_pred = []
-        for sample in gold_samples:
-            all_gold.extend(sample["entities"])
-            result = extract_entities_combined(sample["text"], DEFAULT_SEED_ENTITIES, use_llm=False, use_gliner=True)
-            pred = [{"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end} for e in result.entities]
-            all_pred.extend(pred)
+        def _run_gliner(text):
+            result = extract_entities_combined(text, DEFAULT_SEED_ENTITIES, use_llm=False, use_gliner=True)
+            return [{"text": e.text, "type": e.entity_type, "start": e.start, "end": e.end} for e in result.entities]
 
-        m = _compute_ner_metrics(all_gold, all_pred)
-        per_type = _compute_per_type_metrics(all_gold, all_pred)
+        m, per_type = _micro_average_metrics(gold_samples, _run_gliner, per_type=True)
 
         print("\n=== GLiNER + Seed Eval ===")
         print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")

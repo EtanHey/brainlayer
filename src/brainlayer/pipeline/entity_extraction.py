@@ -10,9 +10,12 @@ and source provenance.
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -244,7 +247,12 @@ def extract_entities_llm(
 
         llm_caller = call_llm
 
-    response = llm_caller(prompt)
+    try:
+        response = llm_caller(prompt)
+    except Exception:
+        logger.exception("LLM caller failed in extract_entities_llm")
+        return [], []
+
     if not response:
         return [], []
 

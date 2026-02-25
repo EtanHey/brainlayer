@@ -18,9 +18,10 @@
       "client_of",
       "uses",
       "builds",
-      "mentioned_in"
+      "mentioned_in",
+      "referred"
     ],
-    "notes": "30 annotated chunks from actual BrainLayer DB. Mix of English, Hebrew-English code-switching, technical, and conversational."
+    "notes": "30 annotated samples for NER evaluation. Mix of English technical and conversational text."
   },
   "samples": [
     {
@@ -223,12 +224,6 @@
           "type": "company",
           "start": 60,
           "end": 66
-        },
-        {
-          "text": "Supabase",
-          "type": "tool",
-          "start": 4,
-          "end": 12
         },
         {
           "text": "golems",
