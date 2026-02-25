@@ -74,12 +74,21 @@ class TestKGTableCreation:
     def test_kg_entities_columns(self, store):
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
-        assert cols == {"id", "entity_type", "name", "metadata", "created_at", "updated_at"}
+        assert cols == {"id", "entity_type", "name", "metadata", "created_at", "updated_at", "user_verified"}
 
     def test_kg_relations_columns(self, store):
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
-        assert cols == {"id", "source_id", "target_id", "relation_type", "properties", "confidence", "created_at"}
+        assert cols == {
+            "id",
+            "source_id",
+            "target_id",
+            "relation_type",
+            "properties",
+            "confidence",
+            "created_at",
+            "user_verified",
+        }
 
     def test_kg_entity_chunks_columns(self, store):
         cursor = store._read_cursor()
