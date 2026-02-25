@@ -316,15 +316,13 @@ def sentiment(
 
         if stats_only:
             cursor = store.conn.cursor()
-            total_user = list(cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message'"
-            ))[0][0]
-            analyzed = list(cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL"
-            ))[0][0]
-            by_label = dict(cursor.execute(
-                "SELECT sentiment_label, COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL GROUP BY sentiment_label"
-            ))
+            total_user = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message'"))[0][0]
+            analyzed = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL"))[0][0]
+            by_label = dict(
+                cursor.execute(
+                    "SELECT sentiment_label, COUNT(*) FROM chunks WHERE sentiment_label IS NOT NULL GROUP BY sentiment_label"
+                )
+            )
             console.print(f"[bold]User messages:[/] {total_user}")
             console.print(f"[bold]Analyzed:[/] {analyzed}")
             console.print(f"[bold]Remaining:[/] {total_user - analyzed}")
@@ -344,9 +342,11 @@ def sentiment(
         ) as progress:
             # Count total to process
             cursor = store.conn.cursor()
-            remaining = list(cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message' AND sentiment_label IS NULL"
-            ))[0][0]
+            remaining = list(
+                cursor.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE content_type = 'user_message' AND sentiment_label IS NULL"
+                )
+            )[0][0]
             if max_chunks > 0:
                 remaining = min(remaining, max_chunks)
 

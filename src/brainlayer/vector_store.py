@@ -137,9 +137,9 @@ class VectorStore:
             # Phase 3: created_at for date filtering
             ("created_at", "TEXT"),  # ISO 8601 timestamp of when chunk was created/ingested
             # Phase 6: Sentiment columns
-            ("sentiment_label", "TEXT"),   # frustration|confusion|positive|satisfaction|neutral
-            ("sentiment_score", "REAL"),   # -1.0 (frustration) to +1.0 (positive)
-            ("sentiment_signals", "TEXT"), # JSON array of matched signal strings
+            ("sentiment_label", "TEXT"),  # frustration|confusion|positive|satisfaction|neutral
+            ("sentiment_score", "REAL"),  # -1.0 (frustration) to +1.0 (positive)
+            ("sentiment_signals", "TEXT"),  # JSON array of matched signal strings
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
