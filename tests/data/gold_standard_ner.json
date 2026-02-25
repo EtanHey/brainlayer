@@ -1,0 +1,1039 @@
+{
+  "_meta": {
+    "description": "Gold-standard NER evaluation set for BrainLayer entity extraction",
+    "version": "1.0",
+    "created": "2026-02-25",
+    "annotator": "brainClaude (Phase 2 pre-flight Gate 3)",
+    "entity_types": [
+      "person",
+      "company",
+      "project",
+      "golem",
+      "tool",
+      "topic"
+    ],
+    "relation_types": [
+      "works_at",
+      "owns",
+      "client_of",
+      "uses",
+      "builds",
+      "mentioned_in"
+    ],
+    "notes": "30 annotated chunks from actual BrainLayer DB. Mix of English, Hebrew-English code-switching, technical, and conversational."
+  },
+  "samples": [
+    {
+      "id": "gold-001",
+      "text": "Dor Zohar is the CEO and handles UX/UI and product for Domica, our real estate AI startup.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Dor Zohar",
+          "type": "person",
+          "start": 0,
+          "end": 9
+        },
+        {
+          "text": "Domica",
+          "type": "company",
+          "start": 55,
+          "end": 61
+        }
+      ],
+      "relations": [
+        {
+          "source": "Dor Zohar",
+          "target": "Domica",
+          "type": "works_at",
+          "properties": {
+            "role": "CEO"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gold-002",
+      "text": "Shachar Gerby is CMO and Maor Noah is CFO at Domica.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Shachar Gerby",
+          "type": "person",
+          "start": 0,
+          "end": 13
+        },
+        {
+          "text": "Maor Noah",
+          "type": "person",
+          "start": 25,
+          "end": 34
+        },
+        {
+          "text": "Domica",
+          "type": "company",
+          "start": 45,
+          "end": 51
+        }
+      ],
+      "relations": [
+        {
+          "source": "Shachar Gerby",
+          "target": "Domica",
+          "type": "works_at",
+          "properties": {
+            "role": "CMO"
+          }
+        },
+        {
+          "source": "Maor Noah",
+          "target": "Domica",
+          "type": "works_at",
+          "properties": {
+            "role": "CFO"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gold-003",
+      "text": "Rudy Rochman is the owner of Rudy Israel, which is a client. The rudy-monorepo repo contains the codebase.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Rudy Rochman",
+          "type": "person",
+          "start": 0,
+          "end": 12
+        },
+        {
+          "text": "Rudy Israel",
+          "type": "company",
+          "start": 29,
+          "end": 40
+        },
+        {
+          "text": "rudy-monorepo",
+          "type": "project",
+          "start": 65,
+          "end": 78
+        }
+      ],
+      "relations": [
+        {
+          "source": "Rudy Rochman",
+          "target": "Rudy Israel",
+          "type": "owns"
+        },
+        {
+          "source": "rudy-monorepo",
+          "target": "Rudy Israel",
+          "type": "builds"
+        }
+      ]
+    },
+    {
+      "id": "gold-004",
+      "text": "Deploy the brainlayer daemon to Railway with the FastAPI server on port 8787.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "brainlayer",
+          "type": "project",
+          "start": 11,
+          "end": 21
+        },
+        {
+          "text": "Railway",
+          "type": "tool",
+          "start": 32,
+          "end": 39
+        },
+        {
+          "text": "FastAPI",
+          "type": "tool",
+          "start": 49,
+          "end": 56
+        }
+      ],
+      "relations": [
+        {
+          "source": "brainlayer",
+          "target": "Railway",
+          "type": "uses"
+        },
+        {
+          "source": "brainlayer",
+          "target": "FastAPI",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-005",
+      "text": "golemsClaude orchestrates the multi-agent system. brainClaude handles memory and indexing. voiceClaude manages voice I/O.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "golemsClaude",
+          "type": "golem",
+          "start": 0,
+          "end": 12
+        },
+        {
+          "text": "brainClaude",
+          "type": "golem",
+          "start": 50,
+          "end": 61
+        },
+        {
+          "text": "voiceClaude",
+          "type": "golem",
+          "start": 91,
+          "end": 102
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-006",
+      "text": "The Supabase project ID is abcdef123. We use Convex for the Domica backend and Supabase for golems.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Supabase",
+          "type": "tool",
+          "start": 4,
+          "end": 12
+        },
+        {
+          "text": "Convex",
+          "type": "tool",
+          "start": 45,
+          "end": 51
+        },
+        {
+          "text": "Domica",
+          "type": "company",
+          "start": 60,
+          "end": 66
+        },
+        {
+          "text": "Supabase",
+          "type": "tool",
+          "start": 4,
+          "end": 12
+        },
+        {
+          "text": "golems",
+          "type": "project",
+          "start": 92,
+          "end": 98
+        }
+      ],
+      "relations": [
+        {
+          "source": "Domica",
+          "target": "Convex",
+          "type": "uses"
+        },
+        {
+          "source": "golems",
+          "target": "Supabase",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-007",
+      "text": "Cantaloupe AI is a company I previously worked at. Daniel Munk referred me to Avi Simon there.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Cantaloupe AI",
+          "type": "company",
+          "start": 0,
+          "end": 13
+        },
+        {
+          "text": "Daniel Munk",
+          "type": "person",
+          "start": 51,
+          "end": 62
+        },
+        {
+          "text": "Avi Simon",
+          "type": "person",
+          "start": 78,
+          "end": 87
+        }
+      ],
+      "relations": [
+        {
+          "source": "Daniel Munk",
+          "target": "Avi Simon",
+          "type": "referred"
+        },
+        {
+          "source": "Avi Simon",
+          "target": "Cantaloupe AI",
+          "type": "works_at"
+        }
+      ]
+    },
+    {
+      "id": "gold-008",
+      "text": "The BrainLayer MCP server uses sqlite-vec for vector storage and bge-large-en-v1.5 for embeddings.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "BrainLayer",
+          "type": "project",
+          "start": 4,
+          "end": 14
+        },
+        {
+          "text": "sqlite-vec",
+          "type": "tool",
+          "start": 31,
+          "end": 41
+        },
+        {
+          "text": "bge-large-en-v1.5",
+          "type": "tool",
+          "start": 65,
+          "end": 82
+        }
+      ],
+      "relations": [
+        {
+          "source": "BrainLayer",
+          "target": "sqlite-vec",
+          "type": "uses"
+        },
+        {
+          "source": "BrainLayer",
+          "target": "bge-large-en-v1.5",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-009",
+      "text": "coachClaude helps with daily planning, habit tracking, and interview prep. It uses Supabase for persistence.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "coachClaude",
+          "type": "golem",
+          "start": 0,
+          "end": 11
+        },
+        {
+          "text": "Supabase",
+          "type": "tool",
+          "start": 83,
+          "end": 91
+        }
+      ],
+      "relations": [
+        {
+          "source": "coachClaude",
+          "target": "Supabase",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-010",
+      "text": "Yuval Nir helped with the initial architecture design for the meeting layer.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Yuval Nir",
+          "type": "person",
+          "start": 0,
+          "end": 9
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-011",
+      "text": "The songscript app uses TanStack Router and Convex for the backend. WhisperX handles transcription.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "songscript",
+          "type": "project",
+          "start": 4,
+          "end": 14
+        },
+        {
+          "text": "TanStack Router",
+          "type": "tool",
+          "start": 24,
+          "end": 39
+        },
+        {
+          "text": "Convex",
+          "type": "tool",
+          "start": 44,
+          "end": 50
+        },
+        {
+          "text": "WhisperX",
+          "type": "tool",
+          "start": 68,
+          "end": 76
+        }
+      ],
+      "relations": [
+        {
+          "source": "songscript",
+          "target": "TanStack Router",
+          "type": "uses"
+        },
+        {
+          "source": "songscript",
+          "target": "Convex",
+          "type": "uses"
+        },
+        {
+          "source": "songscript",
+          "target": "WhisperX",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-012",
+      "text": "I deployed the voicelayer package to npm. It provides voice I/O for Claude Code sessions.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "voicelayer",
+          "type": "project",
+          "start": 15,
+          "end": 25
+        },
+        {
+          "text": "npm",
+          "type": "tool",
+          "start": 37,
+          "end": 40
+        },
+        {
+          "text": "Claude Code",
+          "type": "tool",
+          "start": 68,
+          "end": 79
+        }
+      ],
+      "relations": [
+        {
+          "source": "voicelayer",
+          "target": "Claude Code",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-013",
+      "text": "The Domica app is built with Expo and React Native. It uses Convex for real-time data.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Domica",
+          "type": "company",
+          "start": 4,
+          "end": 10
+        },
+        {
+          "text": "Expo",
+          "type": "tool",
+          "start": 29,
+          "end": 33
+        },
+        {
+          "text": "React Native",
+          "type": "tool",
+          "start": 38,
+          "end": 50
+        },
+        {
+          "text": "Convex",
+          "type": "tool",
+          "start": 60,
+          "end": 66
+        }
+      ],
+      "relations": [
+        {
+          "source": "Domica",
+          "target": "Expo",
+          "type": "uses"
+        },
+        {
+          "source": "Domica",
+          "target": "React Native",
+          "type": "uses"
+        },
+        {
+          "source": "Domica",
+          "target": "Convex",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-014",
+      "text": "Matt Pocock's video on forcing Claude Code to use the right CLI inspired the hooks conversion.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Matt Pocock",
+          "type": "person",
+          "start": 0,
+          "end": 11
+        },
+        {
+          "text": "Claude Code",
+          "type": "tool",
+          "start": 31,
+          "end": 42
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-015",
+      "text": "The grammy library handles the Telegram bot. We deploy it on Railway with Bun as the runtime.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "grammy",
+          "type": "tool",
+          "start": 4,
+          "end": 10
+        },
+        {
+          "text": "Telegram",
+          "type": "tool",
+          "start": 31,
+          "end": 39
+        },
+        {
+          "text": "Railway",
+          "type": "tool",
+          "start": 61,
+          "end": 68
+        },
+        {
+          "text": "Bun",
+          "type": "tool",
+          "start": 74,
+          "end": 77
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-016",
+      "text": "ProductDZ is Dor's design agency. He also does UX consulting for Weby.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "ProductDZ",
+          "type": "company",
+          "start": 0,
+          "end": 9
+        },
+        {
+          "text": "Dor",
+          "type": "person",
+          "start": 13,
+          "end": 16
+        },
+        {
+          "text": "Weby",
+          "type": "company",
+          "start": 65,
+          "end": 69
+        }
+      ],
+      "relations": [
+        {
+          "source": "Dor",
+          "target": "ProductDZ",
+          "type": "owns"
+        },
+        {
+          "source": "Dor",
+          "target": "Weby",
+          "type": "works_at"
+        }
+      ]
+    },
+    {
+      "id": "gold-017",
+      "text": "We use ElevenLabs for speech-to-text in voicelayer. Speechmatics was the runner-up from the STT eval.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "ElevenLabs",
+          "type": "tool",
+          "start": 7,
+          "end": 17
+        },
+        {
+          "text": "voicelayer",
+          "type": "project",
+          "start": 40,
+          "end": 50
+        },
+        {
+          "text": "Speechmatics",
+          "type": "tool",
+          "start": 52,
+          "end": 64
+        }
+      ],
+      "relations": [
+        {
+          "source": "voicelayer",
+          "target": "ElevenLabs",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-018",
+      "text": "GLiNER does zero-shot NER for English text. DictaBERT handles Hebrew entity recognition.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "GLiNER",
+          "type": "tool",
+          "start": 0,
+          "end": 6
+        },
+        {
+          "text": "DictaBERT",
+          "type": "tool",
+          "start": 44,
+          "end": 53
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-019",
+      "text": "The union platform uses TanStack Start and Supabase. It's Etan's side project.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "union",
+          "type": "project",
+          "start": 4,
+          "end": 9
+        },
+        {
+          "text": "TanStack Start",
+          "type": "tool",
+          "start": 24,
+          "end": 38
+        },
+        {
+          "text": "Supabase",
+          "type": "tool",
+          "start": 43,
+          "end": 51
+        },
+        {
+          "text": "Etan",
+          "type": "person",
+          "start": 58,
+          "end": 62
+        }
+      ],
+      "relations": [
+        {
+          "source": "union",
+          "target": "TanStack Start",
+          "type": "uses"
+        },
+        {
+          "source": "union",
+          "target": "Supabase",
+          "type": "uses"
+        },
+        {
+          "source": "Etan",
+          "target": "union",
+          "type": "builds"
+        }
+      ]
+    },
+    {
+      "id": "gold-020",
+      "text": "The MeHayom project is a news aggregation app for the Israeli market.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "MeHayom",
+          "type": "company",
+          "start": 4,
+          "end": 11
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-021",
+      "text": "etanheyman.com hosts the Golems dashboard. It's built with Next.js and deployed on Vercel.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "etanheyman.com",
+          "type": "project",
+          "start": 0,
+          "end": 14
+        },
+        {
+          "text": "Next.js",
+          "type": "tool",
+          "start": 59,
+          "end": 66
+        },
+        {
+          "text": "Vercel",
+          "type": "tool",
+          "start": 83,
+          "end": 89
+        }
+      ],
+      "relations": [
+        {
+          "source": "etanheyman.com",
+          "target": "Next.js",
+          "type": "uses"
+        },
+        {
+          "source": "etanheyman.com",
+          "target": "Vercel",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-022",
+      "text": "Ollama runs GLM-4.7-Flash locally for the enrichment pipeline. MLX is the Apple Silicon alternative.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Ollama",
+          "type": "tool",
+          "start": 0,
+          "end": 6
+        },
+        {
+          "text": "GLM-4.7-Flash",
+          "type": "tool",
+          "start": 12,
+          "end": 25
+        },
+        {
+          "text": "MLX",
+          "type": "tool",
+          "start": 63,
+          "end": 66
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-023",
+      "text": "contentClaude writes LinkedIn posts and manages the Soltome blog content.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "contentClaude",
+          "type": "golem",
+          "start": 0,
+          "end": 13
+        },
+        {
+          "text": "LinkedIn",
+          "type": "tool",
+          "start": 21,
+          "end": 29
+        },
+        {
+          "text": "Soltome",
+          "type": "project",
+          "start": 52,
+          "end": 59
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "gold-024",
+      "text": "The autonomous package in golems uses grammy for the Telegram bot and runs on Railway.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "golems",
+          "type": "project",
+          "start": 26,
+          "end": 32
+        },
+        {
+          "text": "grammy",
+          "type": "tool",
+          "start": 38,
+          "end": 44
+        },
+        {
+          "text": "Telegram",
+          "type": "tool",
+          "start": 53,
+          "end": 61
+        },
+        {
+          "text": "Railway",
+          "type": "tool",
+          "start": 78,
+          "end": 85
+        }
+      ],
+      "relations": [
+        {
+          "source": "golems",
+          "target": "grammy",
+          "type": "uses"
+        },
+        {
+          "source": "golems",
+          "target": "Railway",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-025",
+      "text": "Ralph is the autonomous loop that powers the golems. It uses Bun for TypeScript execution.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Ralph",
+          "type": "project",
+          "start": 0,
+          "end": 5
+        },
+        {
+          "text": "golems",
+          "type": "project",
+          "start": 45,
+          "end": 51
+        },
+        {
+          "text": "Bun",
+          "type": "tool",
+          "start": 61,
+          "end": 64
+        }
+      ],
+      "relations": [
+        {
+          "source": "Ralph",
+          "target": "Bun",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-026",
+      "text": "Etan Heyman is building BrainLayer as an open-source memory layer for AI coding agents.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Etan Heyman",
+          "type": "person",
+          "start": 0,
+          "end": 11
+        },
+        {
+          "text": "BrainLayer",
+          "type": "project",
+          "start": 24,
+          "end": 34
+        }
+      ],
+      "relations": [
+        {
+          "source": "Etan Heyman",
+          "target": "BrainLayer",
+          "type": "builds"
+        }
+      ]
+    },
+    {
+      "id": "gold-027",
+      "text": "The domica app uses expo-router for navigation and @convex-dev/auth for authentication.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "domica",
+          "type": "company",
+          "start": 4,
+          "end": 10
+        },
+        {
+          "text": "expo-router",
+          "type": "tool",
+          "start": 20,
+          "end": 31
+        },
+        {
+          "text": "@convex-dev/auth",
+          "type": "tool",
+          "start": 51,
+          "end": 67
+        }
+      ],
+      "relations": [
+        {
+          "source": "domica",
+          "target": "expo-router",
+          "type": "uses"
+        },
+        {
+          "source": "domica",
+          "target": "@convex-dev/auth",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-028",
+      "text": "The HDBSCAN clustering in brainlayer uses UMAP for dimensionality reduction before clustering.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "HDBSCAN",
+          "type": "tool",
+          "start": 4,
+          "end": 11
+        },
+        {
+          "text": "brainlayer",
+          "type": "project",
+          "start": 26,
+          "end": 36
+        },
+        {
+          "text": "UMAP",
+          "type": "tool",
+          "start": 42,
+          "end": 46
+        }
+      ],
+      "relations": [
+        {
+          "source": "brainlayer",
+          "target": "HDBSCAN",
+          "type": "uses"
+        },
+        {
+          "source": "brainlayer",
+          "target": "UMAP",
+          "type": "uses"
+        }
+      ]
+    },
+    {
+      "id": "gold-029",
+      "text": "We need to check with Avi about the Cantaloupe API integration timeline.",
+      "source": "user_message",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Avi",
+          "type": "person",
+          "start": 22,
+          "end": 25
+        },
+        {
+          "text": "Cantaloupe",
+          "type": "company",
+          "start": 36,
+          "end": 46
+        }
+      ],
+      "relations": [
+        {
+          "source": "Avi",
+          "target": "Cantaloupe",
+          "type": "works_at"
+        }
+      ]
+    },
+    {
+      "id": "gold-030",
+      "text": "The Obsidian export from brainlayer creates one note per session with backlinks between related sessions.",
+      "source": "assistant_text",
+      "language": "en",
+      "entities": [
+        {
+          "text": "Obsidian",
+          "type": "tool",
+          "start": 4,
+          "end": 12
+        },
+        {
+          "text": "brainlayer",
+          "type": "project",
+          "start": 25,
+          "end": 35
+        }
+      ],
+      "relations": [
+        {
+          "source": "brainlayer",
+          "target": "Obsidian",
+          "type": "uses"
+        }
+      ]
+    }
+  ]
+}

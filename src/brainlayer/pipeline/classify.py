@@ -300,6 +300,26 @@ def _should_keep_assistant_text(content: str) -> bool:
     return len(stripped) >= min_len
 
 
+def _extract_entry_metadata(entry: dict) -> dict[str, Any]:
+    """Extract conversation context metadata from a JSONL entry.
+
+    Pulls session_id, timestamp, and sender from the entry so that
+    downstream pipeline stages (chunking, indexing) can populate
+    conversation_id and position on stored chunks.
+    """
+    meta: dict[str, Any] = {}
+    session_id = entry.get("sessionId")
+    if session_id:
+        meta["session_id"] = session_id
+    timestamp = entry.get("timestamp")
+    if timestamp:
+        meta["timestamp"] = timestamp
+    entry_type = entry.get("type")
+    if entry_type in ("user", "assistant"):
+        meta["sender"] = entry_type
+    return meta
+
+
 def classify_content(entry: dict) -> ClassifiedContent | None:
     """
     Classify a JSONL entry by content type and value.
@@ -318,6 +338,9 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     if entry_type in ("progress", "queue-operation"):
         return None
 
+    # Extract conversation context metadata (session_id, timestamp, sender)
+    base_meta = _extract_entry_metadata(entry)
+
     if entry_type == "user":
         raw_content = entry.get("message", {}).get("content", "")
         content = _extract_text_content(raw_content)
@@ -332,13 +355,13 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
                 content=content,
                 content_type=ContentType.USER_MESSAGE,
                 value=ContentValue.MEDIUM,  # System prompts are deduplicated elsewhere
-                metadata={"is_system_prompt": True},
+                metadata={**base_meta, "is_system_prompt": True},
             )
         return ClassifiedContent(
             content=content,
             content_type=ContentType.USER_MESSAGE,
             value=ContentValue.HIGH,
-            metadata={},
+            metadata=base_meta,
         )
 
     if entry_type == "assistant":
@@ -357,6 +380,8 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
                     if not _should_keep_assistant_text(text):
                         continue
                     classified = _classify_text(text)
+                    # Merge entry-level metadata into block-level metadata
+                    classified.metadata = {**base_meta, **classified.metadata}
                     results.append(classified)
 
                 elif block_type == "tool_use":
@@ -374,6 +399,7 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
                     if len(result_content.strip()) < min_len:
                         continue
                     classified = _classify_tool_result(result_content, block)
+                    classified.metadata = {**base_meta, **classified.metadata}
                     results.append(classified)
 
         # Return the highest-value content from this entry
@@ -392,7 +418,7 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
             content=content,
             content_type=ct,
             value=ContentValue.HIGH if role == "user" else ContentValue.MEDIUM,
-            metadata={"source": "whatsapp"},
+            metadata={**base_meta, "source": "whatsapp"},
         )
 
     return None

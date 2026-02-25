@@ -432,6 +432,20 @@ class VectorStore:
             END
         """)
 
+        # Entity aliases for dedup/healing — maps surface forms to canonical entities
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kg_entity_aliases (
+                alias TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                alias_type TEXT DEFAULT 'name',
+                created_at TEXT,
+                PRIMARY KEY (alias, entity_id)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)"
+        )
+
         # ── End Knowledge Graph tables ──────────────────────────────────────
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
@@ -480,8 +494,9 @@ class VectorStore:
                 """
                 INSERT INTO chunks
                 (id, content, metadata, source_file, project,
-                 content_type, value_type, char_count, source, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_type, value_type, char_count, source, created_at,
+                 conversation_id, position, sender)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     content = excluded.content,
                     metadata = excluded.metadata,
@@ -491,7 +506,10 @@ class VectorStore:
                     value_type = excluded.value_type,
                     char_count = excluded.char_count,
                     source = excluded.source,
-                    created_at = COALESCE(chunks.created_at, excluded.created_at)
+                    created_at = COALESCE(chunks.created_at, excluded.created_at),
+                    conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
+                    position = COALESCE(excluded.position, chunks.position),
+                    sender = COALESCE(excluded.sender, chunks.sender)
             """,
                 (
                     chunk_id,
@@ -504,6 +522,9 @@ class VectorStore:
                     chunk.get("char_count", 0),
                     chunk.get("source", "claude_code"),
                     chunk.get("created_at"),
+                    chunk.get("conversation_id"),
+                    chunk.get("position"),
+                    chunk.get("sender"),
                 ),
             )
 
@@ -2435,6 +2456,66 @@ class VectorStore:
             "entity_types": type_counts,
             "relation_types": relation_type_counts,
         }
+
+    # ── Entity Alias CRUD ──────────────────────────────────────────────
+
+    def add_entity_alias(
+        self, alias: str, entity_id: str, alias_type: str = "name"
+    ) -> None:
+        """Add an alias for an entity. Idempotent."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(alias, entity_id) DO NOTHING
+            """,
+            (alias, entity_id, alias_type, now),
+        )
+
+    def get_entity_by_alias(self, alias: str) -> Optional[Dict[str, Any]]:
+        """Look up an entity by alias (case-insensitive)."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """
+                SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at
+                FROM kg_entity_aliases a
+                JOIN kg_entities e ON a.entity_id = e.id
+                WHERE LOWER(a.alias) = LOWER(?)
+                LIMIT 1
+                """,
+                (alias,),
+            )
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+
+    def get_entity_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
+        """Get all aliases for an entity."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT alias, alias_type, created_at FROM kg_entity_aliases WHERE entity_id = ?",
+                (entity_id,),
+            )
+        )
+        return [
+            {"alias": row[0], "alias_type": row[1], "created_at": row[2]}
+            for row in rows
+        ]
 
     def close(self) -> None:
         """Close database connections."""
