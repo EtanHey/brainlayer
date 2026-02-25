@@ -6,21 +6,24 @@ from typing import List
 from brainlayer.vector_store import VectorStore
 
 
-def _insert_chunks(store: VectorStore, ids: List[str], documents: List[str],
-                   metadatas: List[dict], embeddings: List[list]) -> None:
+def _insert_chunks(
+    store: VectorStore, ids: List[str], documents: List[str], metadatas: List[dict], embeddings: List[list]
+) -> None:
     """Helper to insert test chunks using upsert_chunks API."""
     chunks = []
     for i, (cid, doc, meta) in enumerate(zip(ids, documents, metadatas)):
-        chunks.append({
-            "id": cid,
-            "content": doc,
-            "metadata": meta,
-            "source_file": meta.get("source_file", "test.jsonl"),
-            "project": meta.get("project"),
-            "content_type": meta.get("content_type"),
-            "char_count": len(doc),
-            "source": meta.get("source", "claude_code"),
-        })
+        chunks.append(
+            {
+                "id": cid,
+                "content": doc,
+                "metadata": meta,
+                "source_file": meta.get("source_file", "test.jsonl"),
+                "project": meta.get("project"),
+                "content_type": meta.get("content_type"),
+                "char_count": len(doc),
+                "source": meta.get("source", "claude_code"),
+            }
+        )
     store.upsert_chunks(chunks, embeddings)
 
 

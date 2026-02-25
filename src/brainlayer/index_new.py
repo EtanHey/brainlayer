@@ -51,6 +51,10 @@ def index_chunks_to_sqlite(
 
         created_at = datetime.now(timezone.utc).isoformat()
 
+    # Derive conversation_id: prefer session_id from chunk metadata,
+    # fall back to the JSONL filename stem (which is the session UUID).
+    file_stem = Path(source_file).stem
+
     # Prepare data for vector store
     chunk_data = []
     embeddings = []
@@ -59,6 +63,7 @@ def index_chunks_to_sqlite(
         chunk = ec.chunk
 
         chunk_id = f"{source_file}:{i}"
+        conversation_id = chunk.metadata.get("session_id") or file_stem
 
         chunk_data.append(
             {
@@ -71,6 +76,9 @@ def index_chunks_to_sqlite(
                 "value_type": chunk.value.value,
                 "char_count": chunk.char_count,
                 "created_at": created_at,
+                "conversation_id": conversation_id,
+                "position": i,
+                "sender": chunk.metadata.get("sender"),
             }
         )
 

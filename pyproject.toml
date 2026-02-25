@@ -67,6 +67,9 @@ youtube = [
 ast = [
     "tree-sitter-languages>=1.9.0",  # Better code chunking (falls back to line-based if unavailable)
 ]
+kg = [
+    "gliner>=0.2.20",  # GLiNER multi-lingual NER (209M params, EN+HE)
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -104,4 +107,5 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 markers = [
     "integration: tests that need the real production DB (268K+ chunks)",
+    "slow: tests that load ML models or take >30s",
 ]
