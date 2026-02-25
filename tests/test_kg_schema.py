@@ -179,7 +179,10 @@ class TestRelations:
         store.upsert_entity("company-1", "company", "Cantaloupe")
 
         store.add_relation(
-            "rel-1", "person-1", "company-1", "client_of",
+            "rel-1",
+            "person-1",
+            "company-1",
+            "client_of",
             properties={"since": "2025-06"},
             confidence=0.9,
         )
@@ -270,9 +273,16 @@ class TestEntityChunkBridge:
 
     def test_link_multiple_chunks(self, store, mock_embedding):
         chunks = [
-            {"id": f"chunk-{i}", "content": f"Content {i}", "metadata": "{}",
-             "source_file": "test.jsonl", "project": "brainlayer",
-             "content_type": "user_message", "value_type": "HIGH", "char_count": 10}
+            {
+                "id": f"chunk-{i}",
+                "content": f"Content {i}",
+                "metadata": "{}",
+                "source_file": "test.jsonl",
+                "project": "brainlayer",
+                "content_type": "user_message",
+                "value_type": "HIGH",
+                "char_count": 10,
+            }
             for i in range(5)
         ]
         embs = [mock_embedding(c["content"]) for c in chunks]
@@ -288,9 +298,16 @@ class TestEntityChunkBridge:
         assert results[0]["relevance"] >= results[1]["relevance"]
 
     def test_link_upsert_on_conflict(self, store, mock_embedding):
-        chunk = {"id": "chunk-1", "content": "Test", "metadata": "{}",
-                 "source_file": "t.jsonl", "project": "test",
-                 "content_type": "user_message", "value_type": "HIGH", "char_count": 4}
+        chunk = {
+            "id": "chunk-1",
+            "content": "Test",
+            "metadata": "{}",
+            "source_file": "t.jsonl",
+            "project": "test",
+            "content_type": "user_message",
+            "value_type": "HIGH",
+            "char_count": 4,
+        }
         store.upsert_chunks([chunk], [mock_embedding("Test")])
         store.upsert_entity("e-1", "person", "Test Person")
 
@@ -319,8 +336,12 @@ class TestEntityFTS:
         assert any(r["name"] == "Etan Heyman" for r in results)
 
     def test_fts_search_by_metadata(self, store):
-        store.upsert_entity("project-1", "project", "brainlayer",
-                           metadata={"stack": "python sqlite-vec", "description": "knowledge graph for AI agents"})
+        store.upsert_entity(
+            "project-1",
+            "project",
+            "brainlayer",
+            metadata={"stack": "python sqlite-vec", "description": "knowledge graph for AI agents"},
+        )
 
         results = store.search_entities("knowledge graph")
         assert len(results) >= 1

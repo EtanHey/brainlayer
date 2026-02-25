@@ -2157,17 +2157,19 @@ class VectorStore:
                 )
             )
             for row in rows:
-                results.append({
-                    "id": row[0],
-                    "source_id": row[1],
-                    "target_id": row[2],
-                    "relation_type": row[3],
-                    "properties": json.loads(row[4]) if row[4] else {},
-                    "confidence": row[5],
-                    "target_name": row[6],
-                    "target_type": row[7],
-                    "direction": "outgoing",
-                })
+                results.append(
+                    {
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
+                        "relation_type": row[3],
+                        "properties": json.loads(row[4]) if row[4] else {},
+                        "confidence": row[5],
+                        "target_name": row[6],
+                        "target_type": row[7],
+                        "direction": "outgoing",
+                    }
+                )
 
         if direction in ("incoming", "both"):
             rows = list(
@@ -2183,17 +2185,19 @@ class VectorStore:
                 )
             )
             for row in rows:
-                results.append({
-                    "id": row[0],
-                    "source_id": row[1],
-                    "target_id": row[2],
-                    "relation_type": row[3],
-                    "properties": json.loads(row[4]) if row[4] else {},
-                    "confidence": row[5],
-                    "source_name": row[6],
-                    "source_type": row[7],
-                    "direction": "incoming",
-                })
+                results.append(
+                    {
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
+                        "relation_type": row[3],
+                        "properties": json.loads(row[4]) if row[4] else {},
+                        "confidence": row[5],
+                        "source_name": row[6],
+                        "source_type": row[7],
+                        "direction": "incoming",
+                    }
+                )
 
         return results
 
@@ -2342,9 +2346,7 @@ class VectorStore:
         relation_count = list(cursor.execute("SELECT COUNT(*) FROM kg_relations"))[0][0]
         link_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks"))[0][0]
 
-        type_counts = dict(
-            cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type")
-        )
+        type_counts = dict(cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type"))
         relation_type_counts = dict(
             cursor.execute("SELECT relation_type, COUNT(*) FROM kg_relations GROUP BY relation_type")
         )
