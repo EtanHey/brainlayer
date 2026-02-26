@@ -136,7 +136,8 @@ def diarize_audio(audio_path: Path, hf_token: str) -> list[dict]:
     log.info(f"  Device: {device}, compute: {compute_type}")
 
     # Check for cached aligned transcript (avoids re-transcribing on diarization failures)
-    cache_dir = audio_path.parent.parent / "data" / "aligned"
+    # audio_path is data/audio/VIDEO.wav → parent.parent = data/ → data/aligned/
+    cache_dir = audio_path.parent.parent / "aligned"
     cache_path = cache_dir / f"{audio_path.stem}_aligned.json"
 
     audio = whisperx.load_audio(str(audio_path))
@@ -192,7 +193,7 @@ def _detect_huberman_speaker(segments: list[dict]) -> str | None:
     "I'm Andrew Huberman" or "Huberman Lab". Returns the speaker ID
     that says these phrases, or None if not found.
     """
-    # Only check first 60 seconds of content
+    # Only check first 2 minutes of content
     intro_phrases = [
         "i'm andrew huberman",
         "my name is andrew huberman",
@@ -265,10 +266,9 @@ def map_speakers(segments: list[dict], guest_name: str) -> list[dict]:
 def reindex_episode(video_id: str, diarized_path: Path) -> int:
     """Re-index episode using index_youtube.py with diarized transcript."""
     script_path = Path(__file__).parent / "index_youtube.py"
-    venv_python = Path(__file__).parent.parent / ".venv" / "bin" / "python3"
 
     cmd = [
-        str(venv_python),
+        sys.executable,
         str(script_path),
         f"https://www.youtube.com/watch?v={video_id}",
         "--diarized-transcript", str(diarized_path),
