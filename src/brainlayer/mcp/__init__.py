@@ -1620,10 +1620,12 @@ async def _brain_update(
             ok = store.archive_chunk(chunk_id)
             if not ok:
                 return _error_result(f"Chunk not found: {chunk_id}")
-            return [TextContent(
-                type="text",
-                text=json.dumps({"action": "archived", "chunk_id": chunk_id}),
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"action": "archived", "chunk_id": chunk_id}),
+                )
+            ]
 
         elif action == "update":
             # Verify chunk exists

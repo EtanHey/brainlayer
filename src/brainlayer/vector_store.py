@@ -593,9 +593,7 @@ class VectorStore:
         rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
         if not rows:
             return False
-        cursor.execute(
-            "UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,)
-        )
+        cursor.execute("UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,))
         # Remove from vector index so it doesn't appear in searches
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
         return True
@@ -603,20 +601,29 @@ class VectorStore:
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Get a single chunk by ID."""
         cursor = self.conn.cursor()
-        rows = list(cursor.execute(
-            """SELECT id, content, metadata, source_file, project, content_type,
+        rows = list(
+            cursor.execute(
+                """SELECT id, content, metadata, source_file, project, content_type,
                       value_type, tags, importance, created_at, summary
                FROM chunks WHERE id = ?""",
-            (chunk_id,),
-        ))
+                (chunk_id,),
+            )
+        )
         if not rows:
             return None
         r = rows[0]
         return {
-            "id": r[0], "content": r[1], "metadata": r[2],
-            "source_file": r[3], "project": r[4], "content_type": r[5],
-            "value_type": r[6], "tags": r[7], "importance": r[8],
-            "created_at": r[9], "summary": r[10],
+            "id": r[0],
+            "content": r[1],
+            "metadata": r[2],
+            "source_file": r[3],
+            "project": r[4],
+            "content_type": r[5],
+            "value_type": r[6],
+            "tags": r[7],
+            "importance": r[8],
+            "created_at": r[9],
+            "summary": r[10],
         }
 
     def search(
