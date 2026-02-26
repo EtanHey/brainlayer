@@ -47,7 +47,7 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 5 tools:\n"
+        "Memory layer for Claude Code. 6 tools:\n"
         "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
         "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
         "Routing is automatic — pass file_path for file history, chunk_id to expand context, no args for current work.\n"
@@ -2244,6 +2244,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 outcome=item.get("outcome"),
                 reversibility=item.get("reversibility"),
                 files_changed=item.get("files_changed"),
+                entity_id=item.get("entity_id"),
             )
             flushed += 1
         except Exception:
@@ -2340,6 +2341,7 @@ async def _store(
                     "outcome": outcome,
                     "reversibility": reversibility,
                     "files_changed": files_changed,
+                    "entity_id": entity_id,
                 }
             )
             structured = {"chunk_id": "queued", "related": []}
