@@ -8,7 +8,7 @@ BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-co
 
 ## Key Features
 
-- **3 MCP tools** — brain_search, brain_store, brain_recall (old brainlayer_* names work as aliases)
+- **7 MCP tools** — 3 core (search, store, recall) + 4 knowledge graph (digest, entity, update, get_person)
 - **Local-first** — SQLite + sqlite-vec, single file, no cloud, no Docker
 - **Hybrid search** — semantic vectors + keyword, merged with Reciprocal Rank Fusion
 - **10-field enrichment** — summary, tags, importance, intent, and more via local LLM
@@ -45,7 +45,7 @@ Your agent now has persistent memory. Ask it:
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>3 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>7 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
 
@@ -57,6 +57,6 @@ graph LR
 ## Next Steps
 
 - [Quick Start](quickstart.md) — full setup guide
-- [MCP Tools Reference](mcp-tools.md) — all 3 tools documented
+- [MCP Tools Reference](mcp-tools.md) — all 7 tools documented
 - [Configuration](configuration.md) — environment variables and options
 - [Architecture](architecture.md) — how it works under the hood
