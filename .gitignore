@@ -25,6 +25,7 @@ htmlcov/
 *.db
 *.db-wal
 *.db-shm
+data/
 
 # Secrets
 .env
