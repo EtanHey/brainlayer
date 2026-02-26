@@ -1,6 +1,6 @@
 # BrainLayer
 
-> Persistent memory for AI agents. Search, think, recall — across every conversation you've ever had.
+> Persistent memory and knowledge graph for AI agents — 7 MCP tools to search, store, recall, digest, and explore entities across every conversation.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
