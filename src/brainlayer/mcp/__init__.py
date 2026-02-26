@@ -47,7 +47,7 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 6 tools:\n"
+        "Memory layer for Claude Code. 7 tools:\n"
         "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
         "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
         "Routing is automatic — pass file_path for file history, chunk_id to expand context, no args for current work.\n"
@@ -60,6 +60,8 @@ server = Server(
         "Creates a new searchable chunk with source='digest'.\n"
         "- brain_entity(query): look up a known entity in the knowledge graph. "
         "Returns entity type, relations, and evidence chunks.\n"
+        "- brain_update(action, chunk_id): update, archive, or merge existing memories. "
+        "action=update (change content/tags/importance), archive (soft-delete), merge (keep one, archive duplicates).\n"
         "Use brain_search at the start of tasks to retrieve past decisions and patterns.\n"
         "Use brain_store when you make a decision, hit a bug, learn something, or finish a phase.\n"
         'project scoping: auto-inferred from cwd. Override with project="all" for cross-project search.\n'
@@ -867,6 +869,56 @@ Returns: Structured JSON with name, entity_type, relations[], evidence[], or nul
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="brain_update",
+            title="Update or Archive Memory",
+            description="""Update, archive, or merge existing memories in BrainLayer.
+
+Actions:
+- **update**: Change content, tags, or importance of an existing memory. If content changes, re-embeds automatically.
+- **archive**: Soft-delete a memory (removes from search results, keeps in DB).
+- **merge**: Combine multiple duplicate memories into one. Keeps the first chunk_id, archives the rest.
+
+Use brain_search first to find the chunk_id(s) you want to modify.
+
+Returns: Structured JSON with action taken and affected chunk IDs.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["update", "archive", "merge"],
+                        "description": "What to do: update fields, archive (soft-delete), or merge duplicates",
+                    },
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "The chunk ID to update or archive. For merge, this is the chunk to keep.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New content (update only). Will be re-embedded.",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "New tags (update only). Replaces existing tags.",
+                    },
+                    "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "New importance score (update only).",
+                    },
+                    "merge_chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "For merge: additional chunk IDs to archive (duplicates of chunk_id).",
+                    },
+                },
+                "required": ["action", "chunk_id"],
+            },
+        ),
     ]
 
 
@@ -1010,6 +1062,16 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 query=arguments["query"],
                 entity_type=arguments.get("entity_type"),
             )
+        )
+
+    elif name == "brain_update":
+        return await _brain_update(
+            action=arguments["action"],
+            chunk_id=arguments["chunk_id"],
+            content=arguments.get("content"),
+            tags=arguments.get("tags"),
+            importance=arguments.get("importance"),
+            merge_chunk_ids=arguments.get("merge_chunk_ids"),
         )
 
     # --- Backward-compat aliases (old tool names route to same handlers) ---
@@ -1540,6 +1602,93 @@ async def _store_new(
         files_changed=files_changed,
         entity_id=entity_id,
     )
+
+
+async def _brain_update(
+    action: str,
+    chunk_id: str,
+    content: str | None = None,
+    tags: list[str] | None = None,
+    importance: int | None = None,
+    merge_chunk_ids: list[str] | None = None,
+):
+    """Update, archive, or merge memories."""
+    try:
+        store = _get_vector_store()
+
+        if action == "archive":
+            ok = store.archive_chunk(chunk_id)
+            if not ok:
+                return _error_result(f"Chunk not found: {chunk_id}")
+            return [TextContent(
+                type="text",
+                text=json.dumps({"action": "archived", "chunk_id": chunk_id}),
+            )]
+
+        elif action == "update":
+            # Verify chunk exists
+            existing = store.get_chunk(chunk_id)
+            if not existing:
+                return _error_result(f"Chunk not found: {chunk_id}")
+
+            # Re-embed if content changed
+            embedding = None
+            if content is not None:
+                loop = asyncio.get_running_loop()
+                model = _get_embedding_model()
+                embedding = await loop.run_in_executor(None, model.embed_query, content)
+
+            ok = store.update_chunk(
+                chunk_id=chunk_id,
+                content=content,
+                tags=tags,
+                importance=float(importance) if importance is not None else None,
+                embedding=embedding,
+            )
+            if not ok:
+                return _error_result(f"Update failed for: {chunk_id}")
+
+            result = {"action": "updated", "chunk_id": chunk_id, "fields": []}
+            if content is not None:
+                result["fields"].append("content")
+            if tags is not None:
+                result["fields"].append("tags")
+            if importance is not None:
+                result["fields"].append("importance")
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        elif action == "merge":
+            if not merge_chunk_ids:
+                return _error_result("merge requires merge_chunk_ids (the duplicates to archive)")
+
+            # Verify the keeper exists
+            keeper = store.get_chunk(chunk_id)
+            if not keeper:
+                return _error_result(f"Keeper chunk not found: {chunk_id}")
+
+            archived = []
+            failed = []
+            for dup_id in merge_chunk_ids:
+                ok = store.archive_chunk(dup_id)
+                if ok:
+                    archived.append(dup_id)
+                else:
+                    failed.append(dup_id)
+
+            result = {
+                "action": "merged",
+                "kept": chunk_id,
+                "archived": archived,
+                "failed": failed,
+            }
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        else:
+            return _error_result(f"Unknown action: {action}. Use update, archive, or merge.")
+
+    except Exception as e:
+        logger.error("brain_update failed: %s", e)
+        return _error_result(f"brain_update error: {e}")
 
 
 # --- Original Handler Functions ---

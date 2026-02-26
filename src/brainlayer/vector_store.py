@@ -548,6 +548,77 @@ class VectorStore:
 
         return len(chunks)
 
+    def update_chunk(
+        self,
+        chunk_id: str,
+        content: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        importance: Optional[float] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> bool:
+        """Update fields on an existing chunk. Returns True if chunk was found."""
+        cursor = self.conn.cursor()
+        # Check chunk exists
+        rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
+        if not rows:
+            return False
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        if content is not None:
+            cursor.execute(
+                "UPDATE chunks SET content = ?, char_count = ?, summary = ? WHERE id = ?",
+                (content, len(content), content[:200], chunk_id),
+            )
+        if tags is not None:
+            cursor.execute(
+                "UPDATE chunks SET tags = ? WHERE id = ?",
+                (json.dumps(tags), chunk_id),
+            )
+        if importance is not None:
+            cursor.execute(
+                "UPDATE chunks SET importance = ? WHERE id = ?",
+                (float(max(1, min(10, importance))), chunk_id),
+            )
+        if embedding is not None:
+            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+            cursor.execute(
+                "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
+                (chunk_id, serialize_f32(embedding)),
+            )
+        return True
+
+    def archive_chunk(self, chunk_id: str) -> bool:
+        """Soft-delete a chunk by setting value_type to ARCHIVED."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
+        if not rows:
+            return False
+        cursor.execute(
+            "UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,)
+        )
+        # Remove from vector index so it doesn't appear in searches
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        return True
+
+    def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single chunk by ID."""
+        cursor = self.conn.cursor()
+        rows = list(cursor.execute(
+            """SELECT id, content, metadata, source_file, project, content_type,
+                      value_type, tags, importance, created_at, summary
+               FROM chunks WHERE id = ?""",
+            (chunk_id,),
+        ))
+        if not rows:
+            return None
+        r = rows[0]
+        return {
+            "id": r[0], "content": r[1], "metadata": r[2],
+            "source_file": r[3], "project": r[4], "content_type": r[5],
+            "value_type": r[6], "tags": r[7], "importance": r[8],
+            "created_at": r[9], "summary": r[10],
+        }
+
     def search(
         self,
         query_embedding: Optional[List[float]] = None,
