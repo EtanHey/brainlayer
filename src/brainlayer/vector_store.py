@@ -583,9 +583,7 @@ class VectorStore:
             filter_params: list = []
 
             if entity_id:
-                where_clauses.append(
-                    "c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)"
-                )
+                where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 filter_params.append(entity_id)
             if project_filter:
                 where_clauses.append("c.project = ?")
@@ -652,9 +650,7 @@ class VectorStore:
             params = [f"%{query_text}%"]
 
             if entity_id:
-                where_clauses.append(
-                    "id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)"
-                )
+                where_clauses.append("id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 params.append(entity_id)
             if project_filter:
                 where_clauses.append("project = ?")

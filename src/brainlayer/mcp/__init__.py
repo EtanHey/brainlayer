@@ -1230,9 +1230,7 @@ async def _brain_get_person(
         return _error_result(f"Person lookup failed: {e}")
 
     if entity is None:
-        return CallToolResult(
-            content=[TextContent(type="text", text=f"No person entity found matching '{name}'.")]
-        )
+        return CallToolResult(content=[TextContent(type="text", text=f"No person entity found matching '{name}'.")])
 
     entity_id = entity["id"]
 
@@ -1253,12 +1251,14 @@ async def _brain_get_person(
             )
             if results["documents"][0]:
                 for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-                    memories.append({
-                        "content": doc[:500],
-                        "type": meta.get("content_type", "unknown"),
-                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
-                        "summary": meta.get("summary"),
-                    })
+                    memories.append(
+                        {
+                            "content": doc[:500],
+                            "type": meta.get("content_type", "unknown"),
+                            "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                            "summary": meta.get("summary"),
+                        }
+                    )
         else:
             # No context: return entity's linked chunks ordered by relevance
             entity_chunks = await loop.run_in_executor(
@@ -1266,12 +1266,14 @@ async def _brain_get_person(
                 lambda: store.get_entity_chunks(entity_id, limit=num_memories),
             )
             for chunk in entity_chunks:
-                memories.append({
-                    "content": chunk["content"][:500] if chunk.get("content") else "",
-                    "type": chunk.get("content_type", "unknown"),
-                    "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
-                    "relevance": chunk.get("relevance"),
-                })
+                memories.append(
+                    {
+                        "content": chunk["content"][:500] if chunk.get("content") else "",
+                        "type": chunk.get("content_type", "unknown"),
+                        "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
+                        "relevance": chunk.get("relevance"),
+                    }
+                )
     except Exception as e:
         logger.warning("Memory retrieval for person '%s' failed: %s", name, e)
 
