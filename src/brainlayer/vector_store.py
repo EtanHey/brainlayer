@@ -564,8 +564,14 @@ class VectorStore:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         sentiment_filter: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ) -> Dict[str, List]:
-        """Search chunks by embedding or text."""
+        """Search chunks by embedding or text.
+
+        Args:
+            entity_id: If provided, only return chunks linked to this entity
+                       via kg_entity_chunks. Used for per-person memory scoping.
+        """
 
         cursor = self._read_cursor()
 
@@ -576,6 +582,11 @@ class VectorStore:
             where_clauses = []
             filter_params: list = []
 
+            if entity_id:
+                where_clauses.append(
+                    "c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)"
+                )
+                filter_params.append(entity_id)
             if project_filter:
                 where_clauses.append("c.project = ?")
                 filter_params.append(project_filter)
@@ -616,8 +627,11 @@ class VectorStore:
             if where_clauses:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
-            # sqlite-vec KNN: MATCH and k must bind before filter params
-            params = [query_bytes, n_results] + filter_params
+            # sqlite-vec KNN: MATCH and k must bind before filter params.
+            # When entity_id is set, bump k to over-fetch since entity filter
+            # is applied post-KNN and most candidates won't match.
+            effective_k = n_results * 10 if entity_id else n_results
+            params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
@@ -637,6 +651,11 @@ class VectorStore:
             where_clauses = ["content LIKE ?"]
             params = [f"%{query_text}%"]
 
+            if entity_id:
+                where_clauses.append(
+                    "id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)"
+                )
+                params.append(entity_id)
             if project_filter:
                 where_clauses.append("project = ?")
                 params.append(project_filter)
@@ -866,9 +885,15 @@ class VectorStore:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         sentiment_filter: Optional[str] = None,
+        entity_id: Optional[str] = None,
         k: int = 60,
     ) -> Dict[str, List]:
-        """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion."""
+        """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
+
+        Args:
+            entity_id: If provided, only return chunks linked to this entity
+                       via kg_entity_chunks. Used for per-person memory scoping.
+        """
 
         # 1. Semantic search — get more results for fusion (uses _read_cursor via search())
         semantic = self.search(
@@ -885,6 +910,7 @@ class VectorStore:
             date_from=date_from,
             date_to=date_to,
             sentiment_filter=sentiment_filter,
+            entity_id=entity_id,
         )
 
         # Build semantic rank map: chunk_content -> rank
@@ -901,6 +927,11 @@ class VectorStore:
         # Wrap each term in double quotes to treat as literal strings.
         fts_query = _escape_fts5_query(query_text)
         fts_params: list = [fts_query]
+        entity_join = ""
+        if entity_id:
+            entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
+            fts_extra.append("AND ec.entity_id = ?")
+            fts_params.append(entity_id)
         if tag_filter:
             fts_extra.append(
                 "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
@@ -933,6 +964,7 @@ class VectorStore:
                    c.created_at, c.source
             FROM chunks_fts f
             JOIN chunks c ON f.chunk_id = c.id
+            {entity_join}
             WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
             ORDER BY f.rank
             LIMIT ?

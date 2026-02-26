@@ -42,6 +42,7 @@ def store_memory(
     outcome: Optional[str] = None,
     reversibility: Optional[str] = None,
     files_changed: Optional[List[str]] = None,
+    entity_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -57,6 +58,8 @@ def store_memory(
         outcome: Optional decision outcome (pending/validated/reversed).
         reversibility: Optional reversibility (easy/hard/destructive).
         files_changed: Optional list of affected file paths.
+        entity_id: Optional entity ID to link this memory to via kg_entity_chunks.
+                   Used for per-person memory tagging.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -135,6 +138,15 @@ def store_memory(
     # Also insert into FTS5 for keyword search
     # (The trigger handles this for INSERT INTO chunks, but since we bypass
     # the normal upsert_chunks flow, verify it's there)
+
+    # Link to entity if entity_id provided (per-person memory tagging)
+    if entity_id:
+        store.link_entity_chunk(
+            entity_id=entity_id,
+            chunk_id=chunk_id,
+            relevance=1.0,
+            context=f"Stored via brain_store: {memory_type}",
+        )
 
     return {
         "id": chunk_id,
