@@ -141,6 +141,10 @@ def store_memory(
 
     # Link to entity if entity_id provided (per-person memory tagging)
     if entity_id:
+        # Validate entity exists to avoid dangling kg_entity_chunks rows
+        entity = store.get_entity(entity_id)
+        if entity is None:
+            raise ValueError(f"Unknown entity_id: {entity_id}")
         store.link_entity_chunk(
             entity_id=entity_id,
             chunk_id=chunk_id,

@@ -628,7 +628,7 @@ class VectorStore:
             # sqlite-vec KNN: MATCH and k must bind before filter params.
             # When entity_id is set, bump k to over-fetch since entity filter
             # is applied post-KNN and most candidates won't match.
-            effective_k = n_results * 10 if entity_id else n_results
+            effective_k = min(n_results * 10, 1000) if entity_id else n_results
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
