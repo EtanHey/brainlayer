@@ -1031,6 +1031,221 @@ async def session_detail(session_id: str, page: int = 1, per_page: int = 50, con
 
 
 # ──────────────────────────────────────────────
+# Knowledge Graph API (6PM integration bridge)
+# ──────────────────────────────────────────────
+
+
+class DigestRequest(BaseModel):
+    """Digest request — ingest raw content and extract entities/relations."""
+
+    content: str
+    title: Optional[str] = None
+    project: Optional[str] = None
+    participants: Optional[List[str]] = None
+
+
+class StoreRequest(BaseModel):
+    """Store request — persist a memory."""
+
+    content: str
+    type: Optional[str] = None
+    project: Optional[str] = None
+    tags: Optional[List[str]] = None
+    importance: Optional[int] = None
+    entity_id: Optional[str] = None
+
+
+class UpdateEntityRequest(BaseModel):
+    """Update entity metadata."""
+
+    metadata: Dict[str, Any]
+
+
+@app.post("/digest")
+async def api_digest(request: DigestRequest):
+    """Digest raw content — extract entities, relations, sentiment, action items.
+
+    This is the Convex → BrainLayer bridge for 6PM. Chat messages, onboarding
+    transcripts, and meeting notes are ingested here.
+    """
+    if not vector_store or not embedding_model:
+        raise HTTPException(status_code=503, detail="Not initialized")
+
+    from .pipeline.digest import digest_content
+
+    try:
+        result = await asyncio.to_thread(
+            digest_content,
+            content=request.content,
+            store=vector_store,
+            embed_fn=embedding_model.embed_query,
+            title=request.title,
+            project=request.project,
+            participants=request.participants,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Digest failed: {e}")
+        raise HTTPException(status_code=500, detail="Digest failed")
+
+
+@app.get("/person/{name}")
+async def api_get_person(name: str, context: Optional[str] = None, num_memories: int = 10):
+    """Look up a person by name — entity profile + scoped memories.
+
+    Optimized for real-time lookups (~200-500ms). Returns entity metadata,
+    relations, and relevant memory chunks.
+    """
+    if not vector_store or not embedding_model:
+        raise HTTPException(status_code=503, detail="Not initialized")
+
+    from .pipeline.digest import entity_lookup
+
+    # Step 1: Entity lookup
+    entity = await asyncio.to_thread(
+        entity_lookup,
+        query=name,
+        store=vector_store,
+        embed_fn=embedding_model.embed_query,
+        entity_type="person",
+    )
+
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"No person entity found matching '{name}'")
+
+    entity_id = entity["id"]
+
+    # Step 2: Scoped memories
+    memories = []
+    if context:
+        query_embedding = await asyncio.to_thread(embedding_model.embed_query, context)
+        results = await asyncio.to_thread(
+            vector_store.hybrid_search,
+            query_embedding=query_embedding,
+            query_text=context,
+            n_results=num_memories,
+            entity_id=entity_id,
+        )
+        if results["documents"][0]:
+            for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+                memories.append(
+                    {
+                        "content": doc[:500],
+                        "type": meta.get("content_type", "unknown"),
+                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                        "summary": meta.get("summary"),
+                    }
+                )
+    else:
+        entity_chunks = await asyncio.to_thread(vector_store.get_entity_chunks, entity_id, limit=num_memories)
+        for chunk in entity_chunks:
+            memories.append(
+                {
+                    "content": chunk["content"][:500] if chunk.get("content") else "",
+                    "type": chunk.get("content_type", "unknown"),
+                    "relevance": chunk.get("relevance"),
+                }
+            )
+
+    return {
+        "entity": entity,
+        "memories": memories,
+    }
+
+
+@app.post("/store")
+async def api_store(request: StoreRequest):
+    """Store a memory — ideas, decisions, learnings, constraints.
+
+    For 6PM: store extracted constraints, preferences, and meeting outcomes.
+    """
+    if not vector_store or not embedding_model:
+        raise HTTPException(status_code=503, detail="Not initialized")
+
+    from .store import store_memory
+
+    try:
+        result = await asyncio.to_thread(
+            store_memory,
+            store=vector_store,
+            embed_fn=embedding_model.embed_query,
+            content=request.content,
+            memory_type=request.type or "note",
+            project=request.project,
+            tags=request.tags,
+            importance=request.importance,
+            entity_id=request.entity_id,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Store failed: {e}")
+        raise HTTPException(status_code=500, detail="Store failed")
+
+
+@app.get("/entity/{entity_id}")
+async def api_get_entity(entity_id: str):
+    """Get entity by ID — metadata, relations, linked chunks."""
+    if not vector_store:
+        raise HTTPException(status_code=503, detail="Not initialized")
+
+    entity = await asyncio.to_thread(vector_store.get_entity, entity_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+
+    relations = await asyncio.to_thread(vector_store.get_entity_relations, entity_id)
+    chunks = await asyncio.to_thread(vector_store.get_entity_chunks, entity_id, limit=10)
+
+    return {
+        "entity": entity,
+        "relations": relations,
+        "chunks": [
+            {
+                "chunk_id": c["chunk_id"],
+                "content": c["content"][:300] if c.get("content") else "",
+                "relevance": c.get("relevance"),
+            }
+            for c in chunks
+        ],
+    }
+
+
+@app.patch("/entity/{entity_id}")
+async def api_update_entity(entity_id: str, request: UpdateEntityRequest):
+    """Update entity metadata — merge new keys into existing metadata.
+
+    For 6PM: update constraints like blocked_weekdays, preferred_times, etc.
+    """
+    if not vector_store:
+        raise HTTPException(status_code=503, detail="Not initialized")
+
+    # Get existing entity
+    entity = await asyncio.to_thread(vector_store.get_entity, entity_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+
+    # Merge metadata
+    existing_meta = entity.get("metadata") or {}
+    if isinstance(existing_meta, str):
+        try:
+            existing_meta = json.loads(existing_meta)
+        except json.JSONDecodeError:
+            existing_meta = {}
+    existing_meta.update(request.metadata)
+
+    # Update via upsert_entity (preserves existing fields)
+    await asyncio.to_thread(
+        vector_store.upsert_entity,
+        name=entity["name"],
+        entity_type=entity["entity_type"],
+        metadata=existing_meta,
+    )
+
+    return {"entity_id": entity_id, "metadata": existing_meta, "status": "updated"}
+
+
+# ──────────────────────────────────────────────
 # Server startup
 # ──────────────────────────────────────────────
 
