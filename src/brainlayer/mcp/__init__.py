@@ -257,6 +257,19 @@ def _query_has_regression_signal(query: str) -> bool:
 # --- Auto-type detection for brain_store ---
 
 _TYPE_RULES: list[tuple[str, list[str]]] = [
+    (
+        "issue",
+        [
+            r"^Issue:",
+            r"\bissue\b.*\b(?:with|in|when|on)\b",
+            r"\bblocking\b",
+            r"\bblocker\b",
+            r"\bcrashes?\b",
+            r"\bfails?\b.*\bwhen\b",
+            r"\bseverity\b",
+            r"\bP[0-3]\b",
+        ],
+    ),
     ("todo", [r"\bTODO\b", r"\bFIXME\b", r"\bHACK\b", r"^TODO:", r"add\b.*\bsoon\b"]),
     (
         "mistake",
@@ -653,9 +666,11 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
             title="Store Memory",
             description="""Persistently store a memory into BrainLayer.
 
-Use this to save ideas, mistakes, decisions, learnings, todos, bookmarks, notes, or journal entries. Stored items are embedded at write time and immediately searchable.
+Use this to save ideas, mistakes, decisions, learnings, todos, bookmarks, notes, journal entries, or issues. Stored items are embedded at write time and immediately searchable.
 
-Type is auto-detected from content if omitted (e.g., "Always use bun" → decision, "Bug: overflow" → mistake, "TODO: add X" → todo).
+Type is auto-detected from content if omitted (e.g., "Always use bun" → decision, "Bug: overflow" → mistake, "TODO: add X" → todo, "Issue: digest fails" → issue).
+
+Issues support lifecycle tracking (status: open→in_progress→done→archived), severity levels, and code references (file_path, function_name, line_number).
 
 Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar existing memories).""",
             annotations=_WRITE,
@@ -668,7 +683,17 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                     },
                     "type": {
                         "type": "string",
-                        "enum": ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"],
+                        "enum": [
+                            "idea",
+                            "mistake",
+                            "decision",
+                            "learning",
+                            "todo",
+                            "bookmark",
+                            "note",
+                            "journal",
+                            "issue",
+                        ],
                         "description": "Memory type. Auto-detected from content if omitted.",
                     },
                     "project": {
@@ -710,6 +735,28 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                     "entity_id": {
                         "type": "string",
                         "description": "Link this memory to an entity (e.g., a person). The stored chunk will be linked via kg_entity_chunks for per-person memory retrieval.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["open", "in_progress", "done", "archived"],
+                        "description": "Issue lifecycle status. Only for type=issue. Defaults to 'open'.",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "high", "medium", "low"],
+                        "description": "Issue severity. Only for type=issue.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Code file reference (e.g., 'src/brainlayer/mcp/__init__.py'). Only for type=issue.",
+                    },
+                    "function_name": {
+                        "type": "string",
+                        "description": "Function/method reference. Only for type=issue.",
+                    },
+                    "line_number": {
+                        "type": "integer",
+                        "description": "Line number reference. Only for type=issue.",
                     },
                 },
                 "required": ["content"],
@@ -1013,6 +1060,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         # AIDEV-NOTE: No timeout wrapper on writes — non-idempotent (UUID-based IDs).
         # If timeout fires but executor thread completes, user retries = duplicate memory.
         imp = arguments.get("importance")
+        ln = arguments.get("line_number")
         return await _store_new(
             content=arguments["content"],
             memory_type=arguments.get("type"),
@@ -1024,6 +1072,11 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             reversibility=arguments.get("reversibility"),
             files_changed=arguments.get("files_changed"),
             entity_id=arguments.get("entity_id"),
+            status=arguments.get("status"),
+            severity=arguments.get("severity"),
+            file_path=arguments.get("file_path"),
+            function_name=arguments.get("function_name"),
+            line_number=max(1, ln) if ln is not None else None,
         )
 
     elif name == "brain_get_person":
@@ -1586,10 +1639,18 @@ async def _store_new(
     reversibility: str | None = None,
     files_changed: list[str] | None = None,
     entity_id: str | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    file_path: str | None = None,
+    function_name: str | None = None,
+    line_number: int | None = None,
 ):
     """Wrapper for _store with auto-type detection and auto-importance."""
     resolved_type = memory_type or _detect_memory_type(content)
     resolved_importance = importance if importance is not None else _auto_importance(content)
+    # Default issue status to "open" if not specified
+    if resolved_type == "issue" and status is None:
+        status = "open"
     return await _store(
         content=content,
         memory_type=resolved_type,
@@ -1601,6 +1662,11 @@ async def _store_new(
         reversibility=reversibility,
         files_changed=files_changed,
         entity_id=entity_id,
+        status=status,
+        severity=severity,
+        file_path=file_path,
+        function_name=function_name,
+        line_number=line_number,
     )
 
 
@@ -2421,6 +2487,11 @@ async def _store(
     reversibility: str | None = None,
     files_changed: list[str] | None = None,
     entity_id: str | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    file_path: str | None = None,
+    function_name: str | None = None,
+    line_number: int | None = None,
 ):
     """Store a memory into BrainLayer. Buffers to JSONL on DB lock."""
     try:
@@ -2450,6 +2521,11 @@ async def _store(
                 reversibility=reversibility,
                 files_changed=files_changed,
                 entity_id=entity_id,
+                status=status,
+                severity=severity,
+                file_path=file_path,
+                function_name=function_name,
+                line_number=line_number,
             ),
         )
 
@@ -2493,6 +2569,11 @@ async def _store(
                     "reversibility": reversibility,
                     "files_changed": files_changed,
                     "entity_id": entity_id,
+                    "status": status,
+                    "severity": severity,
+                    "file_path": file_path,
+                    "function_name": function_name,
+                    "line_number": line_number,
                 }
             )
             structured = {"chunk_id": "queued", "related": []}

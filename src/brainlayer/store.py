@@ -27,7 +27,7 @@ from .vector_store import VectorStore, serialize_f32
 
 logger = logging.getLogger(__name__)
 
-VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal"]
+VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookmark", "note", "journal", "issue"]
 
 
 def store_memory(
@@ -43,6 +43,11 @@ def store_memory(
     reversibility: Optional[str] = None,
     files_changed: Optional[List[str]] = None,
     entity_id: Optional[str] = None,
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    file_path: Optional[str] = None,
+    function_name: Optional[str] = None,
+    line_number: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -60,6 +65,11 @@ def store_memory(
         files_changed: Optional list of affected file paths.
         entity_id: Optional entity ID to link this memory to via kg_entity_chunks.
                    Used for per-person memory tagging.
+        status: Optional issue status (open/in_progress/done/archived). Only for type=issue.
+        severity: Optional issue severity (critical/high/medium/low). Only for type=issue.
+        file_path: Optional code file reference. Only for type=issue.
+        function_name: Optional function reference. Only for type=issue.
+        line_number: Optional line number reference. Only for type=issue.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -99,6 +109,17 @@ def store_memory(
         meta["reversibility"] = reversibility
     if files_changed is not None:
         meta["files_changed"] = files_changed
+    # Issue-specific fields
+    if status is not None:
+        meta["status"] = status
+    if severity is not None:
+        meta["severity"] = severity
+    if file_path is not None:
+        meta["file_path"] = file_path
+    if function_name is not None:
+        meta["function_name"] = function_name
+    if line_number is not None:
+        meta["line_number"] = line_number
 
     # Insert into chunks table
     cursor = store.conn.cursor()
