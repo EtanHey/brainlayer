@@ -495,8 +495,7 @@ def call_llm(prompt: str, timeout: int = 240, backend: Optional[str] = None) -> 
         if _check_fallback_available(effective):
             fallback = "ollama" if effective == "mlx" else "mlx"
             print(
-                f"  FALLBACK: {_consecutive_failures} consecutive failures on {effective}, "
-                f"switching to {fallback}",
+                f"  FALLBACK: {_consecutive_failures} consecutive failures on {effective}, switching to {fallback}",
                 file=sys.stderr,
             )
             _fallback_active = True
@@ -507,8 +506,7 @@ def call_llm(prompt: str, timeout: int = 240, backend: Optional[str] = None) -> 
         elif _consecutive_failures == _FALLBACK_THRESHOLD:
             # Only log once when threshold is first hit
             print(
-                f"  WARNING: {_consecutive_failures} consecutive failures on {effective}, "
-                f"no fallback available",
+                f"  WARNING: {_consecutive_failures} consecutive failures on {effective}, no fallback available",
                 file=sys.stderr,
             )
 

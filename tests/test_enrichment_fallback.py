@@ -28,8 +28,10 @@ class TestCallLlmFallback:
 
     def test_failure_increments_counter(self):
         """Failed call increments consecutive failure counter."""
-        with patch.object(enrichment, "call_mlx", return_value=None), \
-             patch.object(enrichment, "_check_fallback_available", return_value=False):
+        with (
+            patch.object(enrichment, "call_mlx", return_value=None),
+            patch.object(enrichment, "_check_fallback_available", return_value=False),
+        ):
             result = enrichment.call_llm("test prompt", backend="mlx")
         assert result is None
         assert enrichment._consecutive_failures == 1
@@ -37,9 +39,11 @@ class TestCallLlmFallback:
     def test_fallback_triggers_after_threshold(self):
         """After N consecutive failures, switches to fallback backend."""
         enrichment._consecutive_failures = 2  # One more failure will trigger threshold (3)
-        with patch.object(enrichment, "call_mlx", return_value=None), \
-             patch.object(enrichment, "call_glm", return_value='{"summary":"fallback"}'), \
-             patch.object(enrichment, "_check_fallback_available", return_value=True):
+        with (
+            patch.object(enrichment, "call_mlx", return_value=None),
+            patch.object(enrichment, "call_glm", return_value='{"summary":"fallback"}'),
+            patch.object(enrichment, "_check_fallback_available", return_value=True),
+        ):
             result = enrichment.call_llm("test prompt", backend="mlx")
         assert result == '{"summary":"fallback"}'
         assert enrichment._fallback_active is True
@@ -47,8 +51,10 @@ class TestCallLlmFallback:
     def test_fallback_stays_active_once_triggered(self):
         """Once fallback is active, subsequent calls use fallback directly."""
         enrichment._fallback_active = True
-        with patch.object(enrichment, "call_glm", return_value='{"summary":"via fallback"}') as mock_glm, \
-             patch.object(enrichment, "call_mlx") as mock_mlx:
+        with (
+            patch.object(enrichment, "call_glm", return_value='{"summary":"via fallback"}') as mock_glm,
+            patch.object(enrichment, "call_mlx") as mock_mlx,
+        ):
             result = enrichment.call_llm("test prompt", backend="mlx")
         assert result == '{"summary":"via fallback"}'
         mock_glm.assert_called_once()
@@ -57,8 +63,10 @@ class TestCallLlmFallback:
     def test_no_fallback_when_unavailable(self):
         """If fallback backend isn't running, don't switch."""
         enrichment._consecutive_failures = 2
-        with patch.object(enrichment, "call_mlx", return_value=None), \
-             patch.object(enrichment, "_check_fallback_available", return_value=False):
+        with (
+            patch.object(enrichment, "call_mlx", return_value=None),
+            patch.object(enrichment, "_check_fallback_available", return_value=False),
+        ):
             result = enrichment.call_llm("test prompt", backend="mlx")
         assert result is None
         assert enrichment._fallback_active is False
@@ -66,9 +74,11 @@ class TestCallLlmFallback:
     def test_ollama_to_mlx_fallback(self):
         """Fallback works in reverse: ollama primary → mlx fallback."""
         enrichment._consecutive_failures = 2
-        with patch.object(enrichment, "call_glm", return_value=None), \
-             patch.object(enrichment, "call_mlx", return_value='{"summary":"mlx ok"}'), \
-             patch.object(enrichment, "_check_fallback_available", return_value=True):
+        with (
+            patch.object(enrichment, "call_glm", return_value=None),
+            patch.object(enrichment, "call_mlx", return_value='{"summary":"mlx ok"}'),
+            patch.object(enrichment, "_check_fallback_available", return_value=True),
+        ):
             result = enrichment.call_llm("test prompt", backend="ollama")
         assert result == '{"summary":"mlx ok"}'
         assert enrichment._fallback_active is True
@@ -86,8 +96,12 @@ class TestRunEnrichmentResetsState:
         with patch.object(enrichment, "VectorStore") as mock_vs:
             mock_store = mock_vs.return_value
             mock_store.get_enrichment_stats.return_value = {
-                "enriched": 0, "enrichable": 0, "remaining": 0,
-                "skipped": 0, "percent": "0", "total_chunks": 0,
+                "enriched": 0,
+                "enrichable": 0,
+                "remaining": 0,
+                "skipped": 0,
+                "percent": "0",
+                "total_chunks": 0,
                 "by_intent": {},
             }
             try:
