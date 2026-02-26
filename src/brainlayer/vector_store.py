@@ -1221,11 +1221,15 @@ class VectorStore:
         content_types: Optional[List[str]] = None,
         min_char_count: Optional[int] = None,
         source: Optional[str] = None,
+        since_hours: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Get chunks that haven't been enriched yet, for batch processing.
 
         If min_char_count is not specified, uses source_aware_min_chars()
         to pick an appropriate threshold for the given source.
+
+        Args:
+            since_hours: Only return chunks created in the last N hours.
         """
         cursor = self._read_cursor()
 
@@ -1241,6 +1245,9 @@ class VectorStore:
             placeholders = ",".join("?" for _ in content_types)
             where.append(f"content_type IN ({placeholders})")
             params.extend(content_types)
+
+        if since_hours is not None:
+            where.append(f"created_at > datetime('now', '-{int(since_hours)} hours')")
 
         params.append(batch_size)
 

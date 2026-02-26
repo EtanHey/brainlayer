@@ -872,12 +872,27 @@ def enrich(
     batch_size: int = typer.Option(50, "--batch-size", "-b", help="Chunks per batch"),
     max_chunks: int = typer.Option(0, "--max", "-m", help="Max chunks (0=unlimited)"),
     no_context: bool = typer.Option(False, "--no-context", help="Skip surrounding context"),
+    backend: str = typer.Option(
+        None, "--backend", help="LLM backend: ollama, mlx, groq (default: auto-detect)"
+    ),
+    recent: int = typer.Option(
+        None, "--recent", "-r", help="Only enrich chunks from the last N hours"
+    ),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
 ) -> None:
     """Enrich chunks with LLM-generated metadata (summary, tags, importance, intent)."""
     try:
         from ..pipeline.enrichment import DEFAULT_DB_PATH, run_enrichment
         from ..vector_store import VectorStore
+
+        # Set backend override before run_enrichment reads ENRICH_BACKEND
+        if backend:
+            import os
+
+            import brainlayer.pipeline.enrichment as enrich_mod
+
+            os.environ["BRAINLAYER_ENRICH_BACKEND"] = backend
+            enrich_mod.ENRICH_BACKEND = backend
 
         if stats_only:
             store = VectorStore(DEFAULT_DB_PATH)
@@ -895,6 +910,7 @@ def enrich(
                 batch_size=batch_size,
                 max_chunks=max_chunks,
                 with_context=not no_context,
+                since_hours=recent,
             )
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")

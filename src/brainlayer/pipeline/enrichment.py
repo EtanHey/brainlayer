@@ -85,6 +85,11 @@ MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rs
 MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
 MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
 
+# Groq cloud API (for NON-PRIVATE content only — sanitization enforced in _enrich_one)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_URL = os.environ.get("BRAINLAYER_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
+GROQ_MODEL = os.environ.get("BRAINLAYER_GROQ_MODEL", "llama-3.3-70b-versatile")
+
 # Stall detection: max seconds a single chunk can take before being considered stalled
 STALL_TIMEOUT = int(os.environ.get("BRAINLAYER_STALL_TIMEOUT", "300"))  # 5 minutes default
 # Heartbeat: log progress every N chunks (min 1 to avoid ZeroDivisionError)
@@ -437,6 +442,53 @@ def call_mlx(prompt: str, timeout: int = MLX_DEFAULT_TIMEOUT) -> Optional[str]:
         return None
 
 
+def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
+    """Call Groq cloud API via OpenAI-compatible endpoint. Logs usage to Supabase.
+
+    PRIVACY: This sends content to Groq's cloud. Callers MUST sanitize content
+    before calling this function. The _enrich_one() function enforces this by
+    using build_external_prompt() with a Sanitizer when backend='groq'.
+    """
+    if not GROQ_API_KEY:
+        print("  Groq error: GROQ_API_KEY not set", file=sys.stderr)
+        return None
+    try:
+        start_ms = int(time.time() * 1000)
+        resp = requests.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        duration_ms = int(time.time() * 1000) - start_ms
+
+        # Extract token counts from OpenAI-compatible response
+        usage = data.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+
+        # Log to Supabase (best-effort)
+        _log_glm_usage(prompt_tokens, completion_tokens, duration_ms, model=f"groq:{GROQ_MODEL}")
+
+        # Extract response text
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return None
+    except Exception as e:
+        print(f"  Groq error: {e}", file=sys.stderr)
+        return None
+
+
 # Mid-run fallback state — tracks consecutive failures for automatic backend switching.
 # When the primary backend crashes mid-run (e.g., MLX "Abort trap: 6"), the pipeline
 # automatically retries failed chunks on the fallback backend instead of losing the entire batch.
@@ -488,7 +540,10 @@ def call_llm(prompt: str, timeout: int = 240, backend: Optional[str] = None) -> 
         return None
 
     # Try primary backend
-    if effective == "mlx":
+    if effective == "groq":
+        # Groq is cloud-only, no local fallback mechanism
+        return call_groq(prompt, timeout=timeout)
+    elif effective == "mlx":
         result = call_mlx(prompt, timeout=timeout)
     else:
         result = call_glm(prompt, timeout=timeout)
@@ -627,7 +682,15 @@ def _enrich_one(
         ctx = store.get_context(chunk["id"], before=2, after=1)
         context_chunks = [c for c in ctx.get("context", []) if not c.get("is_target")]
 
-    prompt = build_prompt(chunk, context_chunks)
+    # External backends (groq) MUST use sanitized prompts — no raw PII to cloud
+    effective_backend = backend or ENRICH_BACKEND
+    if effective_backend == "groq":
+        from .sanitize import Sanitizer
+
+        sanitizer = Sanitizer.from_env()
+        prompt, _sanitize_result = build_external_prompt(chunk, sanitizer, context_chunks)
+    else:
+        prompt = build_prompt(chunk, context_chunks)
 
     # Retry loop with exponential backoff + jitter
     response = None
@@ -701,6 +764,7 @@ def enrich_batch(
     with_context: bool = True,
     parallel: int = 1,
     backend: Optional[str] = None,
+    since_hours: Optional[int] = None,
 ) -> Dict[str, int]:
     """Process one batch of unenriched chunks. Returns counts.
 
@@ -712,9 +776,10 @@ def enrich_batch(
         parallel: Number of concurrent workers (1=sequential, >1=ThreadPoolExecutor).
                   MLX server supports concurrent requests. Ollama may not benefit.
         backend: Override backend for LLM calls (used when run_enrichment detects fallback).
+        since_hours: Only enrich chunks from the last N hours (for on-demand enrichment).
     """
     types = content_types or HIGH_VALUE_TYPES
-    chunks = store.get_unenriched_chunks(batch_size=batch_size, content_types=types)
+    chunks = store.get_unenriched_chunks(batch_size=batch_size, content_types=types, since_hours=since_hours)
 
     if not chunks:
         return {"processed": 0, "success": 0, "failed": 0}
@@ -836,6 +901,7 @@ def run_enrichment(
     content_types: Optional[List[str]] = None,
     with_context: bool = True,
     parallel: int = 1,
+    since_hours: Optional[int] = None,
 ) -> None:
     """Run the enrichment pipeline until done or max reached."""
     global _consecutive_failures, _fallback_active, _fallback_available
@@ -849,7 +915,14 @@ def run_enrichment(
     try:
         # Check LLM backend is running — with auto-fallback
         active_backend = ENRICH_BACKEND
-        if active_backend == "mlx":
+        if active_backend == "groq":
+            if not GROQ_API_KEY:
+                raise RuntimeError(
+                    "GROQ_API_KEY not set. Get one from https://console.groq.com/keys\n"
+                    "Or use: op read 'op://development/GROQ_API_KEY/password'"
+                )
+            print(f"Backend: Groq ({GROQ_MODEL}) [cloud — sanitization enforced]")
+        elif active_backend == "mlx":
             try:
                 resp = requests.get(f"{MLX_BASE_URL}/v1/models", timeout=5)
                 resp.raise_for_status()
@@ -890,6 +963,8 @@ def run_enrichment(
         if stats["by_intent"]:
             print(f"Intent distribution: {stats['by_intent']}")
         print(f"Batch size: {batch_size}, Max: {max_chunks or 'unlimited'}, Parallel: {parallel}")
+        if since_hours:
+            print(f"Recent only: last {since_hours} hours")
         print("---")
 
         total_processed = 0
@@ -905,6 +980,7 @@ def run_enrichment(
                 with_context=with_context,
                 parallel=parallel,
                 backend=_run_backend,
+                since_hours=since_hours,
             )
 
             if result["processed"] == 0:
@@ -967,6 +1043,20 @@ if __name__ == "__main__":
         help="Concurrent workers (1=sequential, 3=recommended for MLX)",
     )
     parser.add_argument("--no-context", action="store_true", help="Skip surrounding context")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["ollama", "mlx", "groq"],
+        default=None,
+        help="LLM backend (default: auto-detect). groq sends to cloud with sanitization.",
+    )
+    parser.add_argument(
+        "--recent",
+        type=int,
+        default=None,
+        metavar="HOURS",
+        help="Only enrich chunks from the last N hours (on-demand mode)",
+    )
     parser.add_argument("--stats", action="store_true", help="Show enrichment stats and exit")
     parser.add_argument("--db", type=str, default=None, help="Database path")
     args = parser.parse_args()
@@ -985,10 +1075,17 @@ if __name__ == "__main__":
             print(f"Intent: {stats['by_intent']}")
         store.close()
     else:
+        # Set backend via env var if specified on CLI (affects module-level detection)
+        if args.backend:
+            os.environ["BRAINLAYER_ENRICH_BACKEND"] = args.backend
+            import brainlayer.pipeline.enrichment as _self
+            _self.ENRICH_BACKEND = args.backend
+
         run_enrichment(
             db_path=db,
             batch_size=args.batch_size,
             max_chunks=args.max,
             with_context=not args.no_context,
             parallel=args.parallel,
+            since_hours=args.recent,
         )
