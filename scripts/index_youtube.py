@@ -608,6 +608,55 @@ def index_single_video(
 # Main
 # ---------------------------------------------------------------------------
 
+def load_diarized_transcript(path: Path) -> list[dict]:
+    """Load a WhisperX diarized JSON and convert to indexing segments.
+
+    Input format: [{"start": 0.5, "end": 2.3, "speaker": "Huberman", "text": "..."}]
+    Output format: [{"text": "HUBERMAN: ...", "start": 0.5, "duration": 1.8}]
+    """
+    with open(path) as f:
+        data = json.load(f)
+    # Handle both list-of-segments and {"segments": [...]} formats
+    segments = data if isinstance(data, list) else data.get("segments", [])
+    result = []
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        speaker = seg.get("speaker", "").upper()
+        if speaker:
+            text = f"{speaker}: {text}"
+        start = seg.get("start", 0)
+        end = seg.get("end", start)
+        result.append({
+            "text": text,
+            "start": start,
+            "duration": end - start,
+        })
+    return result
+
+
+def delete_video_chunks(store: VectorStore, video_id: str) -> int:
+    """Delete all chunks for a video ID. Returns count deleted."""
+    source_file = f"youtube:{video_id}"
+    cursor = store.conn.cursor()
+    # Count first
+    count = list(cursor.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source_file = ?", (source_file,)
+    ))[0][0]
+    if count == 0:
+        return 0
+    # Delete from vectors first (FK dependency)
+    cursor.execute(
+        "DELETE FROM chunk_vectors WHERE chunk_id IN "
+        "(SELECT id FROM chunks WHERE source_file = ?)",
+        (source_file,),
+    )
+    cursor.execute("DELETE FROM chunks WHERE source_file = ?", (source_file,))
+    log.info(f"  Deleted {count} existing chunks for {video_id}")
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Index YouTube transcripts into BrainLayer"
@@ -623,6 +672,10 @@ def main():
                         help="Delay between videos (seconds)")
     parser.add_argument("--limit", type=int, default=0,
                         help="Max videos to process (0=all)")
+    parser.add_argument("--diarized-transcript", type=Path,
+                        help="Path to WhisperX diarized JSON (single video only)")
+    parser.add_argument("--replace", action="store_true",
+                        help="Delete existing chunks before re-indexing")
     args = parser.parse_args()
 
     if not args.url and not args.channel and not args.playlist:
@@ -641,8 +694,69 @@ def main():
 
     if args.url:
         # Single video
-        total_chunks = index_single_video(args.url, store, args.project, args.dry_run)
-        total_videos = 1 if total_chunks > 0 else 0
+        video_id_match = re.search(r"[?&]v=([a-zA-Z0-9_-]+)", args.url)
+        vid = video_id_match.group(1) if video_id_match else args.url
+
+        if args.replace:
+            delete_video_chunks(store, vid)
+
+        if args.diarized_transcript:
+            # Use pre-diarized transcript instead of fetching from YouTube
+            log.info(f"Using diarized transcript: {args.diarized_transcript}")
+            segments = load_diarized_transcript(args.diarized_transcript)
+            log.info(f"  Loaded {len(segments)} diarized segments")
+
+            # Still need video metadata from YouTube
+            info = extract_video_info(args.url)
+            title = info.get("title", "Unknown") if info else "Unknown"
+            channel = info.get("uploader", info.get("channel", "Unknown")) if info else "Unknown"
+            chapters = (info.get("chapters") or []) if info else []
+            upload_date = info.get("upload_date", "") if info else ""
+
+            chunks = chunk_transcript(segments, vid, title, channel, chapters, args.project)
+            log.info(f"  Chunks: {len(chunks)}")
+
+            if args.dry_run:
+                log.info(f"  [DRY RUN] Would index {len(chunks)} chunks")
+                for i, c in enumerate(chunks[:3]):
+                    log.info(f"    Chunk {i}: {c.content[:80]}...")
+                total_chunks = len(chunks)
+            else:
+                log.info(f"  Embedding {len(chunks)} chunks...")
+                embedded = embed_chunks(chunks)
+                source_file = f"youtube:{vid}"
+                chunk_data = []
+                embeddings = []
+                for i, ec in enumerate(embedded):
+                    c = ec.chunk
+                    meta = dict(c.metadata)
+                    if upload_date:
+                        meta["upload_date"] = upload_date
+                    created_at = None
+                    if upload_date and len(upload_date) == 8:
+                        created_at = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}T00:00:00+00:00"
+                    chunk_data.append({
+                        "id": f"{source_file}:{i}",
+                        "content": c.content,
+                        "metadata": meta,
+                        "source_file": source_file,
+                        "project": args.project,
+                        "content_type": c.content_type.value,
+                        "value_type": c.value.value,
+                        "char_count": c.char_count,
+                        "source": "youtube",
+                        "conversation_id": source_file,
+                        "position": i,
+                        "created_at": created_at,
+                    })
+                    embeddings.append(ec.embedding)
+                total_chunks = store.upsert_chunks(chunk_data, embeddings)
+                log.info(f"  Indexed {total_chunks} chunks for '{title}'")
+
+            total_videos = 1 if total_chunks > 0 else 0
+        else:
+            total_chunks = index_single_video(args.url, store, args.project, args.dry_run)
+            total_videos = 1 if total_chunks > 0 else 0
     else:
         # Channel or playlist
         if args.channel:
