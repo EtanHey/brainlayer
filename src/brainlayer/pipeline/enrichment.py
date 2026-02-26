@@ -428,16 +428,91 @@ def call_mlx(prompt: str, timeout: int = 240) -> Optional[str]:
         return None
 
 
+# Mid-run fallback state — tracks consecutive failures for automatic backend switching.
+# When the primary backend crashes mid-run (e.g., MLX "Abort trap: 6"), the pipeline
+# automatically retries failed chunks on the fallback backend instead of losing the entire batch.
+_consecutive_failures = 0
+_FALLBACK_THRESHOLD = 3  # Switch after 3 consecutive failures
+_fallback_active = False
+_fallback_available: Optional[bool] = None  # None = not checked yet
+
+
+def _check_fallback_available(primary: str) -> bool:
+    """Check if the fallback backend is reachable. Cached for the run."""
+    global _fallback_available
+    if _fallback_available is not None:
+        return _fallback_available
+
+    fallback = "ollama" if primary == "mlx" else "mlx"
+    try:
+        if fallback == "ollama":
+            resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        else:
+            resp = requests.get(f"{MLX_BASE_URL}/v1/models", timeout=3)
+        resp.raise_for_status()
+        _fallback_available = True
+    except Exception:
+        _fallback_available = False
+    return _fallback_available
+
+
 def call_llm(prompt: str, timeout: int = 240, backend: Optional[str] = None) -> Optional[str]:
     """Call local LLM using configured backend (ollama or mlx).
+
+    Mid-run fallback: if the primary backend fails consecutively (e.g., MLX crash),
+    automatically retries on the fallback backend. This prevents losing entire
+    enrichment batches when MLX dies with "Abort trap: 6".
 
     Args:
         backend: Override backend for this call. If None, uses ENRICH_BACKEND.
     """
+    global _consecutive_failures, _fallback_active, _fallback_available
+
     effective = backend or ENRICH_BACKEND
+
+    # If fallback is already active, use it directly
+    if _fallback_active:
+        fallback = "ollama" if effective == "mlx" else "mlx"
+        result = call_mlx(prompt, timeout=timeout) if fallback == "mlx" else call_glm(prompt, timeout=timeout)
+        if result is not None:
+            return result
+        return None
+
+    # Try primary backend
     if effective == "mlx":
-        return call_mlx(prompt, timeout=timeout)
-    return call_glm(prompt, timeout=timeout)
+        result = call_mlx(prompt, timeout=timeout)
+    else:
+        result = call_glm(prompt, timeout=timeout)
+
+    if result is not None:
+        _consecutive_failures = 0
+        return result
+
+    # Primary failed — track consecutive failures
+    _consecutive_failures += 1
+
+    if _consecutive_failures >= _FALLBACK_THRESHOLD:
+        if _check_fallback_available(effective):
+            fallback = "ollama" if effective == "mlx" else "mlx"
+            print(
+                f"  FALLBACK: {_consecutive_failures} consecutive failures on {effective}, "
+                f"switching to {fallback}",
+                file=sys.stderr,
+            )
+            _fallback_active = True
+            # Retry this chunk on fallback
+            if fallback == "mlx":
+                return call_mlx(prompt, timeout=timeout)
+            return call_glm(prompt, timeout=timeout)
+        elif _consecutive_failures == _FALLBACK_THRESHOLD:
+            # Only log once when threshold is first hit
+            print(
+                f"  WARNING: {_consecutive_failures} consecutive failures on {effective}, "
+                f"no fallback available",
+                file=sys.stderr,
+            )
+
+    return None
 
 
 def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
@@ -701,6 +776,11 @@ def run_enrichment(
     parallel: int = 1,
 ) -> None:
     """Run the enrichment pipeline until done or max reached."""
+    global _consecutive_failures, _fallback_active, _fallback_available
+    _consecutive_failures = 0
+    _fallback_active = False
+    _fallback_available = None
+
     path = db_path or DEFAULT_DB_PATH
     store = VectorStore(path)
 
