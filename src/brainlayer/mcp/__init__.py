@@ -1213,7 +1213,7 @@ async def _brain_digest(
             lambda: digest_content(
                 content=content,
                 store=store,
-                embed_fn=model.embed,
+                embed_fn=model.embed_query,
                 title=title,
                 project=norm_project,
                 participants=participants,
@@ -1245,7 +1245,7 @@ async def _brain_entity(
             lambda: entity_lookup(
                 query=query,
                 store=store,
-                embed_fn=model.embed,
+                embed_fn=model.embed_query,
                 entity_type=entity_type,
             ),
         )
