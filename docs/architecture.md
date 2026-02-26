@@ -33,7 +33,7 @@ graph TD
     end
 
     subgraph Interfaces
-        E1["MCP Server<br/>brainlayer-mcp (3 tools)"]
+        E1["MCP Server<br/>brainlayer-mcp (7 tools)"]
         E2["CLI<br/>brainlayer"]
         E3["FastAPI Daemon<br/>:8787"]
         E4["TUI Dashboard"]
