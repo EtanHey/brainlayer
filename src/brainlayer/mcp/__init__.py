@@ -271,9 +271,9 @@ def _build_compact_result(item: dict) -> dict:
     """
     result = {
         "score": item.get("score", 0),
-        "content": item.get("content", "")[:500],
-        "project": item.get("project", "unknown"),
-        "source_file": item.get("source_file", "unknown"),
+        "content": (item.get("content") or "")[:500],
+        "project": item.get("project") or "unknown",
+        "source_file": item.get("source_file") or "unknown",
     }
     if item.get("date"):
         result["date"] = item["date"]

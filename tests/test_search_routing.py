@@ -95,10 +95,15 @@ class TestCompactFormat:
     """format='compact' should return fewer fields and shorter content."""
 
     def test_compact_result_has_required_fields(self):
-        """Compact format should include: score, content, date, importance, summary, project, source_file."""
+        """Compact format should include core fields: score, content, project, source_file.
+        Optional fields (date, importance, summary) are included when present."""
         compact_item = _build_compact_item(self._sample_item())
         required_keys = {"score", "content", "project", "source_file"}
         assert required_keys.issubset(compact_item.keys())
+        # Optional fields should be present when source item has them
+        assert "date" in compact_item
+        assert "importance" in compact_item
+        assert "summary" in compact_item
 
     def test_compact_result_drops_verbose_fields(self):
         """Compact format should NOT include: content_type, tags, intent, chunk_id, session_*."""
