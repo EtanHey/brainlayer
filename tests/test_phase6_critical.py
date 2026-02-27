@@ -11,6 +11,7 @@ Covers:
 """
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -72,9 +73,7 @@ class TestStoreSearchRoundtrip:
         metas = search_results["metadatas"][0]
 
         assert len(docs) >= 1
-        # The stored chunk should be in results
-        found_ids = [m.get("chunk_id") or m.get("id") for m in metas]
-        # Check the content is findable (chunk_id may be in different field)
+        # Check the content is findable
         found = any("JWT tokens" in doc for doc in docs)
         assert found, f"Stored chunk not found in search results. Docs: {[d[:50] for d in docs]}"
 
@@ -308,6 +307,8 @@ class TestConcurrentDBAccess:
         t2.start()
         t1.join(timeout=30)
         t2.join(timeout=30)
+        assert not t1.is_alive(), "Thread 1 did not finish within 30s"
+        assert not t2.is_alive(), "Thread 2 did not finish within 30s"
 
         assert not errors, f"Concurrent write errors: {errors}"
 
@@ -403,8 +404,6 @@ class TestCompactFormatSize:
 
     def test_compact_total_chars_less_than_full(self):
         """Total serialized size of compact is strictly less than full."""
-        import json
-
         full_item = {
             "score": 0.85,
             "project": "golems",
