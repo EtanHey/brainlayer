@@ -204,6 +204,7 @@ class VectorStore:
             ("idx_chunks_enriched", "enriched_at"),
             ("idx_chunks_created", "created_at"),
             ("idx_chunks_sentiment", "sentiment_label"),
+            ("idx_chunks_project", "project"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -807,9 +808,11 @@ class VectorStore:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
             # sqlite-vec KNN: MATCH and k must bind before filter params.
-            # When entity_id is set, bump k to over-fetch since entity filter
-            # is applied post-KNN and most candidates won't match.
-            effective_k = min(n_results * 10, 1000) if entity_id else n_results
+            # Bump k to over-fetch when post-KNN filters may discard most results:
+            # - entity_id: entity filter applied post-KNN, most candidates won't match
+            # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
+            needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
+            effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
@@ -1109,6 +1112,12 @@ class VectorStore:
             entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
             fts_extra.append("AND ec.entity_id = ?")
             fts_params.append(entity_id)
+        if project_filter:
+            fts_extra.append("AND c.project = ?")
+            fts_params.append(project_filter)
+        if source_filter:
+            fts_extra.append("AND c.source = ?")
+            fts_params.append(source_filter)
         if tag_filter:
             fts_extra.append(
                 "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
