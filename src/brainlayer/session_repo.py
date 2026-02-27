@@ -513,7 +513,7 @@ class SessionMixin:
                 try:
                     chunk_ids = json.loads(row[3])
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    logger.debug("Malformed chunk_ids JSON for operation %s: %s", row[0], row[3])
             results.append(
                 {
                     "id": row[0],
@@ -752,6 +752,7 @@ class SessionMixin:
                 ?
             )
             ON CONFLICT(session_id) DO UPDATE SET
+                file_path = excluded.file_path,
                 enrichment_version = excluded.enrichment_version,
                 enrichment_model = excluded.enrichment_model,
                 enrichment_timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
@@ -910,5 +911,5 @@ class SessionMixin:
             "total_enriched_sessions": total,
             "by_outcome": by_outcome,
             "by_intent": by_intent,
-            "avg_quality_score": round(avg_quality, 1) if avg_quality else None,
+            "avg_quality_score": round(avg_quality, 1) if avg_quality is not None else None,
         }

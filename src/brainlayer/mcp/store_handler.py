@@ -213,6 +213,11 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 reversibility=item.get("reversibility"),
                 files_changed=item.get("files_changed"),
                 entity_id=item.get("entity_id"),
+                status=item.get("status"),
+                severity=item.get("severity"),
+                file_path=item.get("file_path"),
+                function_name=item.get("function_name"),
+                line_number=item.get("line_number"),
             )
             flushed += 1
         except Exception as e:

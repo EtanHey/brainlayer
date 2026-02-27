@@ -532,6 +532,8 @@ class SearchMixin:
                     continue
                 if project_filter and meta.get("project") != project_filter:
                     continue
+                if content_type_filter and meta.get("content_type") != content_type_filter:
+                    continue
 
             scored.append((score, cid, doc, meta, dist))
 

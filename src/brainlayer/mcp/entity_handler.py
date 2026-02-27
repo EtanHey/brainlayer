@@ -22,7 +22,7 @@ async def _brain_entity(
 
     store = _get_vector_store()
     model = _get_embedding_model()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     try:
         result = await loop.run_in_executor(
@@ -52,7 +52,7 @@ async def _brain_get_person(
 
     store = _get_vector_store()
     model = _get_embedding_model()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     try:
         entity = await loop.run_in_executor(
