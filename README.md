@@ -2,13 +2,17 @@
 
 > Persistent memory and knowledge graph for AI agents — 7 MCP tools to search, store, recall, digest, and explore entities across every conversation.
 
+[![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
+[![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-7%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-510%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-698%20passing-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
 ---
+
+**268,000+ chunks indexed** · **698 tests** · **Hybrid RRF search** · **7 MCP tools** · **Zero cloud dependencies**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -240,10 +244,14 @@ BrainLayer can index conversations from multiple sources:
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (525 tests)
+pytest tests/                           # Full suite (698 tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
 ```
+
+## Roadmap
+
+See [docs/roadmap.md](docs/roadmap.md) for planned features including boot context loading, compact search, pinned memories, and MCP Registry listing.
 
 ## Contributing
 

@@ -34,11 +34,13 @@ nav:
     - MCP Tools: mcp-tools.md
     - Architecture: architecture.md
     - Enrichment: enrichment.md
+    - KG Specification: kg-spec.md
   - Guides:
     - Data Locations: data-locations.md
     - Enrichment Runbook: enrichment-runbook.md
     - Local Models: local-models-guide.md
     - MCP Config: mcp-config.md
+  - Roadmap: roadmap.md
   - Contributing: contributing.md
 
 markdown_extensions:
