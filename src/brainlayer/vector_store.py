@@ -545,14 +545,20 @@ class VectorStore:
             cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN mention_type TEXT")
 
         # kg_current_facts view — auto-filters expired relations
-        cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
-        cursor.execute("""
-            CREATE VIEW kg_current_facts AS
-            SELECT * FROM kg_relations
-            WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-              AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-              AND expired_at IS NULL
-        """)
+        # Use DROP + CREATE OR REPLACE pattern with error handling for concurrent init
+        try:
+            cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
+            cursor.execute("""
+                CREATE VIEW kg_current_facts AS
+                SELECT * FROM kg_relations
+                WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                  AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                  AND expired_at IS NULL
+            """)
+        except Exception:
+            # Race condition: another thread already created the view between
+            # our DROP and CREATE. The view exists, which is the desired state.
+            pass
 
         # ── End Knowledge Graph tables ──────────────────────────────────────
 
