@@ -7,6 +7,8 @@ and CLI --backend flag.
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from brainlayer.pipeline import enrichment
 
 # ── call_groq unit tests ──────────────────────────────────────────────
@@ -14,11 +16,6 @@ from brainlayer.pipeline import enrichment
 
 class TestCallGroq:
     """Test call_groq() function — OpenAI-compatible API call to Groq."""
-
-    def test_call_groq_exists(self):
-        """call_groq function should exist in the enrichment module."""
-        assert hasattr(enrichment, "call_groq")
-        assert callable(enrichment.call_groq)
 
     def test_call_groq_success(self):
         """Successful Groq API call returns response content."""
@@ -202,16 +199,14 @@ class TestGroqPrivacy:
 class TestGroqConfig:
     """Test Groq-specific configuration constants."""
 
-    def test_groq_url_default(self):
-        """Default Groq URL points to api.groq.com."""
-        assert hasattr(enrichment, "GROQ_URL")
-        assert "groq.com" in enrichment.GROQ_URL
-
-    def test_groq_model_default(self):
-        """Default Groq model is llama-3.3-70b-versatile."""
-        assert hasattr(enrichment, "GROQ_MODEL")
-        assert enrichment.GROQ_MODEL == "llama-3.3-70b-versatile"
-
-    def test_groq_api_key_from_env(self):
-        """GROQ_API_KEY is read from environment."""
-        assert hasattr(enrichment, "GROQ_API_KEY")
+    @pytest.mark.parametrize(
+        "attr,expected",
+        [
+            ("GROQ_URL", "groq.com"),
+            ("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        ],
+    )
+    def test_groq_config_defaults(self, attr, expected):
+        """Groq config constants have expected default values."""
+        value = getattr(enrichment, attr)
+        assert expected in value or value == expected

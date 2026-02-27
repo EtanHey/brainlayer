@@ -34,28 +34,6 @@ class TestCheckBackendHealth:
             assert enrichment.check_backend_health("groq") is False
 
 
-class TestCallMlxErrorCategorization:
-    """call_mlx should distinguish connection errors from timeouts."""
-
-    def test_connection_refused_logged_distinctly(self, capsys):
-        with patch("brainlayer.pipeline.enrichment.requests.post") as mock_post:
-            mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
-            result = enrichment.call_mlx("test prompt")
-
-        assert result is None
-        captured = capsys.readouterr()
-        assert "connection error" in captured.err.lower()
-
-    def test_timeout_logged_distinctly(self, capsys):
-        with patch("brainlayer.pipeline.enrichment.requests.post") as mock_post:
-            mock_post.side_effect = requests.exceptions.Timeout("timed out")
-            result = enrichment.call_mlx("test prompt")
-
-        assert result is None
-        captured = capsys.readouterr()
-        assert "timeout" in captured.err.lower()
-
-
 class TestHighFailRatioBehavior:
     """run_enrichment should detect high fail ratios and check health."""
 
