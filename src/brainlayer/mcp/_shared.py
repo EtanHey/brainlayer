@@ -19,6 +19,7 @@ def _get_vector_store():
     if _vector_store is None:
         from ..paths import DEFAULT_DB_PATH
         from ..vector_store import VectorStore
+
         _vector_store = VectorStore(DEFAULT_DB_PATH)
     return _vector_store
 
@@ -28,6 +29,7 @@ def _get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
         from ..embeddings import get_embedding_model
+
         _embedding_model = get_embedding_model()
     return _embedding_model
 
@@ -39,37 +41,46 @@ def validate_config() -> list[dict]:
 
     # Check DB file exists and is readable
     if not DEFAULT_DB_PATH.exists():
-        errors.append({
-            "field": "database",
-            "message": f"Database not found at {DEFAULT_DB_PATH}. Run 'brainlayer index' first.",
-            "severity": "warning",
-        })
+        errors.append(
+            {
+                "field": "database",
+                "message": f"Database not found at {DEFAULT_DB_PATH}. Run 'brainlayer index' first.",
+                "severity": "warning",
+            }
+        )
     elif not os.access(DEFAULT_DB_PATH, os.R_OK):
-        errors.append({
-            "field": "database",
-            "message": f"Database not readable: {DEFAULT_DB_PATH}",
-            "severity": "error",
-        })
+        errors.append(
+            {
+                "field": "database",
+                "message": f"Database not readable: {DEFAULT_DB_PATH}",
+                "severity": "error",
+            }
+        )
 
     # Check DB parent directory is writable (for WAL mode)
     db_parent = DEFAULT_DB_PATH.parent
     if db_parent.exists() and not os.access(db_parent, os.W_OK):
-        errors.append({
-            "field": "database_dir",
-            "message": f"Database directory not writable: {db_parent}",
-            "severity": "error",
-        })
+        errors.append(
+            {
+                "field": "database_dir",
+                "message": f"Database directory not writable: {db_parent}",
+                "severity": "error",
+            }
+        )
 
     # Check embedding model availability
     try:
         from ..embeddings import get_embedding_model
+
         get_embedding_model()
     except Exception as e:
-        errors.append({
-            "field": "embedding_model",
-            "message": f"Embedding model failed to load: {e}",
-            "severity": "error",
-        })
+        errors.append(
+            {
+                "field": "embedding_model",
+                "message": f"Embedding model failed to load: {e}",
+                "severity": "error",
+            }
+        )
 
     for err in errors:
         level = logging.ERROR if err["severity"] == "error" else logging.WARNING
@@ -107,7 +118,7 @@ def _normalize_project_name(project: str | None) -> str | None:
                 # Use last occurrence in case of nested "Desktop-Gits"
         if gits_idx is not None and gits_idx + 1 < len(segments):
             # Remaining segments after "Gits" form the project path
-            remaining = segments[gits_idx + 1:]
+            remaining = segments[gits_idx + 1 :]
             # Skip secondary "Gits" (e.g., Desktop-Gits)
             while remaining and remaining[0] == "Gits":
                 remaining = remaining[1:]

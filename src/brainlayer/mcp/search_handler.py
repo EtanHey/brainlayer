@@ -45,16 +45,26 @@ async def _brain_search(
     if project is None and entity_id is None and source not in ("youtube", "whatsapp", "telegram", "all"):
         try:
             from ..scoping import resolve_project_scope
+
             project = resolve_project_scope()
         except Exception:
             logger.debug("Project auto-scope failed, proceeding without scope")
 
     if entity_id is not None:
         return await _search(
-            query=query, project=project, content_type=content_type,
-            num_results=num_results, source=source, tag=tag, intent=intent,
-            importance_min=importance_min, date_from=date_from, date_to=date_to,
-            sentiment=sentiment, entity_id=entity_id, format=format,
+            query=query,
+            project=project,
+            content_type=content_type,
+            num_results=num_results,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            entity_id=entity_id,
+            format=format,
         )
 
     if chunk_id is not None:
@@ -87,10 +97,19 @@ async def _brain_search(
     extracted_file = _extract_file_path(query)
     if extracted_file:
         return await _brain_search(
-            query=query, project=project, file_path=extracted_file,
-            content_type=content_type, source=source, tag=tag, intent=intent,
-            importance_min=importance_min, date_from=date_from, date_to=date_to,
-            sentiment=sentiment, num_results=num_results, max_results=max_results,
+            query=query,
+            project=project,
+            file_path=extracted_file,
+            content_type=content_type,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            num_results=num_results,
+            max_results=max_results,
             format=format,
         )
 
@@ -115,10 +134,18 @@ async def _brain_search(
         return await _recall(topic=query, project=project, max_results=max_results)
 
     return await _search(
-        query=query, project=project, content_type=content_type,
-        num_results=num_results, source=source, tag=tag, intent=intent,
-        importance_min=importance_min, date_from=date_from, date_to=date_to,
-        sentiment=sentiment, format=format,
+        query=query,
+        project=project,
+        content_type=content_type,
+        num_results=num_results,
+        source=source,
+        tag=tag,
+        intent=intent,
+        importance_min=importance_min,
+        date_from=date_from,
+        date_to=date_to,
+        sentiment=sentiment,
+        format=format,
     )
 
 
@@ -143,11 +170,14 @@ async def _brain_recall(
     plan_name: str | None = None,
 ):
     """Unified recall dispatcher -- routes to session/context handlers."""
-    resolved_mode = mode or _infer_recall_mode({
-        "session_id": session_id, "plan_name": plan_name,
-        "days": days if days != 7 else None,
-        "limit": limit if limit != 20 else None,
-    })
+    resolved_mode = mode or _infer_recall_mode(
+        {
+            "session_id": session_id,
+            "plan_name": plan_name,
+            "days": days if days != 7 else None,
+            "limit": limit if limit != 20 else None,
+        }
+    )
 
     if resolved_mode == "context":
         return await _current_context(hours=hours)
@@ -225,11 +255,19 @@ async def _search(
             source_filter = None
 
         results = store.hybrid_search(
-            query_embedding=query_embedding, query_text=query, n_results=num_results,
-            project_filter=normalized_project, content_type_filter=content_type,
-            source_filter=source_filter, tag_filter=tag, intent_filter=intent,
-            importance_min=importance_min, date_from=date_from, date_to=date_to,
-            sentiment_filter=sentiment, entity_id=entity_id,
+            query_embedding=query_embedding,
+            query_text=query,
+            n_results=num_results,
+            project_filter=normalized_project,
+            content_type_filter=content_type,
+            source_filter=source_filter,
+            tag_filter=tag,
+            intent_filter=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment_filter=sentiment,
+            entity_id=entity_id,
         )
 
         if not results["documents"][0]:
@@ -242,15 +280,17 @@ async def _search(
             structured_results = []
             for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
                 score = 1 - dist if dist is not None else 0
-                item = _build_compact_result({
-                    "score": round(score, 4),
-                    "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
-                    "content": doc,
-                    "source_file": meta.get("source_file", "unknown"),
-                    "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
-                    "importance": meta.get("importance"),
-                    "summary": meta.get("summary"),
-                })
+                item = _build_compact_result(
+                    {
+                        "score": round(score, 4),
+                        "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
+                        "content": doc,
+                        "source_file": meta.get("source_file", "unknown"),
+                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                        "importance": meta.get("importance"),
+                        "summary": meta.get("summary"),
+                    }
+                )
                 structured_results.append(item)
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
             return ([], structured)
@@ -331,7 +371,11 @@ async def _stats():
         store = _get_vector_store()
         stats = store.get_stats()
         output = f"""## BrainLayer Knowledge Base Stats\n\n- **Total Chunks:** {stats["total_chunks"]}\n- **Projects:** {", ".join(stats["projects"][:15])}{"..." if len(stats["projects"]) > 15 else ""}\n- **Content Types:** {", ".join(stats["content_types"])}\n"""
-        structured = {"total_chunks": stats["total_chunks"], "projects": stats["projects"], "content_types": stats["content_types"]}
+        structured = {
+            "total_chunks": stats["total_chunks"],
+            "projects": stats["projects"],
+            "content_types": stats["content_types"],
+        }
         return ([TextContent(type="text", text=output)], structured)
     except Exception as e:
         return _error_result(f"Stats error: {str(e)}")
@@ -406,7 +450,9 @@ async def _operations(session_id: str) -> list[TextContent]:
         for i, op in enumerate(ops):
             outcome = op.get("outcome", "unknown")
             ts = (op.get("started_at") or "?")[:19]
-            output_parts.append(f"{i + 1}. **{op.get('operation_type', '?')}** -- {op.get('summary') or '?'} [{outcome}] at {ts}")
+            output_parts.append(
+                f"{i + 1}. **{op.get('operation_type', '?')}** -- {op.get('summary') or '?'} [{outcome}] at {ts}"
+            )
         return [TextContent(type="text", text="\n".join(output_parts))]
     except Exception as e:
         return _error_result(f"Operations error: {str(e)}")
@@ -422,7 +468,9 @@ async def _regression(file_path: str, project: str | None = None) -> list[TextCo
         parts = [f"## Regression Analysis: {file_path}\n", f"Timeline: {len(result['timeline'])} interactions\n"]
         if result["last_success"]:
             ls = result["last_success"]
-            parts.append(f"**Last success:** {ls['timestamp']} (session {ls['session_id'][:8]}, branch {ls.get('branch', '?')})\n")
+            parts.append(
+                f"**Last success:** {ls['timestamp']} (session {ls['session_id'][:8]}, branch {ls.get('branch', '?')})\n"
+            )
         else:
             parts.append("**No successful operations found**\n")
         if result["changes_after"]:
@@ -436,7 +484,9 @@ async def _regression(file_path: str, project: str | None = None) -> list[TextCo
         return _error_result(f"Regression error: {str(e)}")
 
 
-async def _plan_links(plan_name: str | None = None, session_id: str | None = None, project: str | None = None) -> list[TextContent]:
+async def _plan_links(
+    plan_name: str | None = None, session_id: str | None = None, project: str | None = None
+) -> list[TextContent]:
     """Query plan-linked sessions."""
     try:
         store = _get_vector_store()
@@ -480,18 +530,24 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
     """Execute think -- retrieve relevant memories for current task."""
     try:
         from ..engine import think
+
         store = _get_vector_store()
         model = _get_embedding_model()
         loop = asyncio.get_running_loop()
+
         def _embed(text: str) -> list[float]:
             return model.embed_query(text)
+
         normalized_project = _normalize_project_name(project)
         result = await loop.run_in_executor(
             None,
-            lambda: think(context=context, store=store, embed_fn=_embed, project=normalized_project, max_results=max_results),
+            lambda: think(
+                context=context, store=store, embed_fn=_embed, project=normalized_project, max_results=max_results
+            ),
         )
         structured = {
-            "query": result.query, "total": result.total,
+            "query": result.query,
+            "total": result.total,
             "decisions": [_memory_to_dict(i) for i in result.decisions],
             "patterns": [_memory_to_dict(i) for i in result.patterns],
             "bugs": [_memory_to_dict(i) for i in result.bugs],
@@ -502,25 +558,53 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
         return _error_result(f"Think error: {str(e)}")
 
 
-async def _recall(file_path: str | None = None, topic: str | None = None, project: str | None = None, max_results: int = 10):
+async def _recall(
+    file_path: str | None = None, topic: str | None = None, project: str | None = None, max_results: int = 10
+):
     """Execute recall -- proactive context retrieval."""
     try:
         from ..engine import recall
+
         store = _get_vector_store()
         model = _get_embedding_model()
         normalized_project = _normalize_project_name(project)
         loop = asyncio.get_running_loop()
+
         def _embed(text: str) -> list[float]:
             return model.embed_query(text)
+
         result = await loop.run_in_executor(
             None,
-            lambda: recall(store=store, embed_fn=_embed, file_path=file_path, topic=topic, project=normalized_project, max_results=max_results),
+            lambda: recall(
+                store=store,
+                embed_fn=_embed,
+                file_path=file_path,
+                topic=topic,
+                project=normalized_project,
+                max_results=max_results,
+            ),
         )
         structured = {
             "target": result.target,
-            "file_history": [{"timestamp": (h.get("timestamp") or "")[:19], "action": h.get("action", ""), "session_id": h.get("session_id", ""), "file_path": h.get("file_path", "")} for h in result.file_history],
+            "file_history": [
+                {
+                    "timestamp": (h.get("timestamp") or "")[:19],
+                    "action": h.get("action", ""),
+                    "session_id": h.get("session_id", ""),
+                    "file_path": h.get("file_path", ""),
+                }
+                for h in result.file_history
+            ],
             "related_chunks": [_memory_to_dict(c) for c in result.related_chunks],
-            "session_summaries": [{"session_id": s.get("session_id", ""), "branch": s.get("branch", ""), "plan_name": s.get("plan_name", ""), "started_at": (s.get("started_at") or "")[:19]} for s in result.session_summaries],
+            "session_summaries": [
+                {
+                    "session_id": s.get("session_id", ""),
+                    "branch": s.get("branch", ""),
+                    "plan_name": s.get("plan_name", ""),
+                    "started_at": (s.get("started_at") or "")[:19],
+                }
+                for s in result.session_summaries
+            ],
         }
         return ([TextContent(type="text", text=result.format())], structured)
     except Exception as e:
@@ -531,6 +615,7 @@ async def _sessions(project: str | None = None, days: int = 7, limit: int = 20) 
     """List recent sessions."""
     try:
         from ..engine import format_sessions, sessions
+
         store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
         result = sessions(store=store, project=normalized_project, days=days, limit=limit)
@@ -545,7 +630,12 @@ async def _session_summary(session_id: str):
         store = _get_vector_store()
         enrichment = store.get_session_enrichment(session_id)
         if not enrichment:
-            return [TextContent(type="text", text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.")]
+            return [
+                TextContent(
+                    type="text",
+                    text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.",
+                )
+            ]
         parts = [f"## Session Summary: {session_id[:8]}...\n"]
         if enrichment.get("session_summary"):
             parts.append(f"**Summary:** {enrichment['session_summary']}\n")
@@ -560,7 +650,9 @@ async def _session_summary(session_id: str):
         if enrichment.get("duration_seconds"):
             mins = enrichment["duration_seconds"] // 60
             parts.append(f"**Duration:** {mins} min")
-        parts.append(f"**Messages:** {enrichment.get('message_count', 0)} (user: {enrichment.get('user_message_count', 0)}, assistant: {enrichment.get('assistant_message_count', 0)})\n")
+        parts.append(
+            f"**Messages:** {enrichment.get('message_count', 0)} (user: {enrichment.get('user_message_count', 0)}, assistant: {enrichment.get('assistant_message_count', 0)})\n"
+        )
         if enrichment.get("decisions_made"):
             parts.append("### Decisions")
             for d in enrichment["decisions_made"]:
@@ -598,6 +690,7 @@ async def _current_context(hours: int = 24):
     """Lightweight session awareness."""
     try:
         from ..engine import current_context
+
         store = _get_vector_store()
         result = current_context(store=store, hours=hours)
         structured = {
@@ -606,8 +699,13 @@ async def _current_context(hours: int = 24):
             "active_plan": result.active_plan,
             "recent_files": result.recent_files,
             "recent_sessions": [
-                {"session_id": s.session_id, "project": s.project, "branch": s.branch,
-                 "started_at": s.started_at[:19] if s.started_at else "", "plan_name": s.plan_name}
+                {
+                    "session_id": s.session_id,
+                    "project": s.project,
+                    "branch": s.branch,
+                    "started_at": s.started_at[:19] if s.started_at else "",
+                    "plan_name": s.plan_name,
+                }
                 for s in result.recent_sessions
             ],
         }

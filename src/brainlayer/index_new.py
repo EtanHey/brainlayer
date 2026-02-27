@@ -45,7 +45,7 @@ def index_chunks_to_sqlite(
                     created_at = _data["timestamp"]
                     break
     except Exception as e:
-        logger.debug("Could not extract timestamp from %s: %s", path if 'path' in dir() else "file", e)
+        logger.debug("Could not extract timestamp from %s: %s", path if "path" in dir() else "file", e)
     if not created_at:
         from datetime import datetime, timezone
 

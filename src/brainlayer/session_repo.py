@@ -63,9 +63,14 @@ class SessionMixin:
 
         return [
             {
-                "id": row[0], "content": row[1], "source_file": row[2],
-                "project": row[3], "content_type": row[4],
-                "conversation_id": row[5], "position": row[6], "char_count": row[7],
+                "id": row[0],
+                "content": row[1],
+                "source_file": row[2],
+                "project": row[3],
+                "content_type": row[4],
+                "conversation_id": row[5],
+                "position": row[6],
+                "char_count": row[7],
             }
             for row in results
         ]
@@ -237,11 +242,17 @@ class SessionMixin:
                     ?, ?, ?)
         """,
             (
-                session_id, project, branch, pr_number,
+                session_id,
+                project,
+                branch,
+                pr_number,
                 json.dumps(commit_shas) if commit_shas else None,
                 json.dumps(files_changed) if files_changed else None,
-                started_at, ended_at,
-                plan_name, plan_phase, story_id,
+                started_at,
+                ended_at,
+                plan_name,
+                plan_phase,
+                story_id,
             ),
         )
 
@@ -259,15 +270,22 @@ class SessionMixin:
                 VALUES (?, ?, ?, ?, ?, ?)
             """,
                 (
-                    i["file_path"], i.get("timestamp"), i["session_id"],
-                    i.get("action", "unknown"), i.get("chunk_id"), i.get("project"),
+                    i["file_path"],
+                    i.get("timestamp"),
+                    i["session_id"],
+                    i.get("action", "unknown"),
+                    i.get("chunk_id"),
+                    i.get("project"),
                 ),
             )
             count += 1
         return count
 
     def get_file_timeline(
-        self, file_path: str, project: Optional[str] = None, limit: int = 50,
+        self,
+        file_path: str,
+        project: Optional[str] = None,
+        limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get ordered timeline of interactions with a file."""
         cursor = self._read_cursor()
@@ -289,8 +307,13 @@ class SessionMixin:
         for row in cursor.execute(query, params):
             results.append(
                 {
-                    "file_path": row[0], "timestamp": row[1], "session_id": row[2],
-                    "action": row[3], "project": row[4], "branch": row[5], "pr_number": row[6],
+                    "file_path": row[0],
+                    "timestamp": row[1],
+                    "session_id": row[2],
+                    "action": row[3],
+                    "project": row[4],
+                    "branch": row[5],
+                    "pr_number": row[6],
                 }
             )
         return results
@@ -303,11 +326,15 @@ class SessionMixin:
             return None
         row = rows[0]
         result = {
-            "session_id": row[0], "project": row[1], "branch": row[2],
+            "session_id": row[0],
+            "project": row[1],
+            "branch": row[2],
             "pr_number": row[3],
             "commit_shas": _safe_json_loads(row[4]),
             "files_changed": _safe_json_loads(row[5]),
-            "started_at": row[6], "ended_at": row[7], "created_at": row[8],
+            "started_at": row[6],
+            "ended_at": row[7],
+            "created_at": row[8],
         }
         if len(row) > 9:
             result["plan_name"] = row[9]
@@ -324,9 +351,7 @@ class SessionMixin:
     ) -> bool:
         """Update plan linking fields for an existing session."""
         cursor = self.conn.cursor()
-        rows = list(
-            cursor.execute("SELECT 1 FROM session_context WHERE session_id = ?", (session_id,))
-        )
+        rows = list(cursor.execute("SELECT 1 FROM session_context WHERE session_id = ?", (session_id,)))
         if not rows:
             return False
         cursor.execute(
@@ -340,7 +365,9 @@ class SessionMixin:
         return True
 
     def get_sessions_by_plan(
-        self, plan_name: Optional[str] = None, project: Optional[str] = None,
+        self,
+        plan_name: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all sessions linked to a plan."""
         cursor = self._read_cursor()
@@ -363,9 +390,15 @@ class SessionMixin:
         for row in cursor.execute(query, params):
             results.append(
                 {
-                    "session_id": row[0], "project": row[1], "branch": row[2],
-                    "pr_number": row[3], "started_at": row[4], "ended_at": row[5],
-                    "plan_name": row[6], "plan_phase": row[7], "story_id": row[8],
+                    "session_id": row[0],
+                    "project": row[1],
+                    "branch": row[2],
+                    "pr_number": row[3],
+                    "started_at": row[4],
+                    "ended_at": row[5],
+                    "plan_name": row[6],
+                    "plan_phase": row[7],
+                    "story_id": row[8],
                 }
             )
         return results
@@ -444,10 +477,16 @@ class SessionMixin:
                  step_count, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    op["id"], op["session_id"], op.get("operation_type"),
-                    chunk_ids_json, op.get("summary"), op.get("outcome"),
-                    op.get("started_at"), op.get("ended_at"),
-                    op.get("step_count", 0), now,
+                    op["id"],
+                    op["session_id"],
+                    op.get("operation_type"),
+                    chunk_ids_json,
+                    op.get("summary"),
+                    op.get("outcome"),
+                    op.get("started_at"),
+                    op.get("ended_at"),
+                    op.get("step_count", 0),
+                    now,
                 ),
             )
             count += 1
@@ -477,9 +516,15 @@ class SessionMixin:
                     pass
             results.append(
                 {
-                    "id": row[0], "session_id": row[1], "operation_type": row[2],
-                    "chunk_ids": chunk_ids, "summary": row[4], "outcome": row[5],
-                    "started_at": row[6], "ended_at": row[7], "step_count": row[8],
+                    "id": row[0],
+                    "session_id": row[1],
+                    "operation_type": row[2],
+                    "chunk_ids": chunk_ids,
+                    "summary": row[4],
+                    "outcome": row[5],
+                    "started_at": row[6],
+                    "ended_at": row[7],
+                    "step_count": row[8],
                 }
             )
         return results
@@ -496,9 +541,7 @@ class SessionMixin:
                ORDER BY COUNT(*) DESC"""
             )
         )
-        sessions = list(
-            cursor.execute("SELECT COUNT(DISTINCT session_id) FROM operations")
-        )[0][0]
+        sessions = list(cursor.execute("SELECT COUNT(DISTINCT session_id) FROM operations"))[0][0]
         return {
             "total_operations": total,
             "sessions_with_operations": sessions,
@@ -527,9 +570,13 @@ class SessionMixin:
                  project, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    chain["file_path"], chain["session_a"], chain["session_b"],
-                    chain.get("shared_actions", 0), chain.get("time_delta_hours"),
-                    chain.get("project"), now,
+                    chain["file_path"],
+                    chain["session_a"],
+                    chain["session_b"],
+                    chain.get("shared_actions", 0),
+                    chain.get("time_delta_hours"),
+                    chain.get("project"),
+                    now,
                 ),
             )
             count += 1
@@ -556,15 +603,22 @@ class SessionMixin:
         )
         return [
             {
-                "file_path": row[0], "session_a": row[1], "session_b": row[2],
-                "shared_actions": row[3], "time_delta_hours": row[4],
-                "project": row[5], "branch_a": row[6], "branch_b": row[7],
+                "file_path": row[0],
+                "session_a": row[1],
+                "session_b": row[2],
+                "shared_actions": row[3],
+                "time_delta_hours": row[4],
+                "project": row[5],
+                "branch_a": row[6],
+                "branch_b": row[7],
             }
             for row in rows
         ]
 
     def get_file_regression(
-        self, file_path: str, project: Optional[str] = None,
+        self,
+        file_path: str,
+        project: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get regression info for a file."""
         cursor = self._read_cursor()
@@ -588,16 +642,23 @@ class SessionMixin:
 
         if not interactions:
             return {
-                "file_path": file_path, "timeline": [],
-                "last_success": None, "changes_after": [],
+                "file_path": file_path,
+                "timeline": [],
+                "last_success": None,
+                "changes_after": [],
             }
 
         timeline = []
         for row in interactions:
             timeline.append(
                 {
-                    "file_path": row[0], "timestamp": row[1], "session_id": row[2],
-                    "action": row[3], "project": row[4], "branch": row[5], "pr_number": row[6],
+                    "file_path": row[0],
+                    "timestamp": row[1],
+                    "session_id": row[2],
+                    "action": row[3],
+                    "project": row[4],
+                    "branch": row[5],
+                    "pr_number": row[6],
                 }
             )
 
@@ -625,8 +686,10 @@ class SessionMixin:
             changes_after = [e for e in timeline if (e.get("timestamp") or "") > last_success["timestamp"]]
 
         return {
-            "file_path": file_path, "timeline": timeline,
-            "last_success": last_success, "changes_after": changes_after,
+            "file_path": file_path,
+            "timeline": timeline,
+            "last_success": last_success,
+            "changes_after": changes_after,
         }
 
     def get_topic_chain_stats(self) -> Dict[str, Any]:
@@ -653,8 +716,13 @@ class SessionMixin:
         session_id = enrichment["session_id"]
 
         json_fields = [
-            "decisions_made", "corrections", "learnings", "mistakes",
-            "patterns", "topic_tags", "tool_usage_stats",
+            "decisions_made",
+            "corrections",
+            "learnings",
+            "mistakes",
+            "patterns",
+            "topic_tags",
+            "tool_usage_stats",
         ]
         for field in json_fields:
             if field in enrichment and not isinstance(enrichment[field], str):
@@ -759,13 +827,33 @@ class SessionMixin:
             )
 
     _SESSION_ENRICHMENT_COLS = [
-        "id", "session_id", "file_path", "enrichment_version", "enrichment_model",
-        "enrichment_timestamp", "session_start_time", "session_end_time",
-        "duration_seconds", "message_count", "user_message_count",
-        "assistant_message_count", "tool_call_count", "session_summary",
-        "primary_intent", "outcome", "complexity_score", "session_quality_score",
-        "decisions_made", "corrections", "learnings", "mistakes", "patterns",
-        "topic_tags", "tool_usage_stats", "what_worked", "what_failed",
+        "id",
+        "session_id",
+        "file_path",
+        "enrichment_version",
+        "enrichment_model",
+        "enrichment_timestamp",
+        "session_start_time",
+        "session_end_time",
+        "duration_seconds",
+        "message_count",
+        "user_message_count",
+        "assistant_message_count",
+        "tool_call_count",
+        "session_summary",
+        "primary_intent",
+        "outcome",
+        "complexity_score",
+        "session_quality_score",
+        "decisions_made",
+        "corrections",
+        "learnings",
+        "mistakes",
+        "patterns",
+        "topic_tags",
+        "tool_usage_stats",
+        "what_worked",
+        "what_failed",
         "summary_embedding",
     ]
 
@@ -783,8 +871,13 @@ class SessionMixin:
         row = rows[0]
         result = dict(zip(self._SESSION_ENRICHMENT_COLS, row))
         for field in [
-            "decisions_made", "corrections", "learnings",
-            "mistakes", "patterns", "topic_tags", "tool_usage_stats",
+            "decisions_made",
+            "corrections",
+            "learnings",
+            "mistakes",
+            "patterns",
+            "topic_tags",
+            "tool_usage_stats",
         ]:
             result[field] = _safe_json_loads(result.get(field))
         return result

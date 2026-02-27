@@ -28,7 +28,10 @@ async def _brain_entity(
         result = await loop.run_in_executor(
             None,
             lambda: entity_lookup(
-                query=query, store=store, embed_fn=model.embed_query, entity_type=entity_type,
+                query=query,
+                store=store,
+                embed_fn=model.embed_query,
+                entity_type=entity_type,
             ),
         )
     except Exception as e:
@@ -71,30 +74,36 @@ async def _brain_get_person(
             results = await loop.run_in_executor(
                 None,
                 lambda: store.hybrid_search(
-                    query_embedding=query_embedding, query_text=context,
-                    n_results=num_memories, entity_id=entity_id,
+                    query_embedding=query_embedding,
+                    query_text=context,
+                    n_results=num_memories,
+                    entity_id=entity_id,
                 ),
             )
             if results["documents"][0]:
                 for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-                    memories.append({
-                        "content": doc[:500],
-                        "type": meta.get("content_type", "unknown"),
-                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
-                        "summary": meta.get("summary"),
-                    })
+                    memories.append(
+                        {
+                            "content": doc[:500],
+                            "type": meta.get("content_type", "unknown"),
+                            "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                            "summary": meta.get("summary"),
+                        }
+                    )
         else:
             entity_chunks = await loop.run_in_executor(
                 None,
                 lambda: store.get_entity_chunks(entity_id, limit=num_memories),
             )
             for chunk in entity_chunks:
-                memories.append({
-                    "content": chunk["content"][:500] if chunk.get("content") else "",
-                    "type": chunk.get("content_type", "unknown"),
-                    "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
-                    "relevance": chunk.get("relevance"),
-                })
+                memories.append(
+                    {
+                        "content": chunk["content"][:500] if chunk.get("content") else "",
+                        "type": chunk.get("content_type", "unknown"),
+                        "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
+                        "relevance": chunk.get("relevance"),
+                    }
+                )
     except Exception as e:
         logger.warning("Memory retrieval for person '%s' failed: %s", name, e)
 

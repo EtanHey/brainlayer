@@ -53,8 +53,19 @@ class KGMixin:
                 updated_at = excluded.updated_at
             """,
             (
-                entity_id, entity_type, name, meta_json, canon, description,
-                conf, imp, valid_from, valid_until, group_id, now, now,
+                entity_id,
+                entity_type,
+                name,
+                meta_json,
+                canon,
+                description,
+                conf,
+                imp,
+                valid_from,
+                valid_until,
+                group_id,
+                now,
+                now,
             ),
         )
 
@@ -108,8 +119,17 @@ class KGMixin:
                 source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
             """,
             (
-                relation_id, source_id, target_id, relation_type, props_json, confidence,
-                fact, importance, valid_from, valid_until, source_chunk_id,
+                relation_id,
+                source_id,
+                target_id,
+                relation_type,
+                props_json,
+                confidence,
+                fact,
+                importance,
+                valid_from,
+                valid_until,
+                source_chunk_id,
             ),
         )
 
@@ -160,12 +180,19 @@ class KGMixin:
             return None
         row = rows[0]
         return {
-            "id": row[0], "entity_type": row[1], "name": row[2],
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
             "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4], "updated_at": row[5],
-            "canonical_name": row[6], "description": row[7],
-            "confidence": row[8], "importance": row[9],
-            "valid_from": row[10], "valid_until": row[11], "group_id": row[12],
+            "created_at": row[4],
+            "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+            "valid_from": row[10],
+            "valid_until": row[11],
+            "group_id": row[12],
         }
 
     def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
@@ -184,12 +211,19 @@ class KGMixin:
             return None
         row = rows[0]
         return {
-            "id": row[0], "entity_type": row[1], "name": row[2],
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
             "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4], "updated_at": row[5],
-            "canonical_name": row[6], "description": row[7],
-            "confidence": row[8], "importance": row[9],
-            "valid_from": row[10], "valid_until": row[11], "group_id": row[12],
+            "created_at": row[4],
+            "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+            "valid_from": row[10],
+            "valid_until": row[11],
+            "group_id": row[12],
         }
 
     def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
@@ -214,13 +248,20 @@ class KGMixin:
             for row in rows:
                 results.append(
                     {
-                        "id": row[0], "source_id": row[1], "target_id": row[2],
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
                         "relation_type": row[3],
                         "properties": json.loads(row[4]) if row[4] else {},
-                        "confidence": row[5], "target_name": row[6], "target_type": row[7],
-                        "fact": row[8], "importance": row[9],
-                        "valid_from": row[10], "valid_until": row[11],
-                        "expired_at": row[12], "source_chunk_id": row[13],
+                        "confidence": row[5],
+                        "target_name": row[6],
+                        "target_type": row[7],
+                        "fact": row[8],
+                        "importance": row[9],
+                        "valid_from": row[10],
+                        "valid_until": row[11],
+                        "expired_at": row[12],
+                        "source_chunk_id": row[13],
                         "direction": "outgoing",
                     }
                 )
@@ -242,13 +283,20 @@ class KGMixin:
             for row in rows:
                 results.append(
                     {
-                        "id": row[0], "source_id": row[1], "target_id": row[2],
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
                         "relation_type": row[3],
                         "properties": json.loads(row[4]) if row[4] else {},
-                        "confidence": row[5], "source_name": row[6], "source_type": row[7],
-                        "fact": row[8], "importance": row[9],
-                        "valid_from": row[10], "valid_until": row[11],
-                        "expired_at": row[12], "source_chunk_id": row[13],
+                        "confidence": row[5],
+                        "source_name": row[6],
+                        "source_type": row[7],
+                        "fact": row[8],
+                        "importance": row[9],
+                        "valid_from": row[10],
+                        "valid_until": row[11],
+                        "expired_at": row[12],
+                        "source_chunk_id": row[13],
                         "direction": "incoming",
                     }
                 )
@@ -274,15 +322,24 @@ class KGMixin:
         )
         return [
             {
-                "chunk_id": row[0], "relevance": row[1], "context": row[2],
-                "mention_type": row[3], "content": row[4], "source_file": row[5],
-                "project": row[6], "content_type": row[7], "created_at": row[8],
+                "chunk_id": row[0],
+                "relevance": row[1],
+                "context": row[2],
+                "mention_type": row[3],
+                "content": row[4],
+                "source_file": row[5],
+                "project": row[6],
+                "content_type": row[7],
+                "created_at": row[8],
             }
             for row in rows
         ]
 
     def search_entities(
-        self, query: str, entity_type: Optional[str] = None, limit: int = 10,
+        self,
+        query: str,
+        entity_type: Optional[str] = None,
+        limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """Search entities using FTS5 full-text search."""
         cursor = self._read_cursor()
@@ -317,15 +374,22 @@ class KGMixin:
 
         return [
             {
-                "id": row[0], "entity_type": row[1], "name": row[2],
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
                 "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4], "updated_at": row[5], "rank": row[6],
+                "created_at": row[4],
+                "updated_at": row[5],
+                "rank": row[6],
             }
             for row in rows
         ]
 
     def search_entities_semantic(
-        self, query_embedding: List[float], entity_type: Optional[str] = None, limit: int = 10,
+        self,
+        query_embedding: List[float],
+        entity_type: Optional[str] = None,
+        limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """Search entities using vector similarity."""
         cursor = self._read_cursor()
@@ -362,9 +426,13 @@ class KGMixin:
 
         return [
             {
-                "id": row[0], "entity_type": row[1], "name": row[2],
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
                 "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4], "updated_at": row[5], "distance": row[6],
+                "created_at": row[4],
+                "updated_at": row[5],
+                "distance": row[6],
             }
             for row in rows
         ]
@@ -380,9 +448,11 @@ class KGMixin:
             cursor.execute("SELECT relation_type, COUNT(*) FROM kg_relations GROUP BY relation_type")
         )
         return {
-            "entities": entity_count, "relations": relation_count,
+            "entities": entity_count,
+            "relations": relation_count,
             "entity_chunk_links": link_count,
-            "entity_types": type_counts, "relation_types": relation_type_counts,
+            "entity_types": type_counts,
+            "relation_types": relation_type_counts,
         }
 
     def add_entity_alias(self, alias: str, entity_id: str, alias_type: str = "name") -> None:
@@ -417,9 +487,12 @@ class KGMixin:
             return None
         row = rows[0]
         return {
-            "id": row[0], "entity_type": row[1], "name": row[2],
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
             "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4], "updated_at": row[5],
+            "created_at": row[4],
+            "updated_at": row[5],
         }
 
     def get_entity_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
@@ -443,7 +516,9 @@ class KGMixin:
         )
 
     def get_current_facts(
-        self, entity_id: str, relation_type: Optional[str] = None,
+        self,
+        entity_id: str,
+        relation_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get non-expired relations for an entity (outgoing only)."""
         cursor = self._read_cursor()
@@ -477,19 +552,29 @@ class KGMixin:
             )
         return [
             {
-                "id": row[0], "source_id": row[1], "target_id": row[2],
+                "id": row[0],
+                "source_id": row[1],
+                "target_id": row[2],
                 "relation_type": row[3],
                 "properties": json.loads(row[4]) if row[4] else {},
-                "confidence": row[5], "fact": row[6], "importance": row[7],
-                "valid_from": row[8], "valid_until": row[9],
-                "expired_at": row[10], "source_chunk_id": row[11],
-                "target_name": row[12], "target_type": row[13],
+                "confidence": row[5],
+                "fact": row[6],
+                "importance": row[7],
+                "valid_from": row[8],
+                "valid_until": row[9],
+                "expired_at": row[10],
+                "source_chunk_id": row[11],
+                "target_name": row[12],
+                "target_type": row[13],
             }
             for row in rows
         ]
 
     def traverse(
-        self, entity_id: str, max_depth: int = 2, relation_types: Optional[List[str]] = None,
+        self,
+        entity_id: str,
+        max_depth: int = 2,
+        relation_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Multi-hop graph traversal via recursive CTE."""
         cursor = self._read_cursor()
@@ -544,10 +629,7 @@ class KGMixin:
             params_list = [entity_id, entity_id, max_depth]
 
         rows = list(cursor.execute(query, params_list))
-        return [
-            {"entity_id": row[0], "depth": row[1], "entity_type": row[2], "name": row[3]}
-            for row in rows
-        ]
+        return [{"entity_id": row[0], "depth": row[1], "entity_type": row[2], "name": row[3]} for row in rows]
 
     def resolve_entity(self, name_or_alias: str) -> Optional[Dict[str, Any]]:
         """Resolve a string to a KG entity."""
@@ -570,12 +652,19 @@ class KGMixin:
         if rows:
             row = rows[0]
             return {
-                "id": row[0], "entity_type": row[1], "name": row[2],
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
                 "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4], "updated_at": row[5],
-                "canonical_name": row[6], "description": row[7],
-                "confidence": row[8], "importance": row[9],
-                "valid_from": row[10], "valid_until": row[11], "group_id": row[12],
+                "created_at": row[4],
+                "updated_at": row[5],
+                "canonical_name": row[6],
+                "description": row[7],
+                "confidence": row[8],
+                "importance": row[9],
+                "valid_from": row[10],
+                "valid_until": row[11],
+                "group_id": row[12],
             }
 
         # 3. Canonical name match
@@ -591,12 +680,19 @@ class KGMixin:
         if rows:
             row = rows[0]
             return {
-                "id": row[0], "entity_type": row[1], "name": row[2],
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
                 "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4], "updated_at": row[5],
-                "canonical_name": row[6], "description": row[7],
-                "confidence": row[8], "importance": row[9],
-                "valid_from": row[10], "valid_until": row[11], "group_id": row[12],
+                "created_at": row[4],
+                "updated_at": row[5],
+                "canonical_name": row[6],
+                "description": row[7],
+                "confidence": row[8],
+                "importance": row[9],
+                "valid_from": row[10],
+                "valid_until": row[11],
+                "group_id": row[12],
             }
 
         # 4. FTS5 fuzzy fallback
@@ -607,7 +703,10 @@ class KGMixin:
         return None
 
     def kg_search(
-        self, query: str, relation_type: Optional[str] = None, limit: int = 20,
+        self,
+        query: str,
+        relation_type: Optional[str] = None,
+        limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Structured KG fact retrieval."""
         results: List[Dict[str, Any]] = []
@@ -648,9 +747,13 @@ class KGMixin:
             for row in rows:
                 results.append(
                     {
-                        "id": row[0], "source_id": row[1], "target_id": row[2],
-                        "relation_type": row[3], "fact": row[4],
-                        "confidence": row[5], "importance": row[6],
+                        "id": row[0],
+                        "source_id": row[1],
+                        "target_id": row[2],
+                        "relation_type": row[3],
+                        "fact": row[4],
+                        "confidence": row[5],
+                        "importance": row[6],
                         "source_chunk_id": row[7],
                         "properties": json.loads(row[8]) if row[8] else {},
                         "source_entity": {"name": row[9], "entity_type": row[10]},

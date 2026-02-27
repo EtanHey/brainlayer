@@ -34,8 +34,12 @@ async def _brain_digest(
         result = await loop.run_in_executor(
             None,
             lambda: digest_content(
-                content=content, store=store, embed_fn=model.embed_query,
-                title=title, project=norm_project, participants=participants,
+                content=content,
+                store=store,
+                embed_fn=model.embed_query,
+                title=title,
+                project=norm_project,
+                participants=participants,
             ),
         )
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
@@ -68,11 +72,21 @@ async def _store_new(
     if resolved_type == "issue" and status is None:
         status = "open"
     return await _store(
-        content=content, memory_type=resolved_type, project=project, tags=tags,
-        importance=resolved_importance, confidence_score=confidence_score,
-        outcome=outcome, reversibility=reversibility, files_changed=files_changed,
-        entity_id=entity_id, status=status, severity=severity,
-        file_path=file_path, function_name=function_name, line_number=line_number,
+        content=content,
+        memory_type=resolved_type,
+        project=project,
+        tags=tags,
+        importance=resolved_importance,
+        confidence_score=confidence_score,
+        outcome=outcome,
+        reversibility=reversibility,
+        files_changed=files_changed,
+        entity_id=entity_id,
+        status=status,
+        severity=severity,
+        file_path=file_path,
+        function_name=function_name,
+        line_number=line_number,
     )
 
 
@@ -106,7 +120,9 @@ async def _brain_update(
                 embedding = await loop.run_in_executor(None, model.embed_query, content)
 
             ok = store.update_chunk(
-                chunk_id=chunk_id, content=content, tags=tags,
+                chunk_id=chunk_id,
+                content=content,
+                tags=tags,
                 importance=float(importance) if importance is not None else None,
                 embedding=embedding,
             )
@@ -150,6 +166,7 @@ async def _brain_update(
 def _get_pending_store_path():
     """Path for the store queue buffer file."""
     from ..paths import DEFAULT_DB_PATH
+
     return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
 
 
@@ -184,12 +201,18 @@ def _flush_pending_stores(store, embed_fn) -> int:
         try:
             item = json.loads(line)
             store_memory(
-                store=store, embed_fn=embed_fn, content=item["content"],
-                memory_type=item["memory_type"], project=item.get("project"),
-                tags=item.get("tags"), importance=item.get("importance"),
+                store=store,
+                embed_fn=embed_fn,
+                content=item["content"],
+                memory_type=item["memory_type"],
+                project=item.get("project"),
+                tags=item.get("tags"),
+                importance=item.get("importance"),
                 confidence_score=item.get("confidence_score"),
-                outcome=item.get("outcome"), reversibility=item.get("reversibility"),
-                files_changed=item.get("files_changed"), entity_id=item.get("entity_id"),
+                outcome=item.get("outcome"),
+                reversibility=item.get("reversibility"),
+                files_changed=item.get("files_changed"),
+                entity_id=item.get("entity_id"),
             )
             flushed += 1
         except Exception as e:
@@ -237,12 +260,23 @@ async def _store(
         result = await loop.run_in_executor(
             None,
             lambda: store_memory(
-                store=store, embed_fn=_embed, content=content, memory_type=memory_type,
-                project=normalized_project, tags=tags, importance=importance,
-                confidence_score=confidence_score, outcome=outcome,
-                reversibility=reversibility, files_changed=files_changed,
-                entity_id=entity_id, status=status, severity=severity,
-                file_path=file_path, function_name=function_name, line_number=line_number,
+                store=store,
+                embed_fn=_embed,
+                content=content,
+                memory_type=memory_type,
+                project=normalized_project,
+                tags=tags,
+                importance=importance,
+                confidence_score=confidence_score,
+                outcome=outcome,
+                reversibility=reversibility,
+                files_changed=files_changed,
+                entity_id=entity_id,
+                status=status,
+                severity=severity,
+                file_path=file_path,
+                function_name=function_name,
+                line_number=line_number,
             ),
         )
 
@@ -269,15 +303,25 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if "locked" in str(e).lower() or "busy" in str(e).lower():
-            _queue_store({
-                "content": content, "memory_type": memory_type,
-                "project": _normalize_project_name(project), "tags": tags,
-                "importance": importance, "confidence_score": confidence_score,
-                "outcome": outcome, "reversibility": reversibility,
-                "files_changed": files_changed, "entity_id": entity_id,
-                "status": status, "severity": severity, "file_path": file_path,
-                "function_name": function_name, "line_number": line_number,
-            })
+            _queue_store(
+                {
+                    "content": content,
+                    "memory_type": memory_type,
+                    "project": _normalize_project_name(project),
+                    "tags": tags,
+                    "importance": importance,
+                    "confidence_score": confidence_score,
+                    "outcome": outcome,
+                    "reversibility": reversibility,
+                    "files_changed": files_changed,
+                    "entity_id": entity_id,
+                    "status": status,
+                    "severity": severity,
+                    "file_path": file_path,
+                    "function_name": function_name,
+                    "line_number": line_number,
+                }
+            )
             structured = {"chunk_id": "queued", "related": []}
             return (
                 [TextContent(type="text", text="Memory queued (DB busy). Will flush on next successful store.")],
