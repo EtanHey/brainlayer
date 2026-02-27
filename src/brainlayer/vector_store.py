@@ -10,7 +10,21 @@ import apsw
 import apsw.bestpractice
 import sqlite_vec
 
-# Apply APSW best practices
+
+def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
+    """Set busy_timeout on every new connection before any other hooks.
+
+    APSW bestpractice hooks (connection_optimize) run PRAGMA optimize inside
+    the Connection() constructor. Without busy_timeout set first, this PRAGMA
+    fails with BusyError when other processes hold the DB lock.
+    """
+    conn.setbusytimeout(10_000)  # 10 seconds
+
+
+# Register busy_timeout hook BEFORE bestpractice hooks so it fires first.
+# bestpractice.apply() adds hooks that run PRAGMA optimize inside Connection(),
+# which needs busy_timeout active or it crashes under contention.
+apsw.connection_hooks.insert(0, _set_busy_timeout_hook)
 apsw.bestpractice.apply(apsw.bestpractice.recommended)
 
 
@@ -72,23 +86,59 @@ def serialize_f32(vector: List[float]) -> bytes:
 class VectorStore:
     """SQLite-vec based vector store."""
 
+    # Retry settings for DB init under contention (multiple MCP instances + enrichment)
+    _INIT_MAX_RETRIES = 5
+    _INIT_BASE_DELAY = 0.5  # seconds
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self._init_db_with_retry()
+
+    def _init_db_with_retry(self) -> None:
+        """Initialize DB with retry on BusyError.
+
+        Multiple BrainLayer processes (MCP instances, daemon, enrichment) may
+        contend for write locks during DDL. Retry with exponential backoff
+        instead of crashing on the first BusyError.
+        """
+        import time
+
+        last_err = None
+        for attempt in range(self._INIT_MAX_RETRIES):
+            try:
+                self._init_db()
+                return
+            except apsw.BusyError as e:
+                last_err = e
+                delay = self._INIT_BASE_DELAY * (2 ** attempt)
+                import sys
+
+                print(
+                    f"  DB init BusyError (attempt {attempt + 1}/{self._INIT_MAX_RETRIES}), "
+                    f"retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+        raise last_err  # type: ignore[misc]
 
     def _init_db(self) -> None:
         """Initialize database with vector extension."""
         self.conn = apsw.Connection(str(self.db_path))
+
+        # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
+        # The PRAGMA approach only takes effect after execution, but DDL below
+        # needs the timeout active from the start.
+        self.conn.setbusytimeout(10_000)  # 10 seconds
+
         self.conn.enableloadextension(True)
         self.conn.loadextension(sqlite_vec.loadable_path())
         self.conn.enableloadextension(False)
 
         cursor = self.conn.cursor()
 
-        # AIDEV-NOTE: busy_timeout is critical for multi-process access (daemon + MCP + enrichment).
-        # Without this, concurrent writes get SQLITE_BUSY immediately and crash silently.
-        cursor.execute("PRAGMA busy_timeout = 5000")
+        # WAL mode is persistent on the DB file — set it every time to ensure
+        # it's active even if the DB was created by an older version.
         cursor.execute("PRAGMA journal_mode = WAL")
 
         # Create tables

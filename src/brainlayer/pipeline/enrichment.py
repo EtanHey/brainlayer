@@ -102,7 +102,71 @@ RETRY_MAX_DELAY = float(os.environ.get("BRAINLAYER_RETRY_MAX_DELAY", "30.0"))  #
 CIRCUIT_BREAKER_THRESHOLD = int(os.environ.get("BRAINLAYER_CIRCUIT_BREAKER", "10"))
 # MLX default timeout (shorter than Ollama — MLX should respond faster)
 MLX_DEFAULT_TIMEOUT = int(os.environ.get("BRAINLAYER_MLX_TIMEOUT", "60"))
+# Batch fail ratio: pause if more than this fraction of a batch fails
+BATCH_FAIL_RATIO_THRESHOLD = float(os.environ.get("BRAINLAYER_BATCH_FAIL_RATIO", "0.8"))
+# Health check pause: seconds to wait before retrying after backend detected dead
+HEALTH_CHECK_PAUSE = int(os.environ.get("BRAINLAYER_HEALTH_PAUSE", "15"))
+# MLX restart: allow Python to restart MLX server if it dies
+MLX_AUTO_RESTART = os.environ.get("BRAINLAYER_MLX_AUTO_RESTART", "1") == "1"
+MLX_RESTART_WAIT = int(os.environ.get("BRAINLAYER_MLX_RESTART_WAIT", "60"))
 from ..paths import DEFAULT_DB_PATH
+
+
+def check_backend_health(backend: str) -> bool:
+    """Check if the LLM backend is reachable. Returns True if healthy."""
+    try:
+        if backend == "mlx":
+            resp = requests.get(f"{MLX_BASE_URL}/v1/models", timeout=5)
+            resp.raise_for_status()
+        elif backend == "ollama":
+            resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+            resp.raise_for_status()
+        elif backend == "groq":
+            return bool(GROQ_API_KEY)
+        return True
+    except Exception:
+        return False
+
+
+def _try_restart_mlx() -> bool:
+    """Attempt to restart the MLX server. Returns True if successful."""
+    import subprocess
+
+    print("Attempting MLX server restart...", file=sys.stderr)
+    try:
+        # Parse port from MLX_BASE_URL
+        port = "8080"
+        if ":" in MLX_BASE_URL.split("//")[-1]:
+            port = MLX_BASE_URL.split(":")[-1].rstrip("/")
+
+        subprocess.Popen(
+            [
+                sys.executable, "-m", "mlx_lm.server",
+                "--model", MLX_MODEL,
+                "--port", port,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Wait for server to be ready
+        for i in range(MLX_RESTART_WAIT):
+            time.sleep(1)
+            if check_backend_health("mlx"):
+                print(f"MLX server restarted successfully after {i + 1}s", file=sys.stderr)
+                return True
+        print(f"MLX server failed to restart after {MLX_RESTART_WAIT}s", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"MLX restart error: {e}", file=sys.stderr)
+        return False
+
+
+def _recover_backend(backend: str) -> bool:
+    """Try to recover a dead backend. Returns True if recovered."""
+    if backend == "mlx" and MLX_AUTO_RESTART:
+        return _try_restart_mlx()
+    return False
+
 
 # Supabase usage logging — track GLM calls even though they're free
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -436,6 +500,12 @@ def call_mlx(prompt: str, timeout: int = MLX_DEFAULT_TIMEOUT) -> Optional[str]:
         choices = data.get("choices", [])
         if choices:
             return choices[0].get("message", {}).get("content", "")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f"  MLX connection error (server dead?): {e}", file=sys.stderr)
+        return None
+    except requests.exceptions.Timeout as e:
+        print(f"  MLX timeout ({timeout}s): {e}", file=sys.stderr)
         return None
     except Exception as e:
         print(f"  MLX error: {e}", file=sys.stderr)
@@ -998,14 +1068,62 @@ def run_enrichment(
                 f"Total: {total_processed} ({rate:.1f}/s)"
             )
 
-            # Circuit breaker tripped — backend is dead, stop the run
+            # Circuit breaker tripped — try to recover before giving up
             if result.get("circuit_broken"):
                 print(
-                    "\nCircuit breaker tripped — stopping enrichment. "
-                    "Backend may be down. Check with: curl http://127.0.0.1:8080/v1/models",
+                    f"\nCircuit breaker tripped on {_run_backend}. Checking health...",
                     file=sys.stderr,
                 )
-                break
+                if not check_backend_health(_run_backend):
+                    # Backend is dead — try to recover
+                    if _recover_backend(_run_backend):
+                        # Reset fallback state and continue
+                        _consecutive_failures = 0
+                        _fallback_active = False
+                        print("Backend recovered. Continuing enrichment.", file=sys.stderr)
+                        continue
+                    else:
+                        print(
+                            f"Backend {_run_backend} is dead and could not be recovered. "
+                            "Stopping enrichment.",
+                            file=sys.stderr,
+                        )
+                        break
+                else:
+                    # Backend is alive but returning errors — stop to avoid wasting time
+                    print(
+                        "Backend is reachable but returning errors. Stopping.",
+                        file=sys.stderr,
+                    )
+                    break
+
+            # High fail ratio detection: if >80% of batch failed, check health
+            # before burning through more chunks on a dying backend
+            if result["processed"] > 0:
+                fail_ratio = result["failed"] / result["processed"]
+                if fail_ratio >= BATCH_FAIL_RATIO_THRESHOLD:
+                    print(
+                        f"\nHigh fail ratio ({fail_ratio:.0%}) — checking backend health...",
+                        file=sys.stderr,
+                    )
+                    if not check_backend_health(_run_backend):
+                        if _recover_backend(_run_backend):
+                            _consecutive_failures = 0
+                            _fallback_active = False
+                            print("Backend recovered after high-fail batch.", file=sys.stderr)
+                        else:
+                            print(
+                                f"Backend {_run_backend} is dead. Stopping enrichment.",
+                                file=sys.stderr,
+                            )
+                            break
+                    else:
+                        # Backend is alive but producing errors — pause briefly
+                        print(
+                            f"Backend alive but struggling. Pausing {HEALTH_CHECK_PAUSE}s...",
+                            file=sys.stderr,
+                        )
+                        time.sleep(HEALTH_CHECK_PAUSE)
 
             # Sync stats to Supabase every 5 batches
             if total_processed % (batch_size * 5) < batch_size:
