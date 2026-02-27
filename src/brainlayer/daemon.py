@@ -269,7 +269,8 @@ async def health_services():
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             return result.stdout.strip()
-        except Exception:
+        except Exception as e:
+            logger.debug("Service check failed for %s: %s", cmd[0] if cmd else "unknown", e)
             return ""
 
     # Health check URLs — use env vars matching enrichment.py, fallback to defaults
@@ -483,7 +484,8 @@ async def stats_enrichment():
         # Embeddings count
         try:
             has_embeddings = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors_rowids"))[0][0]
-        except Exception:
+        except Exception as e:
+            logger.debug("chunk_vectors_rowids table unavailable: %s", e)
             has_embeddings = 0
 
         # Projects breakdown

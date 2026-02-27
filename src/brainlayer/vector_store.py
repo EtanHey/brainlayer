@@ -1,14 +1,38 @@
-"""SQLite-vec based vector store for fast search."""
+"""SQLite-vec based vector store for fast search.
+
+Thin facade: VectorStore inherits from focused mixin modules.
+See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
+"""
 
 import json
-import struct
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import apsw
 import apsw.bestpractice
 import sqlite_vec
+
+from ._helpers import (  # noqa: I001
+    _DEFAULT_MIN_CHARS as _DEFAULT_MIN_CHARS,
+)
+from ._helpers import (
+    _SOURCE_MIN_CHARS as _SOURCE_MIN_CHARS,
+)
+from ._helpers import (
+    _escape_fts5_query as _escape_fts5_query,
+)
+from ._helpers import (
+    _safe_json_loads as _safe_json_loads,
+)
+from ._helpers import (
+    serialize_f32 as serialize_f32,
+)
+from ._helpers import (
+    source_aware_min_chars as source_aware_min_chars,
+)
+from .kg_repo import KGMixin
+from .search_repo import SearchMixin
+from .session_repo import SessionMixin
 
 
 def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
@@ -28,63 +52,12 @@ apsw.connection_hooks.insert(0, _set_busy_timeout_hook)
 apsw.bestpractice.apply(apsw.bestpractice.recommended)
 
 
-_SOURCE_MIN_CHARS = {
-    "whatsapp": 15,
-    "telegram": 15,
-}
-_DEFAULT_MIN_CHARS = 50
+class VectorStore(SearchMixin, KGMixin, SessionMixin):
+    """SQLite-vec based vector store.
 
-
-def source_aware_min_chars(source: Optional[str]) -> int:
-    """Return minimum character count for enrichment based on message source.
-
-    Short-form messaging sources (WhatsApp, Telegram) use a lower threshold
-    since meaningful messages are often 15-50 chars.
+    Core chunk CRUD and schema management live here.
+    Search, KG, and session methods are inherited from mixin classes.
     """
-    if source is None:
-        return _DEFAULT_MIN_CHARS
-    return _SOURCE_MIN_CHARS.get(source, _DEFAULT_MIN_CHARS)
-
-
-def _safe_json_loads(value: Any) -> list:
-    """Safely parse a JSON string, returning [] on None or invalid JSON."""
-    if not value:
-        return []
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _escape_fts5_query(query: str) -> str:
-    """Escape a query string for FTS5 MATCH.
-
-    FTS5 treats certain characters as syntax: ., *, ^, ", (, ), +, -, NOT, AND, OR, NEAR.
-    We wrap each word in double quotes so they're treated as literal terms,
-    joined with OR for lenient matching (any term matches).
-    Empty/whitespace-only queries return a wildcard match-all.
-    """
-    if not query or not query.strip():
-        return "*"
-    # Split into words, wrap each in double quotes (escaping any internal quotes)
-    terms = []
-    for word in query.split():
-        # Remove internal double quotes to prevent FTS5 injection
-        clean = word.replace('"', "")
-        if clean:
-            terms.append(f'"{clean}"')
-    # Use OR between terms so matching is lenient (any term matches)
-    # Without OR, FTS5 defaults to AND (all terms must be present)
-    return " OR ".join(terms) if terms else "*"
-
-
-def serialize_f32(vector: List[float]) -> bytes:
-    """Serialize a float32 vector to bytes for sqlite-vec."""
-    return struct.pack(f"{len(vector)}f", *vector)
-
-
-class VectorStore:
-    """SQLite-vec based vector store."""
 
     # Retry settings for DB init under contention (multiple MCP instances + enrichment)
     _INIT_MAX_RETRIES = 5
@@ -127,8 +100,6 @@ class VectorStore:
         self.conn = apsw.Connection(str(self.db_path))
 
         # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
-        # The PRAGMA approach only takes effect after execution, but DDL below
-        # needs the timeout active from the start.
         self.conn.setbusytimeout(10_000)  # 10 seconds
 
         self.conn.enableloadextension(True)
@@ -137,8 +108,7 @@ class VectorStore:
 
         cursor = self.conn.cursor()
 
-        # WAL mode is persistent on the DB file — set it every time to ensure
-        # it's active even if the DB was created by an older version.
+        # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
 
         # Create tables
@@ -161,7 +131,7 @@ class VectorStore:
             )
         """)
 
-        # Add columns if upgrading existing DB (check existing columns first)
+        # Add columns if upgrading existing DB
         existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         for col, typ in [
             ("source", "TEXT"),
@@ -172,24 +142,20 @@ class VectorStore:
             ("context_summary", "TEXT"),
             ("tags", "TEXT"),
             ("tag_confidence", "REAL"),
-            # Enrichment columns (Phase 5)
             ("summary", "TEXT"),
             ("importance", "REAL"),
             ("intent", "TEXT"),
             ("enriched_at", "TEXT"),
-            # Extended enrichment columns (Phase 3 — Gemini backfill)
-            ("primary_symbols", "TEXT"),  # JSON array of classes/functions/files
-            ("resolved_query", "TEXT"),  # HyDE-style hypothetical question
-            ("epistemic_level", "TEXT"),  # hypothesis/substantiated/validated
-            ("version_scope", "TEXT"),  # version or system state discussed
-            ("debt_impact", "TEXT"),  # introduction/resolution/none
-            ("external_deps", "TEXT"),  # JSON array of libraries/APIs
-            # Phase 3: created_at for date filtering
-            ("created_at", "TEXT"),  # ISO 8601 timestamp of when chunk was created/ingested
-            # Phase 6: Sentiment columns
-            ("sentiment_label", "TEXT"),  # frustration|confusion|positive|satisfaction|neutral
-            ("sentiment_score", "REAL"),  # -1.0 (frustration) to +1.0 (positive)
-            ("sentiment_signals", "TEXT"),  # JSON array of matched signal strings
+            ("primary_symbols", "TEXT"),
+            ("resolved_query", "TEXT"),
+            ("epistemic_level", "TEXT"),
+            ("version_scope", "TEXT"),
+            ("debt_impact", "TEXT"),
+            ("external_deps", "TEXT"),
+            ("created_at", "TEXT"),
+            ("sentiment_label", "TEXT"),
+            ("sentiment_score", "REAL"),
+            ("sentiment_signals", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -208,7 +174,7 @@ class VectorStore:
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
-        # Create vector table with 1024 dimensions for bge-large-en-v1.5
+        # Vector table (1024 dims for bge-large-en-v1.5)
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(
                 chunk_id TEXT PRIMARY KEY,
@@ -216,14 +182,14 @@ class VectorStore:
             )
         """)
 
-        # FTS5 full-text search table for hybrid search
+        # FTS5 full-text search
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
                 content, chunk_id UNINDEXED
             )
         """)
 
-        # Triggers to keep FTS5 in sync with chunks table
+        # FTS5 sync triggers
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
                 INSERT INTO chunks_fts(content, chunk_id) VALUES (new.content, new.id);
@@ -241,7 +207,7 @@ class VectorStore:
             END
         """)
 
-        # Phase 8b: Git overlay tables
+        # Session context table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS session_context (
                 session_id TEXT PRIMARY KEY,
@@ -255,7 +221,6 @@ class VectorStore:
                 created_at TEXT
             )
         """)
-        # Phase 8c: Plan linking columns on session_context
         existing_sc_cols = {row[1] for row in cursor.execute("PRAGMA table_info(session_context)")}
         for col in ("plan_name", "plan_phase", "story_id"):
             if col not in existing_sc_cols:
@@ -275,7 +240,7 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_interactions_session ON file_interactions(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_context_project ON session_context(project)")
 
-        # Phase 8a: Operations table
+        # Operations table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS operations (
                 id TEXT PRIMARY KEY,
@@ -293,7 +258,7 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_operations_session ON operations(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_operations_type ON operations(operation_type)")
 
-        # Phase 8d: Topic chains table
+        # Topic chains table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS topic_chains (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -309,7 +274,7 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_file ON topic_chains(file_path)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_topic_chains_session ON topic_chains(session_a)")
 
-        # Phase 7: Session-level enrichment table
+        # Session enrichment table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS session_enrichments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,45 +283,27 @@ class VectorStore:
                 enrichment_version TEXT NOT NULL DEFAULT '1.0',
                 enrichment_model TEXT,
                 enrichment_timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-
-                -- Timing (flat — for temporal queries)
                 session_start_time TEXT,
                 session_end_time TEXT,
                 duration_seconds INTEGER,
-
-                -- Message dynamics (flat — for aggregation dashboards)
                 message_count INTEGER NOT NULL DEFAULT 0,
                 user_message_count INTEGER NOT NULL DEFAULT 0,
                 assistant_message_count INTEGER NOT NULL DEFAULT 0,
                 tool_call_count INTEGER NOT NULL DEFAULT 0,
-
-                -- Content analysis (flat — for filtering)
                 session_summary TEXT,
                 primary_intent TEXT,
                 outcome TEXT CHECK(outcome IN ('success','partial_success','failure','abandoned','ongoing')),
                 complexity_score INTEGER CHECK(complexity_score BETWEEN 1 AND 10),
-
-                -- Quality scores (flat — for dashboards)
                 session_quality_score INTEGER CHECK(session_quality_score BETWEEN 1 AND 10),
-
-                -- Decisions, corrections, learnings (JSON — variable-length arrays)
                 decisions_made TEXT DEFAULT '[]',
                 corrections TEXT DEFAULT '[]',
                 learnings TEXT DEFAULT '[]',
                 mistakes TEXT DEFAULT '[]',
                 patterns TEXT DEFAULT '[]',
-
-                -- Topic tags (JSON array)
                 topic_tags TEXT DEFAULT '[]',
-
-                -- Tool usage (JSON — per-tool stats)
                 tool_usage_stats TEXT DEFAULT '[]',
-
-                -- Narrative (text — for human reading)
                 what_worked TEXT,
                 what_failed TEXT,
-
-                -- Embedding for session-level semantic search
                 summary_embedding BLOB
             )
         """)
@@ -369,14 +316,14 @@ class VectorStore:
             "CREATE INDEX IF NOT EXISTS idx_session_enrichments_quality ON session_enrichments(session_quality_score)"
         )
 
-        # Phase 7: FTS5 for session narrative search
+        # Session enrichment FTS5
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS session_enrichments_fts USING fts5(
                 session_summary, what_worked, what_failed, session_id UNINDEXED
             )
         """)
 
-        # Phase 5: Phase commits table (decision tracking + commit history)
+        # Phase commits table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS phase_commits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -395,14 +342,13 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_project ON phase_commits(project)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_phase ON phase_commits(phase_name)")
 
-        # Add source_project_id to chunks (critical issue #3 — links chunks to KG project entities)
+        # source_project_id column
         if "source_project_id" not in existing_cols:
             cursor.execute("ALTER TABLE chunks ADD COLUMN source_project_id TEXT")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_project ON chunks(source_project_id)")
 
-        # ── Knowledge Graph tables (BrainLayer v3 Phase 1) ──────────────────
+        # ── Knowledge Graph tables ──────────────────────────────────────
 
-        # Core entity storage — persons, companies, meetings, topics, projects, golems, skills
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kg_entities (
                 id TEXT PRIMARY KEY,
@@ -417,12 +363,10 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_type ON kg_entities(entity_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_name ON kg_entities(name)")
 
-        # Phase 3: Add user_verified to kg_entities (migration for existing DBs)
         kg_entity_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
         if "user_verified" not in kg_entity_cols:
             cursor.execute("ALTER TABLE kg_entities ADD COLUMN user_verified INTEGER DEFAULT 0")
 
-        # Explicit relationships between entities
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kg_relations (
                 id TEXT PRIMARY KEY,
@@ -439,12 +383,10 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_target ON kg_relations(target_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_type ON kg_relations(relation_type)")
 
-        # Phase 3: Add user_verified to kg_relations (migration for existing DBs)
         kg_rel_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
         if "user_verified" not in kg_rel_cols:
             cursor.execute("ALTER TABLE kg_relations ADD COLUMN user_verified INTEGER DEFAULT 0")
 
-        # Bridge table — links entities to existing 270K chunks with relevance scoring
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kg_entity_chunks (
                 entity_id TEXT NOT NULL,
@@ -457,7 +399,6 @@ class VectorStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_ec_entity ON kg_entity_chunks(entity_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_ec_chunk ON kg_entity_chunks(chunk_id)")
 
-        # Semantic search on entities via sqlite-vec (~5K vectors, 50x cheaper than chunk search)
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS kg_vec_entities USING vec0(
                 entity_id TEXT PRIMARY KEY,
@@ -465,14 +406,13 @@ class VectorStore:
             )
         """)
 
-        # FTS5 full-text search on entity names and metadata
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS kg_entities_fts USING fts5(
                 name, metadata, entity_id UNINDEXED
             )
         """)
 
-        # Triggers to keep kg_entities_fts in sync with kg_entities
+        # KG FTS5 sync triggers
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS kg_entities_fts_insert AFTER INSERT ON kg_entities BEGIN
                 INSERT INTO kg_entities_fts(name, metadata, entity_id)
@@ -493,7 +433,7 @@ class VectorStore:
             END
         """)
 
-        # Entity aliases for dedup/healing — maps surface forms to canonical entities
+        # Entity aliases table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kg_entity_aliases (
                 alias TEXT NOT NULL,
@@ -505,9 +445,7 @@ class VectorStore:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)")
 
-        # ── KG Standard Spec Migrations (matches Convex kgSpec.ts) ──────────
-
-        # Add new standard columns to kg_entities
+        # KG standard spec migrations
         for col, default in [
             ("canonical_name", "TEXT"),
             ("description", "TEXT"),
@@ -525,7 +463,6 @@ class VectorStore:
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)")
 
-        # Add new standard columns to kg_relations
         for col, default in [
             ("fact", "TEXT"),
             ("importance", "REAL DEFAULT 0.5"),
@@ -539,30 +476,21 @@ class VectorStore:
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
 
-        # Add mention_type to kg_entity_chunks
         ec_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
         if "mention_type" not in ec_cols:
             cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN mention_type TEXT")
 
-        # kg_current_facts view — auto-filters expired relations
-        # Use DROP + CREATE OR REPLACE pattern with error handling for concurrent init
-        try:
-            cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
-            cursor.execute("""
-                CREATE VIEW kg_current_facts AS
-                SELECT * FROM kg_relations
-                WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                  AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                  AND expired_at IS NULL
-            """)
-        except Exception:
-            # Race condition: another thread already created the view between
-            # our DROP and CREATE. The view exists, which is the desired state.
-            pass
+        # kg_current_facts view
+        cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
+        cursor.execute("""
+            CREATE VIEW IF NOT EXISTS kg_current_facts AS
+            SELECT * FROM kg_relations
+            WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+              AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+              AND expired_at IS NULL
+        """)
 
-        # ── End Knowledge Graph tables ──────────────────────────────────────
-
-        # Check if FTS5 needs backfill (existing DB without FTS5 data)
+        # FTS5 backfill check
         fts_count = list(cursor.execute("SELECT COUNT(*) FROM chunks_fts"))[0][0]
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
         if chunk_count > 0 and fts_count == 0:
@@ -571,12 +499,7 @@ class VectorStore:
                 SELECT content, id FROM chunks
             """)
 
-        # AIDEV-NOTE: Readonly connection for concurrent read access (P0 fix for MCP hangs).
-        # In WAL mode, readers don't block writers and vice versa.
-        # Using a SEPARATE readonly connection ensures MCP server reads never contend
-        # with enrichment pipeline writes on the same connection object.
-        # Without this, apsw serializes operations on a shared connection, causing
-        # MCP to hang when enrichment holds a write lock.
+        # Readonly connection for concurrent read access
         self.read_conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
         self.read_conn.enableloadextension(True)
         self.read_conn.loadextension(sqlite_vec.loadable_path())
@@ -584,14 +507,12 @@ class VectorStore:
         self.read_conn.cursor().execute("PRAGMA busy_timeout = 5000")
 
     def _read_cursor(self):
-        """Return a cursor for read operations using the readonly connection.
-
-        Falls back to write connection if readonly isn't available (e.g., during init).
-        The readonly connection in WAL mode never blocks on concurrent writes.
-        """
+        """Return a cursor for read operations using the readonly connection."""
         if hasattr(self, "read_conn"):
             return self.read_conn.cursor()
         return self.conn.cursor()
+
+    # ── Chunk CRUD ──────────────────────────────────────────────────────
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
         """Upsert chunks with embeddings."""
@@ -603,7 +524,6 @@ class VectorStore:
         for chunk, embedding in zip(chunks, embeddings):
             chunk_id = chunk["id"]
 
-            # Upsert chunk — preserve enrichment columns on re-index
             cursor.execute(
                 """
                 INSERT INTO chunks
@@ -642,7 +562,7 @@ class VectorStore:
                 ),
             )
 
-            # Upsert vector - vec0 doesn't support INSERT OR REPLACE, so delete first
+            # Upsert vector
             cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
             cursor.execute(
                 """
@@ -664,12 +584,10 @@ class VectorStore:
     ) -> bool:
         """Update fields on an existing chunk. Returns True if chunk was found."""
         cursor = self.conn.cursor()
-        # Check chunk exists
         rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
         if not rows:
             return False
 
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         if content is not None:
             cursor.execute(
                 "UPDATE chunks SET content = ?, char_count = ?, summary = ? WHERE id = ?",
@@ -700,7 +618,6 @@ class VectorStore:
         if not rows:
             return False
         cursor.execute("UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,))
-        # Remove from vector index so it doesn't appear in searches
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
         return True
 
@@ -732,2498 +649,7 @@ class VectorStore:
             "summary": r[10],
         }
 
-    def search(
-        self,
-        query_embedding: Optional[List[float]] = None,
-        query_text: Optional[str] = None,
-        n_results: int = 10,
-        project_filter: Optional[str] = None,
-        content_type_filter: Optional[str] = None,
-        source_filter: Optional[str] = None,
-        sender_filter: Optional[str] = None,
-        language_filter: Optional[str] = None,
-        tag_filter: Optional[str] = None,
-        intent_filter: Optional[str] = None,
-        importance_min: Optional[float] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        sentiment_filter: Optional[str] = None,
-        entity_id: Optional[str] = None,
-    ) -> Dict[str, List]:
-        """Search chunks by embedding or text.
-
-        Args:
-            entity_id: If provided, only return chunks linked to this entity
-                       via kg_entity_chunks. Used for per-person memory scoping.
-        """
-
-        cursor = self._read_cursor()
-
-        if query_embedding is not None:
-            # Vector similarity search
-            query_bytes = serialize_f32(query_embedding)
-
-            where_clauses = []
-            filter_params: list = []
-
-            if entity_id:
-                where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
-                filter_params.append(entity_id)
-            if project_filter:
-                where_clauses.append("c.project = ?")
-                filter_params.append(project_filter)
-            if content_type_filter:
-                where_clauses.append("c.content_type = ?")
-                filter_params.append(content_type_filter)
-            if source_filter:
-                where_clauses.append("c.source = ?")
-                filter_params.append(source_filter)
-            if sender_filter:
-                where_clauses.append("c.sender = ?")
-                filter_params.append(sender_filter)
-            if language_filter:
-                where_clauses.append("c.language = ?")
-                filter_params.append(language_filter)
-            if tag_filter:
-                where_clauses.append(
-                    "c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
-                )
-                filter_params.append(tag_filter)
-            if intent_filter:
-                where_clauses.append("c.intent = ?")
-                filter_params.append(intent_filter)
-            if importance_min is not None:
-                where_clauses.append("c.importance >= ?")
-                filter_params.append(importance_min)
-            if date_from:
-                where_clauses.append("c.created_at >= ?")
-                filter_params.append(date_from)
-            if date_to:
-                where_clauses.append("c.created_at <= ?")
-                filter_params.append(date_to)
-            if sentiment_filter:
-                where_clauses.append("c.sentiment_label = ?")
-                filter_params.append(sentiment_filter)
-
-            where_sql = ""
-            if where_clauses:
-                where_sql = "AND " + " AND ".join(where_clauses)
-
-            # sqlite-vec KNN: MATCH and k must bind before filter params.
-            # Bump k to over-fetch when post-KNN filters may discard most results:
-            # - entity_id: entity filter applied post-KNN, most candidates won't match
-            # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
-            needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
-            effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
-            params = [query_bytes, effective_k] + filter_params
-            query = f"""
-                SELECT c.id, c.content, c.metadata, c.source_file, c.project,
-                       c.content_type, c.value_type, c.char_count,
-                       v.distance,
-                       c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source
-                FROM chunk_vectors v
-                JOIN chunks c ON v.chunk_id = c.id
-                WHERE v.embedding MATCH ? AND k = ? {where_sql}
-                ORDER BY v.distance
-            """
-
-            results = list(cursor.execute(query, params))
-
-        elif query_text is not None:
-            # Text search using LIKE
-            where_clauses = ["content LIKE ?"]
-            params = [f"%{query_text}%"]
-
-            if entity_id:
-                where_clauses.append("id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
-                params.append(entity_id)
-            if project_filter:
-                where_clauses.append("project = ?")
-                params.append(project_filter)
-            if content_type_filter:
-                where_clauses.append("content_type = ?")
-                params.append(content_type_filter)
-            if source_filter:
-                where_clauses.append("source = ?")
-                params.append(source_filter)
-            if sender_filter:
-                where_clauses.append("sender = ?")
-                params.append(sender_filter)
-            if language_filter:
-                where_clauses.append("language = ?")
-                params.append(language_filter)
-            if tag_filter:
-                where_clauses.append(
-                    "tags IS NOT NULL AND json_valid(tags) = 1 AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
-                )
-                params.append(tag_filter)
-            if intent_filter:
-                where_clauses.append("intent = ?")
-                params.append(intent_filter)
-            if importance_min is not None:
-                where_clauses.append("importance >= ?")
-                params.append(importance_min)
-            if date_from:
-                where_clauses.append("created_at >= ?")
-                params.append(date_from)
-            if date_to:
-                where_clauses.append("created_at <= ?")
-                params.append(date_to)
-
-            params.append(n_results)
-
-            query = f"""
-                SELECT id, content, metadata, source_file, project,
-                       content_type, value_type, char_count,
-                       NULL as distance,
-                       summary, tags, importance, intent,
-                       created_at, source
-                FROM chunks
-                WHERE {" AND ".join(where_clauses)}
-                ORDER BY char_count DESC
-                LIMIT ?
-            """
-
-            results = list(cursor.execute(query, params))
-        else:
-            raise ValueError("Either query_embedding or query_text must be provided")
-
-        # Format results
-        ids = []
-        documents = []
-        metadatas = []
-        distances = []
-
-        for row in results:
-            ids.append(row[0])  # chunk id
-            documents.append(row[1])  # content
-            metadata = json.loads(row[2])  # metadata
-            metadata.update(
-                {
-                    "source_file": row[3],
-                    "project": row[4],
-                    "content_type": row[5],
-                    "value_type": row[6],
-                    "char_count": row[7],
-                }
-            )
-            # Enrichment fields (may be None if not yet enriched)
-            if row[9]:
-                metadata["summary"] = row[9]
-            if row[10]:
-                try:
-                    metadata["tags"] = json.loads(row[10])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            if row[11] is not None:
-                metadata["importance"] = row[11]
-            if row[12]:
-                metadata["intent"] = row[12]
-            # Temporal and source metadata
-            if row[13]:
-                metadata["created_at"] = row[13]
-            if row[14]:
-                metadata["source"] = row[14]
-            metadatas.append(metadata)
-            distances.append(row[8])  # distance (None for text search)
-
-        return {
-            "ids": [ids],
-            "documents": [documents],
-            "metadatas": [metadatas],
-            "distances": [distances],
-        }
-
-    def enrich_results_with_session_context(self, results: Dict[str, List]) -> Dict[str, List]:
-        """Add session enrichment metadata to search results.
-
-        For each result, if its session has been enriched, add session_summary,
-        session_outcome, and session_quality_score to the metadata.
-        """
-        if not results.get("metadatas") or not results["metadatas"][0]:
-            return results
-
-        cursor = self._read_cursor()
-        # Cache session lookups to avoid repeated queries
-        session_cache: Dict[str, Optional[Dict]] = {}
-
-        for meta in results["metadatas"][0]:
-            source_file = meta.get("source_file", "")
-            if not source_file:
-                continue
-
-            # Extract session ID from source_file
-            import os
-
-            session_id = os.path.splitext(os.path.basename(source_file))[0]
-            if not session_id:
-                continue
-
-            if session_id not in session_cache:
-                rows = list(
-                    cursor.execute(
-                        """SELECT session_summary, primary_intent, outcome,
-                              session_quality_score
-                       FROM session_enrichments WHERE session_id = ?""",
-                        (session_id,),
-                    )
-                )
-                if rows:
-                    session_cache[session_id] = {
-                        "session_summary": rows[0][0],
-                        "session_intent": rows[0][1],
-                        "session_outcome": rows[0][2],
-                        "session_quality": rows[0][3],
-                    }
-                else:
-                    session_cache[session_id] = None
-
-            enrichment = session_cache[session_id]
-            if enrichment:
-                for k, v in enrichment.items():
-                    if v is not None:
-                        meta[k] = v
-
-        return results
-
-    def count(self) -> int:
-        """Get total number of chunks."""
-        cursor = self._read_cursor()
-        result = list(cursor.execute("SELECT COUNT(*) FROM chunks"))
-        return result[0][0] if result else 0
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get collection statistics."""
-        count = self.count()
-
-        if count == 0:
-            return {"total_chunks": 0, "projects": [], "content_types": []}
-
-        cursor = self._read_cursor()
-
-        # Get unique projects and content types
-        results = list(
-            cursor.execute("""
-            SELECT DISTINCT project, content_type
-            FROM chunks
-            WHERE project IS NOT NULL AND content_type IS NOT NULL
-            LIMIT 100
-        """)
-        )
-
-        projects = set()
-        content_types = set()
-
-        for project, content_type in results:
-            projects.add(project)
-            content_types.add(content_type)
-
-        return {
-            "total_chunks": count,
-            "projects": list(projects),
-            "content_types": list(content_types),
-        }
-
-    def get_all_chunks(self, limit: int = 10000) -> List[Dict[str, Any]]:
-        """Get all chunks for BM25 fitting (limited for performance)."""
-        cursor = self._read_cursor()
-        results = list(
-            cursor.execute(
-                """
-            SELECT id, content, metadata, source_file, project, content_type
-            FROM chunks
-            LIMIT ?
-        """,
-                (limit,),
-            )
-        )
-
-        return [
-            {
-                "id": row[0],
-                "content": row[1],
-                "metadata": json.loads(row[2]) if row[2] else {},
-                "source_file": row[3],
-                "project": row[4],
-                "content_type": row[5],
-            }
-            for row in results
-        ]
-
-    def hybrid_search(
-        self,
-        query_embedding: List[float],
-        query_text: str,
-        n_results: int = 10,
-        project_filter: Optional[str] = None,
-        content_type_filter: Optional[str] = None,
-        source_filter: Optional[str] = None,
-        sender_filter: Optional[str] = None,
-        language_filter: Optional[str] = None,
-        tag_filter: Optional[str] = None,
-        intent_filter: Optional[str] = None,
-        importance_min: Optional[float] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        sentiment_filter: Optional[str] = None,
-        entity_id: Optional[str] = None,
-        k: int = 60,
-    ) -> Dict[str, List]:
-        """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
-
-        Args:
-            entity_id: If provided, only return chunks linked to this entity
-                       via kg_entity_chunks. Used for per-person memory scoping.
-        """
-
-        # 1. Semantic search — get more results for fusion (uses _read_cursor via search())
-        semantic = self.search(
-            query_embedding=query_embedding,
-            n_results=n_results * 3,
-            project_filter=project_filter,
-            content_type_filter=content_type_filter,
-            source_filter=source_filter,
-            sender_filter=sender_filter,
-            language_filter=language_filter,
-            tag_filter=tag_filter,
-            intent_filter=intent_filter,
-            importance_min=importance_min,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment_filter=sentiment_filter,
-            entity_id=entity_id,
-        )
-
-        # Build semantic rank map: chunk_content -> rank
-        semantic_ranks = {}
-        for i, (doc, meta) in enumerate(zip(semantic["documents"][0], semantic["metadatas"][0])):
-            key = meta.get("source_file", "") + "|" + doc[:100]
-            semantic_ranks[key] = i
-
-        # 2. FTS5 keyword search
-        cursor = self._read_cursor()
-        fts_extra = []
-        # AIDEV-NOTE: FTS5 MATCH requires escaped query text. Special chars like
-        # '.', '*', '"', '(', ')' cause syntax errors if passed raw.
-        # Wrap each term in double quotes to treat as literal strings.
-        fts_query = _escape_fts5_query(query_text)
-        fts_params: list = [fts_query]
-        entity_join = ""
-        if entity_id:
-            entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
-            fts_extra.append("AND ec.entity_id = ?")
-            fts_params.append(entity_id)
-        if project_filter:
-            fts_extra.append("AND c.project = ?")
-            fts_params.append(project_filter)
-        if source_filter:
-            fts_extra.append("AND c.source = ?")
-            fts_params.append(source_filter)
-        if tag_filter:
-            fts_extra.append(
-                "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
-            )
-            fts_params.append(tag_filter)
-        if intent_filter:
-            fts_extra.append("AND c.intent = ?")
-            fts_params.append(intent_filter)
-        if importance_min is not None:
-            fts_extra.append("AND c.importance >= ?")
-            fts_params.append(importance_min)
-        if date_from:
-            fts_extra.append("AND c.created_at >= ?")
-            fts_params.append(date_from)
-        if date_to:
-            fts_extra.append("AND c.created_at <= ?")
-            fts_params.append(date_to)
-        if sentiment_filter:
-            fts_extra.append("AND c.sentiment_label = ?")
-            fts_params.append(sentiment_filter)
-        fts_params.append(n_results * 3)
-
-        fts_results = list(
-            cursor.execute(
-                f"""
-            SELECT f.chunk_id, f.rank,
-                   c.content, c.metadata, c.source_file, c.project,
-                   c.content_type, c.value_type, c.char_count,
-                   c.summary, c.tags, c.importance, c.intent,
-                   c.created_at, c.source
-            FROM chunks_fts f
-            JOIN chunks c ON f.chunk_id = c.id
-            {entity_join}
-            WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
-            ORDER BY f.rank
-            LIMIT ?
-        """,
-                fts_params,
-            )
-        )
-
-        # Build FTS rank map
-        fts_ranks = {}
-        fts_data = {}
-        for i, row in enumerate(fts_results):
-            chunk_id = row[0]
-            fts_ranks[chunk_id] = i
-            fts_data[chunk_id] = {
-                "content": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "source_file": row[4],
-                "project": row[5],
-                "content_type": row[6],
-                "value_type": row[7],
-                "char_count": row[8],
-                "summary": row[9],
-                "tags": row[10],
-                "importance": row[11],
-                "intent": row[12],
-                "created_at": row[13],
-                "source": row[14],
-            }
-
-        # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
-        # Build semantic rank map keyed by actual chunk_id
-        semantic_by_id = {}
-        for i in range(len(semantic["ids"][0])):
-            cid = semantic["ids"][0][i]
-            if cid and cid not in semantic_by_id:
-                semantic_by_id[cid] = {
-                    "rank": i,
-                    "doc": semantic["documents"][0][i],
-                    "meta": semantic["metadatas"][0][i],
-                    "dist": semantic["distances"][0][i],
-                }
-
-        # Union of all chunk_ids from both sources
-        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys())
-
-        scored = []
-        for cid in all_chunk_ids:
-            score = 0.0
-            sem_entry = semantic_by_id.get(cid)
-            fts_rank = fts_ranks.get(cid)
-
-            if sem_entry is not None:
-                score += 1.0 / (k + sem_entry["rank"])
-            if fts_rank is not None:
-                score += 1.0 / (k + fts_rank)
-
-            # Get data — prefer semantic (has distance)
-            if sem_entry is not None:
-                doc = sem_entry["doc"]
-                meta = sem_entry["meta"]
-                dist = sem_entry["dist"]
-            elif cid in fts_data:
-                data = fts_data[cid]
-                doc = data["content"]
-                meta = data["metadata"].copy()
-                meta.update(
-                    {
-                        "source_file": data["source_file"],
-                        "project": data["project"],
-                        "content_type": data["content_type"],
-                        "value_type": data["value_type"],
-                        "char_count": data["char_count"],
-                    }
-                )
-                if data.get("summary"):
-                    meta["summary"] = data["summary"]
-                if data.get("tags"):
-                    try:
-                        meta["tags"] = json.loads(data["tags"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                if data.get("importance") is not None:
-                    meta["importance"] = data["importance"]
-                if data.get("intent"):
-                    meta["intent"] = data["intent"]
-                if data.get("created_at"):
-                    meta["created_at"] = data["created_at"]
-                if data.get("source"):
-                    meta["source"] = data["source"]
-                dist = None
-            else:
-                continue
-
-            # Apply filters to FTS-only results
-            if fts_rank is not None and sem_entry is None:
-                if source_filter and meta.get("source") != source_filter:
-                    continue
-                if project_filter and meta.get("project") != project_filter:
-                    continue
-
-            scored.append((score, cid, doc, meta, dist))
-
-        # Sort by RRF score descending
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        ids = [s[1] for s in scored[:n_results]]
-        documents = [s[2] for s in scored[:n_results]]
-        metadatas = [s[3] for s in scored[:n_results]]
-        distances = [s[4] for s in scored[:n_results]]
-
-        return {
-            "ids": [ids],
-            "documents": [documents],
-            "metadatas": [metadatas],
-            "distances": [distances],
-        }
-
-    def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
-        """Get surrounding chunks from the same conversation."""
-        cursor = self._read_cursor()
-
-        # Get the target chunk's conversation_id and position
-        target = list(
-            cursor.execute(
-                """
-            SELECT conversation_id, position, content, metadata
-            FROM chunks WHERE id = ?
-        """,
-                (chunk_id,),
-            )
-        )
-
-        if not target:
-            return {"target": None, "context": [], "error": "Chunk not found"}
-
-        conv_id, position, content, metadata = target[0]
-
-        if not conv_id or position is None:
-            return {
-                "target": {"id": chunk_id, "content": content, "position": None},
-                "context": [],
-                "error": "Chunk has no conversation context (conversation_id/position not set)",
-            }
-
-        # Get surrounding chunks
-        context_rows = list(
-            cursor.execute(
-                """
-            SELECT id, content, position, content_type
-            FROM chunks
-            WHERE conversation_id = ?
-              AND position BETWEEN ? AND ?
-            ORDER BY position
-        """,
-                (conv_id, position - before, position + after),
-            )
-        )
-
-        context = []
-        for row in context_rows:
-            context.append(
-                {
-                    "id": row[0],
-                    "content": row[1],
-                    "position": row[2],
-                    "content_type": row[3],
-                    "is_target": row[0] == chunk_id,
-                }
-            )
-
-        return {
-            "target": {"id": chunk_id, "content": content, "position": position},
-            "context": context,
-        }
-
-    def get_unenriched_chunks(
-        self,
-        batch_size: int = 50,
-        content_types: Optional[List[str]] = None,
-        min_char_count: Optional[int] = None,
-        source: Optional[str] = None,
-        since_hours: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get chunks that haven't been enriched yet, for batch processing.
-
-        If min_char_count is not specified, uses source_aware_min_chars()
-        to pick an appropriate threshold for the given source.
-
-        Args:
-            since_hours: Only return chunks created in the last N hours.
-        """
-        cursor = self._read_cursor()
-
-        effective_min = min_char_count if min_char_count is not None else source_aware_min_chars(source)
-        where = ["enriched_at IS NULL", "char_count >= ?"]
-        params: list = [effective_min]
-
-        if source:
-            where.append("source = ?")
-            params.append(source)
-
-        if content_types:
-            placeholders = ",".join("?" for _ in content_types)
-            where.append(f"content_type IN ({placeholders})")
-            params.extend(content_types)
-
-        if since_hours is not None:
-            where.append(f"created_at > datetime('now', '-{int(since_hours)} hours')")
-
-        params.append(batch_size)
-
-        results = list(
-            cursor.execute(
-                f"""
-            SELECT id, content, source_file, project, content_type,
-                   conversation_id, position, char_count
-            FROM chunks
-            WHERE {" AND ".join(where)}
-            ORDER BY rowid DESC
-            LIMIT ?
-        """,
-                params,
-            )
-        )
-
-        return [
-            {
-                "id": row[0],
-                "content": row[1],
-                "source_file": row[2],
-                "project": row[3],
-                "content_type": row[4],
-                "conversation_id": row[5],
-                "position": row[6],
-                "char_count": row[7],
-            }
-            for row in results
-        ]
-
-    def update_enrichment(
-        self,
-        chunk_id: str,
-        summary: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        importance: Optional[float] = None,
-        intent: Optional[str] = None,
-        primary_symbols: Optional[List[str]] = None,
-        resolved_query: Optional[str] = None,
-        epistemic_level: Optional[str] = None,
-        version_scope: Optional[str] = None,
-        debt_impact: Optional[str] = None,
-        external_deps: Optional[List[str]] = None,
-        sentiment_label: Optional[str] = None,
-        sentiment_score: Optional[float] = None,
-        sentiment_signals: Optional[List[str]] = None,
-    ) -> None:
-        """Update enrichment metadata for a chunk."""
-        cursor = self.conn.cursor()
-        from datetime import datetime, timezone
-
-        sets = ["enriched_at = ?"]
-        params: list = [datetime.now(timezone.utc).isoformat()]
-
-        if summary is not None:
-            sets.append("summary = ?")
-            params.append(summary)
-        if tags is not None:
-            sets.append("tags = ?")
-            params.append(json.dumps(tags))
-        if importance is not None:
-            sets.append("importance = ?")
-            params.append(importance)
-        if intent is not None:
-            sets.append("intent = ?")
-            params.append(intent)
-        if primary_symbols is not None:
-            sets.append("primary_symbols = ?")
-            params.append(json.dumps(primary_symbols))
-        if resolved_query is not None:
-            sets.append("resolved_query = ?")
-            params.append(resolved_query)
-        if epistemic_level is not None:
-            sets.append("epistemic_level = ?")
-            params.append(epistemic_level)
-        if version_scope is not None:
-            sets.append("version_scope = ?")
-            params.append(version_scope)
-        if debt_impact is not None:
-            sets.append("debt_impact = ?")
-            params.append(debt_impact)
-        if external_deps is not None:
-            sets.append("external_deps = ?")
-            params.append(json.dumps(external_deps))
-        if sentiment_label is not None:
-            sets.append("sentiment_label = ?")
-            params.append(sentiment_label)
-        if sentiment_score is not None:
-            sets.append("sentiment_score = ?")
-            params.append(sentiment_score)
-        if sentiment_signals is not None:
-            sets.append("sentiment_signals = ?")
-            params.append(json.dumps(sentiment_signals))
-
-        params.append(chunk_id)
-        # Retry on SQLITE_BUSY — concurrent access from daemon/MCP/enrichment
-        import time as _time
-
-        for attempt in range(3):
-            try:
-                cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
-                return
-            except apsw.BusyError:
-                if attempt < 2:
-                    _time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise
-
-    def update_sentiment(
-        self,
-        chunk_id: str,
-        label: str,
-        score: float,
-        signals: Optional[List[str]] = None,
-    ) -> None:
-        """Update sentiment metadata for a chunk.
-
-        Args:
-            chunk_id: Chunk to update
-            label: frustration|confusion|positive|satisfaction|neutral
-            score: -1.0 to +1.0
-            signals: List of matched signal strings
-        """
-        cursor = self.conn.cursor()
-        import time as _time
-
-        params: list = [label, score, json.dumps(signals or []), chunk_id]
-        for attempt in range(3):
-            try:
-                cursor.execute(
-                    "UPDATE chunks SET sentiment_label = ?, sentiment_score = ?, sentiment_signals = ? WHERE id = ?",
-                    params,
-                )
-                return
-            except apsw.BusyError:
-                if attempt < 2:
-                    _time.sleep(0.5 * (attempt + 1))
-                else:
-                    raise
-
-    def get_enrichment_stats(self) -> Dict[str, Any]:
-        """Get enrichment progress statistics.
-
-        Reports both naive (total) and accurate (enrichable-only) percentages.
-        Chunks marked 'skipped:too_short' are excluded from enrichable count.
-        WhatsApp/Telegram chunks use a lower threshold (15 chars) so they're
-        NOT marked as skipped even if under 50 chars.
-        """
-        cursor = self._read_cursor()
-        total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-        enriched = list(
-            cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
-            )
-        )[0][0]
-        skipped = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"))[0][0]
-        remaining = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL"))[0][0]
-        enrichable = total - skipped
-        by_intent = list(
-            cursor.execute("""
-            SELECT intent, COUNT(*) FROM chunks
-            WHERE intent IS NOT NULL
-            GROUP BY intent ORDER BY COUNT(*) DESC
-        """)
-        )
-        return {
-            "total_chunks": total,
-            "enrichable": enrichable,
-            "enriched": enriched,
-            "skipped": skipped,
-            "remaining": remaining,
-            "percent": round(enriched / enrichable * 100, 1) if enrichable > 0 else 0,
-            "naive_percent": round((enriched + skipped) / total * 100, 1) if total > 0 else 0,
-            "by_intent": {row[0]: row[1] for row in by_intent},
-        }
-
-    # ─── Phase 8b: Git Overlay Methods ──────────────────────────────
-
-    def store_session_context(
-        self,
-        session_id: str,
-        project: str,
-        branch: Optional[str] = None,
-        pr_number: Optional[int] = None,
-        commit_shas: Optional[List[str]] = None,
-        files_changed: Optional[List[str]] = None,
-        started_at: Optional[str] = None,
-        ended_at: Optional[str] = None,
-        plan_name: Optional[str] = None,
-        plan_phase: Optional[str] = None,
-        story_id: Optional[str] = None,
-    ) -> None:
-        """Store git context for a session (upsert).
-
-        Preserves existing plan_name/plan_phase/story_id
-        if not provided (avoids wiping plan links on
-        git overlay re-runs).
-        """
-        cursor = self.conn.cursor()
-        # Preserve existing plan fields if not provided
-        if plan_name is None:
-            existing = list(
-                cursor.execute(
-                    "SELECT plan_name, plan_phase, story_id FROM session_context WHERE session_id = ?",
-                    (session_id,),
-                )
-            )
-            if existing:
-                plan_name = existing[0][0]
-                plan_phase = plan_phase or existing[0][1]
-                story_id = story_id or existing[0][2]
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO session_context
-            (session_id, project, branch, pr_number, commit_shas,
-             files_changed, started_at, ended_at, created_at,
-             plan_name, plan_phase, story_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
-                    ?, ?, ?)
-        """,
-            (
-                session_id,
-                project,
-                branch,
-                pr_number,
-                json.dumps(commit_shas) if commit_shas else None,
-                json.dumps(files_changed) if files_changed else None,
-                started_at,
-                ended_at,
-                plan_name,
-                plan_phase,
-                story_id,
-            ),
-        )
-
-    def store_file_interactions(self, interactions: List[Dict[str, Any]]) -> int:
-        """Store file interaction records. Returns count stored."""
-        if not interactions:
-            return 0
-        cursor = self.conn.cursor()
-        count = 0
-        for i in interactions:
-            cursor.execute(
-                """
-                INSERT INTO file_interactions
-                (file_path, timestamp, session_id, action, chunk_id, project)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    i["file_path"],
-                    i.get("timestamp"),
-                    i["session_id"],
-                    i.get("action", "unknown"),
-                    i.get("chunk_id"),
-                    i.get("project"),
-                ),
-            )
-            count += 1
-        return count
-
-    def get_file_timeline(
-        self,
-        file_path: str,
-        project: Optional[str] = None,
-        limit: int = 50,
-    ) -> List[Dict[str, Any]]:
-        """Get ordered timeline of interactions with a file."""
-        cursor = self._read_cursor()
-        query = """
-            SELECT fi.file_path, fi.timestamp, fi.session_id, fi.action,
-                   fi.project, sc.branch, sc.pr_number
-            FROM file_interactions fi
-            LEFT JOIN session_context sc ON fi.session_id = sc.session_id
-            WHERE fi.file_path LIKE ?
-        """
-        params: list = [f"%{file_path}%"]
-        if project:
-            query += " AND fi.project = ?"
-            params.append(project)
-        query += " ORDER BY fi.timestamp ASC LIMIT ?"
-        params.append(limit)
-
-        results = []
-        for row in cursor.execute(query, params):
-            results.append(
-                {
-                    "file_path": row[0],
-                    "timestamp": row[1],
-                    "session_id": row[2],
-                    "action": row[3],
-                    "project": row[4],
-                    "branch": row[5],
-                    "pr_number": row[6],
-                }
-            )
-        return results
-
-    def get_session_context(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get git context for a session."""
-        cursor = self._read_cursor()
-        rows = list(cursor.execute("SELECT * FROM session_context WHERE session_id = ?", (session_id,)))
-        if not rows:
-            return None
-        row = rows[0]
-        result = {
-            "session_id": row[0],
-            "project": row[1],
-            "branch": row[2],
-            "pr_number": row[3],
-            "commit_shas": _safe_json_loads(row[4]),
-            "files_changed": _safe_json_loads(row[5]),
-            "started_at": row[6],
-            "ended_at": row[7],
-            "created_at": row[8],
-        }
-        # Plan linking columns (may not exist in old DBs)
-        if len(row) > 9:
-            result["plan_name"] = row[9]
-            result["plan_phase"] = row[10]
-            result["story_id"] = row[11]
-        return result
-
-    def update_session_plan(
-        self,
-        session_id: str,
-        plan_name: Optional[str] = None,
-        plan_phase: Optional[str] = None,
-        story_id: Optional[str] = None,
-    ) -> bool:
-        """Update plan linking fields for an existing session.
-
-        Returns True if session was found and updated.
-        """
-        cursor = self.conn.cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT 1 FROM session_context WHERE session_id = ?",
-                (session_id,),
-            )
-        )
-        if not rows:
-            return False
-        cursor.execute(
-            """
-            UPDATE session_context
-            SET plan_name = ?, plan_phase = ?, story_id = ?
-            WHERE session_id = ?
-        """,
-            (plan_name, plan_phase, story_id, session_id),
-        )
-        return True
-
-    def get_sessions_by_plan(
-        self,
-        plan_name: Optional[str] = None,
-        project: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get all sessions linked to a plan (or all linked sessions)."""
-        cursor = self._read_cursor()
-        query = (
-            "SELECT session_id, project, branch, pr_number,"
-            " started_at, ended_at, plan_name, plan_phase, story_id"
-            " FROM session_context"
-            " WHERE plan_name IS NOT NULL"
-        )
-        params: list = []
-        if plan_name:
-            query += " AND plan_name = ?"
-            params.append(plan_name)
-        if project:
-            query += " AND project = ?"
-            params.append(project)
-        query += " ORDER BY started_at ASC"
-
-        results = []
-        for row in cursor.execute(query, params):
-            results.append(
-                {
-                    "session_id": row[0],
-                    "project": row[1],
-                    "branch": row[2],
-                    "pr_number": row[3],
-                    "started_at": row[4],
-                    "ended_at": row[5],
-                    "plan_name": row[6],
-                    "plan_phase": row[7],
-                    "story_id": row[8],
-                }
-            )
-        return results
-
-    def get_plan_linking_stats(self) -> Dict[str, Any]:
-        """Get plan linking statistics."""
-        cursor = self._read_cursor()
-        total = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
-        linked = list(cursor.execute("SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL"))[0][0]
-        plans = list(
-            cursor.execute(
-                "SELECT plan_name, COUNT(*) FROM session_context"
-                " WHERE plan_name IS NOT NULL"
-                " GROUP BY plan_name ORDER BY COUNT(*) DESC"
-            )
-        )
-        return {
-            "total_sessions": total,
-            "linked_sessions": linked,
-            "unlinked_sessions": total - linked,
-            "plans": {row[0]: row[1] for row in plans},
-        }
-
-    def clear_plan_links(self, project: Optional[str] = None) -> int:
-        """Clear plan links. Returns count cleared."""
-        cursor = self.conn.cursor()
-        if project:
-            rows = list(
-                cursor.execute(
-                    "SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL AND project = ?",
-                    (project,),
-                )
-            )
-            cursor.execute(
-                "UPDATE session_context SET plan_name = NULL, plan_phase = NULL, story_id = NULL WHERE project = ?",
-                (project,),
-            )
-        else:
-            rows = list(cursor.execute("SELECT COUNT(*) FROM session_context WHERE plan_name IS NOT NULL"))
-            cursor.execute("UPDATE session_context SET plan_name = NULL, plan_phase = NULL, story_id = NULL")
-        return rows[0][0] if rows else 0
-
-    def get_git_overlay_stats(self) -> Dict[str, Any]:
-        """Get git overlay statistics."""
-        cursor = self._read_cursor()
-        sessions = list(cursor.execute("SELECT COUNT(*) FROM session_context"))[0][0]
-        interactions = list(cursor.execute("SELECT COUNT(*) FROM file_interactions"))[0][0]
-        unique_files = list(cursor.execute("SELECT COUNT(DISTINCT file_path) FROM file_interactions"))[0][0]
-        return {
-            "sessions_with_context": sessions,
-            "file_interactions": interactions,
-            "unique_files": unique_files,
-        }
-
-    def clear_session_git_data(self, session_id: str) -> None:
-        """Clear git overlay data for a session (for re-processing)."""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM session_context WHERE session_id = ?", (session_id,))
-        cursor.execute("DELETE FROM file_interactions WHERE session_id = ?", (session_id,))
-
-    def store_operations(
-        self,
-        operations: List[Dict[str, Any]],
-    ) -> int:
-        """Store operation groups.
-
-        Args:
-            operations: List of dicts with id, session_id,
-                operation_type, chunk_ids, summary, outcome,
-                started_at, ended_at, step_count.
-
-        Returns:
-            Number of operations stored.
-        """
-        if not operations:
-            return 0
-        cursor = self.conn.cursor()
-        from datetime import timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        count = 0
-        for op in operations:
-            chunk_ids_json = json.dumps(op.get("chunk_ids", []))
-            cursor.execute(
-                """INSERT OR REPLACE INTO operations
-                (id, session_id, operation_type, chunk_ids,
-                 summary, outcome, started_at, ended_at,
-                 step_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    op["id"],
-                    op["session_id"],
-                    op.get("operation_type"),
-                    chunk_ids_json,
-                    op.get("summary"),
-                    op.get("outcome"),
-                    op.get("started_at"),
-                    op.get("ended_at"),
-                    op.get("step_count", 0),
-                    now,
-                ),
-            )
-            count += 1
-        return count
-
-    def get_session_operations(
-        self,
-        session_id: str,
-    ) -> List[Dict[str, Any]]:
-        """Get all operations for a session."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, session_id, operation_type,
-                      chunk_ids, summary, outcome,
-                      started_at, ended_at, step_count
-               FROM operations
-               WHERE session_id = ?
-               ORDER BY started_at""",
-                (session_id,),
-            )
-        )
-        results = []
-        for row in rows:
-            chunk_ids = []
-            if row[3]:
-                try:
-                    chunk_ids = json.loads(row[3])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            results.append(
-                {
-                    "id": row[0],
-                    "session_id": row[1],
-                    "operation_type": row[2],
-                    "chunk_ids": chunk_ids,
-                    "summary": row[4],
-                    "outcome": row[5],
-                    "started_at": row[6],
-                    "ended_at": row[7],
-                    "step_count": row[8],
-                }
-            )
-        return results
-
-    def get_operations_stats(self) -> Dict[str, Any]:
-        """Get operation grouping statistics."""
-        cursor = self._read_cursor()
-        total = list(cursor.execute("SELECT COUNT(*) FROM operations"))[0][0]
-        by_type = list(
-            cursor.execute(
-                """SELECT operation_type, COUNT(*)
-               FROM operations
-               GROUP BY operation_type
-               ORDER BY COUNT(*) DESC"""
-            )
-        )
-        sessions = list(
-            cursor.execute(
-                """SELECT COUNT(DISTINCT session_id)
-               FROM operations"""
-            )
-        )[0][0]
-        return {
-            "total_operations": total,
-            "sessions_with_operations": sessions,
-            "by_type": {(row[0] or "unknown"): row[1] for row in by_type},
-        }
-
-    def clear_session_operations(self, session_id: str) -> None:
-        """Clear operations for a session."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM operations WHERE session_id = ?",
-            (session_id,),
-        )
-
-    def store_topic_chains(
-        self,
-        chains: List[Dict[str, Any]],
-    ) -> int:
-        """Store topic chain entries."""
-        if not chains:
-            return 0
-        cursor = self.conn.cursor()
-        from datetime import timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        count = 0
-        for chain in chains:
-            cursor.execute(
-                """INSERT INTO topic_chains
-                (file_path, session_a, session_b,
-                 shared_actions, time_delta_hours,
-                 project, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    chain["file_path"],
-                    chain["session_a"],
-                    chain["session_b"],
-                    chain.get("shared_actions", 0),
-                    chain.get("time_delta_hours"),
-                    chain.get("project"),
-                    now,
-                ),
-            )
-            count += 1
-        return count
-
-    def get_file_chains(
-        self,
-        file_path: str,
-        limit: int = 20,
-    ) -> List[Dict[str, Any]]:
-        """Get topic chains for a file (sessions linked by file)."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT tc.file_path, tc.session_a,
-                      tc.session_b, tc.shared_actions,
-                      tc.time_delta_hours, tc.project,
-                      sa.branch AS branch_a,
-                      sb.branch AS branch_b
-               FROM topic_chains tc
-               LEFT JOIN session_context sa
-                   ON tc.session_a = sa.session_id
-               LEFT JOIN session_context sb
-                   ON tc.session_b = sb.session_id
-               WHERE tc.file_path LIKE ?
-               ORDER BY tc.time_delta_hours
-               LIMIT ?""",
-                (f"%{file_path}%", limit),
-            )
-        )
-        return [
-            {
-                "file_path": row[0],
-                "session_a": row[1],
-                "session_b": row[2],
-                "shared_actions": row[3],
-                "time_delta_hours": row[4],
-                "project": row[5],
-                "branch_a": row[6],
-                "branch_b": row[7],
-            }
-            for row in rows
-        ]
-
-    def get_file_regression(
-        self,
-        file_path: str,
-        project: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Get regression info for a file.
-
-        Finds the last successful operation involving the file,
-        then shows all changes after that point.
-
-        Returns:
-            Dict with last_success, changes_after, and timeline.
-        """
-        cursor = self._read_cursor()
-
-        # Get all interactions for this file, ordered by time
-        query = """
-            SELECT fi.file_path, fi.timestamp,
-                   fi.session_id, fi.action,
-                   fi.project,
-                   sc.branch, sc.pr_number
-            FROM file_interactions fi
-            LEFT JOIN session_context sc
-                ON fi.session_id = sc.session_id
-            WHERE fi.file_path LIKE ?
-        """
-        params: list = [f"%{file_path}%"]
-        if project:
-            query += " AND fi.project = ?"
-            params.append(project)
-        query += " ORDER BY fi.timestamp"
-
-        interactions = list(cursor.execute(query, params))
-
-        if not interactions:
-            return {
-                "file_path": file_path,
-                "timeline": [],
-                "last_success": None,
-                "changes_after": [],
-            }
-
-        # Build timeline
-        timeline = []
-        for row in interactions:
-            timeline.append(
-                {
-                    "file_path": row[0],
-                    "timestamp": row[1],
-                    "session_id": row[2],
-                    "action": row[3],
-                    "project": row[4],
-                    "branch": row[5],
-                    "pr_number": row[6],
-                }
-            )
-
-        # Find last successful operation for this file
-        # Check operations table for success outcomes
-        last_success = None
-        changes_after = []
-
-        # Get operations that involved this file
-        for entry in reversed(timeline):
-            sid = entry["session_id"]
-            if not sid:
-                continue
-            ops = list(
-                cursor.execute(
-                    """SELECT outcome FROM operations
-                   WHERE session_id = ?
-                   AND outcome = 'success'
-                   LIMIT 1""",
-                    (sid,),
-                )
-            )
-            if ops:
-                last_success = entry
-                break
-
-        # Get all entries after last success
-        if last_success and last_success.get("timestamp"):
-            changes_after = [e for e in timeline if (e.get("timestamp") or "") > last_success["timestamp"]]
-
-        return {
-            "file_path": file_path,
-            "timeline": timeline,
-            "last_success": last_success,
-            "changes_after": changes_after,
-        }
-
-    def get_topic_chain_stats(self) -> Dict[str, Any]:
-        """Get topic chain statistics."""
-        cursor = self._read_cursor()
-        total = list(cursor.execute("SELECT COUNT(*) FROM topic_chains"))[0][0]
-        files = list(
-            cursor.execute(
-                """SELECT COUNT(DISTINCT file_path)
-               FROM topic_chains"""
-            )
-        )[0][0]
-        return {
-            "total_chains": total,
-            "unique_files": files,
-        }
-
-    def clear_topic_chains(self, project: Optional[str] = None) -> None:
-        """Clear topic chains, optionally for a project."""
-        cursor = self.conn.cursor()
-        if project:
-            cursor.execute(
-                "DELETE FROM topic_chains WHERE project = ?",
-                (project,),
-            )
-        else:
-            cursor.execute("DELETE FROM topic_chains")
-
-    # --- Phase 7: Session Enrichment CRUD ---
-
-    def upsert_session_enrichment(self, enrichment: Dict[str, Any]) -> None:
-        """Insert or update a session enrichment record."""
-        cursor = self.conn.cursor()
-        # Work on a copy to avoid mutating caller's dict
-        enrichment = dict(enrichment)
-        session_id = enrichment["session_id"]
-
-        # Serialize JSON fields
-        json_fields = [
-            "decisions_made",
-            "corrections",
-            "learnings",
-            "mistakes",
-            "patterns",
-            "topic_tags",
-            "tool_usage_stats",
-        ]
-        for field in json_fields:
-            if field in enrichment and not isinstance(enrichment[field], str):
-                enrichment[field] = json.dumps(enrichment[field])
-
-        cursor.execute(
-            """
-            INSERT INTO session_enrichments (
-                session_id, file_path, enrichment_version, enrichment_model,
-                session_start_time, session_end_time, duration_seconds,
-                message_count, user_message_count, assistant_message_count, tool_call_count,
-                session_summary, primary_intent, outcome, complexity_score,
-                session_quality_score,
-                decisions_made, corrections, learnings, mistakes, patterns,
-                topic_tags, tool_usage_stats,
-                what_worked, what_failed,
-                summary_embedding
-            ) VALUES (
-                ?, ?, ?, ?,
-                ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?,
-                ?, ?, ?, ?, ?,
-                ?, ?,
-                ?, ?,
-                ?
-            )
-            ON CONFLICT(session_id) DO UPDATE SET
-                enrichment_version = excluded.enrichment_version,
-                enrichment_model = excluded.enrichment_model,
-                enrichment_timestamp = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-                session_start_time = excluded.session_start_time,
-                session_end_time = excluded.session_end_time,
-                duration_seconds = excluded.duration_seconds,
-                message_count = excluded.message_count,
-                user_message_count = excluded.user_message_count,
-                assistant_message_count = excluded.assistant_message_count,
-                tool_call_count = excluded.tool_call_count,
-                session_summary = excluded.session_summary,
-                primary_intent = excluded.primary_intent,
-                outcome = excluded.outcome,
-                complexity_score = excluded.complexity_score,
-                session_quality_score = excluded.session_quality_score,
-                decisions_made = excluded.decisions_made,
-                corrections = excluded.corrections,
-                learnings = excluded.learnings,
-                mistakes = excluded.mistakes,
-                patterns = excluded.patterns,
-                topic_tags = excluded.topic_tags,
-                tool_usage_stats = excluded.tool_usage_stats,
-                what_worked = excluded.what_worked,
-                what_failed = excluded.what_failed,
-                summary_embedding = excluded.summary_embedding
-            """,
-            (
-                session_id,
-                enrichment.get("file_path"),
-                enrichment.get("enrichment_version", "1.0"),
-                enrichment.get("enrichment_model"),
-                enrichment.get("session_start_time"),
-                enrichment.get("session_end_time"),
-                enrichment.get("duration_seconds"),
-                enrichment.get("message_count", 0),
-                enrichment.get("user_message_count", 0),
-                enrichment.get("assistant_message_count", 0),
-                enrichment.get("tool_call_count", 0),
-                enrichment.get("session_summary"),
-                enrichment.get("primary_intent"),
-                enrichment.get("outcome"),
-                enrichment.get("complexity_score"),
-                enrichment.get("session_quality_score"),
-                enrichment.get("decisions_made", "[]"),
-                enrichment.get("corrections", "[]"),
-                enrichment.get("learnings", "[]"),
-                enrichment.get("mistakes", "[]"),
-                enrichment.get("patterns", "[]"),
-                enrichment.get("topic_tags", "[]"),
-                enrichment.get("tool_usage_stats", "[]"),
-                enrichment.get("what_worked"),
-                enrichment.get("what_failed"),
-                enrichment.get("summary_embedding"),
-            ),
-        )
-
-        # Update FTS5
-        cursor.execute(
-            "DELETE FROM session_enrichments_fts WHERE session_id = ?",
-            (session_id,),
-        )
-        if enrichment.get("session_summary") or enrichment.get("what_worked") or enrichment.get("what_failed"):
-            cursor.execute(
-                """INSERT INTO session_enrichments_fts
-                   (session_summary, what_worked, what_failed, session_id)
-                   VALUES (?, ?, ?, ?)""",
-                (
-                    enrichment.get("session_summary", ""),
-                    enrichment.get("what_worked", ""),
-                    enrichment.get("what_failed", ""),
-                    session_id,
-                ),
-            )
-
-    # Column names for session_enrichments (must match CREATE TABLE order)
-    _SESSION_ENRICHMENT_COLS = [
-        "id",
-        "session_id",
-        "file_path",
-        "enrichment_version",
-        "enrichment_model",
-        "enrichment_timestamp",
-        "session_start_time",
-        "session_end_time",
-        "duration_seconds",
-        "message_count",
-        "user_message_count",
-        "assistant_message_count",
-        "tool_call_count",
-        "session_summary",
-        "primary_intent",
-        "outcome",
-        "complexity_score",
-        "session_quality_score",
-        "decisions_made",
-        "corrections",
-        "learnings",
-        "mistakes",
-        "patterns",
-        "topic_tags",
-        "tool_usage_stats",
-        "what_worked",
-        "what_failed",
-        "summary_embedding",
-    ]
-
-    def get_session_enrichment(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get enrichment data for a session."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT * FROM session_enrichments WHERE session_id = ?",
-                (session_id,),
-            )
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        result = dict(zip(self._SESSION_ENRICHMENT_COLS, row))
-        # Parse JSON fields
-        for field in [
-            "decisions_made",
-            "corrections",
-            "learnings",
-            "mistakes",
-            "patterns",
-            "topic_tags",
-            "tool_usage_stats",
-        ]:
-            result[field] = _safe_json_loads(result.get(field))
-        return result
-
-    def list_enriched_sessions(self) -> List[str]:
-        """Return session IDs that already have enrichment data."""
-        cursor = self._read_cursor()
-        return [row[0] for row in cursor.execute("SELECT session_id FROM session_enrichments")]
-
-    def get_session_enrichment_stats(self) -> Dict[str, Any]:
-        """Get session enrichment statistics."""
-        cursor = self._read_cursor()
-        total = list(cursor.execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
-        by_outcome = dict(
-            cursor.execute(
-                "SELECT outcome, COUNT(*) FROM session_enrichments WHERE outcome IS NOT NULL GROUP BY outcome"
-            )
-        )
-        by_intent = dict(
-            cursor.execute(
-                "SELECT primary_intent, COUNT(*) FROM session_enrichments WHERE primary_intent IS NOT NULL GROUP BY primary_intent"
-            )
-        )
-        avg_quality = list(
-            cursor.execute(
-                "SELECT AVG(session_quality_score) FROM session_enrichments WHERE session_quality_score IS NOT NULL"
-            )
-        )[0][0]
-        return {
-            "total_enriched_sessions": total,
-            "by_outcome": by_outcome,
-            "by_intent": by_intent,
-            "avg_quality_score": round(avg_quality, 1) if avg_quality else None,
-        }
-
-    # ── Knowledge Graph CRUD ──────────────────────────────────────────
-
-    def upsert_entity(
-        self,
-        entity_id: str,
-        entity_type: str,
-        name: str,
-        metadata: Optional[Dict] = None,
-        embedding: Optional[List[float]] = None,
-        *,
-        canonical_name: Optional[str] = None,
-        description: Optional[str] = None,
-        confidence: Optional[float] = None,
-        importance: Optional[float] = None,
-        valid_from: Optional[str] = None,
-        valid_until: Optional[str] = None,
-        group_id: Optional[str] = None,
-    ) -> str:
-        """Insert or update a KG entity. Returns the entity ID.
-
-        Standard fields (matching Convex kgSpec.ts):
-            canonical_name: Lowercased canonical form (auto-derived from name if not set)
-            description: Human-readable description
-            confidence: How certain we are (0-1, default 1.0)
-            importance: How important (0-1, default 0.5)
-            valid_from/valid_until: ISO 8601 temporal validity
-            group_id: Multi-tenant namespace
-        """
-        cursor = self.conn.cursor()
-        meta_json = json.dumps(metadata or {})
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        canon = canonical_name or name.lower().replace(" ", "_")
-        conf = confidence if confidence is not None else 1.0
-        imp = importance if importance is not None else 0.5
-
-        cursor.execute(
-            """
-            INSERT INTO kg_entities (id, entity_type, name, metadata, canonical_name,
-                                     description, confidence, importance,
-                                     valid_from, valid_until, group_id,
-                                     created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(entity_type, name) DO UPDATE SET
-                metadata = excluded.metadata,
-                canonical_name = excluded.canonical_name,
-                description = excluded.description,
-                confidence = excluded.confidence,
-                importance = excluded.importance,
-                valid_from = COALESCE(excluded.valid_from, kg_entities.valid_from),
-                valid_until = COALESCE(excluded.valid_until, kg_entities.valid_until),
-                group_id = COALESCE(excluded.group_id, kg_entities.group_id),
-                updated_at = excluded.updated_at
-            """,
-            (
-                entity_id,
-                entity_type,
-                name,
-                meta_json,
-                canon,
-                description,
-                conf,
-                imp,
-                valid_from,
-                valid_until,
-                group_id,
-                now,
-                now,
-            ),
-        )
-
-        # Retrieve the actual stored ID (may differ from entity_id on conflict)
-        stored_id = list(
-            cursor.execute(
-                "SELECT id FROM kg_entities WHERE entity_type = ? AND name = ?",
-                (entity_type, name),
-            )
-        )[0][0]
-
-        if embedding is not None:
-            embedding_bytes = serialize_f32(embedding)
-            cursor.execute(
-                "INSERT OR REPLACE INTO kg_vec_entities (entity_id, embedding) VALUES (?, ?)",
-                (stored_id, embedding_bytes),
-            )
-
-        return stored_id
-
-    def add_relation(
-        self,
-        relation_id: str,
-        source_id: str,
-        target_id: str,
-        relation_type: str,
-        properties: Optional[Dict] = None,
-        confidence: float = 1.0,
-        *,
-        fact: Optional[str] = None,
-        importance: float = 0.5,
-        valid_from: Optional[str] = None,
-        valid_until: Optional[str] = None,
-        source_chunk_id: Optional[str] = None,
-    ) -> str:
-        """Add a relationship between two entities. Returns the relation ID.
-
-        Standard fields (matching Convex kgSpec.ts):
-            fact: Natural language description (e.g., "Alice does not meet on Fridays")
-            importance: How important (0-1, default 0.5)
-            valid_from/valid_until: ISO 8601 temporal validity
-            source_chunk_id: Provenance — which conversation chunk this came from
-        """
-        cursor = self.conn.cursor()
-        props_json = json.dumps(properties or {})
-
-        cursor.execute(
-            """
-            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence,
-                                      fact, importance, valid_from, valid_until, source_chunk_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
-                properties = excluded.properties,
-                confidence = excluded.confidence,
-                fact = COALESCE(excluded.fact, kg_relations.fact),
-                importance = COALESCE(excluded.importance, kg_relations.importance),
-                valid_from = COALESCE(excluded.valid_from, kg_relations.valid_from),
-                valid_until = COALESCE(excluded.valid_until, kg_relations.valid_until),
-                source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
-            """,
-            (
-                relation_id,
-                source_id,
-                target_id,
-                relation_type,
-                props_json,
-                confidence,
-                fact,
-                importance,
-                valid_from,
-                valid_until,
-                source_chunk_id,
-            ),
-        )
-
-        # Retrieve the actual stored ID (may differ from relation_id on conflict)
-        stored_id = list(
-            cursor.execute(
-                "SELECT id FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?",
-                (source_id, target_id, relation_type),
-            )
-        )[0][0]
-        return stored_id
-
-    def link_entity_chunk(
-        self,
-        entity_id: str,
-        chunk_id: str,
-        relevance: float = 1.0,
-        context: Optional[str] = None,
-        *,
-        mention_type: Optional[str] = None,
-    ) -> None:
-        """Link an entity to an existing chunk.
-
-        Args:
-            mention_type: How entity was found — 'explicit', 'inferred', 'embedding_match'
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context, mention_type)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(entity_id, chunk_id) DO UPDATE SET
-                relevance = excluded.relevance,
-                context = excluded.context,
-                mention_type = COALESCE(excluded.mention_type, kg_entity_chunks.mention_type)
-            """,
-            (entity_id, chunk_id, relevance, context, mention_type),
-        )
-
-    def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single entity by ID."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
-                   FROM kg_entities WHERE id = ?""",
-                (entity_id,),
-            )
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "id": row[0],
-            "entity_type": row[1],
-            "name": row[2],
-            "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4],
-            "updated_at": row[5],
-            "canonical_name": row[6],
-            "description": row[7],
-            "confidence": row[8],
-            "importance": row[9],
-            "valid_from": row[10],
-            "valid_until": row[11],
-            "group_id": row[12],
-        }
-
-    def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
-        """Get an entity by type and name."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
-                   FROM kg_entities WHERE entity_type = ? AND name = ?""",
-                (entity_type, name),
-            )
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "id": row[0],
-            "entity_type": row[1],
-            "name": row[2],
-            "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4],
-            "updated_at": row[5],
-            "canonical_name": row[6],
-            "description": row[7],
-            "confidence": row[8],
-            "importance": row[9],
-            "valid_from": row[10],
-            "valid_until": row[11],
-            "group_id": row[12],
-        }
-
-    def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
-        """Get all relations for an entity.
-
-        Args:
-            entity_id: Entity to query
-            direction: 'outgoing', 'incoming', or 'both'
-        """
-        cursor = self._read_cursor()
-        results = []
-
-        if direction in ("outgoing", "both"):
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
-                           e.name as target_name, e.entity_type as target_type,
-                           r.fact, r.importance, r.valid_from, r.valid_until, r.expired_at, r.source_chunk_id
-                    FROM kg_relations r
-                    JOIN kg_entities e ON r.target_id = e.id
-                    WHERE r.source_id = ?
-                    """,
-                    (entity_id,),
-                )
-            )
-            for row in rows:
-                results.append(
-                    {
-                        "id": row[0],
-                        "source_id": row[1],
-                        "target_id": row[2],
-                        "relation_type": row[3],
-                        "properties": json.loads(row[4]) if row[4] else {},
-                        "confidence": row[5],
-                        "target_name": row[6],
-                        "target_type": row[7],
-                        "fact": row[8],
-                        "importance": row[9],
-                        "valid_from": row[10],
-                        "valid_until": row[11],
-                        "expired_at": row[12],
-                        "source_chunk_id": row[13],
-                        "direction": "outgoing",
-                    }
-                )
-
-        if direction in ("incoming", "both"):
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
-                           e.name as source_name, e.entity_type as source_type,
-                           r.fact, r.importance, r.valid_from, r.valid_until, r.expired_at, r.source_chunk_id
-                    FROM kg_relations r
-                    JOIN kg_entities e ON r.source_id = e.id
-                    WHERE r.target_id = ?
-                    """,
-                    (entity_id,),
-                )
-            )
-            for row in rows:
-                results.append(
-                    {
-                        "id": row[0],
-                        "source_id": row[1],
-                        "target_id": row[2],
-                        "relation_type": row[3],
-                        "properties": json.loads(row[4]) if row[4] else {},
-                        "confidence": row[5],
-                        "source_name": row[6],
-                        "source_type": row[7],
-                        "fact": row[8],
-                        "importance": row[9],
-                        "valid_from": row[10],
-                        "valid_until": row[11],
-                        "expired_at": row[12],
-                        "source_chunk_id": row[13],
-                        "direction": "incoming",
-                    }
-                )
-
-        return results
-
-    def get_entity_chunks(self, entity_id: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Get chunks linked to an entity, ordered by relevance."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """
-                SELECT ec.chunk_id, ec.relevance, ec.context, ec.mention_type,
-                       c.content, c.source_file, c.project, c.content_type, c.created_at
-                FROM kg_entity_chunks ec
-                JOIN chunks c ON ec.chunk_id = c.id
-                WHERE ec.entity_id = ?
-                ORDER BY ec.relevance DESC
-                LIMIT ?
-                """,
-                (entity_id, limit),
-            )
-        )
-        return [
-            {
-                "chunk_id": row[0],
-                "relevance": row[1],
-                "context": row[2],
-                "mention_type": row[3],
-                "content": row[4],
-                "source_file": row[5],
-                "project": row[6],
-                "content_type": row[7],
-                "created_at": row[8],
-            }
-            for row in rows
-        ]
-
-    def search_entities(
-        self,
-        query: str,
-        entity_type: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Search entities using FTS5 full-text search."""
-        cursor = self._read_cursor()
-        fts_query = _escape_fts5_query(query)
-
-        if entity_type:
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
-                           f.rank
-                    FROM kg_entities_fts f
-                    JOIN kg_entities e ON f.entity_id = e.id
-                    WHERE kg_entities_fts MATCH ? AND e.entity_type = ?
-                    ORDER BY f.rank
-                    LIMIT ?
-                    """,
-                    (fts_query, entity_type, limit),
-                )
-            )
-        else:
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
-                           f.rank
-                    FROM kg_entities_fts f
-                    JOIN kg_entities e ON f.entity_id = e.id
-                    WHERE kg_entities_fts MATCH ?
-                    ORDER BY f.rank
-                    LIMIT ?
-                    """,
-                    (fts_query, limit),
-                )
-            )
-
-        return [
-            {
-                "id": row[0],
-                "entity_type": row[1],
-                "name": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4],
-                "updated_at": row[5],
-                "rank": row[6],
-            }
-            for row in rows
-        ]
-
-    def search_entities_semantic(
-        self,
-        query_embedding: List[float],
-        entity_type: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Search entities using vector similarity."""
-        cursor = self._read_cursor()
-        query_bytes = serialize_f32(query_embedding)
-
-        if entity_type:
-            # Over-fetch since vec0 applies k before WHERE filter on entity_type
-            fetch_k = min(max(limit * 3, limit + 50), 500)
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
-                           v.distance
-                    FROM kg_vec_entities v
-                    JOIN kg_entities e ON v.entity_id = e.id
-                    WHERE v.embedding MATCH ? AND k = ? AND e.entity_type = ?
-                    ORDER BY v.distance
-                    """,
-                    (query_bytes, fetch_k, entity_type),
-                )
-            )
-            rows = rows[:limit]
-        else:
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at,
-                           v.distance
-                    FROM kg_vec_entities v
-                    JOIN kg_entities e ON v.entity_id = e.id
-                    WHERE v.embedding MATCH ? AND k = ?
-                    ORDER BY v.distance
-                    """,
-                    (query_bytes, limit),
-                )
-            )
-
-        return [
-            {
-                "id": row[0],
-                "entity_type": row[1],
-                "name": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4],
-                "updated_at": row[5],
-                "distance": row[6],
-            }
-            for row in rows
-        ]
-
-    def kg_stats(self) -> Dict[str, Any]:
-        """Get KG statistics."""
-        cursor = self._read_cursor()
-
-        entity_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entities"))[0][0]
-        relation_count = list(cursor.execute("SELECT COUNT(*) FROM kg_relations"))[0][0]
-        link_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks"))[0][0]
-
-        type_counts = dict(cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type"))
-        relation_type_counts = dict(
-            cursor.execute("SELECT relation_type, COUNT(*) FROM kg_relations GROUP BY relation_type")
-        )
-
-        return {
-            "entities": entity_count,
-            "relations": relation_count,
-            "entity_chunk_links": link_count,
-            "entity_types": type_counts,
-            "relation_types": relation_type_counts,
-        }
-
-    # ── Entity Alias CRUD ──────────────────────────────────────────────
-
-    def add_entity_alias(self, alias: str, entity_id: str, alias_type: str = "name") -> None:
-        """Add an alias for an entity. Idempotent."""
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO kg_entity_aliases (alias, entity_id, alias_type, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(alias, entity_id) DO NOTHING
-            """,
-            (alias, entity_id, alias_type, now),
-        )
-
-    def get_entity_by_alias(self, alias: str) -> Optional[Dict[str, Any]]:
-        """Look up an entity by alias (case-insensitive)."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """
-                SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at
-                FROM kg_entity_aliases a
-                JOIN kg_entities e ON a.entity_id = e.id
-                WHERE LOWER(a.alias) = LOWER(?)
-                LIMIT 1
-                """,
-                (alias,),
-            )
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "id": row[0],
-            "entity_type": row[1],
-            "name": row[2],
-            "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4],
-            "updated_at": row[5],
-        }
-
-    def get_entity_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
-        """Get all aliases for an entity."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT alias, alias_type, created_at FROM kg_entity_aliases WHERE entity_id = ?",
-                (entity_id,),
-            )
-        )
-        return [{"alias": row[0], "alias_type": row[1], "created_at": row[2]} for row in rows]
-
-    # ── KG Standard Methods (matches Convex kgSpec.ts) ──────────────────
-
-    def soft_close_relation(self, relation_id: str) -> None:
-        """Soft-close a relation by setting expired_at to now.
-
-        The relation is not deleted but becomes invisible to kg_current_facts.
-        """
-        cursor = self.conn.cursor()
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        cursor.execute(
-            "UPDATE kg_relations SET expired_at = ? WHERE id = ?",
-            (now, relation_id),
-        )
-
-    def get_current_facts(
-        self,
-        entity_id: str,
-        relation_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get non-expired relations for an entity (outgoing only).
-
-        Uses the kg_current_facts VIEW which auto-filters by validity and expiration.
-        """
-        cursor = self._read_cursor()
-        if relation_type:
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT f.id, f.source_id, f.target_id, f.relation_type, f.properties, f.confidence,
-                           f.fact, f.importance, f.valid_from, f.valid_until, f.expired_at, f.source_chunk_id,
-                           e.name as target_name, e.entity_type as target_type
-                    FROM kg_current_facts f
-                    JOIN kg_entities e ON f.target_id = e.id
-                    WHERE f.source_id = ? AND f.relation_type = ?
-                    """,
-                    (entity_id, relation_type),
-                )
-            )
-        else:
-            rows = list(
-                cursor.execute(
-                    """
-                    SELECT f.id, f.source_id, f.target_id, f.relation_type, f.properties, f.confidence,
-                           f.fact, f.importance, f.valid_from, f.valid_until, f.expired_at, f.source_chunk_id,
-                           e.name as target_name, e.entity_type as target_type
-                    FROM kg_current_facts f
-                    JOIN kg_entities e ON f.target_id = e.id
-                    WHERE f.source_id = ?
-                    """,
-                    (entity_id,),
-                )
-            )
-        return [
-            {
-                "id": row[0],
-                "source_id": row[1],
-                "target_id": row[2],
-                "relation_type": row[3],
-                "properties": json.loads(row[4]) if row[4] else {},
-                "confidence": row[5],
-                "fact": row[6],
-                "importance": row[7],
-                "valid_from": row[8],
-                "valid_until": row[9],
-                "expired_at": row[10],
-                "source_chunk_id": row[11],
-                "target_name": row[12],
-                "target_type": row[13],
-            }
-            for row in rows
-        ]
-
-    def traverse(
-        self,
-        entity_id: str,
-        max_depth: int = 2,
-        relation_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Multi-hop graph traversal via recursive CTE.
-
-        Returns entities reachable from entity_id within max_depth hops,
-        following non-expired relations. Avoids cycles.
-        """
-        cursor = self._read_cursor()
-
-        rel_filter = ""
-        params: list = [entity_id, max_depth]
-        if relation_types:
-            placeholders = ", ".join("?" for _ in relation_types)
-            rel_filter = f"AND r.relation_type IN ({placeholders})"
-            params = [entity_id] + relation_types + [max_depth]
-
-        # Build the recursive CTE query
-        if relation_types:
-            query = f"""
-                WITH RECURSIVE reachable(entity_id, depth, path) AS (
-                    SELECT ?, 0, '|' || ? || '|'
-                    UNION ALL
-                    SELECT r.target_id, re.depth + 1,
-                           re.path || r.target_id || '|'
-                    FROM reachable re
-                    JOIN kg_relations r ON r.source_id = re.entity_id
-                    WHERE re.depth < ?
-                      AND r.expired_at IS NULL
-                      AND re.path NOT LIKE '%|' || r.target_id || '|%'
-                      {rel_filter}
-                )
-                SELECT DISTINCT r.entity_id, r.depth, e.entity_type, e.name
-                FROM reachable r
-                JOIN kg_entities e ON r.entity_id = e.id
-                WHERE r.depth > 0
-                ORDER BY r.depth, e.name
-            """
-            params_list = [entity_id, entity_id] + relation_types + [max_depth]
-        else:
-            query = """
-                WITH RECURSIVE reachable(entity_id, depth, path) AS (
-                    SELECT ?, 0, '|' || ? || '|'
-                    UNION ALL
-                    SELECT r.target_id, re.depth + 1,
-                           re.path || r.target_id || '|'
-                    FROM reachable re
-                    JOIN kg_relations r ON r.source_id = re.entity_id
-                    WHERE re.depth < ?
-                      AND r.expired_at IS NULL
-                      AND re.path NOT LIKE '%|' || r.target_id || '|%'
-                )
-                SELECT DISTINCT r.entity_id, r.depth, e.entity_type, e.name
-                FROM reachable r
-                JOIN kg_entities e ON r.entity_id = e.id
-                WHERE r.depth > 0
-                ORDER BY r.depth, e.name
-            """
-            params_list = [entity_id, entity_id, max_depth]
-
-        rows = list(cursor.execute(query, params_list))
-        return [
-            {
-                "entity_id": row[0],
-                "depth": row[1],
-                "entity_type": row[2],
-                "name": row[3],
-            }
-            for row in rows
-        ]
-
-    def resolve_entity(self, name_or_alias: str) -> Optional[Dict[str, Any]]:
-        """Resolve a string to a KG entity.
-
-        Resolution order:
-        1. Exact alias match (case-insensitive)
-        2. Exact name match (case-insensitive)
-        3. Canonical name match
-        4. FTS5 fuzzy search (first result)
-        """
-        # 1. Exact alias
-        result = self.get_entity_by_alias(name_or_alias)
-        if result:
-            return result
-
-        # 2. Exact name (case-insensitive)
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
-                   FROM kg_entities WHERE LOWER(name) = LOWER(?)""",
-                (name_or_alias,),
-            )
-        )
-        if rows:
-            row = rows[0]
-            return {
-                "id": row[0],
-                "entity_type": row[1],
-                "name": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4],
-                "updated_at": row[5],
-                "canonical_name": row[6],
-                "description": row[7],
-                "confidence": row[8],
-                "importance": row[9],
-                "valid_from": row[10],
-                "valid_until": row[11],
-                "group_id": row[12],
-            }
-
-        # 3. Canonical name match
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
-                   FROM kg_entities WHERE LOWER(canonical_name) = LOWER(?)""",
-                (name_or_alias,),
-            )
-        )
-        if rows:
-            row = rows[0]
-            return {
-                "id": row[0],
-                "entity_type": row[1],
-                "name": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4],
-                "updated_at": row[5],
-                "canonical_name": row[6],
-                "description": row[7],
-                "confidence": row[8],
-                "importance": row[9],
-                "valid_from": row[10],
-                "valid_until": row[11],
-                "group_id": row[12],
-            }
-
-        # 4. FTS5 fuzzy fallback
-        results = self.search_entities(name_or_alias, limit=1)
-        if results:
-            return self.get_entity(results[0]["id"])
-
-        return None
-
-    # ── KG Hybrid Retrieval ──────────────────────────────────────────
-
-    def kg_search(
-        self,
-        query: str,
-        relation_type: Optional[str] = None,
-        limit: int = 20,
-    ) -> List[Dict[str, Any]]:
-        """Structured KG fact retrieval — find relations matching a query.
-
-        Resolves query to an entity, then returns its current (non-expired) facts.
-        If no exact entity match, searches relations by fact text via FTS-like matching.
-
-        Args:
-            query: Entity name or search text
-            relation_type: Optional filter by relation type
-            limit: Max results
-        """
-        results: List[Dict[str, Any]] = []
-
-        # Try to resolve query to an entity
-        entity = self.resolve_entity(query)
-        if entity:
-            # Get facts for this entity (both directions)
-            cursor = self._read_cursor()
-            params: list = [entity["id"]]
-            rel_filter = ""
-            if relation_type:
-                rel_filter = "AND r.relation_type = ?"
-                params.append(relation_type)
-            params.append(entity["id"])
-            if relation_type:
-                params.append(relation_type)
-            params.append(limit)
-
-            rows = list(
-                cursor.execute(
-                    f"""
-                    SELECT r.id, r.source_id, r.target_id, r.relation_type,
-                           r.fact, r.confidence, r.importance,
-                           r.source_chunk_id, r.properties,
-                           se.name as source_name, se.entity_type as source_type,
-                           te.name as target_name, te.entity_type as target_type
-                    FROM kg_current_facts r
-                    JOIN kg_entities se ON r.source_id = se.id
-                    JOIN kg_entities te ON r.target_id = te.id
-                    WHERE (r.source_id = ? {rel_filter})
-                       OR (r.target_id = ? {rel_filter})
-                    ORDER BY r.importance DESC, r.confidence DESC
-                    LIMIT ?
-                    """,
-                    params,
-                )
-            )
-
-            for row in rows:
-                results.append(
-                    {
-                        "id": row[0],
-                        "source_id": row[1],
-                        "target_id": row[2],
-                        "relation_type": row[3],
-                        "fact": row[4],
-                        "confidence": row[5],
-                        "importance": row[6],
-                        "source_chunk_id": row[7],
-                        "properties": json.loads(row[8]) if row[8] else {},
-                        "source_entity": {"name": row[9], "entity_type": row[10]},
-                        "target_entity": {"name": row[11], "entity_type": row[12]},
-                    }
-                )
-
-        return results
-
-    def kg_hybrid_search(
-        self,
-        query_embedding: List[float],
-        query_text: str,
-        n_results: int = 10,
-        entity_name: Optional[str] = None,
-        relation_type: Optional[str] = None,
-        project_filter: Optional[str] = None,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Combined vector + KG fact retrieval with RRF scoring.
-
-        Returns:
-            {
-                "chunks": <standard hybrid_search result>,
-                "facts": [{"fact": ..., "rrf_score": ..., ...}]
-            }
-        """
-        RRF_K = 60  # RRF constant
-
-        # 1. Standard vector + FTS5 hybrid search on chunks
-        entity_id = None
-        if entity_name:
-            entity = self.resolve_entity(entity_name)
-            if entity:
-                entity_id = entity["id"]
-
-        chunk_results = self.hybrid_search(
-            query_embedding=query_embedding,
-            query_text=query_text,
-            n_results=n_results,
-            project_filter=project_filter,
-            entity_id=entity_id,
-            **kwargs,
-        )
-
-        # 2. KG fact search
-        search_term = entity_name or query_text
-        kg_facts = self.kg_search(
-            query=search_term,
-            relation_type=relation_type,
-            limit=n_results,
-        )
-
-        # 3. Score facts via RRF (rank by importance * confidence)
-        scored_facts = []
-        for rank, fact in enumerate(kg_facts):
-            rrf_score = 1.0 / (RRF_K + rank)
-            # Boost by importance and confidence
-            importance = fact.get("importance") or 0.5
-            confidence = fact.get("confidence") or 1.0
-            boosted_score = rrf_score * importance * confidence
-            fact["rrf_score"] = round(boosted_score, 6)
-            scored_facts.append(fact)
-
-        # Sort by score descending
-        scored_facts.sort(key=lambda f: f["rrf_score"], reverse=True)
-
-        return {
-            "chunks": chunk_results,
-            "facts": scored_facts,
-        }
+    # ── Context manager ─────────────────────────────────────────────────
 
     def close(self) -> None:
         """Close database connections."""

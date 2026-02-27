@@ -27,6 +27,7 @@ AIDEV-NOTE: Two prompt paths exist:
 """
 
 import json
+import logging
 import os
 import random
 import sys
@@ -37,6 +38,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 from ..vector_store import VectorStore
 
@@ -726,7 +729,8 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             return result
         return None
 
-    except Exception:
+    except Exception as e:
+        logger.debug("Enrichment result validation failed: %s", e)
         return None
 
 

@@ -1531,8 +1531,8 @@ def index_fast(
             _sync_stats_to_supabase(store)
             store.close()
             rprint("[dim]Synced enrichment stats to Supabase[/]")
-        except Exception:
-            pass
+        except Exception as e:
+            rprint(f"[dim]Supabase stats sync skipped: {e}[/]")
 
     except typer.Exit:
         raise

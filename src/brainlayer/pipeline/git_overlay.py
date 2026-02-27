@@ -82,8 +82,8 @@ def get_session_timestamps(jsonl_path: Path) -> Tuple[Optional[str], Optional[st
                         last_ts = ts
                 except json.JSONDecodeError:
                     continue
-    except (OSError, IOError):
-        pass
+    except (OSError, IOError) as e:
+        logger.debug("Could not read session timestamps: %s", e)
     return first_ts, last_ts
 
 
@@ -138,8 +138,8 @@ def extract_file_actions(jsonl_path: Path, session_id: str) -> List[Dict[str, An
                             )
                 except json.JSONDecodeError:
                     continue
-    except (OSError, IOError):
-        pass
+    except (OSError, IOError) as e:
+        logger.debug("Could not read file interactions: %s", e)
     return interactions
 
 
@@ -200,8 +200,8 @@ def get_git_context(
                 prs = json.loads(result.stdout)
                 if prs:
                     context["pr_number"] = prs[0]["number"]
-        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-            pass
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+            logger.debug("PR lookup failed: %s", e)
 
     return context
 

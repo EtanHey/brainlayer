@@ -7,7 +7,7 @@ Covers:
 - format="compact" token reduction
 """
 
-from brainlayer.mcp import (
+from brainlayer.mcp._shared import (
     _RECALL_SIGNALS,
     _extract_file_path,
     _query_signals_recall,

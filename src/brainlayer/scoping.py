@@ -4,9 +4,12 @@ Reads ~/.config/brainlayer/scopes.yaml to map directory prefixes to project name
 Falls back to parsing CWD if no config exists.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 _SCOPES_PATH = Path.home() / ".config" / "brainlayer" / "scopes.yaml"
 
@@ -37,7 +40,8 @@ def _load_scopes() -> dict:
     except ImportError:
         # Fall back to simple line parsing if PyYAML not installed
         return _parse_scopes_simple(_SCOPES_PATH)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to load scopes config from %s: %s", _SCOPES_PATH, e)
         return {}
 
 
