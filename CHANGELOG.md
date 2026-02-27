@@ -7,7 +7,7 @@
 - Semantic search across AI conversation history (sqlite-vec + bge-large-en-v1.5)
 - 10-field LLM enrichment pipeline (Ollama / MLX backends)
 - Brain graph visualization (HDBSCAN clustering + UMAP 3D layout)
-- MCP server with 8 tools for Claude Code, Zed, Cursor
+- MCP server with 7 tools (+ 14 backward-compatible aliases) for Claude Code, Zed, Cursor
 - Interactive setup wizard (`brainlayer init`)
 - Centralized artifact storage (`~/.local/share/brainlayer/storage/`)
 - Multi-source indexing: Claude Code, WhatsApp, YouTube, Markdown, Claude Desktop
