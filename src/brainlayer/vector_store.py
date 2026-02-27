@@ -504,6 +504,59 @@ class VectorStore:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)")
 
+        # ── KG Standard Spec Migrations (matches Convex kgSpec.ts) ──────────
+
+        # Add new standard columns to kg_entities
+        for col, default in [
+            ("canonical_name", "TEXT"),
+            ("description", "TEXT"),
+            ("confidence", "REAL DEFAULT 1.0"),
+            ("importance", "REAL DEFAULT 0.5"),
+            ("valid_from", "TEXT"),
+            ("valid_until", "TEXT"),
+            ("group_id", "TEXT"),
+        ]:
+            if col not in kg_entity_cols:
+                cursor.execute(f"ALTER TABLE kg_entities ADD COLUMN {col} {default}")
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_entities_canonical ON kg_entities(canonical_name, entity_type)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)"
+        )
+
+        # Add new standard columns to kg_relations
+        for col, default in [
+            ("fact", "TEXT"),
+            ("importance", "REAL DEFAULT 0.5"),
+            ("valid_from", "TEXT"),
+            ("valid_until", "TEXT"),
+            ("expired_at", "TEXT"),
+            ("source_chunk_id", "TEXT"),
+        ]:
+            if col not in kg_rel_cols:
+                cursor.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {default}")
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)"
+        )
+
+        # Add mention_type to kg_entity_chunks
+        ec_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
+        if "mention_type" not in ec_cols:
+            cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN mention_type TEXT")
+
+        # kg_current_facts view — auto-filters expired relations
+        cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
+        cursor.execute("""
+            CREATE VIEW kg_current_facts AS
+            SELECT * FROM kg_relations
+            WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+              AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+              AND expired_at IS NULL
+        """)
+
         # ── End Knowledge Graph tables ──────────────────────────────────────
 
         # Check if FTS5 needs backfill (existing DB without FTS5 data)
@@ -2270,21 +2323,53 @@ class VectorStore:
         name: str,
         metadata: Optional[Dict] = None,
         embedding: Optional[List[float]] = None,
+        *,
+        canonical_name: Optional[str] = None,
+        description: Optional[str] = None,
+        confidence: Optional[float] = None,
+        importance: Optional[float] = None,
+        valid_from: Optional[str] = None,
+        valid_until: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> str:
-        """Insert or update a KG entity. Returns the entity ID."""
+        """Insert or update a KG entity. Returns the entity ID.
+
+        Standard fields (matching Convex kgSpec.ts):
+            canonical_name: Lowercased canonical form (auto-derived from name if not set)
+            description: Human-readable description
+            confidence: How certain we are (0-1, default 1.0)
+            importance: How important (0-1, default 0.5)
+            valid_from/valid_until: ISO 8601 temporal validity
+            group_id: Multi-tenant namespace
+        """
         cursor = self.conn.cursor()
         meta_json = json.dumps(metadata or {})
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        canon = canonical_name or name.lower().replace(" ", "_")
+        conf = confidence if confidence is not None else 1.0
+        imp = importance if importance is not None else 0.5
 
         cursor.execute(
             """
-            INSERT INTO kg_entities (id, entity_type, name, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO kg_entities (id, entity_type, name, metadata, canonical_name,
+                                     description, confidence, importance,
+                                     valid_from, valid_until, group_id,
+                                     created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(entity_type, name) DO UPDATE SET
                 metadata = excluded.metadata,
+                canonical_name = excluded.canonical_name,
+                description = excluded.description,
+                confidence = excluded.confidence,
+                importance = excluded.importance,
+                valid_from = COALESCE(excluded.valid_from, kg_entities.valid_from),
+                valid_until = COALESCE(excluded.valid_until, kg_entities.valid_until),
+                group_id = COALESCE(excluded.group_id, kg_entities.group_id),
                 updated_at = excluded.updated_at
             """,
-            (entity_id, entity_type, name, meta_json, now, now),
+            (entity_id, entity_type, name, meta_json, canon,
+             description, conf, imp,
+             valid_from, valid_until, group_id, now, now),
         )
 
         # Retrieve the actual stored ID (may differ from entity_id on conflict)
@@ -2312,20 +2397,40 @@ class VectorStore:
         relation_type: str,
         properties: Optional[Dict] = None,
         confidence: float = 1.0,
+        *,
+        fact: Optional[str] = None,
+        importance: float = 0.5,
+        valid_from: Optional[str] = None,
+        valid_until: Optional[str] = None,
+        source_chunk_id: Optional[str] = None,
     ) -> str:
-        """Add a relationship between two entities. Returns the relation ID."""
+        """Add a relationship between two entities. Returns the relation ID.
+
+        Standard fields (matching Convex kgSpec.ts):
+            fact: Natural language description (e.g., "Alice does not meet on Fridays")
+            importance: How important (0-1, default 0.5)
+            valid_from/valid_until: ISO 8601 temporal validity
+            source_chunk_id: Provenance — which conversation chunk this came from
+        """
         cursor = self.conn.cursor()
         props_json = json.dumps(properties or {})
 
         cursor.execute(
             """
-            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence,
+                                      fact, importance, valid_from, valid_until, source_chunk_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
                 properties = excluded.properties,
-                confidence = excluded.confidence
+                confidence = excluded.confidence,
+                fact = COALESCE(excluded.fact, kg_relations.fact),
+                importance = COALESCE(excluded.importance, kg_relations.importance),
+                valid_from = COALESCE(excluded.valid_from, kg_relations.valid_from),
+                valid_until = COALESCE(excluded.valid_until, kg_relations.valid_until),
+                source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
             """,
-            (relation_id, source_id, target_id, relation_type, props_json, confidence),
+            (relation_id, source_id, target_id, relation_type, props_json, confidence,
+             fact, importance, valid_from, valid_until, source_chunk_id),
         )
 
         # Retrieve the actual stored ID (may differ from relation_id on conflict)
@@ -2343,18 +2448,25 @@ class VectorStore:
         chunk_id: str,
         relevance: float = 1.0,
         context: Optional[str] = None,
+        *,
+        mention_type: Optional[str] = None,
     ) -> None:
-        """Link an entity to an existing chunk."""
+        """Link an entity to an existing chunk.
+
+        Args:
+            mention_type: How entity was found — 'explicit', 'inferred', 'embedding_match'
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context, mention_type)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(entity_id, chunk_id) DO UPDATE SET
                 relevance = excluded.relevance,
-                context = excluded.context
+                context = excluded.context,
+                mention_type = COALESCE(excluded.mention_type, kg_entity_chunks.mention_type)
             """,
-            (entity_id, chunk_id, relevance, context),
+            (entity_id, chunk_id, relevance, context, mention_type),
         )
 
     def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
@@ -2362,7 +2474,10 @@ class VectorStore:
         cursor = self._read_cursor()
         rows = list(
             cursor.execute(
-                "SELECT id, entity_type, name, metadata, created_at, updated_at FROM kg_entities WHERE id = ?",
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance,
+                          valid_from, valid_until, group_id
+                   FROM kg_entities WHERE id = ?""",
                 (entity_id,),
             )
         )
@@ -2376,6 +2491,13 @@ class VectorStore:
             "metadata": json.loads(row[3]) if row[3] else {},
             "created_at": row[4],
             "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+            "valid_from": row[10],
+            "valid_until": row[11],
+            "group_id": row[12],
         }
 
     def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
@@ -2383,7 +2505,10 @@ class VectorStore:
         cursor = self._read_cursor()
         rows = list(
             cursor.execute(
-                "SELECT id, entity_type, name, metadata, created_at, updated_at FROM kg_entities WHERE entity_type = ? AND name = ?",
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance,
+                          valid_from, valid_until, group_id
+                   FROM kg_entities WHERE entity_type = ? AND name = ?""",
                 (entity_type, name),
             )
         )
@@ -2397,6 +2522,13 @@ class VectorStore:
             "metadata": json.loads(row[3]) if row[3] else {},
             "created_at": row[4],
             "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+            "valid_from": row[10],
+            "valid_until": row[11],
+            "group_id": row[12],
         }
 
     def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
@@ -2414,7 +2546,8 @@ class VectorStore:
                 cursor.execute(
                     """
                     SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
-                           e.name as target_name, e.entity_type as target_type
+                           e.name as target_name, e.entity_type as target_type,
+                           r.fact, r.importance, r.valid_from, r.valid_until, r.expired_at, r.source_chunk_id
                     FROM kg_relations r
                     JOIN kg_entities e ON r.target_id = e.id
                     WHERE r.source_id = ?
@@ -2433,6 +2566,12 @@ class VectorStore:
                         "confidence": row[5],
                         "target_name": row[6],
                         "target_type": row[7],
+                        "fact": row[8],
+                        "importance": row[9],
+                        "valid_from": row[10],
+                        "valid_until": row[11],
+                        "expired_at": row[12],
+                        "source_chunk_id": row[13],
                         "direction": "outgoing",
                     }
                 )
@@ -2442,7 +2581,8 @@ class VectorStore:
                 cursor.execute(
                     """
                     SELECT r.id, r.source_id, r.target_id, r.relation_type, r.properties, r.confidence,
-                           e.name as source_name, e.entity_type as source_type
+                           e.name as source_name, e.entity_type as source_type,
+                           r.fact, r.importance, r.valid_from, r.valid_until, r.expired_at, r.source_chunk_id
                     FROM kg_relations r
                     JOIN kg_entities e ON r.source_id = e.id
                     WHERE r.target_id = ?
@@ -2461,6 +2601,12 @@ class VectorStore:
                         "confidence": row[5],
                         "source_name": row[6],
                         "source_type": row[7],
+                        "fact": row[8],
+                        "importance": row[9],
+                        "valid_from": row[10],
+                        "valid_until": row[11],
+                        "expired_at": row[12],
+                        "source_chunk_id": row[13],
                         "direction": "incoming",
                     }
                 )
@@ -2473,7 +2619,7 @@ class VectorStore:
         rows = list(
             cursor.execute(
                 """
-                SELECT ec.chunk_id, ec.relevance, ec.context,
+                SELECT ec.chunk_id, ec.relevance, ec.context, ec.mention_type,
                        c.content, c.source_file, c.project, c.content_type, c.created_at
                 FROM kg_entity_chunks ec
                 JOIN chunks c ON ec.chunk_id = c.id
@@ -2489,11 +2635,12 @@ class VectorStore:
                 "chunk_id": row[0],
                 "relevance": row[1],
                 "context": row[2],
-                "content": row[3],
-                "source_file": row[4],
-                "project": row[5],
-                "content_type": row[6],
-                "created_at": row[7],
+                "mention_type": row[3],
+                "content": row[4],
+                "source_file": row[5],
+                "project": row[6],
+                "content_type": row[7],
+                "created_at": row[8],
             }
             for row in rows
         ]
@@ -2682,6 +2829,230 @@ class VectorStore:
             )
         )
         return [{"alias": row[0], "alias_type": row[1], "created_at": row[2]} for row in rows]
+
+    # ── KG Standard Methods (matches Convex kgSpec.ts) ──────────────────
+
+    def soft_close_relation(self, relation_id: str) -> None:
+        """Soft-close a relation by setting expired_at to now.
+
+        The relation is not deleted but becomes invisible to kg_current_facts.
+        """
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        cursor.execute(
+            "UPDATE kg_relations SET expired_at = ? WHERE id = ?",
+            (now, relation_id),
+        )
+
+    def get_current_facts(
+        self,
+        entity_id: str,
+        relation_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get non-expired relations for an entity (outgoing only).
+
+        Uses the kg_current_facts VIEW which auto-filters by validity and expiration.
+        """
+        cursor = self._read_cursor()
+        if relation_type:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT f.id, f.source_id, f.target_id, f.relation_type, f.properties, f.confidence,
+                           f.fact, f.importance, f.valid_from, f.valid_until, f.expired_at, f.source_chunk_id,
+                           e.name as target_name, e.entity_type as target_type
+                    FROM kg_current_facts f
+                    JOIN kg_entities e ON f.target_id = e.id
+                    WHERE f.source_id = ? AND f.relation_type = ?
+                    """,
+                    (entity_id, relation_type),
+                )
+            )
+        else:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT f.id, f.source_id, f.target_id, f.relation_type, f.properties, f.confidence,
+                           f.fact, f.importance, f.valid_from, f.valid_until, f.expired_at, f.source_chunk_id,
+                           e.name as target_name, e.entity_type as target_type
+                    FROM kg_current_facts f
+                    JOIN kg_entities e ON f.target_id = e.id
+                    WHERE f.source_id = ?
+                    """,
+                    (entity_id,),
+                )
+            )
+        return [
+            {
+                "id": row[0],
+                "source_id": row[1],
+                "target_id": row[2],
+                "relation_type": row[3],
+                "properties": json.loads(row[4]) if row[4] else {},
+                "confidence": row[5],
+                "fact": row[6],
+                "importance": row[7],
+                "valid_from": row[8],
+                "valid_until": row[9],
+                "expired_at": row[10],
+                "source_chunk_id": row[11],
+                "target_name": row[12],
+                "target_type": row[13],
+            }
+            for row in rows
+        ]
+
+    def traverse(
+        self,
+        entity_id: str,
+        max_depth: int = 2,
+        relation_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Multi-hop graph traversal via recursive CTE.
+
+        Returns entities reachable from entity_id within max_depth hops,
+        following non-expired relations. Avoids cycles.
+        """
+        cursor = self._read_cursor()
+
+        rel_filter = ""
+        params: list = [entity_id, max_depth]
+        if relation_types:
+            placeholders = ", ".join("?" for _ in relation_types)
+            rel_filter = f"AND r.relation_type IN ({placeholders})"
+            params = [entity_id] + relation_types + [max_depth]
+
+        # Build the recursive CTE query
+        if relation_types:
+            query = f"""
+                WITH RECURSIVE reachable(entity_id, depth, path) AS (
+                    SELECT ?, 0, '|' || ? || '|'
+                    UNION ALL
+                    SELECT r.target_id, re.depth + 1,
+                           re.path || r.target_id || '|'
+                    FROM reachable re
+                    JOIN kg_relations r ON r.source_id = re.entity_id
+                    WHERE re.depth < ?
+                      AND r.expired_at IS NULL
+                      AND re.path NOT LIKE '%|' || r.target_id || '|%'
+                      {rel_filter}
+                )
+                SELECT DISTINCT r.entity_id, r.depth, e.entity_type, e.name
+                FROM reachable r
+                JOIN kg_entities e ON r.entity_id = e.id
+                WHERE r.depth > 0
+                ORDER BY r.depth, e.name
+            """
+            params_list = [entity_id, entity_id] + relation_types + [max_depth]
+        else:
+            query = """
+                WITH RECURSIVE reachable(entity_id, depth, path) AS (
+                    SELECT ?, 0, '|' || ? || '|'
+                    UNION ALL
+                    SELECT r.target_id, re.depth + 1,
+                           re.path || r.target_id || '|'
+                    FROM reachable re
+                    JOIN kg_relations r ON r.source_id = re.entity_id
+                    WHERE re.depth < ?
+                      AND r.expired_at IS NULL
+                      AND re.path NOT LIKE '%|' || r.target_id || '|%'
+                )
+                SELECT DISTINCT r.entity_id, r.depth, e.entity_type, e.name
+                FROM reachable r
+                JOIN kg_entities e ON r.entity_id = e.id
+                WHERE r.depth > 0
+                ORDER BY r.depth, e.name
+            """
+            params_list = [entity_id, entity_id, max_depth]
+
+        rows = list(cursor.execute(query, params_list))
+        return [
+            {
+                "entity_id": row[0],
+                "depth": row[1],
+                "entity_type": row[2],
+                "name": row[3],
+            }
+            for row in rows
+        ]
+
+    def resolve_entity(self, name_or_alias: str) -> Optional[Dict[str, Any]]:
+        """Resolve a string to a KG entity.
+
+        Resolution order:
+        1. Exact alias match (case-insensitive)
+        2. Exact name match (case-insensitive)
+        3. Canonical name match
+        4. FTS5 fuzzy search (first result)
+        """
+        # 1. Exact alias
+        result = self.get_entity_by_alias(name_or_alias)
+        if result:
+            return result
+
+        # 2. Exact name (case-insensitive)
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance,
+                          valid_from, valid_until, group_id
+                   FROM kg_entities WHERE LOWER(name) = LOWER(?)""",
+                (name_or_alias,),
+            )
+        )
+        if rows:
+            row = rows[0]
+            return {
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "created_at": row[4],
+                "updated_at": row[5],
+                "canonical_name": row[6],
+                "description": row[7],
+                "confidence": row[8],
+                "importance": row[9],
+                "valid_from": row[10],
+                "valid_until": row[11],
+                "group_id": row[12],
+            }
+
+        # 3. Canonical name match
+        rows = list(
+            cursor.execute(
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance,
+                          valid_from, valid_until, group_id
+                   FROM kg_entities WHERE LOWER(canonical_name) = LOWER(?)""",
+                (name_or_alias,),
+            )
+        )
+        if rows:
+            row = rows[0]
+            return {
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "created_at": row[4],
+                "updated_at": row[5],
+                "canonical_name": row[6],
+                "description": row[7],
+                "confidence": row[8],
+                "importance": row[9],
+                "valid_from": row[10],
+                "valid_until": row[11],
+                "group_id": row[12],
+            }
+
+        # 4. FTS5 fuzzy fallback
+        results = self.search_entities(name_or_alias, limit=1)
+        if results:
+            return self.get_entity(results[0]["id"])
+
+        return None
 
     def close(self) -> None:
         """Close database connections."""
