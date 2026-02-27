@@ -15,7 +15,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from ..vector_store import VectorStore
-from .batch_extraction import DEFAULT_SEED_ENTITIES, process_chunk, store_extraction_result
+from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_chunk, store_extraction_result
 from .sentiment import analyze_sentiment
 
 logger = logging.getLogger(__name__)
@@ -158,9 +158,10 @@ def digest_content(
     extraction_result = process_chunk(chunk_dict, seed_entities=seed_entities)
     entity_ids = store_extraction_result(extraction_result, store)
 
-    # Build entity list for response
+    # Build entity list for response (deduplicated)
+    unique_entities = _dedup_entities(extraction_result.entities)
     entities = []
-    for ext_entity in extraction_result.entities:
+    for ext_entity in unique_entities:
         eid = entity_ids.get(ext_entity.text)
         entity_data = store.get_entity(eid) if eid else None
         entities.append(

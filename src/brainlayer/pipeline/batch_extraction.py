@@ -74,6 +74,19 @@ def process_chunk(
     return result
 
 
+def _dedup_entities(entities: list) -> list:
+    """Deduplicate extracted entities by (normalized_name, entity_type).
+
+    Keeps the highest-confidence mention for each unique (name, type) pair.
+    """
+    seen: dict[tuple[str, str], Any] = {}
+    for entity in entities:
+        key = (entity.text.strip().lower(), entity.entity_type)
+        if key not in seen or entity.confidence > seen[key].confidence:
+            seen[key] = entity
+    return list(seen.values())
+
+
 def store_extraction_result(
     result: ExtractionResult,
     store: VectorStore,
@@ -81,11 +94,15 @@ def store_extraction_result(
     """Store extraction results into the KG.
 
     Returns mapping of entity text -> entity_id for all stored entities.
+    Deduplicates entities by (normalized_name, entity_type) before resolution.
     """
     entity_ids: dict[str, str] = {}
 
-    # 1. Resolve and store entities
-    for entity in result.entities:
+    # 1. Deduplicate entities before resolution
+    unique_entities = _dedup_entities(result.entities)
+
+    # 2. Resolve and store entities
+    for entity in unique_entities:
         entity_id = resolve_entity(
             entity.text,
             entity.entity_type,
@@ -98,7 +115,7 @@ def store_extraction_result(
         if result.chunk_id:
             store.link_entity_chunk(entity_id, result.chunk_id, relevance=entity.confidence)
 
-    # 2. Store relations
+    # 3. Store relations
     for relation in result.relations:
         source_id = entity_ids.get(relation.source_text)
         target_id = entity_ids.get(relation.target_text)

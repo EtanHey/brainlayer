@@ -1,17 +1,21 @@
 """Entity resolution — map extracted names to canonical KG entities.
 
-Three-layer approach:
+Cascading approach:
 1. Exact match (name or alias, case-insensitive)
-2. Fuzzy match (Jaro-Winkler on short names)
-3. Create new entity if no match
+2. Vector similarity fallback (cosine on entity embeddings, threshold 0.92)
+3. Create new entity if no match above 0.75
 
 Hebrew prefix stripping handles morphological prefixes (ב,ל,מ,ש,ה,ו,כ).
 """
 
+import logging
 import re
 import unicodedata
+from typing import Callable, List, Optional
 
 from ..vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
 
 # Hebrew prefix characters that fuse with nouns (prepositions, articles, conjunctions)
 _HEBREW_PREFIXES = set("בלמשהוכ")
@@ -54,17 +58,18 @@ def resolve_entity(
     entity_type: str,
     context: str,
     store: VectorStore,
+    embed_fn: Optional[Callable[[str], List[float]]] = None,
 ) -> str:
     """Resolve an extracted name to an existing entity ID, or create a new one.
 
-    Resolution order:
+    Cascading resolution:
     1. Exact name match (case-insensitive, via get_entity_by_name)
     2. Alias match (case-insensitive)
     3. Hebrew prefix-stripped match
-    4. Create new entity
+    4. Vector similarity fallback (if embed_fn provided, threshold 0.92 auto-match)
+    5. Create new entity (only if nothing matches above 0.75)
     """
     # 1. Exact name match (UNIQUE(entity_type, name) — case-sensitive in DB)
-    # Try original and lowered
     existing = store.get_entity_by_name(entity_type, name)
     if existing:
         return existing["id"]
@@ -86,18 +91,49 @@ def resolve_entity(
         alias_match = store.get_entity_by_alias(stripped)
         if alias_match and alias_match["entity_type"] == entity_type:
             return alias_match["id"]
-        # Also try as a direct name
         existing = store.get_entity_by_name(entity_type, stripped)
         if existing:
-            # Store the prefixed form as an alias for future lookups
             store.add_entity_alias(name, existing["id"], alias_type="hebrew_prefix")
             return existing["id"]
 
-    # 4. No match — create new entity with auto-generated ID
+    # 4. Vector similarity fallback
+    if embed_fn is not None:
+        try:
+            query_embedding = embed_fn(f"{entity_type}: {name}")
+            vec_candidates = store.search_entities_semantic(query_embedding, entity_type=entity_type, limit=5)
+            if vec_candidates:
+                best = vec_candidates[0]
+                # sqlite-vec distance is cosine distance (0=identical, 2=opposite)
+                similarity = 1.0 - best.get("distance", 1.0)
+                if similarity >= 0.92:
+                    # High confidence — auto-match and store alias
+                    logger.debug(
+                        "Vector match: '%s' → '%s' (sim=%.3f)",
+                        name,
+                        best["name"],
+                        similarity,
+                    )
+                    store.add_entity_alias(name, best["id"], alias_type="vector_match")
+                    return best["id"]
+                elif similarity >= 0.75:
+                    # Moderate confidence — still match but log for review
+                    logger.info(
+                        "Fuzzy vector match: '%s' → '%s' (sim=%.3f, needs review)",
+                        name,
+                        best["name"],
+                        similarity,
+                    )
+                    store.add_entity_alias(name, best["id"], alias_type="fuzzy_vector")
+                    return best["id"]
+        except Exception as e:
+            logger.debug("Vector similarity fallback failed for '%s': %s", name, e)
+
+    # 5. No match — create new entity with auto-generated ID
     import uuid
 
     entity_id = f"{entity_type}-{uuid.uuid4().hex[:12]}"
-    return store.upsert_entity(entity_id, entity_type, name, metadata={})
+    embedding = embed_fn(f"{entity_type}: {name}") if embed_fn else None
+    return store.upsert_entity(entity_id, entity_type, name, metadata={}, embedding=embedding)
 
 
 def merge_entities(store: VectorStore, keep_id: str, merge_id: str) -> None:
