@@ -342,25 +342,6 @@ class TestEvalHarnessSeedOnly:
             f"Seed partial F1 {m['partial']['f1']:.3f} below 0.3 — seed entities may need updating"
         )
 
-    def test_seed_baseline_reports_metrics(self, gold_samples):
-        """Report full metrics for visibility (always passes)."""
-        m, per_type = _micro_average_metrics(gold_samples, _run_extraction, per_type=True)
-
-        # Print metrics for debugging (visible with pytest -v -s)
-        print("\n=== Seed-Only Eval ===")
-        print(f"Gold: {m['exact']['possible']} entities, Predicted: {m['exact']['actual']}")
-        print(f"Exact:   P={m['exact']['precision']:.3f}  R={m['exact']['recall']:.3f}  F1={m['exact']['f1']:.3f}")
-        print(
-            f"Partial: P={m['partial']['precision']:.3f}  R={m['partial']['recall']:.3f}  F1={m['partial']['f1']:.3f}"
-        )
-        print(
-            f"Type:    P={m['type_only']['precision']:.3f}  R={m['type_only']['recall']:.3f}  F1={m['type_only']['f1']:.3f}"
-        )
-        for etype, scores in per_type.items():
-            print(
-                f"  {etype}: P={scores['precision']:.3f} R={scores['recall']:.3f} F1={scores['f1']:.3f} ({scores['correct']}/{scores['possible']})"
-            )
-
 
 try:
     import gliner  # noqa: F401

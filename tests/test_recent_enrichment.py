@@ -17,9 +17,7 @@ class TestRecentEnrichment:
 
         store.get_unenriched_chunks.assert_called_once()
         call_kwargs = store.get_unenriched_chunks.call_args
-        assert call_kwargs[1].get("since_hours") == 6 or (
-            len(call_kwargs[0]) > 0 and 6 in call_kwargs[0]
-        )
+        assert call_kwargs[1].get("since_hours") == 6 or (len(call_kwargs[0]) > 0 and 6 in call_kwargs[0])
 
     def test_enrich_batch_none_since_hours_by_default(self):
         """enrich_batch passes since_hours=None by default (all chunks)."""

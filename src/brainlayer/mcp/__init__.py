@@ -192,8 +192,16 @@ FILE_EXTENSIONS = r"\.(ts|tsx|js|jsx|py|go|rs|java|kt|swift|rb|sh|md|json|yaml|y
 
 
 def _extract_file_path(query: str) -> str | None:
-    """Extract a file path token from a query string."""
+    """Extract a file path token from a query string.
+
+    Only triggers when the query IS a file path (≤2 tokens), not when
+    a longer semantic query happens to contain a filename or path.
+    This prevents queries like "how is auth in CLAUDE.md" from being
+    routed to file timeline instead of semantic search.
+    """
     tokens = query.split()
+    if len(tokens) > 2:
+        return None
     for token in tokens:
         token = token.strip("'\"(),")
         if re.search(FILE_EXTENSIONS, token, re.IGNORECASE):
@@ -227,9 +235,6 @@ _RECALL_SIGNALS = [
     "history of",
     "discussed about",
     "thought about",
-    "worked on",
-    "context for",
-    "what about",
 ]
 
 _REGRESSION_SIGNALS = [
@@ -256,6 +261,27 @@ def _query_signals_recall(query: str) -> bool:
 
 def _query_has_regression_signal(query: str) -> bool:
     return any(s in query.lower() for s in _REGRESSION_SIGNALS)
+
+
+def _build_compact_result(item: dict) -> dict:
+    """Build a compact search result — fewer fields, shorter content (~40% token savings).
+
+    Keeps: score, content (500 chars), project, source_file, date, importance, summary.
+    Drops: content_type, source, tags, intent, chunk_id, session_*.
+    """
+    result = {
+        "score": item.get("score", 0),
+        "content": (item.get("content") or "")[:500],
+        "project": item.get("project") or "unknown",
+        "source_file": item.get("source_file") or "unknown",
+    }
+    if item.get("date"):
+        result["date"] = item["date"]
+    if item.get("importance") is not None:
+        result["importance"] = item["importance"]
+    if item.get("summary"):
+        result["summary"] = item["summary"]
+    return result
 
 
 # --- Auto-type detection for brain_store ---
@@ -661,6 +687,12 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
                         "type": "string",
                         "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
                     },
+                    "format": {
+                        "type": "string",
+                        "enum": ["full", "compact"],
+                        "default": "full",
+                        "description": "Output format. 'compact' returns only: content (500 chars), score, date, importance, summary, project, source_file. ~40% fewer tokens.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -1057,6 +1089,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),
+                format=arguments.get("format", "full"),
             )
         )
 
@@ -1434,6 +1467,7 @@ async def _brain_search(
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
+    format: str = "full",
 ):
     """Unified search dispatcher — routes to the right internal handler.
 
@@ -1470,6 +1504,7 @@ async def _brain_search(
             date_to=date_to,
             sentiment=sentiment,
             entity_id=entity_id,
+            format=format,
         )
 
     # Rule 1: chunk context expand
@@ -1503,7 +1538,7 @@ async def _brain_search(
             merged_text.extend(recall_result)
         return merged_text
 
-    # Rule 4: file token in query text
+    # Rule 4: file token in query text (only for short queries ≤2 tokens)
     extracted_file = _extract_file_path(query)
     if extracted_file:
         return await _brain_search(
@@ -1520,6 +1555,7 @@ async def _brain_search(
             sentiment=sentiment,
             num_results=num_results,
             max_results=max_results,
+            format=format,
         )
 
     # Rule 5: current context signals
@@ -1558,6 +1594,7 @@ async def _brain_search(
         date_from=date_from,
         date_to=date_to,
         sentiment=sentiment,
+        format=format,
     )
 
 
@@ -1779,6 +1816,7 @@ async def _search(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
+    format: str = "full",
 ):
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
@@ -1841,7 +1879,27 @@ async def _search(
         # Enrich results with session-level context (Phase 7)
         results = store.enrich_results_with_session_context(results)
 
-        # Build structured results + formatted text
+        # Compact format: structured JSON only, fewer fields, shorter content
+        if format == "compact":
+            structured_results = []
+            for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
+                score = 1 - dist if dist is not None else 0
+                item = _build_compact_result(
+                    {
+                        "score": round(score, 4),
+                        "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
+                        "content": doc,
+                        "source_file": meta.get("source_file", "unknown"),
+                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                        "importance": meta.get("importance"),
+                        "summary": meta.get("summary"),
+                    }
+                )
+                structured_results.append(item)
+            structured = {"query": query, "total": len(structured_results), "results": structured_results}
+            return ([], structured)
+
+        # Full format: structured results + formatted text
         output_parts = [f"## Search Results for: {query}\n"]
         structured_results = []
 

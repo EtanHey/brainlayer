@@ -111,7 +111,7 @@ class VectorStore:
                 return
             except apsw.BusyError as e:
                 last_err = e
-                delay = self._INIT_BASE_DELAY * (2 ** attempt)
+                delay = self._INIT_BASE_DELAY * (2**attempt)
                 import sys
 
                 print(
@@ -204,6 +204,7 @@ class VectorStore:
             ("idx_chunks_enriched", "enriched_at"),
             ("idx_chunks_created", "created_at"),
             ("idx_chunks_sentiment", "sentiment_label"),
+            ("idx_chunks_project", "project"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -522,9 +523,7 @@ class VectorStore:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_kg_entities_canonical ON kg_entities(canonical_name, entity_type)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)")
 
         # Add new standard columns to kg_relations
         for col, default in [
@@ -538,9 +537,7 @@ class VectorStore:
             if col not in kg_rel_cols:
                 cursor.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {default}")
 
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
 
         # Add mention_type to kg_entity_chunks
         ec_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
@@ -548,14 +545,20 @@ class VectorStore:
             cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN mention_type TEXT")
 
         # kg_current_facts view — auto-filters expired relations
-        cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
-        cursor.execute("""
-            CREATE VIEW kg_current_facts AS
-            SELECT * FROM kg_relations
-            WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-              AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-              AND expired_at IS NULL
-        """)
+        # Use DROP + CREATE OR REPLACE pattern with error handling for concurrent init
+        try:
+            cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
+            cursor.execute("""
+                CREATE VIEW kg_current_facts AS
+                SELECT * FROM kg_relations
+                WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                  AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                  AND expired_at IS NULL
+            """)
+        except Exception:
+            # Race condition: another thread already created the view between
+            # our DROP and CREATE. The view exists, which is the desired state.
+            pass
 
         # ── End Knowledge Graph tables ──────────────────────────────────────
 
@@ -807,9 +810,11 @@ class VectorStore:
                 where_sql = "AND " + " AND ".join(where_clauses)
 
             # sqlite-vec KNN: MATCH and k must bind before filter params.
-            # When entity_id is set, bump k to over-fetch since entity filter
-            # is applied post-KNN and most candidates won't match.
-            effective_k = min(n_results * 10, 1000) if entity_id else n_results
+            # Bump k to over-fetch when post-KNN filters may discard most results:
+            # - entity_id: entity filter applied post-KNN, most candidates won't match
+            # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
+            needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
+            effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
@@ -1109,6 +1114,12 @@ class VectorStore:
             entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
             fts_extra.append("AND ec.entity_id = ?")
             fts_params.append(entity_id)
+        if project_filter:
+            fts_extra.append("AND c.project = ?")
+            fts_params.append(project_filter)
+        if source_filter:
+            fts_extra.append("AND c.source = ?")
+            fts_params.append(source_filter)
         if tag_filter:
             fts_extra.append(
                 "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
@@ -2367,9 +2378,21 @@ class VectorStore:
                 group_id = COALESCE(excluded.group_id, kg_entities.group_id),
                 updated_at = excluded.updated_at
             """,
-            (entity_id, entity_type, name, meta_json, canon,
-             description, conf, imp,
-             valid_from, valid_until, group_id, now, now),
+            (
+                entity_id,
+                entity_type,
+                name,
+                meta_json,
+                canon,
+                description,
+                conf,
+                imp,
+                valid_from,
+                valid_until,
+                group_id,
+                now,
+                now,
+            ),
         )
 
         # Retrieve the actual stored ID (may differ from entity_id on conflict)
@@ -2429,8 +2452,19 @@ class VectorStore:
                 valid_until = COALESCE(excluded.valid_until, kg_relations.valid_until),
                 source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
             """,
-            (relation_id, source_id, target_id, relation_type, props_json, confidence,
-             fact, importance, valid_from, valid_until, source_chunk_id),
+            (
+                relation_id,
+                source_id,
+                target_id,
+                relation_type,
+                props_json,
+                confidence,
+                fact,
+                importance,
+                valid_from,
+                valid_until,
+                source_chunk_id,
+            ),
         )
 
         # Retrieve the actual stored ID (may differ from relation_id on conflict)
