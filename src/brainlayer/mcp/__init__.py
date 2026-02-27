@@ -1,6 +1,7 @@
 """BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
+import json
 import logging
 from typing import Any
 
