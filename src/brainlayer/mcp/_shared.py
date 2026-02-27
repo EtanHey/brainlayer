@@ -237,13 +237,16 @@ def _query_has_regression_signal(query: str) -> bool:
 
 
 def _build_compact_result(item: dict) -> dict:
-    """Build compact search results (~40% token savings)."""
+    """Build compact search results — pointers for drill-down, not full content.
+
+    Returns: chunk_id, score, project, date, snippet (150 chars), summary.
+    """
     result = {}
-    for key in ("score", "project", "source_file", "date", "importance", "summary"):
+    for key in ("chunk_id", "score", "project", "date", "summary"):
         if item.get(key) is not None:
             result[key] = item[key]
     content = item.get("content", "")
-    result["content"] = content[:500]
+    result["snippet"] = content[:150]
     return result
 
 

@@ -82,10 +82,15 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 7 tools:\n"
+        "Memory layer for Claude Code. 8 tools:\n"
         "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
+        "Returns compact results by default (snippet + chunk_id + score). "
+        "Use detail='full' for verbose output. "
         "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
-        "Routing is automatic — pass file_path for file history, chunk_id to expand context, no args for current work.\n"
+        "Routing is automatic — pass file_path for file history, no args for current work.\n"
+        "- brain_expand(chunk_id): drill into a specific search result. "
+        "Returns full content + N surrounding chunks for context. "
+        "Use after brain_search to read interesting results in full.\n"
         "- brain_store(content): save decisions, learnings, mistakes, ideas, todos. "
         "type is auto-detected from content. Pass importance (1-10) for critical items.\n"
         "- brain_recall(mode): session/operational context. "
@@ -391,11 +396,11 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
                         "type": "string",
                         "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
                     },
-                    "format": {
+                    "detail": {
                         "type": "string",
-                        "enum": ["full", "compact"],
-                        "default": "full",
-                        "description": "Output format. 'compact' returns only: content (500 chars), score, date, importance, summary, project, source_file. ~40% fewer tokens.",
+                        "enum": ["compact", "full"],
+                        "default": "compact",
+                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary — use brain_expand to drill into specific results. 'full': returns full content + all metadata fields.",
                     },
                 },
                 "required": ["query"],
@@ -657,6 +662,37 @@ Returns: Structured JSON with name, entity_type, relations[], evidence[], or nul
             },
         ),
         Tool(
+            name="brain_expand",
+            title="Expand Chunk Context",
+            description="""Expand a specific chunk from a previous brain_search result.
+
+Returns the full content of the target chunk plus N surrounding chunks for context.
+Use this after brain_search returns compact results — pick an interesting chunk_id
+and expand it to see full content and conversation flow.
+
+Example workflow:
+1. brain_search("auth implementation") → compact results with chunk_ids
+2. brain_expand(chunk_id="abc123", context=3) → full content + 3 chunks before/after""",
+            annotations=_READ_ONLY,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "The chunk_id from a brain_search result to expand.",
+                    },
+                    "context": {
+                        "type": "integer",
+                        "default": 3,
+                        "minimum": 0,
+                        "maximum": 20,
+                        "description": "Number of surrounding chunks to include (before and after). Default: 3.",
+                    },
+                },
+                "required": ["chunk_id"],
+            },
+        ),
+        Tool(
             name="brain_update",
             title="Update or Archive Memory",
             description="""Update, archive, or merge existing memories in BrainLayer.
@@ -799,7 +835,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),
-                format=arguments.get("format", "full"),
+                detail=arguments.get("detail", "compact"),
             )
         )
 
@@ -854,6 +890,16 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             title=arguments.get("title"),
             project=arguments.get("project"),
             participants=arguments.get("participants"),
+        )
+
+    elif name == "brain_expand":
+        ctx_n = max(0, min(arguments.get("context", 3), 20))
+        return await _with_timeout(
+            _context(
+                chunk_id=arguments["chunk_id"],
+                before=ctx_n,
+                after=ctx_n,
+            )
         )
 
     elif name == "brain_entity":

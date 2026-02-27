@@ -92,27 +92,26 @@ class TestRecallSignals:
 
 
 class TestCompactFormat:
-    """format='compact' should return fewer fields and shorter content."""
+    """Compact format returns pointers for drill-down: chunk_id, snippet, score, project, summary."""
 
     def test_compact_result_has_required_fields(self):
-        """Compact format should include core fields: score, content, project, source_file.
-        Optional fields (date, importance, summary) are included when present."""
+        """Compact format should include: chunk_id, snippet, score, project, date, summary."""
         compact_item = _build_compact_item(self._sample_item())
-        required_keys = {"score", "content", "project", "source_file"}
+        required_keys = {"score", "snippet", "project", "chunk_id"}
         assert required_keys.issubset(compact_item.keys())
         # Optional fields should be present when source item has them
         assert "date" in compact_item
-        assert "importance" in compact_item
         assert "summary" in compact_item
 
     def test_compact_result_drops_verbose_fields(self):
-        """Compact format should NOT include: content_type, tags, intent, chunk_id, session_*."""
+        """Compact format should NOT include verbose fields."""
         compact_item = _build_compact_item(self._sample_item())
         dropped_keys = {
             "content_type",
             "tags",
             "intent",
-            "chunk_id",
+            "source_file",
+            "importance",
             "session_summary",
             "session_outcome",
             "session_quality",
@@ -120,12 +119,12 @@ class TestCompactFormat:
         for key in dropped_keys:
             assert key not in compact_item, f"'{key}' should be dropped in compact format"
 
-    def test_compact_content_truncated_to_500(self):
-        """Compact format should truncate content to 500 chars."""
+    def test_compact_snippet_truncated_to_150(self):
+        """Compact format should truncate snippet to 150 chars."""
         item = self._sample_item()
         item["content"] = "x" * 1000
         compact_item = _build_compact_item(item)
-        assert len(compact_item["content"]) <= 500
+        assert len(compact_item["snippet"]) <= 150
 
     def test_compact_fewer_tokens_than_full(self):
         """Compact format should have fewer total characters than full format."""

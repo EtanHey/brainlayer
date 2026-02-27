@@ -38,7 +38,7 @@ async def _brain_search(
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
-    format: str = "full",
+    detail: str = "compact",
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -64,7 +64,7 @@ async def _brain_search(
             date_to=date_to,
             sentiment=sentiment,
             entity_id=entity_id,
-            format=format,
+            detail=detail,
         )
 
     if chunk_id is not None:
@@ -110,7 +110,7 @@ async def _brain_search(
             sentiment=sentiment,
             num_results=num_results,
             max_results=max_results,
-            format=format,
+            detail=detail,
         )
 
     if _query_signals_current_context(query):
@@ -221,10 +221,16 @@ async def _search(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
-    format: str = "full",
+    detail: str = "compact",
+    # Backward compat: accept old 'format' kwarg
+    format: str | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF)."""
     try:
+        # Backward compat: old 'format' kwarg overrides 'detail'
+        if format is not None:
+            detail = format
+
         if num_results < 1:
             num_results = 5
         elif num_results > 100:
@@ -276,13 +282,14 @@ async def _search(
 
         results = store.enrich_results_with_session_context(results)
 
-        if format == "compact":
+        if detail == "compact":
             structured_results = []
             for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
                 score = 1 - dist if dist is not None else 0
                 item = _build_compact_result(
                     {
                         "score": round(score, 4),
+                        "chunk_id": meta.get("chunk_id"),
                         "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
                         "content": doc,
                         "source_file": meta.get("source_file", "unknown"),

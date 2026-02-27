@@ -382,20 +382,22 @@ class TestCompactFormatSize:
         # Compact should have fewer keys
         assert len(compact) < len(full_item)
 
-        # Content truncated to 500
-        assert len(compact["content"]) <= 500
+        # Snippet truncated to 150
+        assert "snippet" in compact
+        assert len(compact["snippet"]) <= 150
 
-        # Core fields present
+        # Core fields present (chunk_id now included for drill-down)
         assert "score" in compact
         assert "project" in compact
-        assert "source_file" in compact
+        assert "chunk_id" in compact
 
         # Verbose fields dropped
         for dropped in (
             "content_type",
             "tags",
             "intent",
-            "chunk_id",
+            "source_file",
+            "importance",
             "session_summary",
             "session_outcome",
             "session_quality",
