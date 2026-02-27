@@ -823,6 +823,22 @@ def _enrich_one(
             sentiment_score=sentiment_score,
             sentiment_signals=sentiment_signals,
         )
+
+        # KG extraction: extract entities from enriched chunk into KG tables
+        try:
+            from .kg_extraction import extract_kg_from_chunk
+
+            extract_kg_from_chunk(
+                store=store,
+                chunk_id=chunk["id"],
+                seed_entities={},  # TODO: load seed entities from config
+                use_llm=False,     # Seed-only for now (LLM extraction is expensive)
+                use_gliner=False,
+            )
+        except Exception:
+            # KG extraction is non-critical — don't fail the enrichment
+            logger.debug("KG extraction failed for chunk %s", chunk["id"], exc_info=True)
+
         return True
     return False
 
