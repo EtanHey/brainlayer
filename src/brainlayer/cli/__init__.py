@@ -872,12 +872,8 @@ def enrich(
     batch_size: int = typer.Option(50, "--batch-size", "-b", help="Chunks per batch"),
     max_chunks: int = typer.Option(0, "--max", "-m", help="Max chunks (0=unlimited)"),
     no_context: bool = typer.Option(False, "--no-context", help="Skip surrounding context"),
-    backend: str = typer.Option(
-        None, "--backend", help="LLM backend: ollama, mlx, groq (default: auto-detect)"
-    ),
-    recent: int = typer.Option(
-        None, "--recent", "-r", help="Only enrich chunks from the last N hours"
-    ),
+    backend: str = typer.Option(None, "--backend", help="LLM backend: ollama, mlx, groq (default: auto-detect)"),
+    recent: int = typer.Option(None, "--recent", "-r", help="Only enrich chunks from the last N hours"),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
 ) -> None:
     """Enrich chunks with LLM-generated metadata (summary, tags, importance, intent)."""

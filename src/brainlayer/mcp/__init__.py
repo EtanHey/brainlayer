@@ -1882,19 +1882,19 @@ async def _search(
         # Compact format: structured JSON only, fewer fields, shorter content
         if format == "compact":
             structured_results = []
-            for doc, meta, dist in zip(
-                results["documents"][0], results["metadatas"][0], results["distances"][0]
-            ):
+            for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
                 score = 1 - dist if dist is not None else 0
-                item = _build_compact_result({
-                    "score": round(score, 4),
-                    "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
-                    "content": doc,
-                    "source_file": meta.get("source_file", "unknown"),
-                    "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
-                    "importance": meta.get("importance"),
-                    "summary": meta.get("summary"),
-                })
+                item = _build_compact_result(
+                    {
+                        "score": round(score, 4),
+                        "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
+                        "content": doc,
+                        "source_file": meta.get("source_file", "unknown"),
+                        "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
+                        "importance": meta.get("importance"),
+                        "summary": meta.get("summary"),
+                    }
+                )
                 structured_results.append(item)
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
             return ([], structured)

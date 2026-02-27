@@ -80,6 +80,9 @@ class TestHighFailRatioBehavior:
         ]
         batch_iter = iter(batch_results)
 
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.raise_for_status = MagicMock()
+
         with (
             patch.object(enrichment, "enrich_batch", side_effect=lambda *a, **kw: next(batch_iter)),
             patch.object(enrichment, "mark_unenrichable", return_value=0),
@@ -87,6 +90,8 @@ class TestHighFailRatioBehavior:
             patch.object(enrichment, "_sync_stats_to_supabase"),
             patch.object(enrichment, "HEALTH_CHECK_PAUSE", 0),  # No sleep in tests
             patch.object(enrichment, "BATCH_FAIL_RATIO_THRESHOLD", 0.8),
+            patch("brainlayer.pipeline.enrichment.requests.get", return_value=mock_resp),
+            patch("brainlayer.pipeline.enrichment.VectorStore", return_value=store),
         ):
             enrichment.run_enrichment(
                 db_path=None,
@@ -116,12 +121,17 @@ class TestHighFailRatioBehavior:
         ]
         batch_iter = iter(batch_results)
 
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.raise_for_status = MagicMock()
+
         with (
             patch.object(enrichment, "enrich_batch", side_effect=lambda *a, **kw: next(batch_iter)),
             patch.object(enrichment, "mark_unenrichable", return_value=0),
             patch.object(enrichment, "check_backend_health", return_value=False) as mock_health,
             patch.object(enrichment, "_recover_backend", return_value=False) as mock_recover,
             patch.object(enrichment, "_sync_stats_to_supabase"),
+            patch("brainlayer.pipeline.enrichment.requests.get", return_value=mock_resp),
+            patch("brainlayer.pipeline.enrichment.VectorStore", return_value=store),
         ):
             enrichment.run_enrichment(
                 db_path=None,

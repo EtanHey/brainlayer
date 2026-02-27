@@ -103,7 +103,15 @@ class TestCompactFormat:
     def test_compact_result_drops_verbose_fields(self):
         """Compact format should NOT include: content_type, tags, intent, chunk_id, session_*."""
         compact_item = _build_compact_item(self._sample_item())
-        dropped_keys = {"content_type", "tags", "intent", "chunk_id", "session_summary", "session_outcome", "session_quality"}
+        dropped_keys = {
+            "content_type",
+            "tags",
+            "intent",
+            "chunk_id",
+            "session_summary",
+            "session_outcome",
+            "session_quality",
+        }
         for key in dropped_keys:
             assert key not in compact_item, f"'{key}' should be dropped in compact format"
 
@@ -151,4 +159,5 @@ def _build_compact_item(item: dict) -> dict:
     """
     # Import from production code — this will fail until implemented
     from brainlayer.mcp import _build_compact_result
+
     return _build_compact_result(item)

@@ -111,7 +111,7 @@ class VectorStore:
                 return
             except apsw.BusyError as e:
                 last_err = e
-                delay = self._INIT_BASE_DELAY * (2 ** attempt)
+                delay = self._INIT_BASE_DELAY * (2**attempt)
                 import sys
 
                 print(
@@ -523,9 +523,7 @@ class VectorStore:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_kg_entities_canonical ON kg_entities(canonical_name, entity_type)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)")
 
         # Add new standard columns to kg_relations
         for col, default in [
@@ -539,9 +537,7 @@ class VectorStore:
             if col not in kg_rel_cols:
                 cursor.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {default}")
 
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
 
         # Add mention_type to kg_entity_chunks
         ec_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
@@ -2376,9 +2372,21 @@ class VectorStore:
                 group_id = COALESCE(excluded.group_id, kg_entities.group_id),
                 updated_at = excluded.updated_at
             """,
-            (entity_id, entity_type, name, meta_json, canon,
-             description, conf, imp,
-             valid_from, valid_until, group_id, now, now),
+            (
+                entity_id,
+                entity_type,
+                name,
+                meta_json,
+                canon,
+                description,
+                conf,
+                imp,
+                valid_from,
+                valid_until,
+                group_id,
+                now,
+                now,
+            ),
         )
 
         # Retrieve the actual stored ID (may differ from entity_id on conflict)
@@ -2438,8 +2446,19 @@ class VectorStore:
                 valid_until = COALESCE(excluded.valid_until, kg_relations.valid_until),
                 source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
             """,
-            (relation_id, source_id, target_id, relation_type, props_json, confidence,
-             fact, importance, valid_from, valid_until, source_chunk_id),
+            (
+                relation_id,
+                source_id,
+                target_id,
+                relation_type,
+                props_json,
+                confidence,
+                fact,
+                importance,
+                valid_from,
+                valid_until,
+                source_chunk_id,
+            ),
         )
 
         # Retrieve the actual stored ID (may differ from relation_id on conflict)

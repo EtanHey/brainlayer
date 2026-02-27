@@ -343,7 +343,6 @@ class TestEvalHarnessSeedOnly:
         )
 
 
-
 try:
     import gliner  # noqa: F401
 

@@ -141,9 +141,13 @@ def _try_restart_mlx() -> bool:
 
         subprocess.Popen(
             [
-                sys.executable, "-m", "mlx_lm.server",
-                "--model", MLX_MODEL,
-                "--port", port,
+                sys.executable,
+                "-m",
+                "mlx_lm.server",
+                "--model",
+                MLX_MODEL,
+                "--port",
+                port,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -832,7 +836,7 @@ def _enrich_one(
                 store=store,
                 chunk_id=chunk["id"],
                 seed_entities={},  # TODO: load seed entities from config
-                use_llm=False,     # Seed-only for now (LLM extraction is expensive)
+                use_llm=False,  # Seed-only for now (LLM extraction is expensive)
                 use_gliner=False,
             )
         except Exception:
@@ -1108,8 +1112,7 @@ def run_enrichment(
                         continue
                     else:
                         print(
-                            f"Backend {_run_backend} is dead and could not be recovered. "
-                            "Stopping enrichment.",
+                            f"Backend {_run_backend} is dead and could not be recovered. Stopping enrichment.",
                             file=sys.stderr,
                         )
                         break
@@ -1221,6 +1224,7 @@ if __name__ == "__main__":
         if args.backend:
             os.environ["BRAINLAYER_ENRICH_BACKEND"] = args.backend
             import brainlayer.pipeline.enrichment as _self
+
             _self.ENRICH_BACKEND = args.backend
 
         run_enrichment(

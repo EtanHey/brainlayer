@@ -75,9 +75,20 @@ class TestKGTableCreation:
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
         expected = {
-            "id", "entity_type", "name", "metadata", "created_at", "updated_at", "user_verified",
-            "canonical_name", "description", "confidence", "importance",
-            "valid_from", "valid_until", "group_id",
+            "id",
+            "entity_type",
+            "name",
+            "metadata",
+            "created_at",
+            "updated_at",
+            "user_verified",
+            "canonical_name",
+            "description",
+            "confidence",
+            "importance",
+            "valid_from",
+            "valid_until",
+            "group_id",
         }
         assert cols == expected
 
@@ -85,9 +96,20 @@ class TestKGTableCreation:
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
         expected = {
-            "id", "source_id", "target_id", "relation_type", "properties",
-            "confidence", "created_at", "user_verified",
-            "fact", "importance", "valid_from", "valid_until", "expired_at", "source_chunk_id",
+            "id",
+            "source_id",
+            "target_id",
+            "relation_type",
+            "properties",
+            "confidence",
+            "created_at",
+            "user_verified",
+            "fact",
+            "importance",
+            "valid_from",
+            "valid_until",
+            "expired_at",
+            "source_chunk_id",
         }
         assert cols == expected
 
