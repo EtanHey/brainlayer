@@ -255,7 +255,7 @@ async def _search(
         elif source:
             source_filter = source
         else:
-            source_filter = "claude_code"
+            source_filter = None  # AIDEV-NOTE: was "claude_code" — excluded brain_store ("manual") chunks. Default to all sources.
 
         if entity_id and not source:
             source_filter = None
