@@ -69,14 +69,16 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
         }
 
     # Get all source_files with their chunk counts and metadata
+    # AIDEV-NOTE: dominant_source is hardcoded to 'claude_code' (not a subquery) — the original
+    # correlated subquery (SELECT source FROM chunks c2 WHERE c2.source_file = chunks.source_file ...)
+    # caused an N+1 performance problem on large DBs (240K+ chunks). The literal is correct for all
+    # current sources; if multi-source support is needed, pre-aggregate in a CTE instead.
     query = """
         SELECT source_file, project, COUNT(*) as chunk_count,
                GROUP_CONCAT(DISTINCT content_type) as types,
                GROUP_CONCAT(DISTINCT intent) as intents,
                AVG(CASE WHEN importance IS NOT NULL THEN importance END) as avg_importance,
-               (SELECT source FROM chunks c2
-                WHERE c2.source_file = chunks.source_file AND c2.source IS NOT NULL
-                GROUP BY source ORDER BY COUNT(*) DESC LIMIT 1) as dominant_source
+               'claude_code' as dominant_source
         FROM chunks
     """
     params = []

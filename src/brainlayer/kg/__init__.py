@@ -1,4 +1,9 @@
-"""BrainLayer Knowledge Graph — standardized KG spec (matches Convex kgSpec.ts)."""
+"""BrainLayer Knowledge Graph — standardized KG spec (matches Convex kgSpec.ts).
+
+AIDEV-NOTE: Shared KG spec types. Used by 6PM Convex backend. Kept here as the canonical
+reference for the BrainLayer KG standard. If you change ENTITY_TYPES, RELATION_TYPES, or
+DECAY_CONSTANTS, mirror the change in 6pm-mini/convex/lib/kgSpec.ts to keep both in sync.
+"""
 
 import math
 from typing import Optional

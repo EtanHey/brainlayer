@@ -1,18 +1,18 @@
 # BrainLayer
 
-> Persistent memory and knowledge graph for AI agents — 7 MCP tools to search, store, recall, digest, and explore entities across every conversation.
+> Persistent memory and knowledge graph for AI agents — 8 MCP tools to search, store, recall, digest, expand, and explore entities across every conversation.
 
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-7%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-698%20passing-brightgreen.svg)](#testing)
+[![MCP](https://img.shields.io/badge/MCP-8%20tools-green.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
 ---
 
-**268,000+ chunks indexed** · **698 tests** · **Hybrid RRF search** · **7 MCP tools** · **Zero cloud dependencies**
+**268,000+ chunks indexed** · **715 tests** · **Hybrid RRF search** · **8 MCP tools** · **Zero cloud dependencies**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -93,7 +93,7 @@ That's it. Your agent now has persistent memory across every conversation.
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>7 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>8 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
@@ -113,9 +113,9 @@ graph LR
 | Search | Hybrid: vector similarity + FTS5 keyword, merged with Reciprocal Rank Fusion |
 | Enrichment | Local LLM via Ollama or MLX — 10-field metadata per chunk |
 | MCP Server | stdio-based, MCP SDK v1.26+, compatible with any MCP client |
-| Clustering | HDBSCAN + UMAP for brain graph visualization (optional) |
+| Clustering | Leiden + UMAP for brain graph visualization (optional) |
 
-## MCP Tools (7)
+## MCP Tools (8)
 
 ### Core (3)
 
@@ -125,12 +125,13 @@ graph LR
 | `brain_store` | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. |
 | `brain_recall` | Proactive retrieval — current context, sessions, session summaries. |
 
-### Knowledge Graph (4)
+### Knowledge Graph (5)
 
 | Tool | Description |
 |------|-------------|
 | `brain_digest` | Ingest raw content — entity extraction, relations, sentiment, action items. |
 | `brain_entity` | Look up entities in the knowledge graph — type, relations, evidence. |
+| `brain_expand` | Expand a chunk_id with N surrounding chunks for full context. |
 | `brain_update` | Update, archive, or merge existing memories. |
 | `brain_get_person` | Person lookup — entity details, interactions, preferences (~200-500ms). |
 
@@ -171,7 +172,7 @@ BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich --batch-size=100
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta | LangChain Memory |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **MCP native** | 7 tools | 1 server | 1 server | No | No |
+| **MCP native** | 8 tools | 1 server | 1 server | No | No |
 | **Think / Recall** | Yes | No | No | No | No |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG | Framework |
 | **Zero infra** | `pip install` | API key | API key | Docker | Multiple deps |
@@ -183,7 +184,7 @@ BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich --batch-size=100
 BrainLayer is the only memory layer that:
 1. **Thinks before answering** — categorizes past knowledge by intent (decisions, bugs, patterns) instead of raw search results
 2. **Runs on a single file** — no database servers, no Docker, no cloud accounts
-3. **Works with every MCP client** — 7 tools, instant integration, zero SDK
+3. **Works with every MCP client** — 8 tools, instant integration, zero SDK
 4. **Knowledge graph** — entities, relations, and person lookup across all indexed data
 
 ## CLI Reference
@@ -216,14 +217,19 @@ All configuration is via environment variables:
 | `BRAINLAYER_HEARTBEAT_INTERVAL` | `25` | Log progress every N chunks during enrichment |
 | `BRAINLAYER_SANITIZE_EXTRA_NAMES` | (empty) | Comma-separated names to redact from indexed content |
 | `BRAINLAYER_SANITIZE_USE_SPACY` | `true` | Use spaCy NER for PII detection |
+| `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment backend |
+| `BRAINLAYER_GROQ_URL` | `https://api.groq.com/openai/v1/chat/completions` | Groq API endpoint |
+| `BRAINLAYER_GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model for enrichment |
 
 ## Optional Extras
 
 ```bash
-pip install "brainlayer[brain]"     # Brain graph visualization (HDBSCAN + UMAP)
+pip install "brainlayer[brain]"     # Brain graph visualization (Leiden + UMAP) + FAISS
 pip install "brainlayer[cloud]"     # Cloud backfill (Gemini Batch API)
 pip install "brainlayer[youtube]"   # YouTube transcript indexing
 pip install "brainlayer[ast]"       # AST-aware code chunking (tree-sitter)
+pip install "brainlayer[kg]"        # GliNER entity extraction (209M params, EN+HE)
+pip install "brainlayer[style]"     # ChromaDB vector store (alternative backend)
 pip install "brainlayer[dev]"       # Development: pytest, ruff
 ```
 
@@ -244,7 +250,7 @@ BrainLayer can index conversations from multiple sources:
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (698 tests)
+pytest tests/                           # Full suite (715 tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
 ```

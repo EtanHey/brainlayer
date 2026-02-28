@@ -20,9 +20,6 @@ dependencies = [
     "uvicorn>=0.20.0",
     "httpx>=0.24.0",
 
-    # AST parsing for code chunking (optional - has fallback)
-    "tree-sitter>=0.21.0",
-
     # MCP server
     "mcp>=1.0.0",
 
@@ -58,6 +55,7 @@ brain = [
     "igraph>=0.11.0",  # Graph operations + Leiden via leidenalg
     "leidenalg>=0.10.0",  # Leiden community detection (replaces graspologic)
     "umap-learn>=0.5.0",  # UMAP 3D layout
+    "faiss-cpu>=1.7.0",  # Fast approximate nearest-neighbor search
 ]
 youtube = [
     "yt-dlp>=2024.1.0",  # YouTube video metadata + subtitle download
@@ -69,6 +67,9 @@ ast = [
 ]
 kg = [
     "gliner>=0.2.20",  # GLiNER multi-lingual NER (209M params, EN+HE)
+]
+style = [
+    "chromadb>=0.4.0",  # ChromaDB vector store (alternative to sqlite-vec)
 ]
 dev = [
     "pytest>=7.0.0",
