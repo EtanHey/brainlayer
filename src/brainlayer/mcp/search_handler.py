@@ -2,7 +2,12 @@
 
 import asyncio
 
+import apsw
 from mcp.types import TextContent
+
+# Retry settings for DB lock resilience on reads
+_RETRY_MAX_ATTEMPTS = 3
+_retry_delay = 0.1  # base delay in seconds (exposed for test patching)
 
 from ._shared import (
     _build_compact_result,
@@ -225,7 +230,7 @@ async def _search(
     # Backward compat: accept old 'format' kwarg
     format: str | None = None,
 ):
-    """Execute a hybrid search query (semantic + keyword via RRF)."""
+    """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
         # Backward compat: old 'format' kwarg overrides 'detail'
         if format is not None:
@@ -260,21 +265,35 @@ async def _search(
         if entity_id and not source:
             source_filter = None
 
-        results = store.hybrid_search(
-            query_embedding=query_embedding,
-            query_text=query,
-            n_results=num_results,
-            project_filter=normalized_project,
-            content_type_filter=content_type,
-            source_filter=source_filter,
-            tag_filter=tag,
-            intent_filter=intent,
-            importance_min=importance_min,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment_filter=sentiment,
-            entity_id=entity_id,
-        )
+        # Retry hybrid_search on BusyError — WAL reads shouldn't block but
+        # they can during checkpoint or when enrichment holds exclusive lock.
+        results = None
+        for attempt in range(_RETRY_MAX_ATTEMPTS):
+            try:
+                results = store.hybrid_search(
+                    query_embedding=query_embedding,
+                    query_text=query,
+                    n_results=num_results,
+                    project_filter=normalized_project,
+                    content_type_filter=content_type,
+                    source_filter=source_filter,
+                    tag_filter=tag,
+                    intent_filter=intent,
+                    importance_min=importance_min,
+                    date_from=date_from,
+                    date_to=date_to,
+                    sentiment_filter=sentiment,
+                    entity_id=entity_id,
+                )
+                break
+            except (apsw.BusyError, Exception) as e:
+                is_lock = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
+                if is_lock and attempt < _RETRY_MAX_ATTEMPTS - 1:
+                    delay = _retry_delay * (2**attempt)
+                    logger.warning("Search BusyError (attempt %d/%d), retrying in %.2fs", attempt + 1, _RETRY_MAX_ATTEMPTS, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                raise  # Non-lock error or retries exhausted
 
         if not results["documents"][0]:
             empty = {"query": query, "total": 0, "results": []}

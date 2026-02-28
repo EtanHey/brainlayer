@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import apsw
 from mcp.types import CallToolResult, TextContent
 
 from ._shared import (
@@ -14,6 +15,11 @@ from ._shared import (
     _normalize_project_name,
     logger,
 )
+
+# Retry settings for DB lock resilience
+_RETRY_MAX_ATTEMPTS = 4
+_retry_delay = 0.15  # base delay in seconds (exposed for test patching)
+_QUEUE_MAX_SIZE = 100
 
 
 async def _brain_digest(
@@ -98,69 +104,78 @@ async def _brain_update(
     importance: int | None = None,
     merge_chunk_ids: list[str] | None = None,
 ):
-    """Update, archive, or merge memories."""
-    try:
-        store = _get_vector_store()
+    """Update, archive, or merge memories. Retries on BusyError."""
+    last_err = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            store = _get_vector_store()
 
-        if action == "archive":
-            ok = store.archive_chunk(chunk_id)
-            if not ok:
-                return _error_result(f"Chunk not found: {chunk_id}")
-            return [TextContent(type="text", text=json.dumps({"action": "archived", "chunk_id": chunk_id}))]
+            if action == "archive":
+                ok = store.archive_chunk(chunk_id)
+                if not ok:
+                    return _error_result(f"Chunk not found: {chunk_id}")
+                return [TextContent(type="text", text=json.dumps({"action": "archived", "chunk_id": chunk_id}))]
 
-        elif action == "update":
-            existing = store.get_chunk(chunk_id)
-            if not existing:
-                return _error_result(f"Chunk not found: {chunk_id}")
+            elif action == "update":
+                existing = store.get_chunk(chunk_id)
+                if not existing:
+                    return _error_result(f"Chunk not found: {chunk_id}")
 
-            embedding = None
-            if content is not None:
-                loop = asyncio.get_running_loop()
-                model = _get_embedding_model()
-                embedding = await loop.run_in_executor(None, model.embed_query, content)
+                embedding = None
+                if content is not None:
+                    loop = asyncio.get_running_loop()
+                    model = _get_embedding_model()
+                    embedding = await loop.run_in_executor(None, model.embed_query, content)
 
-            ok = store.update_chunk(
-                chunk_id=chunk_id,
-                content=content,
-                tags=tags,
-                importance=float(importance) if importance is not None else None,
-                embedding=embedding,
-            )
-            if not ok:
-                return _error_result(f"Update failed for: {chunk_id}")
+                ok = store.update_chunk(
+                    chunk_id=chunk_id,
+                    content=content,
+                    tags=tags,
+                    importance=float(importance) if importance is not None else None,
+                    embedding=embedding,
+                )
+                if not ok:
+                    return _error_result(f"Update failed for: {chunk_id}")
 
-            result = {"action": "updated", "chunk_id": chunk_id, "fields": []}
-            if content is not None:
-                result["fields"].append("content")
-            if tags is not None:
-                result["fields"].append("tags")
-            if importance is not None:
-                result["fields"].append("importance")
-            return [TextContent(type="text", text=json.dumps(result))]
+                result = {"action": "updated", "chunk_id": chunk_id, "fields": []}
+                if content is not None:
+                    result["fields"].append("content")
+                if tags is not None:
+                    result["fields"].append("tags")
+                if importance is not None:
+                    result["fields"].append("importance")
+                return [TextContent(type="text", text=json.dumps(result))]
 
-        elif action == "merge":
-            if not merge_chunk_ids:
-                return _error_result("merge requires merge_chunk_ids (the duplicates to archive)")
-            keeper = store.get_chunk(chunk_id)
-            if not keeper:
-                return _error_result(f"Keeper chunk not found: {chunk_id}")
-            archived = []
-            failed = []
-            for dup_id in merge_chunk_ids:
-                ok = store.archive_chunk(dup_id)
-                if ok:
-                    archived.append(dup_id)
-                else:
-                    failed.append(dup_id)
-            result = {"action": "merged", "kept": chunk_id, "archived": archived, "failed": failed}
-            return [TextContent(type="text", text=json.dumps(result))]
+            elif action == "merge":
+                if not merge_chunk_ids:
+                    return _error_result("merge requires merge_chunk_ids (the duplicates to archive)")
+                keeper = store.get_chunk(chunk_id)
+                if not keeper:
+                    return _error_result(f"Keeper chunk not found: {chunk_id}")
+                archived = []
+                failed = []
+                for dup_id in merge_chunk_ids:
+                    ok = store.archive_chunk(dup_id)
+                    if ok:
+                        archived.append(dup_id)
+                    else:
+                        failed.append(dup_id)
+                result = {"action": "merged", "kept": chunk_id, "archived": archived, "failed": failed}
+                return [TextContent(type="text", text=json.dumps(result))]
 
-        else:
-            return _error_result(f"Unknown action: {action}. Use update, archive, or merge.")
+            else:
+                return _error_result(f"Unknown action: {action}. Use update, archive, or merge.")
 
-    except Exception as e:
-        logger.error("brain_update failed: %s", e)
-        return _error_result(f"brain_update error: {e}")
+        except (apsw.BusyError, Exception) as e:
+            is_lock_error = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
+            if is_lock_error and attempt < _RETRY_MAX_ATTEMPTS - 1:
+                delay = _retry_delay * (2**attempt)
+                logger.warning("brain_update BusyError (attempt %d/%d), retrying in %.2fs", attempt + 1, _RETRY_MAX_ATTEMPTS, delay)
+                await asyncio.sleep(delay)
+                last_err = e
+                continue
+            logger.error("brain_update failed: %s", e)
+            return _error_result(f"brain_update error: {e}")
 
 
 def _get_pending_store_path():
@@ -171,11 +186,32 @@ def _get_pending_store_path():
 
 
 def _queue_store(item: dict) -> None:
-    """Buffer a store request to JSONL when DB is locked."""
+    """Buffer a store request to JSONL when DB is locked.
+
+    Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
+    are dropped to make room.
+    """
     path = _get_pending_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Append the new item
     with open(path, "a") as f:
         f.write(json.dumps(item) + "\n")
+
+    # Enforce max size — read, trim oldest, rewrite
+    try:
+        lines = path.read_text().strip().splitlines()
+        if len(lines) > _QUEUE_MAX_SIZE:
+            trimmed = lines[-_QUEUE_MAX_SIZE:]
+            path.write_text("\n".join(trimmed) + "\n")
+            logger.warning(
+                "Pending store queue trimmed: %d -> %d (dropped %d oldest)",
+                len(lines),
+                _QUEUE_MAX_SIZE,
+                len(lines) - _QUEUE_MAX_SIZE,
+            )
+    except Exception:
+        pass  # Non-critical — queue still works, just unbounded
 
 
 def _flush_pending_stores(store, embed_fn) -> int:
