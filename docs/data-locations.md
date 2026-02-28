@@ -6,8 +6,8 @@
 
 | What | Path | Size | Notes |
 |------|------|------|-------|
-| **Main database** | `~/.local/share/zikaron/zikaron.db` | ~3.8 GB | 268K+ chunks, sqlite-vec + FTS5 |
-| **knowledge.db** | `~/.local/share/zikaron/knowledge.db` | symlink | Points to zikaron.db |
+| **Main database** | `~/.local/share/brainlayer/brainlayer.db` | ~3.8 GB | 335K+ chunks, sqlite-vec + FTS5 |
+| **Legacy path** | `~/.local/share/zikaron/zikaron.db` | symlink | Auto-resolved by `paths.py` if no canonical path exists |
 | **Current sessions** | `~/.claude/projects/{encoded-path}/*.jsonl` | ~805 files | Claude Code session transcripts |
 | **Archived sessions** | `~/.claude-archive/{project-id}/archive-{timestamp}/` | 1.2 GB | Moved by session-archiver |
 

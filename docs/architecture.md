@@ -29,11 +29,11 @@ graph TD
     subgraph Post-Processing
         D1["Chunk Enrichment<br/>10-field LLM metadata"]
         D2["Session Enrichment<br/>decisions, learnings"]
-        D3["Brain Graph<br/>HDBSCAN clustering"]
+        D3["Brain Graph<br/>Leiden clustering"]
     end
 
     subgraph Interfaces
-        E1["MCP Server<br/>brainlayer-mcp (7 tools)"]
+        E1["MCP Server<br/>brainlayer-mcp (8 tools)"]
         E2["CLI<br/>brainlayer"]
         E3["FastAPI Daemon<br/>:8787"]
         E4["TUI Dashboard"]

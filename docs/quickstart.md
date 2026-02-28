@@ -9,10 +9,12 @@ pip install brainlayer
 ### Optional extras
 
 ```bash
-pip install "brainlayer[brain]"     # Brain graph visualization (HDBSCAN + UMAP)
+pip install "brainlayer[brain]"     # Brain graph visualization (Leiden + UMAP)
 pip install "brainlayer[cloud]"     # Cloud backfill (Gemini Batch API)
 pip install "brainlayer[youtube]"   # YouTube transcript indexing
 pip install "brainlayer[ast]"       # AST-aware code chunking (tree-sitter)
+pip install "brainlayer[kg]"        # GliNER entity extraction (209M params, EN+HE)
+pip install "brainlayer[style]"     # ChromaDB vector store (alternative backend)
 ```
 
 ## Setup
