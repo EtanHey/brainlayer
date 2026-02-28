@@ -1,0 +1,33 @@
+{
+  "customContext": {
+    "rules": [
+      {
+        "content": "Python project using SQLite + sqlite-vec for vector search. Uses pytest for testing."
+      },
+      {
+        "content": "MCP server with 8 tools: brain_search, brain_store, brain_recall, brain_entity, brain_update, brain_digest, brain_expand, brain_get_person."
+      },
+      {
+        "content": "Entity resolution uses cascading pipeline: normalize → exact match → vector similarity → LLM fallback. Thresholds: 0.92 auto-match, 0.75 fuzzy, <0.75 create new."
+      },
+      {
+        "content": "brain_search defaults to compact format (150-char snippets). Use detail='full' for verbose output."
+      },
+      {
+        "content": "Never hardcode secrets. Use environment variables.",
+        "scope": ["**/*.py"]
+      },
+      {
+        "content": "Flag surprises — if something in the codebase is unexpected, mention it in the review."
+      }
+    ]
+  },
+  "ignorePatterns": [
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    ".git",
+    "*.pyc",
+    "claude.scratchpad.md"
+  ]
+}

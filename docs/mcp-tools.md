@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-BrainLayer exposes **7 MCP tools** — 3 core (search/store/recall) + 4 knowledge graph (digest/entity/update/get_person).
+BrainLayer exposes **8 MCP tools** — 3 core (search/store/recall) + 5 knowledge graph (digest/entity/expand/update/get_person).
 
 ## brain_search
 
@@ -101,6 +101,24 @@ Look up a known entity in the knowledge graph. Returns entity type, relations, a
 **Annotations:** `readOnlyHint: true`
 
 **Use when:** Looking up people, projects, or concepts in the knowledge graph.
+
+---
+
+## brain_expand
+
+Expand a chunk_id with N surrounding chunks for full context. Useful when a search result is truncated and you need the surrounding conversation or code.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `chunk_id` | string | Yes | Chunk ID to expand around |
+| `radius` | integer | No | Number of chunks to include on each side (default: 3) |
+| `project` | string | No | Scope to a project |
+
+**Returns:** The target chunk plus N preceding and N following chunks in order.
+
+**Annotations:** `readOnlyHint: true`
+
+**Use when:** A search result is a fragment and you need the full surrounding context — e.g., the full function body, the full conversation turn, or the full stack trace.
 
 ---
 

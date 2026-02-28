@@ -20,7 +20,7 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 brainlayer index
-brainlayer serve --http 8787
+brainlayer serve
 brainlayer search "how did I implement authentication"
 brainlayer enrich
 ```
@@ -47,7 +47,7 @@ brainlayer enrich
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
-- MCP tools: `brain_search`, `brain_store`, `brain_recall` (legacy `brainlayer_*` aliases)
+- MCP tools (8): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person` (legacy `brainlayer_*` aliases still work)
 - MCP server entrypoint: `brainlayer-mcp`
 
 ## Exports
