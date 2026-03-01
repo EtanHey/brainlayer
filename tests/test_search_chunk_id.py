@@ -115,9 +115,7 @@ class TestSearchReturnsChunkId:
                 "created_at": "2026-03-01T12:00:00",
             }
         ]
-        mock_store.hybrid_search.return_value = _make_search_results(
-            chunk_ids, documents, metadatas=metadatas
-        )
+        mock_store.hybrid_search.return_value = _make_search_results(chunk_ids, documents, metadatas=metadatas)
 
         with (
             patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
