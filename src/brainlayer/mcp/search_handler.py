@@ -307,12 +307,14 @@ async def _search(
 
         if detail == "compact":
             structured_results = []
-            for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
+            for cid, doc, meta, dist in zip(
+                results["ids"][0], results["documents"][0], results["metadatas"][0], results["distances"][0]
+            ):
                 score = 1 - dist if dist is not None else 0
                 item = _build_compact_result(
                     {
                         "score": round(score, 4),
-                        "chunk_id": meta.get("chunk_id"),
+                        "chunk_id": cid,
                         "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
                         "content": doc,
                         "source_file": meta.get("source_file", "unknown"),
@@ -328,12 +330,13 @@ async def _search(
         output_parts = [f"## Search Results for: {query}\n"]
         structured_results = []
 
-        for i, (doc, meta, dist) in enumerate(
-            zip(results["documents"][0], results["metadatas"][0], results["distances"][0])
+        for i, (cid, doc, meta, dist) in enumerate(
+            zip(results["ids"][0], results["documents"][0], results["metadatas"][0], results["distances"][0])
         ):
             score = 1 - dist if dist is not None else 0
             item = {
                 "score": round(score, 4),
+                "chunk_id": cid,
                 "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
                 "content_type": meta.get("content_type", "unknown"),
                 "content": doc[:1000],
@@ -351,8 +354,6 @@ async def _search(
                 item["intent"] = meta["intent"]
             if meta.get("importance") is not None:
                 item["importance"] = meta["importance"]
-            if meta.get("chunk_id"):
-                item["chunk_id"] = meta["chunk_id"]
             if meta.get("session_summary"):
                 item["session_summary"] = meta["session_summary"]
             if meta.get("session_outcome"):

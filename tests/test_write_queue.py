@@ -250,8 +250,9 @@ class TestBrainSearchRetryOnLock:
 
         call_count = 0
         original_search_results = {
+            "ids": [["c1"]],
             "documents": [["test doc"]],
-            "metadatas": [[{"project": "test", "content_type": "note", "chunk_id": "c1"}]],
+            "metadatas": [[{"project": "test", "content_type": "note", "source_file": "s.jsonl"}]],
             "distances": [[0.1]],
         }
 
