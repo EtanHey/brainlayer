@@ -5,7 +5,7 @@ from results["ids"] rather than metadata (which doesn't carry it).
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
