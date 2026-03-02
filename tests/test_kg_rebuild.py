@@ -99,15 +99,17 @@ class TestGroqNERCaller:
         """Mock Groq response should be parsed into entities."""
         from brainlayer.pipeline.entity_extraction import parse_llm_ner_response
 
-        groq_response = json.dumps({
-            "entities": [
-                {"text": "FastAPI", "type": "tool"},
-                {"text": "Railway", "type": "tool"},
-            ],
-            "relations": [
-                {"source": "FastAPI", "target": "Railway", "type": "uses"},
-            ],
-        })
+        groq_response = json.dumps(
+            {
+                "entities": [
+                    {"text": "FastAPI", "type": "tool"},
+                    {"text": "Railway", "type": "tool"},
+                ],
+                "relations": [
+                    {"source": "FastAPI", "target": "Railway", "type": "uses"},
+                ],
+            }
+        )
         source_text = "Deploy FastAPI to Railway for production."
         entities, relations = parse_llm_ner_response(groq_response, source_text)
         assert len(entities) == 2
@@ -130,20 +132,22 @@ class TestGroqNERCaller:
         """Multi-chunk response should map entities to chunk IDs."""
         from brainlayer.pipeline.kg_extraction_groq import parse_multi_chunk_response
 
-        response = json.dumps({
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "entities": [{"text": "Etan", "type": "person"}],
-                    "relations": [],
-                },
-                {
-                    "chunk_id": "c2",
-                    "entities": [{"text": "Domica", "type": "company"}],
-                    "relations": [{"source": "Dor", "target": "Domica", "type": "works_at"}],
-                },
-            ]
-        })
+        response = json.dumps(
+            {
+                "chunks": [
+                    {
+                        "chunk_id": "c1",
+                        "entities": [{"text": "Etan", "type": "person"}],
+                        "relations": [],
+                    },
+                    {
+                        "chunk_id": "c2",
+                        "entities": [{"text": "Domica", "type": "company"}],
+                        "relations": [{"source": "Dor", "target": "Domica", "type": "works_at"}],
+                    },
+                ]
+            }
+        )
         results = parse_multi_chunk_response(response)
         assert len(results) == 2
         assert results[0]["chunk_id"] == "c1"
@@ -206,7 +210,14 @@ class TestEnrichmentHookFix:
         # Insert a test chunk
         store.conn.cursor().execute(
             "INSERT INTO chunks (id, content, source, project, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?)",
-            ("test-chunk-1", "Etan Heyman is working on brainlayer with Dor Zohar at Domica.", "test", "test", "{}", "test.jsonl"),
+            (
+                "test-chunk-1",
+                "Etan Heyman is working on brainlayer with Dor Zohar at Domica.",
+                "test",
+                "test",
+                "{}",
+                "test.jsonl",
+            ),
         )
 
         stats = extract_kg_from_chunk(
@@ -241,10 +252,12 @@ class TestEnrichmentHookFix:
         store.link_entity_chunk(entity_id, "mention-chunk-1", mention_type="inferred")
         # Verify explicit is preserved
         cursor = store._read_cursor()
-        row = list(cursor.execute(
-            "SELECT mention_type FROM kg_entity_chunks WHERE entity_id = ? AND chunk_id = ?",
-            (entity_id, "mention-chunk-1"),
-        ))
+        row = list(
+            cursor.execute(
+                "SELECT mention_type FROM kg_entity_chunks WHERE entity_id = ? AND chunk_id = ?",
+                (entity_id, "mention-chunk-1"),
+            )
+        )
         assert row[0][0] == "explicit"
 
     def test_kg_with_llm_mock(self, store):
@@ -258,15 +271,17 @@ class TestEnrichmentHookFix:
         )
 
         def mock_llm(prompt):
-            return json.dumps({
-                "entities": [
-                    {"text": "FastAPI", "type": "tool"},
-                    {"text": "Railway", "type": "tool"},
-                ],
-                "relations": [
-                    {"source": "Etan Heyman", "target": "FastAPI", "type": "uses"},
-                ],
-            })
+            return json.dumps(
+                {
+                    "entities": [
+                        {"text": "FastAPI", "type": "tool"},
+                        {"text": "Railway", "type": "tool"},
+                    ],
+                    "relations": [
+                        {"source": "Etan Heyman", "target": "FastAPI", "type": "uses"},
+                    ],
+                }
+            )
 
         stats = extract_kg_from_chunk(
             store=store,

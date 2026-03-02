@@ -71,11 +71,13 @@ def parse_multi_chunk_response(response: str) -> list[dict[str, Any]]:
         chunk_id = chunk_data.get("chunk_id", "")
         entities = chunk_data.get("entities", [])
         relations = chunk_data.get("relations", [])
-        results.append({
-            "chunk_id": chunk_id,
-            "entities": entities,
-            "relations": relations,
-        })
+        results.append(
+            {
+                "chunk_id": chunk_id,
+                "entities": entities,
+                "relations": relations,
+            }
+        )
 
     return results
 
@@ -150,7 +152,7 @@ def call_groq_ner(prompt: str, timeout: int = 60, max_retries: int = 5) -> Optio
                 if retry_after:
                     wait = float(retry_after) + random.uniform(0.5, 2.0)
                 else:
-                    wait = min(30 * (2 ** attempt), 120) + random.uniform(1, 5)
+                    wait = min(30 * (2**attempt), 120) + random.uniform(1, 5)
                 logger.info("Rate limited (429), waiting %.1fs (attempt %d/%d)", wait, attempt + 1, max_retries)
                 time.sleep(wait)
                 continue
@@ -164,7 +166,7 @@ def call_groq_ner(prompt: str, timeout: int = 60, max_retries: int = 5) -> Optio
 
         except requests.exceptions.HTTPError as e:
             if "429" in str(e):
-                wait = min(30 * (2 ** attempt), 120) + random.uniform(1, 5)
+                wait = min(30 * (2**attempt), 120) + random.uniform(1, 5)
                 logger.info("Rate limited, waiting %.1fs (attempt %d/%d)", wait, attempt + 1, max_retries)
                 time.sleep(wait)
                 continue

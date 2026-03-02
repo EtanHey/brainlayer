@@ -341,25 +341,94 @@ def extract_entities_gliner(
 
 # Known technology tags → technology entities
 KNOWN_TECH_TAGS = {
-    "python", "typescript", "javascript", "react", "nextjs", "fastapi",
-    "sqlite", "docker", "railway", "vercel", "supabase", "convex",
-    "tailwind", "playwright", "bun", "nodejs", "rust", "go", "redis",
-    "postgresql", "mongodb", "graphql", "prisma", "drizzle", "trpc",
-    "astro", "svelte", "vue", "angular", "express", "flask", "django",
-    "pytorch", "tensorflow", "langchain", "chromadb", "pinecone",
-    "openai", "anthropic", "groq", "ollama", "mlx", "huggingface",
-    "kubernetes", "terraform", "aws", "gcp", "azure", "cloudflare",
-    "github", "gitlab", "linear", "figma", "notion", "obsidian",
-    "turborepo", "nx", "pnpm", "yarn", "npm", "vite", "webpack",
-    "jest", "vitest", "pytest", "cypress", "selenium",
-    "spacy", "gliner", "apsw", "tree-sitter", "ruff",
+    "python",
+    "typescript",
+    "javascript",
+    "react",
+    "nextjs",
+    "fastapi",
+    "sqlite",
+    "docker",
+    "railway",
+    "vercel",
+    "supabase",
+    "convex",
+    "tailwind",
+    "playwright",
+    "bun",
+    "nodejs",
+    "rust",
+    "go",
+    "redis",
+    "postgresql",
+    "mongodb",
+    "graphql",
+    "prisma",
+    "drizzle",
+    "trpc",
+    "astro",
+    "svelte",
+    "vue",
+    "angular",
+    "express",
+    "flask",
+    "django",
+    "pytorch",
+    "tensorflow",
+    "langchain",
+    "chromadb",
+    "pinecone",
+    "openai",
+    "anthropic",
+    "groq",
+    "ollama",
+    "mlx",
+    "huggingface",
+    "kubernetes",
+    "terraform",
+    "aws",
+    "gcp",
+    "azure",
+    "cloudflare",
+    "github",
+    "gitlab",
+    "linear",
+    "figma",
+    "notion",
+    "obsidian",
+    "turborepo",
+    "nx",
+    "pnpm",
+    "yarn",
+    "npm",
+    "vite",
+    "webpack",
+    "jest",
+    "vitest",
+    "pytest",
+    "cypress",
+    "selenium",
+    "spacy",
+    "gliner",
+    "apsw",
+    "tree-sitter",
+    "ruff",
 }
 
 # Known project tags → project entities
 KNOWN_PROJECT_TAGS = {
-    "brainlayer", "voicelayer", "golems", "songscript", "domica",
-    "rudy-monorepo", "union", "6pm", "6pm-mini", "soltome",
-    "orchestrator", "golem-profiles",
+    "brainlayer",
+    "voicelayer",
+    "golems",
+    "songscript",
+    "domica",
+    "rudy-monorepo",
+    "union",
+    "6pm",
+    "6pm-mini",
+    "soltome",
+    "orchestrator",
+    "golem-profiles",
 }
 
 
@@ -388,23 +457,27 @@ def extract_entities_from_tags(
         tag_norm = tag.lower().replace("-", "").replace("_", "").replace(".", "")
         # Check projects first (higher priority)
         if tag_norm in norm_projects:
-            entities.append(ExtractedEntity(
-                text=norm_projects[tag_norm],
-                entity_type="project",
-                start=-1,
-                end=-1,
-                confidence=0.85,
-                source="tag",
-            ))
+            entities.append(
+                ExtractedEntity(
+                    text=norm_projects[tag_norm],
+                    entity_type="project",
+                    start=-1,
+                    end=-1,
+                    confidence=0.85,
+                    source="tag",
+                )
+            )
         elif tag_norm in norm_tech:
-            entities.append(ExtractedEntity(
-                text=norm_tech[tag_norm],
-                entity_type="technology",
-                start=-1,
-                end=-1,
-                confidence=0.80,
-                source="tag",
-            ))
+            entities.append(
+                ExtractedEntity(
+                    text=norm_tech[tag_norm],
+                    entity_type="technology",
+                    start=-1,
+                    end=-1,
+                    confidence=0.80,
+                    source="tag",
+                )
+            )
     return entities
 
 
