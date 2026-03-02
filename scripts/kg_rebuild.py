@@ -21,10 +21,7 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import sys
-import time
-import uuid
 from pathlib import Path
 
 # Add src to path
@@ -42,9 +39,7 @@ from brainlayer.pipeline.entity_extraction import (
     ExtractionResult,
     extract_entities_from_tags,
     extract_seed_entities,
-    parse_llm_ner_response,
 )
-from brainlayer.pipeline.entity_resolution import resolve_entity
 from brainlayer.pipeline.kg_extraction import process_extraction_result
 from brainlayer.pipeline.kg_extraction_groq import (
     RateLimiter,
@@ -79,9 +74,7 @@ def tier1_seed_and_tags(store: VectorStore, batch_size: int = 5000) -> dict:
     logger.info("=== Tier 1: Seed + Tag Extraction ===")
     cursor = store._read_cursor()
 
-    total = list(cursor.execute(
-        "SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"
-    ))[0][0]
+    total = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[0][0]
     logger.info("Total enriched chunks: %d", total)
 
     stats = {
@@ -94,13 +87,15 @@ def tier1_seed_and_tags(store: VectorStore, batch_size: int = 5000) -> dict:
 
     offset = 0
     while offset < total:
-        rows = list(cursor.execute(
-            """SELECT id, content, tags FROM chunks
+        rows = list(
+            cursor.execute(
+                """SELECT id, content, tags FROM chunks
                WHERE summary IS NOT NULL AND summary != ''
                ORDER BY id
                LIMIT ? OFFSET ?""",
-            (batch_size, offset),
-        ))
+                (batch_size, offset),
+            )
+        )
         if not rows:
             break
 
@@ -153,7 +148,10 @@ def tier1_seed_and_tags(store: VectorStore, batch_size: int = 5000) -> dict:
         offset += batch_size
         logger.info(
             "Tier 1 progress: %d/%d chunks, %d entities found, %d linked",
-            stats["chunks_processed"], total, stats["entities_found"], stats["chunks_linked"],
+            stats["chunks_processed"],
+            total,
+            stats["entities_found"],
+            stats["chunks_linked"],
         )
 
     logger.info("=== Tier 1 Complete ===")
@@ -173,8 +171,7 @@ def tier2_groq_ner(
     """
     logger.info("=== Tier 2: Groq NER Extraction ===")
 
-    progress = load_progress() if resume else {"tier2_last_offset": 0, "tier2_processed": 0}
-    start_offset = progress.get("tier2_last_offset", 0)
+    progress = load_progress() if resume else {"tier2_processed": 0}
 
     cursor = store._read_cursor()
     # Use conservative rate limit — enrichment pipeline shares the 30 RPM quota
@@ -192,7 +189,7 @@ def tier2_groq_ner(
           AND c.content IS NOT NULL
           AND LENGTH(c.content) > 50
         ORDER BY c.importance DESC, c.id
-        LIMIT ? OFFSET ?
+        LIMIT ?
     """
 
     stats = {
@@ -203,9 +200,8 @@ def tier2_groq_ner(
         "errors": 0,
     }
 
-    offset = start_offset
     while stats["chunks_processed"] < limit:
-        rows = list(cursor.execute(query, (chunks_per_call, offset)))
+        rows = list(cursor.execute(query, (chunks_per_call,)))
         if not rows:
             logger.info("No more unprocessed chunks")
             break
@@ -220,7 +216,6 @@ def tier2_groq_ner(
             if not response:
                 logger.warning("Empty Groq response, skipping batch")
                 stats["errors"] += 1
-                offset += chunks_per_call
                 continue
 
             parsed_results = parse_multi_chunk_response(response)
@@ -243,14 +238,16 @@ def tier2_groq_ner(
                         continue
                     # Find span in content
                     idx = content.lower().find(text.lower()) if content else -1
-                    entities.append(ExtractedEntity(
-                        text=text,
-                        entity_type=etype,
-                        start=idx,
-                        end=idx + len(text) if idx >= 0 else -1,
-                        confidence=0.75,
-                        source="llm",
-                    ))
+                    entities.append(
+                        ExtractedEntity(
+                            text=text,
+                            entity_type=etype,
+                            start=idx,
+                            end=idx + len(text) if idx >= 0 else -1,
+                            confidence=0.75,
+                            source="llm",
+                        )
+                    )
 
                 relations = []
                 for rel_data in chunk_result.get("relations", []):
@@ -258,12 +255,14 @@ def tier2_groq_ner(
                     target = rel_data.get("target", "")
                     rtype = rel_data.get("type", "")
                     if source and target and rtype:
-                        relations.append(ExtractedRelation(
-                            source_text=source,
-                            target_text=target,
-                            relation_type=rtype,
-                            confidence=0.70,
-                        ))
+                        relations.append(
+                            ExtractedRelation(
+                                source_text=source,
+                                target_text=target,
+                                relation_type=rtype,
+                                confidence=0.70,
+                            )
+                        )
 
                 if entities or relations:
                     result = ExtractionResult(
@@ -278,21 +277,20 @@ def tier2_groq_ner(
             stats["chunks_processed"] += len(chunks)
 
         except Exception:
-            logger.exception("Error in Groq NER batch at offset %d", offset)
+            logger.exception("Error in Groq NER batch")
             stats["errors"] += 1
 
-        offset += chunks_per_call
-
         # Save progress every batch
-        progress["tier2_last_offset"] = offset
         progress["tier2_processed"] = stats["chunks_processed"]
         save_progress(progress)
 
         if stats["api_calls"] % 10 == 0:
             logger.info(
                 "Tier 2 progress: %d chunks, %d API calls, %d entities, %d relations",
-                stats["chunks_processed"], stats["api_calls"],
-                stats["entities_found"], stats["relations_found"],
+                stats["chunks_processed"],
+                stats["api_calls"],
+                stats["entities_found"],
+                stats["relations_found"],
             )
 
     logger.info("=== Tier 2 Complete ===")
@@ -306,9 +304,9 @@ def print_kg_stats(store: VectorStore):
     ents = list(cursor.execute("SELECT COUNT(*) FROM kg_entities"))[0][0]
     rels = list(cursor.execute("SELECT COUNT(*) FROM kg_relations"))[0][0]
     links = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks"))[0][0]
-    types = list(cursor.execute(
-        "SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type ORDER BY COUNT(*) DESC"
-    ))
+    types = list(
+        cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type ORDER BY COUNT(*) DESC")
+    )
     print(f"\nKG Stats: {ents} entities, {rels} relations, {links} entity-chunk links")
     print("Entity types:", {t: c for t, c in types})
 
@@ -346,7 +344,8 @@ def main():
 
     if args.tier2:
         tier2_stats = tier2_groq_ner(
-            store, limit=args.limit,
+            store,
+            limit=args.limit,
             chunks_per_call=args.chunks_per_call,
             resume=args.resume,
         )

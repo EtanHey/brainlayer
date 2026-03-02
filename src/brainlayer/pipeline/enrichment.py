@@ -871,7 +871,7 @@ def _enrich_one(
                         process_extraction_result(store, result)
         except Exception:
             # KG extraction is non-critical — don't fail the enrichment
-            logger.debug("KG extraction failed for chunk %s", chunk["id"], exc_info=True)
+            logger.warning("KG extraction failed for chunk %s", chunk["id"], exc_info=True)
 
         return True
     return False

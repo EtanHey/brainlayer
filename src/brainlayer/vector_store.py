@@ -514,7 +514,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             conn.enableloadextension(True)
             conn.loadextension(sqlite_vec.loadable_path())
             conn.enableloadextension(False)
-            conn.cursor().execute("PRAGMA busy_timeout = 5000")
+            conn.setbusytimeout(30_000)
             self._local.read_conn = conn
         return conn
 

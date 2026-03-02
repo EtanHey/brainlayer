@@ -16,7 +16,7 @@ from brainlayer.vector_store import VectorStore
 
 def cleanup_kg(store: VectorStore, dry_run: bool = True):
     """Run all KG cleanup operations."""
-    cursor = store.conn.cursor()
+    cursor = store._read_cursor()
 
     # ── 1. Merge person duplicates ──
     merges = [
@@ -150,9 +150,9 @@ def cleanup_kg(store: VectorStore, dry_run: bool = True):
     ents = list(cursor.execute("SELECT COUNT(*) FROM kg_entities"))[0][0]
     rels = list(cursor.execute("SELECT COUNT(*) FROM kg_relations"))[0][0]
     links = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks"))[0][0]
-    types = list(cursor.execute(
-        "SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type ORDER BY COUNT(*) DESC"
-    ))
+    types = list(
+        cursor.execute("SELECT entity_type, COUNT(*) FROM kg_entities GROUP BY entity_type ORDER BY COUNT(*) DESC")
+    )
     print(f"\nFinal KG: {ents} entities, {rels} relations, {links} links")
     print("Types:", {t: c for t, c in types})
 
