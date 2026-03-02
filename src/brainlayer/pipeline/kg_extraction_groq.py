@@ -68,7 +68,11 @@ def parse_multi_chunk_response(response: str) -> list[dict[str, Any]]:
 
     results = []
     for chunk_data in parsed.get("chunks", []):
+        if not isinstance(chunk_data, dict):
+            continue
         chunk_id = chunk_data.get("chunk_id", "")
+        if not chunk_id:
+            continue
         entities = chunk_data.get("entities", [])
         relations = chunk_data.get("relations", [])
         results.append(

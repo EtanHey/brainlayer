@@ -124,6 +124,7 @@ def cleanup_kg(store: VectorStore, dry_run: bool = True):
                 cursor.execute("DELETE FROM kg_entity_chunks WHERE entity_id = ?", (eid,))
                 cursor.execute("DELETE FROM kg_relations WHERE source_id = ? OR target_id = ?", (eid, eid))
                 cursor.execute("DELETE FROM kg_entity_aliases WHERE entity_id = ?", (eid,))
+                cursor.execute("DELETE FROM kg_vec_entities WHERE entity_id = ?", (eid,))
                 cursor.execute("DELETE FROM kg_entities WHERE id = ?", (eid,))
 
     # ── 6. Add useful aliases ──

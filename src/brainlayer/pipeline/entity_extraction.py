@@ -448,6 +448,7 @@ def extract_entities_from_tags(
         known_projects = KNOWN_PROJECT_TAGS
 
     entities = []
+    seen_norms: set[str] = set()
     norm_projects = {p.lower().replace("-", "").replace("_", "").replace(".", ""): p for p in known_projects}
     norm_tech = {t.lower().replace("-", "").replace("_", "").replace(".", ""): t for t in known_tech}
 
@@ -455,6 +456,9 @@ def extract_entities_from_tags(
         if not isinstance(tag, str):
             continue
         tag_norm = tag.lower().replace("-", "").replace("_", "").replace(".", "")
+        if tag_norm in seen_norms:
+            continue
+        seen_norms.add(tag_norm)
         # Check projects first (higher priority)
         if tag_norm in norm_projects:
             entities.append(
