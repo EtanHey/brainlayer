@@ -5,6 +5,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 """
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -499,18 +500,27 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 SELECT content, id FROM chunks
             """)
 
-        # Readonly connection for concurrent read access
-        self.read_conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
-        self.read_conn.enableloadextension(True)
-        self.read_conn.loadextension(sqlite_vec.loadable_path())
-        self.read_conn.enableloadextension(False)
-        self.read_conn.cursor().execute("PRAGMA busy_timeout = 5000")
+        # Thread-local storage for per-thread read connections.
+        # APSW connections are NOT thread-safe — each thread needs its own.
+        # This prevents "Connection is busy in another thread" when parallel
+        # MCP tool calls (e.g., brain_search) hit the same VectorStore.
+        self._local = threading.local()
+
+    def _get_read_conn(self) -> apsw.Connection:
+        """Get or create a per-thread readonly connection."""
+        conn = getattr(self._local, "read_conn", None)
+        if conn is None:
+            conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
+            conn.enableloadextension(True)
+            conn.loadextension(sqlite_vec.loadable_path())
+            conn.enableloadextension(False)
+            conn.setbusytimeout(30_000)
+            self._local.read_conn = conn
+        return conn
 
     def _read_cursor(self):
-        """Return a cursor for read operations using the readonly connection."""
-        if hasattr(self, "read_conn"):
-            return self.read_conn.cursor()
-        return self.conn.cursor()
+        """Return a cursor for read operations using a per-thread readonly connection."""
+        return self._get_read_conn().cursor()
 
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
@@ -653,8 +663,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def close(self) -> None:
         """Close database connections."""
-        if hasattr(self, "read_conn"):
-            self.read_conn.close()
+        # Close thread-local read connection if it exists
+        if hasattr(self, "_local"):
+            read_conn = getattr(self._local, "read_conn", None)
+            if read_conn is not None:
+                read_conn.close()
+                self._local.read_conn = None
         if hasattr(self, "conn"):
             self.conn.close()
 

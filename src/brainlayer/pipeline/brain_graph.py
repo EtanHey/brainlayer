@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUTPUT_DIR = Path.home() / ".brainlayer-brain"
 MIN_CHUNKS_PER_SESSION = 3  # Skip tiny sessions
 MAX_SESSIONS = 5000  # Cap for performance
+MAX_ENTITIES = 200  # Cap entity nodes in graph
 KNN_NEIGHBORS = 15  # Each node connects to its K nearest neighbors
 LEIDEN_RESOLUTIONS = [0.3, 0.8, 2.0]  # Coarse → medium → fine
+TOP_ENTITIES_PER_SESSION = 5  # Top entities shown per session node
+TOP_SESSIONS_PER_ENTITY = 5  # Max entity→session edges per entity
 
 
 # ─── Data Loading ───────────────────────────────────────────────────
@@ -188,6 +191,243 @@ def load_sessions(db_path: str, project: Optional[str] = None) -> list[dict]:
 
     logger.info(f"Built {len(sessions)} sessions with embeddings")
     return sessions
+
+
+# ─── KG Data Loading ──────────────────────────────────────────────
+
+
+def load_kg_data(db_path: str) -> dict:
+    """Load KG entities, relations, and entity-session mappings in bulk queries."""
+    import apsw
+    import sqlite_vec
+
+    conn = apsw.Connection(db_path, flags=apsw.SQLITE_OPEN_READONLY)
+    conn.enableloadextension(True)
+    conn.loadextension(sqlite_vec.loadable_path())
+    conn.enableloadextension(False)
+    cursor = conn.cursor()
+
+    # Query 1: All entities with optional embeddings
+    entities = []
+    try:
+        for row in cursor.execute(
+            "SELECT e.id, e.entity_type, e.name, e.description, e.importance, e.confidence "
+            "FROM kg_entities e ORDER BY e.importance DESC"
+        ):
+            eid, etype, name, desc, imp, conf = row
+            entities.append(
+                {
+                    "id": eid,
+                    "entity_type": etype or "unknown",
+                    "name": name,
+                    "description": desc or "",
+                    "importance": float(imp) if imp is not None else 0.5,
+                    "confidence": float(conf) if conf is not None else 1.0,
+                }
+            )
+    except Exception:
+        logger.warning("Could not load KG entities (tables may not exist)")
+        return {"entities": [], "relations": [], "entity_sessions": {}}
+
+    # Query 2: All current relations
+    relations = []
+    try:
+        for row in cursor.execute(
+            "SELECT source_id, target_id, relation_type, importance, confidence, fact "
+            "FROM kg_relations WHERE expired_at IS NULL"
+        ):
+            sid, tid, rtype, imp, conf, fact = row
+            relations.append(
+                {
+                    "source_id": sid,
+                    "target_id": tid,
+                    "relation_type": rtype,
+                    "importance": float(imp) if imp is not None else 0.5,
+                    "confidence": float(conf) if conf is not None else 1.0,
+                    "fact": fact or "",
+                }
+            )
+    except Exception:
+        logger.warning("Could not load KG relations")
+
+    # Query 3: Entity→source_file aggregation (bulk, no N+1)
+    entity_sessions: dict[str, list[tuple[str, float, int]]] = defaultdict(list)
+    try:
+        for row in cursor.execute(
+            "SELECT ec.entity_id, c.source_file, MAX(ec.relevance) as max_rel, COUNT(*) as cnt "
+            "FROM kg_entity_chunks ec JOIN chunks c ON ec.chunk_id = c.id "
+            "GROUP BY ec.entity_id, c.source_file "
+            "ORDER BY ec.entity_id, max_rel DESC"
+        ):
+            eid, src_file, max_rel, cnt = row
+            entity_sessions[eid].append((src_file, float(max_rel or 1.0), int(cnt)))
+    except Exception:
+        logger.warning("Could not load entity-chunk mappings")
+
+    logger.info(
+        f"KG data: {len(entities)} entities, {len(relations)} relations, "
+        f"{len(entity_sessions)} entities with session links"
+    )
+    return {"entities": entities, "relations": relations, "entity_sessions": dict(entity_sessions)}
+
+
+def enrich_sessions_with_entities(sessions: list[dict], kg_data: dict) -> list[dict]:
+    """Add top_entities list to each session based on entity-chunk links."""
+    entities_by_id = {e["id"]: e for e in kg_data["entities"]}
+
+    # Invert: source_file → [(entity_id, relevance, count)]
+    file_to_entities: dict[str, list[tuple[str, float, int]]] = defaultdict(list)
+    for entity_id, file_list in kg_data["entity_sessions"].items():
+        for source_file, relevance, count in file_list:
+            file_to_entities[source_file].append((entity_id, relevance, count))
+
+    enriched = 0
+    for session in sessions:
+        src_file = session["source_file"]
+        entity_refs = sorted(file_to_entities.get(src_file, []), key=lambda x: -x[1])[:TOP_ENTITIES_PER_SESSION]
+        top = []
+        for eid, rel, _ in entity_refs:
+            ent = entities_by_id.get(eid)
+            if ent:
+                top.append({"name": ent["name"], "type": ent["entity_type"], "relevance": round(rel, 3)})
+        session["top_entities"] = top
+        if top:
+            enriched += 1
+
+    logger.info(f"Enriched {enriched}/{len(sessions)} sessions with entity data")
+    return sessions
+
+
+def compute_entity_positions(
+    sessions: list[dict],
+    session_coords: np.ndarray,
+    kg_data: dict,
+) -> dict[str, tuple[float, float, float]]:
+    """Compute 3D positions for entity nodes as centroids of connected sessions."""
+    file_to_idx = {s["source_file"]: i for i, s in enumerate(sessions)}
+    rng = np.random.default_rng(42)
+
+    result: dict[str, tuple[float, float, float]] = {}
+    for entity in kg_data["entities"]:
+        entity_id = entity["id"]
+        file_list = kg_data["entity_sessions"].get(entity_id, [])
+
+        connected_coords = []
+        for source_file, _relevance, _count in file_list:
+            idx = file_to_idx.get(source_file)
+            if idx is not None:
+                connected_coords.append(session_coords[idx])
+
+        if connected_coords:
+            centroid = np.mean(connected_coords, axis=0)
+            jitter = rng.uniform(-2, 2, 3)
+            pos = centroid + jitter
+            result[entity_id] = (round(float(pos[0]), 2), round(float(pos[1]), 2), round(float(pos[2]), 2))
+
+    logger.info(f"Positioned {len(result)}/{len(kg_data['entities'])} entities")
+    return result
+
+
+def build_entity_nodes(
+    kg_data: dict,
+    entity_positions: dict[str, tuple[float, float, float]],
+) -> list[dict]:
+    """Build graph nodes for KG entities."""
+    sorted_entities = sorted(kg_data["entities"], key=lambda e: -e["importance"])[:MAX_ENTITIES]
+
+    nodes = []
+    for entity in sorted_entities:
+        pos = entity_positions.get(entity["id"])
+        if pos is None:
+            continue
+
+        nodes.append(
+            {
+                "id": f"kg-{entity['id'][:8]}",
+                "entity_id": entity["id"],
+                "session_id": "",
+                "node_type": "entity",
+                "entity_type": entity["entity_type"],
+                "label": entity["name"],
+                "description": entity["description"],
+                "community": {"coarse": -1, "medium": -1, "fine": -1},
+                "x": pos[0],
+                "y": pos[1],
+                "z": pos[2],
+                "size": round(float(np.clip(entity["importance"] * 8 + 1, 1, 10)), 2),
+                "color_type": entity["entity_type"],
+                "source": "kg",
+                "project": "",
+                "branch": "",
+                "plan": "",
+                "chunk_count": 0,
+                "files_count": 0,
+                "started_at": "",
+                "importance": round(entity["importance"], 2),
+                "confidence": round(entity["confidence"], 3),
+            }
+        )
+
+    logger.info(f"Built {len(nodes)} entity nodes")
+    return nodes
+
+
+def build_entity_session_edges(
+    entity_nodes: list[dict],
+    sessions: list[dict],
+    kg_data: dict,
+) -> list[dict]:
+    """Build edges connecting entity nodes to their most-mentioned sessions."""
+    entity_id_to_node_id = {n["entity_id"]: n["id"] for n in entity_nodes}
+    file_to_session_id = {s["source_file"]: s["id"][:8] for s in sessions}
+
+    edges = []
+    for entity_id, file_list in kg_data["entity_sessions"].items():
+        entity_node_id = entity_id_to_node_id.get(entity_id)
+        if not entity_node_id:
+            continue
+        top = sorted(file_list, key=lambda x: -x[1])[:TOP_SESSIONS_PER_ENTITY]
+        for source_file, relevance, _count in top:
+            session_node_id = file_to_session_id.get(source_file)
+            if session_node_id:
+                edges.append(
+                    {
+                        "source": entity_node_id,
+                        "target": session_node_id,
+                        "weight": round(relevance, 3),
+                        "edge_type": "entity_mention",
+                    }
+                )
+
+    logger.info(f"Built {len(edges)} entity→session edges")
+    return edges
+
+
+def build_entity_relation_edges(
+    kg_data: dict,
+    entity_nodes: list[dict],
+) -> list[dict]:
+    """Build edges between entity nodes based on KG relations."""
+    entity_id_to_node_id = {n["entity_id"]: n["id"] for n in entity_nodes}
+
+    edges = []
+    for rel in kg_data["relations"]:
+        src_node = entity_id_to_node_id.get(rel["source_id"])
+        tgt_node = entity_id_to_node_id.get(rel["target_id"])
+        if src_node and tgt_node:
+            edges.append(
+                {
+                    "source": src_node,
+                    "target": tgt_node,
+                    "weight": round(rel["importance"], 3),
+                    "edge_type": "kg_relation",
+                    "relation_type": rel["relation_type"],
+                    "fact": rel["fact"],
+                }
+            )
+
+    logger.info(f"Built {len(edges)} entity↔entity relation edges")
+    return edges
 
 
 # ─── Similarity Matrix ──────────────────────────────────────────────
@@ -427,36 +667,39 @@ def build_graph_json(
     hierarchy: dict[str, list[int]],
     labels: dict[int, str],
     coords: np.ndarray,
+    kg_data: Optional[dict] = None,
+    entity_positions: Optional[dict] = None,
 ) -> dict:
-    """Build the final graph.json structure."""
+    """Build the final graph.json structure with KG entity overlay."""
     medium_membership = hierarchy.get("medium", hierarchy.get("coarse", [0] * len(sessions)))
 
     nodes = []
     for i, s in enumerate(sessions):
         comm = medium_membership[i] if i < len(medium_membership) else 0
-        nodes.append(
-            {
-                "id": s["id"][:8],
-                "session_id": s["id"],
-                "label": labels.get(comm, f"cluster-{comm}"),
-                "community": {
-                    level: membership[i] if i < len(membership) else 0 for level, membership in hierarchy.items()
-                },
-                "x": round(float(coords[i, 0]), 2),
-                "y": round(float(coords[i, 1]), 2),
-                "z": round(float(coords[i, 2]), 2),
-                "size": round(float(np.clip(s["importance"] / 10 * 5 + 1, 1, 8)), 2),
-                "color_type": dominant_type(s["intents"]),
-                "source": s.get("source", "claude_code"),
-                "project": s["project"],
-                "branch": s["branch"],
-                "plan": s["plan_name"],
-                "chunk_count": s["chunk_count"],
-                "files_count": len(s["files"]),
-                "started_at": s["started_at"],
-                "importance": round(float(s["importance"]), 2),
-            }
-        )
+        node = {
+            "id": s["id"][:8],
+            "session_id": s["id"],
+            "node_type": "session",
+            "label": labels.get(comm, f"cluster-{comm}"),
+            "community": {
+                level: membership[i] if i < len(membership) else 0 for level, membership in hierarchy.items()
+            },
+            "x": round(float(coords[i, 0]), 2),
+            "y": round(float(coords[i, 1]), 2),
+            "z": round(float(coords[i, 2]), 2),
+            "size": round(float(np.clip(s["importance"] / 10 * 5 + 1, 1, 8)), 2),
+            "color_type": dominant_type(s["intents"]),
+            "source": s.get("source", "claude_code"),
+            "project": s["project"],
+            "branch": s["branch"],
+            "plan": s["plan_name"],
+            "chunk_count": s["chunk_count"],
+            "files_count": len(s["files"]),
+            "started_at": s["started_at"],
+            "importance": round(float(s["importance"]), 2),
+            "top_entities": s.get("top_entities", []),
+        }
+        nodes.append(node)
 
     # Build edges (top N per node to avoid clutter)
     edges = []
@@ -492,17 +735,42 @@ def build_graph_json(
             for comm_id, members in communities.items()
         }
 
+    # Merge KG entity nodes and edges if available
+    entity_count = 0
+    kg_edge_count = 0
+    entity_type_counts: dict[str, int] = {}
+    if kg_data and entity_positions:
+        entity_nodes = build_entity_nodes(kg_data, entity_positions)
+        entity_session_edges = build_entity_session_edges(entity_nodes, sessions, kg_data)
+        entity_relation_edges = build_entity_relation_edges(kg_data, entity_nodes)
+
+        nodes.extend(entity_nodes)
+        edges.extend(entity_session_edges)
+        edges.extend(entity_relation_edges)
+
+        entity_count = len(entity_nodes)
+        kg_edge_count = len(entity_session_edges) + len(entity_relation_edges)
+        for n in entity_nodes:
+            etype = n.get("entity_type", "unknown")
+            entity_type_counts[etype] = entity_type_counts.get(etype, 0) + 1
+
+    meta = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "session_count": len(sessions),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "community_counts": {level: len(set(m)) for level, m in hierarchy.items()},
+    }
+    if entity_count > 0:
+        meta["entity_count"] = entity_count
+        meta["kg_edge_count"] = kg_edge_count
+        meta["entity_types"] = entity_type_counts
+
     return {
         "nodes": nodes,
         "edges": edges,
         "hierarchy": hierarchy_info,
-        "meta": {
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "session_count": len(sessions),
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "community_counts": {level: len(set(m)) for level, m in hierarchy.items()},
-        },
+        "meta": meta,
     }
 
 
@@ -547,9 +815,18 @@ def generate_brain_graph(
     logger.info("Step 5: Computing UMAP 3D layout...")
     coords = compute_layout(sessions)
 
-    # Step 6: Build and export graph
-    logger.info("Step 6: Building graph.json...")
-    graph = build_graph_json(sessions, similarity, hierarchy, labels, coords)
+    # Step 6: Load KG data and enrich sessions
+    logger.info("Step 6: Loading KG entities and relations...")
+    kg_data = load_kg_data(db)
+    entity_positions = None
+    if kg_data["entities"]:
+        sessions = enrich_sessions_with_entities(sessions, kg_data)
+        logger.info("Step 6b: Computing entity node positions...")
+        entity_positions = compute_entity_positions(sessions, coords, kg_data)
+
+    # Step 7: Build and export graph
+    logger.info("Step 7: Building graph.json...")
+    graph = build_graph_json(sessions, similarity, hierarchy, labels, coords, kg_data, entity_positions)
 
     graph_path = out / "graph.json"
     with open(graph_path, "w") as f:

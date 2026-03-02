@@ -30,7 +30,9 @@ brainlayer enrich
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
 - Post-processing: Enrichment, Brain Graph, Obsidian export
-- Storage: `~/.local/share/brainlayer/brainlayer.db` (sqlite-vec, WAL, `busy_timeout=5000`)
+- Storage: currently `~/.local/share/zikaron/zikaron.db` (legacy path, 5GB+). Target: `~/.local/share/brainlayer/brainlayer.db`
+- DB path resolved by `paths.py:get_db_path()` — prefers zikaron if it exists, falls through to brainlayer
+- 8 scripts in `scripts/` hardcode `brainlayer.db` path — need fixing during DB consolidation
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
 ## Classification & Chunking Rules
@@ -39,9 +41,12 @@ brainlayer enrich
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
 ## Enrichment
-- Backends: Ollama (`glm4`) or MLX (`BRAINLAYER_ENRICH_BACKEND=ollama|mlx`)
-- Set `"think": false` for GLM-4.7 speed
+- Primary backend: **MLX** (`Qwen2.5-Coder-14B-Instruct-4bit`) on Apple Silicon (port 8080)
+- Fallback: Ollama (`glm-4.7-flash`) on port 11434, auto-switches after 3 consecutive MLX failures
+- Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
+- Worker script: `golems/scripts/enrichment-lazy.sh` (launchd, nice=20, batch=50)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
+- Known issue: 72K empty 0-char chunks from tool-call-only turns pollute the queue (FIXED 2026-03-01, deleted)
 
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
@@ -59,6 +64,13 @@ brainlayer enrich
 - Prompts cache: `~/.local/share/brainlayer/prompts/`
 - Socket: `/tmp/brainlayer.sock`
 - Enrichment lock: `/tmp/brainlayer-enrichment.lock`
+
+## Bulk DB Operations (SAFETY)
+1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)
+2. **Checkpoint WAL** before and after: `PRAGMA wal_checkpoint(FULL)`
+3. **Drop FTS triggers** before bulk deletes — `chunks_fts_delete` trigger is a massive perf killer. Recreate after.
+4. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
+5. Never delete from `chunks` while FTS trigger is active on large datasets
 
 ## Naming
 - BrainLayer (זיכרון) = "memory"

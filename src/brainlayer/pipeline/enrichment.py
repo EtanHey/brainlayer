@@ -834,18 +834,44 @@ def _enrich_one(
 
         # KG extraction: extract entities from enriched chunk into KG tables
         try:
+            from .batch_extraction import DEFAULT_SEED_ENTITIES
+            from .entity_extraction import extract_entities_from_tags
             from .kg_extraction import extract_kg_from_chunk
 
+            # Seed + tag extraction (no API calls, always enabled)
             extract_kg_from_chunk(
                 store=store,
                 chunk_id=chunk["id"],
-                seed_entities={},  # TODO: load seed entities from config
-                use_llm=False,  # Seed-only for now (LLM extraction is expensive)
+                seed_entities=DEFAULT_SEED_ENTITIES,
+                use_llm=False,
                 use_gliner=False,
             )
+
+            # Tag-based extraction from enrichment tags
+            if enrichment.get("tags"):
+                import json as _json
+
+                from .entity_extraction import ExtractionResult
+                from .kg_extraction import process_extraction_result
+
+                tags = enrichment["tags"]
+                if isinstance(tags, str):
+                    try:
+                        tags = _json.loads(tags)
+                    except (ValueError, TypeError):
+                        tags = []
+                if isinstance(tags, list):
+                    tag_entities = extract_entities_from_tags(tags)
+                    if tag_entities:
+                        result = ExtractionResult(
+                            entities=tag_entities,
+                            relations=[],
+                            chunk_id=chunk["id"],
+                        )
+                        process_extraction_result(store, result)
         except Exception:
             # KG extraction is non-critical — don't fail the enrichment
-            logger.debug("KG extraction failed for chunk %s", chunk["id"], exc_info=True)
+            logger.warning("KG extraction failed for chunk %s", chunk["id"], exc_info=True)
 
         return True
     return False

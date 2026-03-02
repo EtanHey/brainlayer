@@ -337,6 +337,154 @@ def extract_entities_gliner(
     return _deduplicate_overlaps(entities)
 
 
+# ── Tag-based extraction ──
+
+# Known technology tags → technology entities
+KNOWN_TECH_TAGS = {
+    "python",
+    "typescript",
+    "javascript",
+    "react",
+    "nextjs",
+    "fastapi",
+    "sqlite",
+    "docker",
+    "railway",
+    "vercel",
+    "supabase",
+    "convex",
+    "tailwind",
+    "playwright",
+    "bun",
+    "nodejs",
+    "rust",
+    "go",
+    "redis",
+    "postgresql",
+    "mongodb",
+    "graphql",
+    "prisma",
+    "drizzle",
+    "trpc",
+    "astro",
+    "svelte",
+    "vue",
+    "angular",
+    "express",
+    "flask",
+    "django",
+    "pytorch",
+    "tensorflow",
+    "langchain",
+    "chromadb",
+    "pinecone",
+    "openai",
+    "anthropic",
+    "groq",
+    "ollama",
+    "mlx",
+    "huggingface",
+    "kubernetes",
+    "terraform",
+    "aws",
+    "gcp",
+    "azure",
+    "cloudflare",
+    "github",
+    "gitlab",
+    "linear",
+    "figma",
+    "notion",
+    "obsidian",
+    "turborepo",
+    "nx",
+    "pnpm",
+    "yarn",
+    "npm",
+    "vite",
+    "webpack",
+    "jest",
+    "vitest",
+    "pytest",
+    "cypress",
+    "selenium",
+    "spacy",
+    "gliner",
+    "apsw",
+    "tree-sitter",
+    "ruff",
+}
+
+# Known project tags → project entities
+KNOWN_PROJECT_TAGS = {
+    "brainlayer",
+    "voicelayer",
+    "golems",
+    "songscript",
+    "domica",
+    "rudy-monorepo",
+    "union",
+    "6pm",
+    "6pm-mini",
+    "soltome",
+    "orchestrator",
+    "golem-profiles",
+}
+
+
+def extract_entities_from_tags(
+    tags: list[str],
+    known_tech: Optional[set[str]] = None,
+    known_projects: Optional[set[str]] = None,
+) -> list[ExtractedEntity]:
+    """Extract entities from enrichment tags without API calls.
+
+    Maps known tags to entity types. Returns ExtractedEntity objects
+    with source="tag" and span positions of -1 (not text-based).
+    """
+    if known_tech is None:
+        known_tech = KNOWN_TECH_TAGS
+    if known_projects is None:
+        known_projects = KNOWN_PROJECT_TAGS
+
+    entities = []
+    seen_norms: set[str] = set()
+    norm_projects = {p.lower().replace("-", "").replace("_", "").replace(".", ""): p for p in known_projects}
+    norm_tech = {t.lower().replace("-", "").replace("_", "").replace(".", ""): t for t in known_tech}
+
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        tag_norm = tag.lower().replace("-", "").replace("_", "").replace(".", "")
+        if tag_norm in seen_norms:
+            continue
+        seen_norms.add(tag_norm)
+        # Check projects first (higher priority)
+        if tag_norm in norm_projects:
+            entities.append(
+                ExtractedEntity(
+                    text=norm_projects[tag_norm],
+                    entity_type="project",
+                    start=-1,
+                    end=-1,
+                    confidence=0.85,
+                    source="tag",
+                )
+            )
+        elif tag_norm in norm_tech:
+            entities.append(
+                ExtractedEntity(
+                    text=norm_tech[tag_norm],
+                    entity_type="technology",
+                    start=-1,
+                    end=-1,
+                    confidence=0.80,
+                    source="tag",
+                )
+            )
+    return entities
+
+
 def extract_entities_combined(
     text: str,
     seed_entities: dict[str, list[str]],

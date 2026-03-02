@@ -159,7 +159,10 @@ class KGMixin:
             ON CONFLICT(entity_id, chunk_id) DO UPDATE SET
                 relevance = excluded.relevance,
                 context = excluded.context,
-                mention_type = COALESCE(excluded.mention_type, kg_entity_chunks.mention_type)
+                mention_type = CASE
+                    WHEN kg_entity_chunks.mention_type = 'explicit' THEN 'explicit'
+                    ELSE COALESCE(excluded.mention_type, kg_entity_chunks.mention_type)
+                END
             """,
             (entity_id, chunk_id, relevance, context, mention_type),
         )
