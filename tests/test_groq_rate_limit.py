@@ -21,6 +21,8 @@ class TestGroqRateLimiting:
         """call_groq should enforce minimum delay between consecutive calls."""
         from brainlayer.pipeline import enrichment
 
+        # Reset global state so test is order-independent
+        enrichment._groq_last_call = 0.0
         call_times = []
 
         def fake_post(*args, **kwargs):
@@ -103,9 +105,11 @@ class TestEnrichmentSourcePriority:
 
             unenriched = store.get_unenriched_chunks(batch_size=10)
             sources = [c.get("source") for c in unenriched]
+            # Both sources must be present
+            assert "claude_code" in sources, f"Expected claude_code in sources, got: {sources}"
+            assert "youtube" in sources, f"Expected youtube in sources, got: {sources}"
             # Claude Code should come before YouTube
-            if "claude_code" in sources and "youtube" in sources:
-                cc_idx = sources.index("claude_code")
-                yt_idx = sources.index("youtube")
-                assert cc_idx < yt_idx, f"Claude Code (idx={cc_idx}) should rank before YouTube (idx={yt_idx})"
+            cc_idx = sources.index("claude_code")
+            yt_idx = sources.index("youtube")
+            assert cc_idx < yt_idx, f"Claude Code (idx={cc_idx}) should rank before YouTube (idx={yt_idx})"
             store.close()
