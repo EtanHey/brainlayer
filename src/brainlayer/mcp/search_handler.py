@@ -217,8 +217,11 @@ async def _brain_search(
 
     # Entity-aware routing: detect known entity names in query and route to
     # kg_hybrid_search for combined chunk + KG fact retrieval.
+    # Skip entity routing when additional filters are active — kg_hybrid_search
+    # doesn't support them and we'd silently drop the user's filter intent.
+    has_active_filters = any([content_type, source, tag, intent, importance_min, date_from, date_to, sentiment])
     store = _get_vector_store()
-    detected_entities = _detect_entities(query, store)
+    detected_entities = _detect_entities(query, store) if not has_active_filters else []
     if detected_entities:
         try:
             entity_name = detected_entities[0]["name"]

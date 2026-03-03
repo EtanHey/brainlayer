@@ -95,6 +95,7 @@ GROQ_MODEL = os.environ.get("BRAINLAYER_GROQ_MODEL", "llama-3.3-70b-versatile")
 # Rate limiting: Groq free tier allows ~30 req/min. 2s delay = ~30/min max.
 GROQ_RATE_LIMIT_DELAY = float(os.environ.get("BRAINLAYER_GROQ_RATE_DELAY", "2.0"))
 _groq_last_call: float = 0.0  # monotonic timestamp of last Groq API call
+_groq_rate_lock = threading.Lock()  # serialize rate-limit checks across threads
 
 # Stall detection: max seconds a single chunk can take before being considered stalled
 STALL_TIMEOUT = int(os.environ.get("BRAINLAYER_STALL_TIMEOUT", "300"))  # 5 minutes default
@@ -537,13 +538,13 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
         print("  Groq error: GROQ_API_KEY not set", file=sys.stderr)
         return None
     try:
-        # Rate limit: wait if we called too recently
-        now = time.monotonic()
-        elapsed = now - _groq_last_call
-        if _groq_last_call > 0 and elapsed < GROQ_RATE_LIMIT_DELAY:
-            sleep_time = GROQ_RATE_LIMIT_DELAY - elapsed
-            time.sleep(sleep_time)
-        _groq_last_call = time.monotonic()
+        # Rate limit: serialize timestamp check/update across threads
+        with _groq_rate_lock:
+            now = time.monotonic()
+            elapsed = now - _groq_last_call
+            if _groq_last_call > 0 and elapsed < GROQ_RATE_LIMIT_DELAY:
+                time.sleep(GROQ_RATE_LIMIT_DELAY - elapsed)
+            _groq_last_call = time.monotonic()
 
         start_ms = int(time.time() * 1000)
         resp = requests.post(

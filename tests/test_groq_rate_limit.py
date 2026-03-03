@@ -53,19 +53,21 @@ class TestGroqRateLimiting:
     def test_rate_limit_delay_env_override(self):
         """BRAINLAYER_GROQ_RATE_DELAY env var should override the default delay."""
         import os
+        from importlib import reload
+
+        from brainlayer.pipeline import enrichment
 
         original = os.environ.get("BRAINLAYER_GROQ_RATE_DELAY")
         try:
             os.environ["BRAINLAYER_GROQ_RATE_DELAY"] = "5.0"
-            # Need to reload to pick up env var
-            # Check the module-level constant respects the env var
-            # (This tests the env var mechanism, not the reloaded value)
-            assert float(os.environ["BRAINLAYER_GROQ_RATE_DELAY"]) == 5.0
+            reloaded = reload(enrichment)
+            assert reloaded.GROQ_RATE_LIMIT_DELAY == 5.0
         finally:
             if original is None:
                 os.environ.pop("BRAINLAYER_GROQ_RATE_DELAY", None)
             else:
                 os.environ["BRAINLAYER_GROQ_RATE_DELAY"] = original
+            reload(enrichment)  # restore original value
 
 
 class TestEnrichmentSourcePriority:
