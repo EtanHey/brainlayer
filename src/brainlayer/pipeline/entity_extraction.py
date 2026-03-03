@@ -118,13 +118,20 @@ def _deduplicate_overlaps(entities: list[ExtractedEntity]) -> list[ExtractedEnti
 
 # ── LLM-based extraction ──
 
-_NER_PROMPT_TEMPLATE = """Extract named entities and relationships from this text.
+_NER_PROMPT_TEMPLATE = """Extract named entities and relationships from this developer conversation text.
 
-Entity types: person, company, project, golem, tool, topic
-Relation types: works_at, owns, builds, uses, client_of, mentioned_in
+Entity types: person, agent, company, project, tool, technology, topic
+- person: Human names (First Last). NOT repos/tools/agents.
+- agent: AI agents (*Claude, *Golem, Ralph). NOT humans.
+- company: Businesses. project: Code repos/apps. tool/technology: Dev tools, languages, frameworks.
 
-Return JSON only, no explanation:
-{{"entities": [{{"text": "exact text from input", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type"}}]}}
+Relation types (direction: source → target):
+- works_at: person → company. owns: person → project/company. builds: person/agent → project.
+- uses: entity → tool/technology. client_of: A → B (B serves A). affiliated_with: person → company.
+- coaches: agent → person. related_to: generic fallback.
+
+Return JSON only:
+{{"entities": [{{"text": "exact text from input", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "fact": "natural language sentence"}}]}}
 
 If no entities found, return: {{"entities": [], "relations": []}}
 

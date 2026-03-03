@@ -15,19 +15,37 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # Multi-chunk NER prompt — processes N chunks in one API call
-_MULTI_CHUNK_NER_PROMPT = """Extract named entities and relationships from each text chunk below.
+_MULTI_CHUNK_NER_PROMPT = """Extract named entities and relationships from developer conversation chunks.
 
-Entity types: person, company, project, golem, tool, technology, topic
-Relation types: works_at, owns, builds, uses, client_of, mentioned_in, related_to
+Entity types (choose carefully):
+- person: Human names only (First Last). NOT project names, repos, or tools.
+- agent: AI agents and autonomous tools (*Claude, *Golem, Ralph, ClaudeGolem).
+- company: Business entities (Cantaloupe AI, Domica, MeHayom, Weby, Union).
+- project: Code repos, apps, products (brainlayer, golems, voicelayer, 6pm, soltome).
+- tool: Developer tools and services (CodeRabbit, Railway, Vercel).
+- technology: Languages, frameworks, libraries (Python, React, SQLite, Convex).
+- topic: Abstract concepts only when not fitting above types.
+
+Relation types and DIRECTION rules (source → target):
+- works_at: person → company (person works at company)
+- owns: person → project/company (person owns the project)
+- builds: person/agent → project (who builds what)
+- uses: entity → tool/technology (who uses what tool)
+- client_of: person/company → person/company (A is a client OF B, meaning B serves A)
+- affiliated_with: person → company (generic association)
+- coaches: agent → person (agent coaches person, e.g. coachClaude coaches Etan)
+- related_to: any → any (generic, use only when no specific type fits)
 
 Return JSON with this exact structure:
-{{"chunks": [{{"chunk_id": "id", "entities": [{{"text": "exact text", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type"}}]}}]}}
+{{"chunks": [{{"chunk_id": "id", "entities": [{{"text": "exact text", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "fact": "natural language description"}}]}}]}}
 
 Rules:
 - Only extract entities that appear verbatim in the text
 - Use the exact text from the input (preserve casing)
 - If a chunk has no entities, use empty arrays
 - Relations must reference entities that exist in the same chunk
+- ALWAYS provide a fact: a clear natural-language sentence describing the relationship
+- Direction matters: source is the actor/owner, target is the object/owned
 
 {chunks_text}"""
 

@@ -77,9 +77,9 @@ class TestSeedEntities:
         assert "brainlayer" in names
         assert "golems" in names
 
-    def test_seed_has_golems(self):
-        assert "golem" in DEFAULT_SEED_ENTITIES
-        names = DEFAULT_SEED_ENTITIES["golem"]
+    def test_seed_has_agents(self):
+        assert "agent" in DEFAULT_SEED_ENTITIES
+        names = DEFAULT_SEED_ENTITIES["agent"]
         assert "brainClaude" in names
 
 

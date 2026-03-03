@@ -2,22 +2,193 @@
 
 After a chunk is embedded/enriched, this module:
 1. Extracts entities from chunk content (seed + LLM + GLiNER)
-2. Resolves each entity against existing kg_entities
-3. Creates relations between entities
-4. Links entities to the source chunk via kg_entity_chunks
+2. Validates and corrects entity types and relation directions
+3. Resolves each entity against existing kg_entities
+4. Creates relations between entities
+5. Links entities to the source chunk via kg_entity_chunks
 
 Designed to run as a post-enrichment step in enrich_batch.
 """
 
 import logging
+import math
+import re
 import uuid
 from typing import Any, Optional
 
 from ..vector_store import VectorStore
-from .entity_extraction import ExtractionResult, extract_entities_combined
+from .entity_extraction import (
+    KNOWN_PROJECT_TAGS,
+    KNOWN_TECH_TAGS,
+    ExtractedRelation,
+    ExtractionResult,
+    extract_entities_combined,
+)
 from .entity_resolution import resolve_entity
 
 logger = logging.getLogger(__name__)
+
+# Canonical relation types — everything else maps to 'related_to'
+CANONICAL_RELATION_TYPES = {
+    "works_at",
+    "owns",
+    "builds",
+    "uses",
+    "client_of",
+    "affiliated_with",
+    "coaches",
+    "related_to",
+}
+
+# Known agent names (beyond *Claude/*Golem pattern matching)
+_KNOWN_AGENTS = {"ralph", "claudegolem"}
+
+# Relation direction constraints: relation_type → (valid_source_types, valid_target_types)
+# If extracted direction is wrong, we swap source/target.
+_RELATION_DIRECTION_RULES: dict[str, tuple[set[str], set[str]]] = {
+    "works_at": ({"person", "agent"}, {"company", "project"}),
+    "owns": ({"person"}, {"company", "project", "agent"}),
+    "builds": ({"person", "agent"}, {"project", "tool", "technology"}),
+    "uses": ({"person", "agent", "project", "company"}, {"tool", "technology"}),
+    "coaches": ({"agent"}, {"person"}),
+}
+
+
+def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
+    """Validate and correct extracted entities and relations.
+
+    Applies heuristic guardrails:
+    1. Entity type coercion (agent patterns, known projects/tech)
+    2. Relation direction validation and correction
+    3. Self-referential relation removal
+    4. Relation type normalization to canonical types
+    """
+    # Build entity type lookup from (possibly corrected) entities
+    entity_types: dict[str, str] = {}
+
+    # 1. Entity type coercion
+    for entity in result.entities:
+        name = entity.text
+        name_lower = name.lower().replace("-", "").replace("_", "").replace(" ", "")
+
+        # *Claude or *Golem pattern → agent
+        if re.search(r"(?i)(claude|golem)$", name):
+            entity.entity_type = "agent"
+        # Known agent names
+        elif name_lower in _KNOWN_AGENTS:
+            entity.entity_type = "agent"
+        # Known project tags
+        elif name_lower in {p.lower().replace("-", "").replace("_", "") for p in KNOWN_PROJECT_TAGS}:
+            entity.entity_type = "project"
+        # Known tech tags
+        elif name_lower in {t.lower().replace("-", "").replace("_", "") for t in KNOWN_TECH_TAGS}:
+            entity.entity_type = "technology"
+
+        entity_types[name.lower()] = entity.entity_type
+
+    # 2-4. Validate relations
+    validated_relations: list[ExtractedRelation] = []
+    for rel in result.relations:
+        # 3. Self-referential filter
+        if rel.source_text.lower() == rel.target_text.lower():
+            logger.debug(
+                "Dropping self-referential relation: %s --%s--> %s", rel.source_text, rel.relation_type, rel.target_text
+            )
+            continue
+
+        # 4. Normalize relation type
+        if rel.relation_type not in CANONICAL_RELATION_TYPES:
+            rel.relation_type = "related_to"
+
+        # 2. Direction validation
+        source_type = entity_types.get(rel.source_text.lower(), "unknown")
+        target_type = entity_types.get(rel.target_text.lower(), "unknown")
+
+        if rel.relation_type in _RELATION_DIRECTION_RULES:
+            valid_src, valid_tgt = _RELATION_DIRECTION_RULES[rel.relation_type]
+            if source_type not in valid_src and target_type in valid_src:
+                # Wrong direction — swap
+                rel.source_text, rel.target_text = rel.target_text, rel.source_text
+                logger.debug(
+                    "Swapped relation direction: %s --%s--> %s",
+                    rel.source_text,
+                    rel.relation_type,
+                    rel.target_text,
+                )
+
+        validated_relations.append(rel)
+
+    return ExtractionResult(
+        entities=result.entities,
+        relations=validated_relations,
+        chunk_id=result.chunk_id,
+        metadata=result.metadata,
+    )
+
+
+def compute_entity_importance(store: VectorStore) -> int:
+    """Compute entity importance from chunk links and relations.
+
+    Formula: importance = log2(1 + chunk_count) * avg_chunk_importance * (1 + 0.1 * relation_count)
+    Normalized to 0-10 range.
+
+    Returns number of entities updated.
+    """
+    cursor = store._read_cursor()
+
+    # Get chunk link counts and avg importance per entity
+    rows = list(
+        cursor.execute(
+            """SELECT ec.entity_id,
+                      COUNT(*) as link_count,
+                      AVG(COALESCE(c.importance, 5)) as avg_imp
+               FROM kg_entity_chunks ec
+               JOIN chunks c ON ec.chunk_id = c.id
+               GROUP BY ec.entity_id"""
+        )
+    )
+
+    if not rows:
+        return 0
+
+    # Get relation counts per entity
+    rel_counts: dict[str, int] = {}
+    for row in cursor.execute(
+        """SELECT entity_id, COUNT(*) FROM (
+               SELECT source_id as entity_id FROM kg_relations WHERE expired_at IS NULL
+               UNION ALL
+               SELECT target_id as entity_id FROM kg_relations WHERE expired_at IS NULL
+           ) GROUP BY entity_id"""
+    ):
+        rel_counts[row[0]] = row[1]
+
+    # Compute raw scores
+    scores: dict[str, float] = {}
+    for entity_id, link_count, avg_imp in rows:
+        n_rels = rel_counts.get(entity_id, 0)
+        raw = math.log2(1 + link_count) * (avg_imp / 10.0) * (1 + 0.1 * n_rels)
+        scores[entity_id] = raw
+
+    if not scores:
+        return 0
+
+    # Normalize to 0.5-9.5 range (leave room at edges)
+    max_score = max(scores.values())
+    min_score = min(scores.values())
+    score_range = max_score - min_score if max_score > min_score else 1.0
+
+    updated = 0
+    write_cursor = store.conn.cursor()
+    for entity_id, raw in scores.items():
+        normalized = 0.5 + 9.0 * (raw - min_score) / score_range
+        write_cursor.execute(
+            "UPDATE kg_entities SET importance = ? WHERE id = ?",
+            (round(normalized, 2), entity_id),
+        )
+        updated += 1
+
+    logger.info("Updated importance for %d entities (range %.2f-%.2f)", updated, min_score, max_score)
+    return updated
 
 
 def _mention_type_from_source(source: str) -> str:
@@ -47,6 +218,9 @@ def process_extraction_result(
 
     if not result.entities and not result.relations:
         return stats
+
+    # Validate and correct entity types + relation directions
+    result = validate_extraction_result(result)
 
     chunk_id = result.chunk_id
 
@@ -109,6 +283,8 @@ def process_extraction_result(
             continue
 
         rel_id = f"rel-{uuid.uuid4().hex[:12]}"
+        # Extract fact from properties or dedicated field
+        fact = getattr(ext_rel, "fact", None) or ext_rel.properties.get("fact")
         store.add_relation(
             relation_id=rel_id,
             source_id=source_id,
@@ -116,6 +292,7 @@ def process_extraction_result(
             relation_type=ext_rel.relation_type,
             properties=ext_rel.properties,
             confidence=ext_rel.confidence,
+            fact=fact,
             source_chunk_id=chunk_id,
         )
         stats["relations_created"] += 1
