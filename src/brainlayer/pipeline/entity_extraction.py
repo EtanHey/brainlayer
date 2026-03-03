@@ -195,13 +195,18 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
         if not source or not target or not rtype:
             continue
 
+        fact = raw_rel.get("fact")
+        props = raw_rel.get("properties") or {}
+        if fact and "fact" not in props:
+            props["fact"] = fact
+
         relations.append(
             ExtractedRelation(
                 source_text=source,
                 target_text=target,
                 relation_type=rtype,
                 confidence=0.7,
-                properties=raw_rel.get("properties", {}),
+                properties=props,
             )
         )
 

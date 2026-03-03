@@ -46,7 +46,7 @@ _KNOWN_AGENTS = {"ralph", "claudegolem"}
 # Relation direction constraints: relation_type → (valid_source_types, valid_target_types)
 # If extracted direction is wrong, we swap source/target.
 _RELATION_DIRECTION_RULES: dict[str, tuple[set[str], set[str]]] = {
-    "works_at": ({"person", "agent"}, {"company", "project"}),
+    "works_at": ({"person", "agent"}, {"company"}),
     "owns": ({"person"}, {"company", "project", "agent"}),
     "builds": ({"person", "agent"}, {"project", "tool", "technology"}),
     "uses": ({"person", "agent", "project", "company"}, {"tool", "technology"}),

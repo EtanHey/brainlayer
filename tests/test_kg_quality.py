@@ -336,6 +336,35 @@ class TestFactFieldPropagation:
         assert "client" in rows[0][0].lower()
         store.close()
 
+    def test_parser_preserves_top_level_fact(self):
+        """parse_llm_ner_response should capture top-level 'fact' from LLM JSON."""
+        import json
+
+        from brainlayer.pipeline.entity_extraction import parse_llm_ner_response
+
+        llm_response = json.dumps(
+            {
+                "entities": [
+                    {"text": "Yuval Nir", "type": "person"},
+                    {"text": "Etan Heyman", "type": "person"},
+                ],
+                "relations": [
+                    {
+                        "source": "Yuval Nir",
+                        "target": "Etan Heyman",
+                        "type": "client_of",
+                        "fact": "Yuval Nir is a coaching client of Etan Heyman",
+                    }
+                ],
+            }
+        )
+        source_text = "Yuval Nir is a coaching client of Etan Heyman since 2024."
+        _, relations = parse_llm_ner_response(llm_response, source_text)
+        assert len(relations) == 1
+        fact = relations[0].properties.get("fact")
+        assert fact is not None
+        assert "client" in fact.lower()
+
 
 # ── Entity Importance Computation ─────────────────────────────────
 

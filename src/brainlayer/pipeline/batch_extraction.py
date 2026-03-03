@@ -59,7 +59,6 @@ DEFAULT_SEED_ENTITIES: dict[str, list[str]] = {
         "recruiterGolem",
         "contentGolem",
         "tellerGolem",
-        "ContentClaude",
         "orcClaude",
         "dashboardClaude",
     ],

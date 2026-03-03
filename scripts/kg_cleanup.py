@@ -246,6 +246,9 @@ def main():
 
     if dry_run:
         logger.info("=== DRY-RUN MODE (use --apply to commit changes) ===")
+    else:
+        store.conn.cursor().execute("PRAGMA wal_checkpoint(FULL)")
+        logger.info("WAL checkpoint (pre) done")
 
     # Fix entity types
     logger.info("\n--- Entity Type Fixes ---")
@@ -273,7 +276,7 @@ def main():
 
     if not dry_run:
         store.conn.cursor().execute("PRAGMA wal_checkpoint(FULL)")
-        logger.info("WAL checkpoint done")
+        logger.info("WAL checkpoint (post) done")
 
     print_stats(store)
     store.close()
