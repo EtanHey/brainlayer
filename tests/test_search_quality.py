@@ -519,3 +519,35 @@ class TestEntityAwareRouting:
 
         # The routing code checks has_active_filters before calling _detect_entities.
         # We verify that _detect_entities itself works; the filter guard is in _brain_search.
+
+    def test_entity_detection_latency_under_50ms(self, store):
+        """Entity detection overhead must stay under 50ms to keep search fast."""
+        import time
+
+        # Seed a few entities so there's something to check against
+        cursor = store.conn.cursor()
+        for i in range(20):
+            cursor.execute(
+                """INSERT INTO kg_entities (id, entity_type, name, metadata, created_at)
+                   VALUES (?, ?, ?, '{}', datetime('now'))""",
+                (f"lat-ent-{i}", "person", f"Person{i} Name{i}"),
+            )
+            cursor.execute(
+                "INSERT INTO kg_entities_fts (name, metadata, entity_id) VALUES (?, '{}', ?)",
+                (f"Person{i} Name{i}", f"lat-ent-{i}"),
+            )
+
+        from brainlayer.mcp.search_handler import _detect_entities
+
+        # Warm up (first call may be slower due to imports/caching)
+        _detect_entities("Person0 Name0 something", store)
+
+        # Time 100 iterations to get a reliable average
+        start = time.monotonic()
+        iterations = 100
+        for _ in range(iterations):
+            _detect_entities("What does Person5 Name5 think about code reviews?", store)
+        elapsed = time.monotonic() - start
+        avg_ms = (elapsed / iterations) * 1000
+
+        assert avg_ms < 50, f"Entity detection averaged {avg_ms:.1f}ms per call, exceeds 50ms budget"

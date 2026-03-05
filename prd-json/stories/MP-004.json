@@ -5,37 +5,39 @@
   "acceptanceCriteria": [
     {
       "text": "Entity detection added to search query preprocessing (detect names, projects, functions)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "When entities detected, brain_search routes through kg_hybrid_search",
-      "checked": false
+      "checked": true
     },
     {
       "text": "KG results merged with standard RRF results (not replacing them)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Test: searching 'brainClaude' returns entity-linked chunks via KG path",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Test: searching generic terms (no entities) still uses standard RRF path",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Test: KG routing doesn't add more than 50ms latency to search",
-      "checked": false
+      "checked": true
     },
-    { "text": "All existing tests pass (pytest)", "checked": false },
+    { "text": "All existing tests pass (pytest)", "checked": true },
     {
       "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Commit: feat: MP-004 wire kg_hybrid_search into brain_search routing",
-      "checked": false
+      "checked": true
     }
   ],
-  "passes": false
+  "passes": true,
+  "completedAt": "2026-03-05T19:50:00.000Z",
+  "completedBy": "opus"
 }

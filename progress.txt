@@ -38,6 +38,17 @@
 - CodeRabbit: passed, no findings
 - 735 tests pass (2 skipped)
 
+## Iteration 5 - MP-004: Wire kg_hybrid_search into brain_search auto-routing
+- Model: opus
+- Implementation was already complete from a prior session (search_handler.py)
+- Entity detection: `_detect_entities()` checks bigrams + capitalized words against kg_entities + FTS
+- Routing: when entities detected and no active filters, routes to `kg_hybrid_search`
+- KG results include chunks + facts, formatted into structured output
+- Fallback: if KG search fails, falls through to standard RRF search
+- Added test: entity detection latency under 50ms (100 iterations averaged)
+- CodeRabbit: passed, no findings
+- 736 tests pass (2 skipped)
+
 ## Learnings
 - Python project (FastAPI + SQLite + FTS5)
 - Tests: pytest
