@@ -176,7 +176,8 @@ class TestQueryTruncation:
         passed = args[0][0]
         # The query portion (after prefix) must be <= MAX_QUERY_CHARS
         from brainlayer.embeddings import BGE_QUERY_PREFIX
-        query_portion = passed[len(BGE_QUERY_PREFIX):]
+
+        query_portion = passed[len(BGE_QUERY_PREFIX) :]
         assert len(query_portion) <= MAX_QUERY_CHARS
 
 
