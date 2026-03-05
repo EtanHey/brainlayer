@@ -1,0 +1,37 @@
+{
+  "id": "US-002",
+  "title": "Add post-RRF reranking with importance and recency boosting",
+  "storyType": "feature",
+  "acceptanceCriteria": [
+    {
+      "text": "Post-RRF reranking step added to search pipeline",
+      "checked": false
+    },
+    {
+      "text": "Reranking formula boosts by importance (1-10 scale) and recency (decay factor)",
+      "checked": false
+    },
+    {
+      "text": "Test: importance=9 chunk outranks importance=2 chunk when RRF scores are equal",
+      "checked": false
+    },
+    {
+      "text": "Test: recent chunk (today) outranks old chunk (6 months ago) when RRF scores are equal",
+      "checked": false
+    },
+    {
+      "text": "Test: reranking doesn't break existing search result ordering for normal queries",
+      "checked": false
+    },
+    { "text": "All existing tests pass (pytest)", "checked": false },
+    {
+      "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)",
+      "checked": false
+    },
+    {
+      "text": "Commit: feat: US-002 add post-RRF importance and recency reranking",
+      "checked": false
+    }
+  ],
+  "passes": false
+}

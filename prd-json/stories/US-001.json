@@ -1,0 +1,35 @@
+{
+  "id": "US-001",
+  "title": "Expand FTS5 index to include summary, tags, and resolved_query",
+  "storyType": "feature",
+  "acceptanceCriteria": [
+    {
+      "text": "FTS5 content definition expanded to include summary + tags fields",
+      "checked": true
+    },
+    {
+      "text": "Triggers added to rebuild FTS entries when summary or tags change",
+      "checked": true
+    },
+    {
+      "text": "Test: searching for a tag name (e.g., 'architecture') returns chunks with that tag",
+      "checked": true
+    },
+    {
+      "text": "Test: searching for a resolved_query term returns matching chunks",
+      "checked": true
+    },
+    { "text": "All existing tests still pass (pytest)", "checked": true },
+    {
+      "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)",
+      "checked": true
+    },
+    {
+      "text": "Commit: feat: US-001 expand FTS5 to index summary, tags, resolved_query",
+      "checked": true
+    }
+  ],
+  "passes": true,
+  "completedAt": "2026-03-05T19:23:40.926Z",
+  "completedBy": "sonnet"
+}

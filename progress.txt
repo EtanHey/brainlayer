@@ -9,6 +9,15 @@
 - CodeRabbit: ran, 2 false alarms (passes field and backward compat for unused internal kwarg), no real fixes needed
 - 726 tests pass
 
+## Iteration 2 - US-001: Expand FTS5 to index summary, tags, resolved_query
+- Model: sonnet
+- Implementation was already complete from a prior session (vector_store.py lines 186-526)
+- FTS5 columns: content, summary, tags, resolved_query, chunk_id UNINDEXED
+- Triggers: insert/delete/update on chunks table keep FTS in sync
+- Tests: 8 passing tests in TestFTS5Expansion class (test_search_quality.py)
+- CodeRabbit: skipped (repo not in allowed list)
+- All 726 tests pass
+
 ## Learnings
 - Python project (FastAPI + SQLite + FTS5)
 - Tests: pytest
