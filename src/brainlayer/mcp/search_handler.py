@@ -270,7 +270,7 @@ async def _brain_search(
                         item = {
                             "score": round(score, 4),
                             "chunk_id": cid,
-                            "content": doc[:1000],
+                            "content": doc,
                             "entity": entity_name,
                         }
                     structured_results.append(item)
@@ -388,13 +388,13 @@ async def _search(
     entity_id: str | None = None,
     detail: str = "compact",
     # Backward compat: accept old 'format' kwarg
-    format: str | None = None,
+    output_format: str | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
         # Backward compat: old 'format' kwarg overrides 'detail'
-        if format is not None:
-            detail = format
+        if output_format is not None:
+            detail = output_format
 
         if num_results < 1:
             num_results = 5
@@ -499,7 +499,7 @@ async def _search(
                 "chunk_id": cid,
                 "project": _normalize_project_name(meta.get("project")) or meta.get("project", "unknown"),
                 "content_type": meta.get("content_type", "unknown"),
-                "content": doc[:1000],
+                "content": doc,
                 "source_file": meta.get("source_file", "unknown"),
             }
             if meta.get("created_at"):
@@ -546,7 +546,7 @@ async def _search(
             if meta.get("session_summary"):
                 output_parts.append(f"**Session:** {meta['session_summary'][:200]}")
             output_parts.append(f"**File:** `{meta.get('source_file', 'unknown')}`\n")
-            output_parts.append(doc[:1000] + ("..." if len(doc) > 1000 else ""))
+            output_parts.append(doc)
             output_parts.append("\n---")
 
         structured = {"query": query, "total": len(structured_results), "results": structured_results}

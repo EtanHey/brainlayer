@@ -1,0 +1,31 @@
+{
+  "id": "BUG-005",
+  "title": "Fix format=format parameter bug shadowing Python builtin",
+  "storyType": "bug",
+  "acceptanceCriteria": [
+    {
+      "text": "Rename the `format` parameter in search handler to avoid shadowing Python builtin `format`",
+      "checked": true
+    },
+    {
+      "text": "Verify that `detail='full'` returns full content (not compact/truncated)",
+      "checked": true
+    },
+    {
+      "text": "Add regression test: call search with detail='full', assert full content returned",
+      "checked": true
+    },
+    { "text": "All existing tests pass (pytest)", "checked": true },
+    {
+      "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)",
+      "checked": true
+    },
+    {
+      "text": "Commit: fix: BUG-005 rename format parameter to avoid Python builtin shadowing",
+      "checked": true
+    }
+  ],
+  "passes": true,
+  "completedAt": "2026-03-05T12:00:00.000Z",
+  "completedBy": "sonnet"
+}

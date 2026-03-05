@@ -4,12 +4,15 @@ Task 1: FTS5 expansion — summary, tags, resolved_query indexed
 Task 2: Entity-aware routing — auto-detect entities, route to kg_hybrid_search
 Task 3: Post-RRF reranking — importance + recency boost
 Task 6: format=format bug fix
+BUG-005: detail='full' returns full content (not truncated to 1000 chars)
 
 All tests use tmp_path fixtures (isolated, no production DB).
 """
 
+import asyncio
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -104,6 +107,70 @@ class TestFormatBug:
                 # If format=format exists, it's the Python builtin — bug is present
                 if isinstance(node.value, ast.Name) and node.value.id == "format":
                     pytest.fail("format=format bug still present — passes Python builtin format()")
+
+
+# ── BUG-005: detail='full' returns full content ───────────────────
+
+
+class TestDetailFullReturnsFullContent:
+    """Regression: detail='full' must return complete content, not doc[:1000]."""
+
+    def test_no_truncation_in_full_detail_path(self):
+        """_search source must not truncate doc to 1000 chars in the full detail branch."""
+        import ast
+
+        handler_path = Path(__file__).parent.parent / "src" / "brainlayer" / "mcp" / "search_handler.py"
+        source = handler_path.read_text()
+        tree = ast.parse(source)
+
+        # Find all Subscript nodes of the form doc[:1000] or name[:1000]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                # Check if slice is [:1000]
+                s = node.slice
+                if (
+                    isinstance(s, ast.Slice)
+                    and s.lower is None
+                    and isinstance(s.upper, ast.Constant)
+                    and s.upper.value == 1000
+                ):
+                    pytest.fail(
+                        f"Found doc[:1000] truncation at line {node.lineno} — "
+                        "detail='full' should return complete content"
+                    )
+
+    @pytest.mark.asyncio
+    async def test_detail_full_content_not_truncated(self):
+        """Calling _search with detail='full' returns content longer than 1000 chars."""
+        from brainlayer.mcp.search_handler import _search
+
+        long_content = "x" * 2000  # Content longer than old 1000-char truncation limit
+        mock_store = MagicMock()
+        mock_store.count.return_value = 1
+        mock_store.hybrid_search.return_value = {
+            "ids": [["chunk-full-1"]],
+            "documents": [[long_content]],
+            "metadatas": [[{"project": "test", "content_type": "note", "source_file": "s.jsonl"}]],
+            "distances": [[0.1]],
+        }
+        mock_store.enrich_results_with_session_context = lambda r: r
+
+        mock_model = MagicMock()
+        mock_model.embed_query.return_value = [0.1] * 1024
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+            patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
+            patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
+        ):
+            result = await _search(query="test query", detail="full")
+
+        _texts, structured = result
+        assert structured["total"] == 1
+        returned_content = structured["results"][0]["content"]
+        assert len(returned_content) == 2000, (
+            f"detail='full' should return full 2000-char content, got {len(returned_content)} chars"
+        )
 
 
 # ── Task 1: FTS5 expansion ────────────────────────────────────────

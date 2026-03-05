@@ -1,0 +1,17 @@
+# Ralph Progress - BrainLayer Search Relevance
+
+## Iteration 1 - BUG-005: Fix format=format parameter bug shadowing Python builtin
+- Model: sonnet
+- Renamed `format` param to `output_format` in `_search()` — fixes Python builtin shadowing
+- Fixed `detail='full'` truncation bug: removed `doc[:1000]` in 3 places, now returns full content
+- Added regression tests in test_search_quality.py: TestDetailFullReturnsFullContent (2 new tests)
+- Updated test_smart_search_entity_dedup.py to reflect new param name
+- CodeRabbit: ran, 2 false alarms (passes field and backward compat for unused internal kwarg), no real fixes needed
+- 726 tests pass
+
+## Learnings
+- Python project (FastAPI + SQLite + FTS5)
+- Tests: pytest
+- Key files: src/brainlayer/search.py, src/brainlayer/kg_search.py, src/brainlayer/mcp/search_handler.py
+- 726 tests passing as of March 5 2026
+- `_search()` is internal — no external callers use `format=` kwarg, safe to rename

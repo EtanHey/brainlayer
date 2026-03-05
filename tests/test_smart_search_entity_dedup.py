@@ -135,14 +135,15 @@ class TestDetailFullSearch:
         assert "detail" in sig.parameters
 
     def test_detail_full_format_backward_compat(self):
-        """Old 'format' kwarg still works as backward compat for 'detail'."""
+        """Backward compat param is renamed to 'output_format' to avoid shadowing Python builtin."""
         import inspect
 
         from brainlayer.mcp.search_handler import _search
 
         sig = inspect.signature(_search)
-        # Should still accept 'format' for backward compat
-        assert "format" in sig.parameters
+        # 'format' was renamed to 'output_format' to avoid shadowing Python builtin
+        assert "output_format" in sig.parameters
+        assert "format" not in sig.parameters
 
 
 # ============================================================
