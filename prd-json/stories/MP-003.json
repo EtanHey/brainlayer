@@ -1,33 +1,35 @@
 {
-  "id": "US-003",
+  "id": "MP-003",
   "title": "Fix embedding truncation for chunks longer than 512 characters",
-  "storyType": "feature",
+  "storyType": "infrastructure",
   "acceptanceCriteria": [
     {
       "text": "Chunks longer than 512 chars are no longer truncated before embedding",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Approach chosen: either chunk-and-multi-embed or embed summary field",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Test: semantic search finds content that exists only after character 512",
-      "checked": false
+      "checked": true
     },
     {
       "text": "Test: embedding generation doesn't significantly slow down for long content",
-      "checked": false
+      "checked": true
     },
-    { "text": "All existing tests pass (pytest)", "checked": false },
+    { "text": "All existing tests pass (pytest)", "checked": true },
     {
       "text": "Run CodeRabbit review - must pass (or create BUG if unfixable)",
-      "checked": false
+      "checked": true
     },
     {
-      "text": "Commit: feat: US-003 fix embedding truncation for long chunks",
-      "checked": false
+      "text": "Commit: feat: MP-003 fix embedding truncation for long chunks",
+      "checked": true
     }
   ],
-  "passes": false
+  "passes": true,
+  "completedAt": "2026-03-05T19:45:00.000Z",
+  "completedBy": "opus"
 }

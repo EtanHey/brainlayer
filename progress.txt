@@ -27,6 +27,17 @@
 - CodeRabbit: skipped (repo not in allowed list)
 - 727 tests pass (2 skipped)
 
+## Iteration 4 - MP-003: Fix embedding truncation for chunks longer than 512 characters
+- Model: opus
+- Implementation was already complete from a prior session (embeddings.py)
+- Old code: `MAX_EMBEDDING_CHARS = 512` with `content[:MAX_EMBEDDING_CHARS - 50] + "..."` truncation
+- New code: passes full content to sentence-transformers; model handles token-level truncation at 512 tokens (~2000+ chars)
+- Approach chosen: let sentence-transformers handle tokenization natively (no char truncation, no multi-embed)
+- Query cap renamed to `MAX_QUERY_CHARS = 2000` (generous cap for degenerate inputs only)
+- Tests: 8 passing in test_embedding_truncation.py (no-truncation, query caps, performance)
+- CodeRabbit: passed, no findings
+- 735 tests pass (2 skipped)
+
 ## Learnings
 - Python project (FastAPI + SQLite + FTS5)
 - Tests: pytest

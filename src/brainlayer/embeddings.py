@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 # Use bge-large-en-v1.5 for high-quality embeddings (1024 dims, 63.5 MTEB score)
 DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_DIM = 1024  # bge-large dimension
-MAX_EMBEDDING_CHARS = 512  # context length
+# bge-large-en-v1.5 supports 512 tokens (~2000+ characters).
+# sentence-transformers handles token-level truncation natively — no char truncation needed.
+MAX_QUERY_CHARS = 2000  # generous cap for query strings only (avoids degenerate inputs)
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
@@ -55,14 +57,10 @@ class EmbeddingModel:
         results = []
         total = len(chunks)
 
-        # Prepare texts with truncation
-        texts = []
-        for chunk in chunks:
-            content = chunk.content
-            if len(content) > MAX_EMBEDDING_CHARS:
-                # Keep first part for context
-                content = content[: MAX_EMBEDDING_CHARS - 50] + "..."
-            texts.append(content)
+        # Pass full content — sentence-transformers tokenizes and truncates at the
+        # model's actual token limit (512 tokens ≈ 2000+ chars), so content beyond
+        # 512 chars is now included in the embedding instead of being discarded.
+        texts = [chunk.content for chunk in chunks]
 
         # Generate embeddings in batches
         for i in range(0, len(texts), batch_size):
@@ -88,9 +86,9 @@ class EmbeddingModel:
         """Generate embedding for search query with BGE prefix."""
         model = self._load_model()
 
-        # Truncate if too long
-        if len(query) > MAX_EMBEDDING_CHARS:
-            query = query[: MAX_EMBEDDING_CHARS - 3] + "..."
+        # Cap degenerate query inputs; model handles token truncation internally
+        if len(query) > MAX_QUERY_CHARS:
+            query = query[:MAX_QUERY_CHARS]
 
         # BGE models need query prefix for optimal retrieval
         prefixed_query = f"{BGE_QUERY_PREFIX}{query}"

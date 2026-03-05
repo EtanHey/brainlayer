@@ -1,13 +1,13 @@
 {
-  "storyOrder": ["BUG-005", "US-001", "US-002", "US-003", "US-004"],
-  "pending": ["US-003", "US-004"],
+  "storyOrder": ["BUG-005", "US-001", "US-002", "MP-003", "MP-004"],
+  "pending": ["MP-004"],
   "blocked": [],
-  "completed": ["BUG-005", "US-001", "US-002"],
+  "completed": ["BUG-005", "US-001", "US-002", "MP-003"],
   "stats": {
     "total": 5,
-    "completed": 3,
-    "pending": 2,
+    "completed": 4,
+    "pending": 1,
     "blocked": 0
   },
-  "nextStory": "US-003"
+  "nextStory": "MP-004"
 }
