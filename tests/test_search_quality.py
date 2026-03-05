@@ -9,7 +9,6 @@ BUG-005: detail='full' returns full content (not truncated to 1000 chars)
 All tests use tmp_path fixtures (isolated, no production DB).
 """
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch

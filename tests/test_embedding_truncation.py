@@ -12,20 +12,16 @@ These tests verify:
 """
 
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from brainlayer.embeddings import (
     MAX_QUERY_CHARS,
     EmbeddingModel,
-    embed_chunks,
-    embed_query,
 )
 from brainlayer.pipeline.chunk import Chunk
 from brainlayer.pipeline.classify import ContentType
-
 
 # ── Helpers ─────────────────────────────────────────────────────
 
