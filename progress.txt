@@ -18,6 +18,15 @@
 - CodeRabbit: skipped (repo not in allowed list)
 - All 726 tests pass
 
+## Iteration 3 - US-002: Post-RRF reranking with importance and recency boosting
+- Model: sonnet
+- Implementation was already complete from a prior session (search_repo.py lines 542-568)
+- Importance boost: 1.0 + importance/20 (range 1.0x to 1.5x for importance 0-10)
+- Recency boost: exponential decay, 30-day half-life, range 0.7x (old) to 1.0x (fresh)
+- Tests: 4 existing tests in TestPostRRFReranking; added 1 new test (test_reranking_preserves_normal_ordering)
+- CodeRabbit: skipped (repo not in allowed list)
+- 727 tests pass (2 skipped)
+
 ## Learnings
 - Python project (FastAPI + SQLite + FTS5)
 - Tests: pytest

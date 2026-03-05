@@ -389,6 +389,43 @@ class TestPostRRFReranking:
         )
         assert len(results["ids"][0]) >= 1
 
+    def test_reranking_preserves_normal_ordering(self, store, mock_embed):
+        """Reranking should not break ordering for strongly-relevant vs weakly-relevant results.
+
+        A chunk that is highly semantically relevant should still rank first even when
+        the other chunk has slightly higher importance. The boost is multiplicative on
+        RRF score, so a large RRF gap should dominate small importance differences.
+        """
+        # Strongly relevant chunk: same embedding as query, modest importance
+        emb_query = mock_embed("python async patterns")
+        _insert_chunk(
+            store,
+            "strong-match",
+            content="python async patterns and best practices",
+            importance=5.0,
+            created_at="2026-03-01T00:00:00",
+            embedding=emb_query,
+        )
+        # Weakly relevant chunk: very different embedding, slightly higher importance
+        emb_unrelated = mock_embed("javascript frontend css")
+        _insert_chunk(
+            store,
+            "weak-match",
+            content="javascript frontend css styling",
+            importance=7.0,
+            created_at="2026-03-01T00:00:00",
+            embedding=emb_unrelated,
+        )
+        results = store.hybrid_search(
+            query_embedding=emb_query,
+            query_text="python async patterns",
+            n_results=2,
+        )
+        ids = results["ids"][0]
+        assert len(ids) >= 1
+        # The strongly relevant chunk should still rank first
+        assert ids[0] == "strong-match", f"Expected strong-match first, got: {ids}"
+
 
 # ── Task 2: Entity-aware routing ────────────────────────────────────
 
