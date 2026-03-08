@@ -99,9 +99,9 @@ class TestCompactSearchDefault:
             }
         )
 
-        # Compact mode should not have verbose fields
+        # Compact mode should not have verbose fields (importance IS included now)
         assert "source_file" not in result
-        assert "importance" not in result
+        assert "importance" in result
         assert "content_type" not in result
         assert "tags" not in result
         assert "intent" not in result

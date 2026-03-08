@@ -46,7 +46,6 @@ from .search_handler import (
     _plan_links,
     _recall,
     _regression,
-    _search,
     _session_summary,
     _sessions,
     _stats,
@@ -924,7 +923,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
     elif name == "brainlayer_search":
         return await _with_timeout(
-            _search(
+            _brain_search(
                 query=arguments["query"],
                 project=arguments.get("project"),
                 content_type=arguments.get("content_type"),
@@ -936,6 +935,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 date_from=arguments.get("date_from"),
                 date_to=arguments.get("date_to"),
                 sentiment=arguments.get("sentiment"),
+                detail=arguments.get("detail", "compact"),
             )
         )
 

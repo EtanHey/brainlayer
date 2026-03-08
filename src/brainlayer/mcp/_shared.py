@@ -239,10 +239,10 @@ def _query_has_regression_signal(query: str) -> bool:
 def _build_compact_result(item: dict) -> dict:
     """Build compact search results — pointers for drill-down, not full content.
 
-    Returns: chunk_id, score, project, date, snippet (150 chars), summary.
+    Returns: chunk_id, score, project, date, snippet (150 chars), summary, importance.
     """
     result = {}
-    for key in ("chunk_id", "score", "project", "date", "summary"):
+    for key in ("chunk_id", "score", "project", "date", "summary", "importance"):
         if item.get(key) is not None:
             result[key] = item[key]
     content = item.get("content", "")

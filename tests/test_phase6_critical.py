@@ -391,13 +391,15 @@ class TestCompactFormatSize:
         assert "project" in compact
         assert "chunk_id" in compact
 
+        # importance is now included in compact format for relevance visibility
+        assert "importance" in compact
+
         # Verbose fields dropped
         for dropped in (
             "content_type",
             "tags",
             "intent",
             "source_file",
-            "importance",
             "session_summary",
             "session_outcome",
             "session_quality",

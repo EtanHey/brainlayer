@@ -346,7 +346,7 @@ class KGMixin:
     ) -> List[Dict[str, Any]]:
         """Search entities using FTS5 full-text search."""
         cursor = self._read_cursor()
-        fts_query = _escape_fts5_query(query)
+        fts_query = _escape_fts5_query(query, match_mode="or")
 
         if entity_type:
             rows = list(
