@@ -264,6 +264,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 SELECT new.id, value FROM json_each(new.tags);
             END
         """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_update_clear")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunk_tags_update_clear
+            AFTER UPDATE OF tags ON chunks
+            WHEN new.tags IS NULL OR json_valid(new.tags) = 0 BEGIN
+                DELETE FROM chunk_tags WHERE chunk_id = new.id;
+            END
+        """)
         cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_delete")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunk_tags_delete AFTER DELETE ON chunks BEGIN
@@ -271,9 +279,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             END
         """)
 
-        # Backfill chunk_tags from existing data (only if empty — idempotent)
-        tag_count = cursor.execute("SELECT COUNT(*) FROM chunk_tags").fetchone()[0]
-        if tag_count == 0:
+        # Backfill chunk_tags from existing data (detects partial fills from crashes)
+        tagged_chunks = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND json_valid(tags) = 1"
+        ).fetchone()[0]
+        backfilled_chunks = cursor.execute(
+            "SELECT COUNT(DISTINCT chunk_id) FROM chunk_tags"
+        ).fetchone()[0]
+        if tagged_chunks > 0 and backfilled_chunks < tagged_chunks:
             cursor.execute("""
                 INSERT OR IGNORE INTO chunk_tags(chunk_id, tag)
                 SELECT c.id, j.value FROM chunks c, json_each(c.tags) j
