@@ -66,7 +66,7 @@ class SearchMixin:
                 filter_params.append(language_filter)
             if tag_filter:
                 where_clauses.append(
-                    "c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
+                    "c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)"
                 )
                 filter_params.append(tag_filter)
             if intent_filter:
@@ -135,7 +135,7 @@ class SearchMixin:
                 params.append(language_filter)
             if tag_filter:
                 where_clauses.append(
-                    "tags IS NOT NULL AND json_valid(tags) = 1 AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
+                    "id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)"
                 )
                 params.append(tag_filter)
             if intent_filter:
@@ -403,7 +403,7 @@ class SearchMixin:
             fts_params.append(source_filter)
         if tag_filter:
             fts_extra.append(
-                "AND c.tags IS NOT NULL AND json_valid(c.tags) = 1 AND EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)"
+                "AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)"
             )
             fts_params.append(tag_filter)
         if intent_filter:

@@ -111,7 +111,6 @@ class TestCompactFormat:
             "tags",
             "intent",
             "source_file",
-            "importance",
             "session_summary",
             "session_outcome",
             "session_quality",

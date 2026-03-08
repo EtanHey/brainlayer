@@ -32,12 +32,15 @@ def _safe_json_loads(value: Any) -> list:
         return []
 
 
-def _escape_fts5_query(query: str) -> str:
+def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
     """Escape a query string for FTS5 MATCH.
 
     FTS5 treats certain characters as syntax: ., *, ^, ", (, ), +, -, NOT, AND, OR, NEAR.
-    We wrap each word in double quotes so they're treated as literal terms,
-    joined with OR for lenient matching (any term matches).
+    We wrap each word in double quotes so they're treated as literal terms.
+
+    match_mode:
+        "auto" — AND for ≤3 terms (precision), OR for 4+ (recall via RRF).
+        "or"   — always OR (for entity search where any term should match).
     Empty/whitespace-only queries return a wildcard match-all.
     """
     if not query or not query.strip():
@@ -49,9 +52,14 @@ def _escape_fts5_query(query: str) -> str:
         clean = word.replace('"', "")
         if clean:
             terms.append(f'"{clean}"')
-    # Use OR between terms so matching is lenient (any term matches)
-    # Without OR, FTS5 defaults to AND (all terms must be present)
-    return " OR ".join(terms) if terms else "*"
+    if not terms:
+        return "*"
+    if match_mode == "or":
+        joiner = " OR "
+    else:
+        # Short queries (≤3 terms): AND for precision; 4+: OR for recall
+        joiner = " " if len(terms) <= 3 else " OR "
+    return joiner.join(terms)
 
 
 def serialize_f32(vector: List[float]) -> bytes:

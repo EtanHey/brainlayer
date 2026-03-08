@@ -172,6 +172,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_created", "created_at"),
             ("idx_chunks_sentiment", "sentiment_label"),
             ("idx_chunks_project", "project"),
+            ("idx_chunks_content_type", "content_type"),
+            ("idx_chunks_language", "language"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
 
@@ -232,6 +234,51 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 VALUES (new.content, new.summary, new.tags, new.resolved_query, new.id);
             END
         """)
+
+        # ── Tag junction table (replaces json_each scanning) ──────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_tags (
+                chunk_id TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY (chunk_id, tag)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag)")
+
+        # Sync triggers: keep chunk_tags in sync with chunks.tags JSON
+        cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_insert")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunk_tags_insert AFTER INSERT ON chunks
+            WHEN new.tags IS NOT NULL AND json_valid(new.tags) = 1 BEGIN
+                INSERT OR IGNORE INTO chunk_tags(chunk_id, tag)
+                SELECT new.id, value FROM json_each(new.tags);
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_update")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunk_tags_update
+            AFTER UPDATE OF tags ON chunks
+            WHEN new.tags IS NOT NULL AND json_valid(new.tags) = 1 BEGIN
+                DELETE FROM chunk_tags WHERE chunk_id = new.id;
+                INSERT OR IGNORE INTO chunk_tags(chunk_id, tag)
+                SELECT new.id, value FROM json_each(new.tags);
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_delete")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunk_tags_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunk_tags WHERE chunk_id = old.id;
+            END
+        """)
+
+        # Backfill chunk_tags from existing data (only if empty — idempotent)
+        tag_count = cursor.execute("SELECT COUNT(*) FROM chunk_tags").fetchone()[0]
+        if tag_count == 0:
+            cursor.execute("""
+                INSERT OR IGNORE INTO chunk_tags(chunk_id, tag)
+                SELECT c.id, j.value FROM chunks c, json_each(c.tags) j
+                WHERE c.tags IS NOT NULL AND json_valid(c.tags) = 1
+            """)
 
         # Session context table
         cursor.execute("""
