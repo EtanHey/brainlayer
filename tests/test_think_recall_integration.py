@@ -252,7 +252,7 @@ class TestMCPToolCount:
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        assert len(tools) == 8
+        assert len(tools) == 9
 
     def test_consolidated_tools_registered(self):
         """brain_search, brain_store, brain_recall are registered."""
