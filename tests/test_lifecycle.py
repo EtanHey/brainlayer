@@ -23,28 +23,34 @@ sys.path.insert(0, str(HOOKS_DIR))
 class TestParseEtime:
     def test_seconds_only(self):
         from cleanup_stale_mcp import parse_etime
+
         assert parse_etime("00:45") == 45
 
     def test_minutes_seconds(self):
         from cleanup_stale_mcp import parse_etime
+
         assert parse_etime("05:30") == 330
 
     def test_hours_minutes_seconds(self):
         from cleanup_stale_mcp import parse_etime
+
         assert parse_etime("02:30:00") == 9000
 
     def test_days_hours_minutes_seconds(self):
         from cleanup_stale_mcp import parse_etime
+
         assert parse_etime("1-12:00:00") == 129600
 
     def test_zero(self):
         from cleanup_stale_mcp import parse_etime
+
         assert parse_etime("00:00") == 0
 
 
 class TestClassifyStale:
     def test_orphan_ppid_1(self):
         from cleanup_stale_mcp import classify_stale
+
         procs = [{"pid": 100, "ppid": 1, "etime": "00:30", "command": "brainlayer-mcp", "age_seconds": 30}]
         stale, active = classify_stale(procs)
         assert len(stale) == 1
@@ -53,6 +59,7 @@ class TestClassifyStale:
 
     def test_young_process_with_live_parent(self):
         from cleanup_stale_mcp import classify_stale
+
         procs = [{"pid": 100, "ppid": 200, "etime": "00:30", "command": "brainlayer-mcp", "age_seconds": 30}]
         stale, active = classify_stale(procs)
         assert len(stale) == 0
@@ -61,10 +68,8 @@ class TestClassifyStale:
     @patch("cleanup_stale_mcp.parent_has_active_session", return_value=False)
     def test_old_process_idle_parent(self, mock_active):
         from cleanup_stale_mcp import classify_stale
-        procs = [{
-            "pid": 100, "ppid": 200, "etime": "07:00:00",
-            "command": "brainlayer-mcp", "age_seconds": 25200
-        }]
+
+        procs = [{"pid": 100, "ppid": 200, "etime": "07:00:00", "command": "brainlayer-mcp", "age_seconds": 25200}]
         stale, active = classify_stale(procs)
         assert len(stale) == 1
         assert "stale" in stale[0]["reason"]
@@ -72,10 +77,8 @@ class TestClassifyStale:
     @patch("cleanup_stale_mcp.parent_has_active_session", return_value=True)
     def test_old_process_active_parent(self, mock_active):
         from cleanup_stale_mcp import classify_stale
-        procs = [{
-            "pid": 100, "ppid": 200, "etime": "07:00:00",
-            "command": "brainlayer-mcp", "age_seconds": 25200
-        }]
+
+        procs = [{"pid": 100, "ppid": 200, "etime": "07:00:00", "command": "brainlayer-mcp", "age_seconds": 25200}]
         stale, active = classify_stale(procs)
         assert len(stale) == 0
         assert len(active) == 1
@@ -91,6 +94,7 @@ class TestGetMcpProcesses:
             "  300   150       01:00 /usr/bin/node server.js\n"
         )
         from cleanup_stale_mcp import get_mcp_processes
+
         procs = get_mcp_processes()
         assert len(procs) == 2
         assert procs[0]["pid"] == 100
@@ -99,6 +103,7 @@ class TestGetMcpProcesses:
     @patch("cleanup_stale_mcp.subprocess.check_output", side_effect=subprocess.SubprocessError)
     def test_handles_ps_failure(self, mock_ps):
         from cleanup_stale_mcp import get_mcp_processes
+
         assert get_mcp_processes() == []
 
 
@@ -106,6 +111,7 @@ class TestKillProcesses:
     @patch("cleanup_stale_mcp.os.kill")
     def test_dry_run_does_not_kill(self, mock_kill):
         from cleanup_stale_mcp import kill_processes
+
         stale = [{"pid": 100, "reason": "orphaned"}]
         killed = kill_processes(stale, dry_run=True)
         mock_kill.assert_not_called()
@@ -114,6 +120,7 @@ class TestKillProcesses:
     @patch("cleanup_stale_mcp.os.kill")
     def test_kill_sends_sigterm(self, mock_kill):
         from cleanup_stale_mcp import kill_processes
+
         stale = [{"pid": 100, "reason": "orphaned"}]
         killed = kill_processes(stale, dry_run=False)
         mock_kill.assert_called_once_with(100, signal.SIGTERM)
@@ -122,6 +129,7 @@ class TestKillProcesses:
     @patch("cleanup_stale_mcp.os.kill", side_effect=ProcessLookupError)
     def test_handles_already_dead(self, mock_kill):
         from cleanup_stale_mcp import kill_processes
+
         stale = [{"pid": 100, "reason": "orphaned"}]
         killed = kill_processes(stale, dry_run=False)
         assert killed == 0
@@ -149,6 +157,7 @@ class TestWalCheckpoint:
         wal_path = db_path + "-wal"
 
         from wal_checkpoint import checkpoint
+
         busy, log_pages, checkpointed = checkpoint(db_path)
         conn2.close()
         # After checkpoint, should succeed
@@ -156,6 +165,7 @@ class TestWalCheckpoint:
 
     def test_format_size(self):
         from wal_checkpoint import format_size
+
         assert format_size(500) == "500.0B"
         assert format_size(1024) == "1.0KB"
         assert format_size(1024 * 1024) == "1.0MB"
@@ -163,6 +173,7 @@ class TestWalCheckpoint:
 
     def test_get_wal_size_missing(self):
         from wal_checkpoint import get_wal_size
+
         assert get_wal_size("/nonexistent/path.db") == 0
 
     def test_get_wal_size_exists(self, tmp_path):
@@ -172,6 +183,7 @@ class TestWalCheckpoint:
         with open(wal_path, "wb") as f:
             f.write(b"x" * 1024)
         from wal_checkpoint import get_wal_size
+
         assert get_wal_size(db_path) == 1024
 
 
@@ -182,9 +194,8 @@ class TestSessionCleanupHook:
     @staticmethod
     def _load_hook():
         import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "session_cleanup", HOOKS_DIR / "session-cleanup.py"
-        )
+
+        spec = importlib.util.spec_from_file_location("session_cleanup", HOOKS_DIR / "session-cleanup.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
