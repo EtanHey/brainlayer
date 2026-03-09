@@ -1,0 +1,361 @@
+{
+  "search": {
+    "run_date": "2026-03-09",
+    "db": "/Users/etanheyman/.local/share/zikaron/zikaron.db",
+    "cases": [
+      {
+        "name": "entity_avi_simon",
+        "query": "Avi Simon platform invites schedule",
+        "expected_snippets": [
+          "avi simon",
+          "6pm",
+          "6PM"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-82fa7ad5a3614d46",
+        "top_snippet": "Avi Simon \u2014 6PM Platform Tech Advisor Call (Feb 24, 2026)\n\nContext: 60-min tech screen call with Avi"
+      },
+      {
+        "name": "entity_fedor",
+        "query": "Fedor iOS build handover GitHub",
+        "expected_snippets": [
+          "fedor",
+          "Fedor",
+          "iOS"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-e731b63ab50c4769",
+        "top_snippet": "DECISION: MeHayom iOS build ownership (March 10 2026): Fedor submits iOS build to App Store review, "
+      },
+      {
+        "name": "entity_yuval_mehayom",
+        "query": "MeHayom Yuval sprint payment",
+        "expected_snippets": [
+          "yuval",
+          "Yuval",
+          "MeHayom"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-6494601725414371",
+        "top_snippet": "[2026-03-10] MeHayom Sprint 1: First 50% payment (2,100 NIS) landed in bank. Yuval added Etan to App"
+      },
+      {
+        "name": "tag_decision",
+        "query": "important decision",
+        "expected_snippets": [
+          "decision",
+          "DECISION",
+          "chose"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": "decision",
+        "passed": true,
+        "actual_rank": 2,
+        "top_chunk_id": "manual-0822d7551cde4362",
+        "top_snippet": "6PM Research Results Summary (Feb 28, 3 deep research papers):\n\nEXTRACTION OPTIMIZATION:\n- Tool desc"
+      },
+      {
+        "name": "tag_voicelayer_scoped",
+        "query": "architecture decision voicelayer",
+        "expected_snippets": [
+          "VoiceLayer",
+          "voice"
+        ],
+        "top_n": 3,
+        "project": "voicelayer",
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-a5b9d46fcc0b484a",
+        "top_snippet": "VoiceLayer architecture BUG: FlowBar is the client, MCP servers are the servers \u2014 backwards. Each MC"
+      },
+      {
+        "name": "recency_milestone",
+        "query": "measurement mandate evals before improvements",
+        "expected_snippets": [
+          "measurement",
+          "evals",
+          "baseline"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-1a0c8f70a35d4ac4",
+        "top_snippet": "MEASUREMENT MANDATE (March 9, 2026): All improvements must be measured before and after. No \"it feel"
+      },
+      {
+        "name": "hebrew_style_correction",
+        "query": "em dashes Hebrew writing style correction freelance",
+        "expected_snippets": [
+          "hebrew",
+          "Hebrew",
+          "em dash"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-83d0d8baa2c549b4",
+        "top_snippet": "ETAN'S HEBREW WRITING STYLE \u2014 Freelance/WhatsApp (extracted from iterative corrections, March 10 202"
+      },
+      {
+        "name": "cross_fts5_architecture",
+        "query": "FTS5 search quality gaps summary tags indexed",
+        "expected_snippets": [
+          "FTS5",
+          "fts5",
+          "summary"
+        ],
+        "top_n": 3,
+        "project": "brainlayer",
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-17ea700f44794d55",
+        "top_snippet": "BrainLayer Search Pipeline Gaps (from Cursor audit Mar 2):\n1. FTS5 only indexes chunks.content \u2014 sum"
+      },
+      {
+        "name": "cross_golems_monorepo",
+        "query": "golems monorepo architecture golem-powers CLI",
+        "expected_snippets": [
+          "golems",
+          "golem",
+          "monorepo"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "Do a VERY THOROUGH exploration of the Golems monorepo automation infrastructure. I need to understan"
+      },
+      {
+        "name": "decision_voicelayer_rule",
+        "query": "voicelayer local CLI voice tools architecture rule",
+        "expected_snippets": [
+          "local",
+          "CLI",
+          "VoiceLayer"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "## Summary of Key Findings\n\n### 1. **Async Voice Architecture Research** (first 100 lines)\nThe hybri"
+      },
+      {
+        "name": "decision_brainlayer_v3",
+        "query": "BrainLayer v3 architecture decisions sqlite-vec",
+        "expected_snippets": [
+          "BrainLayer",
+          "architecture",
+          "v3"
+        ],
+        "top_n": 3,
+        "project": "brainlayer",
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-705bf11e2e7c436a",
+        "top_snippet": "BrainLayer v3 Plan \u2014 Major Architecture Decisions (Feb 24, 2026):\n\n1. VISION: BrainLayer becomes the"
+      },
+      {
+        "name": "memory_whoop",
+        "query": "remember when we discussed WHOOP recovery score",
+        "expected_snippets": [
+          "whoop",
+          "Whoop",
+          "WHOOP"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "\u23fa Bash(TOKEN=$(python3 -c \"import json; print(json.load(open('/tmp/whoop-tokens.json'))['access_toke"
+      },
+      {
+        "name": "memory_coach_schedule",
+        "query": "morning schedule wake up huberman protocol",
+        "expected_snippets": [
+          "schedule",
+          "morning",
+          "huberman"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "   - **`/Users/etanheyman/Gits/golems/skills/golem-powers/coach/workflows/health.md`** (REWRITTEN th"
+      },
+      {
+        "name": "mined_search_quality",
+        "query": "brainlayer search quality evaluation evals measurement mandate",
+        "expected_snippets": [
+          "measurement",
+          "evals",
+          "baseline"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-1a0c8f70a35d4ac4",
+        "top_snippet": "MEASUREMENT MANDATE (March 9, 2026): All improvements must be measured before and after. No \"it feel"
+      },
+      {
+        "name": "mined_enrichment_backend",
+        "query": "enrichment MLX Groq backend progress stats chunks",
+        "expected_snippets": [
+          "enrichment",
+          "MLX",
+          "Groq"
+        ],
+        "top_n": 3,
+        "project": "brainlayer",
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "manual-0717f7968aff4c5c",
+        "top_snippet": "Switched enrichment from MLX to Groq (March 2 2026). Reason: MLX server (Qwen2.5-Coder-14B, ~5GB RAM"
+      },
+      {
+        "name": "mined_6pm_decisions",
+        "query": "6pm scheduling architecture confirmed decisions",
+        "expected_snippets": [
+          "6pm",
+          "6PM",
+          "scheduling"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "You are 6pmClaude \u2014 working on the 6PM blind scheduling system.\n\n## First: Load Context\n\n```\nbrain_s"
+      },
+      {
+        "name": "mined_cursor_cli",
+        "query": "cursor CLI agent versus cursor IDE difference",
+        "expected_snippets": [
+          "cursor",
+          "Cursor",
+          "CLI"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "Perfect! Now I have comprehensive information. Let me compile a detailed research report for you:\n\n#"
+      },
+      {
+        "name": "gap_auth_cross_project",
+        "query": "authentication JWT tokens security implementation",
+        "expected_snippets": [
+          "auth",
+          "JWT",
+          "token"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": true,
+        "actual_rank": 1,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "from brainlayer import brain\nresult = brain.search(\"how did I implement auth\")\nbrain.store(\"Decided "
+      },
+      {
+        "name": "gap_hebrew_semantic",
+        "query": "\u05dc\u05d5\u05d7 \u05d6\u05de\u05e0\u05d9\u05dd \u05d1\u05d5\u05e7\u05e8 \u05e7\u05d5\u05d3",
+        "expected_snippets": [
+          "\u05dc\u05d5\u05d7 \u05d6\u05de\u05e0\u05d9\u05dd",
+          "schedule",
+          "morning"
+        ],
+        "top_n": 3,
+        "project": null,
+        "tag": null,
+        "passed": false,
+        "actual_rank": null,
+        "top_chunk_id": "/Users/etanheyman/.claude/projects/-Users-etanheym",
+        "top_snippet": "\u05d4\u05d9\u05d9, \u05d0\u05e0\u05d9 \u05de\u05db\u05d9\u05df \u05d0\u05ea \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05d4\u05d6\u05d4 \u05d1\u05e9\u05d1\u05d9\u05dc \u05d0\u05de\u05d0 \u05e9\u05dc\u05d9 \u05d5\u05d1\u05df \u05d6\u05d5\u05d2\u05d4. \u05d4\u05dd \u05d8\u05e1\u05d9\u05dd \u05dc\u05d0\u05dc\u05d1\u05e0\u05d9\u05d4.\n\n\u05d9\u05e9 \u05dc\u05d4\u05dd \u05db\u05d1\u05e8 \u05db\u05de\u05d4 \u05d3\u05d1\u05e8\u05d9\u05dd \u05de\u05ea\u05d5\u05db\u05e0\u05e0\u05d9\u05dd"
+      }
+    ],
+    "pass_count": 18,
+    "total": 19,
+    "score_pct": 94.7
+  },
+  "hook": {
+    "section": "hook_entity_injection",
+    "pass_count": 4,
+    "total": 4,
+    "score_pct": 100.0,
+    "cases": [
+      {
+        "name": "hook_entity_avi_simon",
+        "query": "What are Avi Simon's meeting preferences?",
+        "expected": [
+          "[entity:",
+          "entity: avi simon",
+          "person"
+        ],
+        "passed": true,
+        "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
+      },
+      {
+        "name": "hook_entity_fedor",
+        "query": "What is Fedor working on with GitHub access?",
+        "expected": [
+          "[entity:",
+          "entity: fedor",
+          "person"
+        ],
+        "passed": true,
+        "output_preview": "[Entity: Fedor \u2014 person]\n- [? (orchestrator)] coachClaude session transcript \u2014 March 9-10, 2026. ~/Gits/golems/packages/coach | ## Key Events: | ### 1"
+      },
+      {
+        "name": "hook_entity_first_line",
+        "query": "Tell me about Avi Simon and his 6PM project",
+        "expected": [
+          "[entity"
+        ],
+        "passed": true,
+        "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
+      },
+      {
+        "name": "hook_no_entity_generic",
+        "query": "How does authentication work in Python?",
+        "expected": null,
+        "passed": true,
+        "output_preview": "[BrainLayer auto] Memories matching your prompt:\n- [2026-02-19 imp:7 (golems)] Also, I got the authentication application successfully set up on PyPi."
+      }
+    ]
+  },
+  "combined_score_pct": 95.7
+}

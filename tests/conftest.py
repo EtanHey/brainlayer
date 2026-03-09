@@ -5,6 +5,14 @@ import os
 import pytest
 
 
+def pytest_configure(config):
+    """Register custom pytest marks."""
+    config.addinivalue_line(
+        "markers",
+        "live: mark test as requiring a live production DB (skipped in CI if DB absent)",
+    )
+
+
 @pytest.fixture
 def test_user() -> str:
     """Username for path-based tests.
