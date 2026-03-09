@@ -423,8 +423,8 @@ class TestKnownGaps:
         # Should NOT return Albania trip planning
         albania_in_results = any("אלבניה" in doc for doc in docs[:3])
         assert not albania_in_results, (
-            f"Hebrew query returned Albania trip content instead of schedule. "
-            f"This is the gap to fix."
+            "Hebrew query returned Albania trip content instead of schedule. "
+            "This is the gap to fix."
         )
 
 
@@ -436,7 +436,6 @@ def run_baseline() -> dict:
 
     Called by scripts/run_evals.py to generate eval_baselines.json.
     """
-    import os
     import sys
 
     src = Path(__file__).parent.parent / "src"
@@ -671,7 +670,7 @@ if __name__ == "__main__":
     baseline = run_baseline()
     hook_baseline = run_hook_baseline()
 
-    print(f"\n=== brain_search quality ===")
+    print("\n=== brain_search quality ===")
     print(f"Baseline Score: {baseline['pass_count']}/{baseline['total']} ({baseline['score_pct']}%)")
     print(f"Run date: {baseline['run_date']}")
     for case in baseline["cases"]:
@@ -681,7 +680,7 @@ if __name__ == "__main__":
         if not case["passed"]:
             print(f"         top: {case['top_snippet'][:70]!r}")
 
-    print(f"\n=== hook entity injection ===")
+    print("\n=== hook entity injection ===")
     print(f"Baseline Score: {hook_baseline['pass_count']}/{hook_baseline['total']} ({hook_baseline['score_pct']}%)")
     for case in hook_baseline["cases"]:
         status = "✓ PASS" if case["passed"] else "✗ FAIL"
