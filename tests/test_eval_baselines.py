@@ -189,8 +189,7 @@ class TestRecency:
                     recent_found = True
                     break
         assert recent_found, (
-            f"Expected at least one chunk from 2026-03-09/10 in top 5 for 'today' query. "
-            f"Got chunk_ids: {ids[:5]}"
+            f"Expected at least one chunk from 2026-03-09/10 in top 5 for 'today' query. Got chunk_ids: {ids[:5]}"
         )
 
     def test_recent_milestone_findable(self, live_store, live_model):
@@ -219,8 +218,7 @@ class TestHebrewFTS:
         # Check that results contain Hebrew characters
         hebrew_found = any(any("\u0590" <= c <= "\u05ea" for c in doc) for doc in docs[:3])
         assert hebrew_found, (
-            f"Expected Hebrew content in top 3 results for Hebrew query. "
-            f"Got: {[d[:60] for d in docs[:3]]}"
+            f"Expected Hebrew content in top 3 results for Hebrew query. Got: {[d[:60] for d in docs[:3]]}"
         )
 
     def test_hebrew_style_correction_findable(self, live_store, live_model):
@@ -288,9 +286,7 @@ class TestDecisionRetrieval:
             docs,
             ["local", "CLI", "architecture", "VoiceLayer", "voicelayer", "voice"],
             top_n=3,
-        ), (
-            f"Expected VoiceLayer architecture rule in top 3, got: {[d[:60] for d in docs[:3]]}"
-        )
+        ), f"Expected VoiceLayer architecture rule in top 3, got: {[d[:60] for d in docs[:3]]}"
 
     def test_brainlayer_decision_findable(self, live_store, live_model):
         """BrainLayer v3 major architecture decisions should be findable."""
@@ -414,7 +410,7 @@ class TestKnownGaps:
         # Expect actual auth implementation, not brainlayer internals
         assert _passes(docs, ["auth", "JWT", "token", "security"], top_n=3) and not _passes(
             docs, ["hybrid_search", "vector_store", "VectorStore"], top_n=2
-        ), (f"Expected auth patterns, got brainlayer internals: {[d[:60] for d in docs[:3]]}")
+        ), f"Expected auth patterns, got brainlayer internals: {[d[:60] for d in docs[:3]]}"
 
     @pytest.mark.xfail(reason="Hebrew semantic: returns unrelated Hebrew content (Albania trip)")
     def test_hebrew_schedule_semantic_accuracy(self, live_store, live_model):
@@ -423,8 +419,7 @@ class TestKnownGaps:
         # Should NOT return Albania trip planning
         albania_in_results = any("אלבניה" in doc for doc in docs[:3])
         assert not albania_in_results, (
-            "Hebrew query returned Albania trip content instead of schedule. "
-            "This is the gap to fix."
+            "Hebrew query returned Albania trip content instead of schedule. This is the gap to fix."
         )
 
 
@@ -460,25 +455,116 @@ def run_baseline() -> dict:
         ("tag_decision", "important decision", ["decision", "DECISION", "chose", "decided"], 3, None, "decision"),
         ("tag_voicelayer_scoped", "architecture decision voicelayer", ["VoiceLayer", "voice"], 3, "voicelayer", None),
         # Recency
-        ("recency_milestone", "measurement mandate evals before improvements", ["measurement", "evals", "baseline"], 3, None, None),
+        (
+            "recency_milestone",
+            "measurement mandate evals before improvements",
+            ["measurement", "evals", "baseline"],
+            3,
+            None,
+            None,
+        ),
         # Hebrew FTS
-        ("hebrew_style_correction", "em dashes Hebrew writing style correction freelance", ["hebrew", "Hebrew", "em dash", "style"], 3, None, None),
+        (
+            "hebrew_style_correction",
+            "em dashes Hebrew writing style correction freelance",
+            ["hebrew", "Hebrew", "em dash", "style"],
+            3,
+            None,
+            None,
+        ),
         # Cross-project
-        ("cross_fts5_architecture", "FTS5 search quality gaps summary tags indexed", ["FTS5", "fts5", "summary", "gaps"], 3, "brainlayer", None),
-        ("cross_golems_monorepo", "golems monorepo architecture golem-powers CLI", ["golems", "golem", "monorepo"], 3, None, None),
+        (
+            "cross_fts5_architecture",
+            "FTS5 search quality gaps summary tags indexed",
+            ["FTS5", "fts5", "summary", "gaps"],
+            3,
+            "brainlayer",
+            None,
+        ),
+        (
+            "cross_golems_monorepo",
+            "golems monorepo architecture golem-powers CLI",
+            ["golems", "golem", "monorepo"],
+            3,
+            None,
+            None,
+        ),
         # Decision retrieval
-        ("decision_voicelayer_rule", "voicelayer local CLI voice tools architecture rule", ["local", "CLI", "VoiceLayer", "voice"], 3, None, None),
-        ("decision_brainlayer_v3", "BrainLayer v3 architecture decisions sqlite-vec", ["BrainLayer", "architecture", "v3", "sqlite"], 3, "brainlayer", None),
+        (
+            "decision_voicelayer_rule",
+            "voicelayer local CLI voice tools architecture rule",
+            ["local", "CLI", "VoiceLayer", "voice"],
+            3,
+            None,
+            None,
+        ),
+        (
+            "decision_brainlayer_v3",
+            "BrainLayer v3 architecture decisions sqlite-vec",
+            ["BrainLayer", "architecture", "v3", "sqlite"],
+            3,
+            "brainlayer",
+            None,
+        ),
         # Memory retrieval
-        ("memory_whoop", "remember when we discussed WHOOP recovery score", ["whoop", "Whoop", "WHOOP", "recovery"], 3, None, None),
-        ("memory_coach_schedule", "morning schedule wake up huberman protocol", ["schedule", "morning", "huberman", "Huberman", "coach"], 3, None, None),
+        (
+            "memory_whoop",
+            "remember when we discussed WHOOP recovery score",
+            ["whoop", "Whoop", "WHOOP", "recovery"],
+            3,
+            None,
+            None,
+        ),
+        (
+            "memory_coach_schedule",
+            "morning schedule wake up huberman protocol",
+            ["schedule", "morning", "huberman", "Huberman", "coach"],
+            3,
+            None,
+            None,
+        ),
         # Mined from logs
-        ("mined_search_quality", "brainlayer search quality evaluation evals measurement mandate", ["measurement", "evals", "baseline", "quality"], 3, None, None),
-        ("mined_enrichment_backend", "enrichment MLX Groq backend progress stats chunks", ["enrichment", "MLX", "Groq", "backend"], 3, "brainlayer", None),
-        ("mined_6pm_decisions", "6pm scheduling architecture confirmed decisions", ["6pm", "6PM", "scheduling", "architecture"], 3, None, None),
-        ("mined_cursor_cli", "cursor CLI agent versus cursor IDE difference", ["cursor", "Cursor", "CLI", "IDE"], 3, None, None),
+        (
+            "mined_search_quality",
+            "brainlayer search quality evaluation evals measurement mandate",
+            ["measurement", "evals", "baseline", "quality"],
+            3,
+            None,
+            None,
+        ),
+        (
+            "mined_enrichment_backend",
+            "enrichment MLX Groq backend progress stats chunks",
+            ["enrichment", "MLX", "Groq", "backend"],
+            3,
+            "brainlayer",
+            None,
+        ),
+        (
+            "mined_6pm_decisions",
+            "6pm scheduling architecture confirmed decisions",
+            ["6pm", "6PM", "scheduling", "architecture"],
+            3,
+            None,
+            None,
+        ),
+        (
+            "mined_cursor_cli",
+            "cursor CLI agent versus cursor IDE difference",
+            ["cursor", "Cursor", "CLI", "IDE"],
+            3,
+            None,
+            None,
+        ),
         # Known gaps (expected to fail at baseline)
-        ("gap_auth_cross_project", "authentication JWT tokens security implementation", ["auth", "JWT", "token"], 3, None, None),
+        (
+            "gap_auth_cross_project",
+            "authentication JWT tokens security implementation",
+            ["auth", "JWT", "token"],
+            3,
+            None,
+            None,
+        ),
         ("gap_hebrew_semantic", "לוח זמנים בוקר קוד", ["לוח זמנים", "schedule", "morning"], 3, None, None),
     ]
 
@@ -563,8 +649,10 @@ class TestPromptHookEntityInjection:
         """Hook should detect 'Avi Simon' as a known entity and inject entity label."""
         output = self._call_hook("What are Avi Simon's meeting preferences?")
         # After Phase A: output should mention entity type or entity header
-        assert "[entity:" in output.lower() or "entity: avi simon" in output.lower() or (
-            "avi simon" in output.lower() and "person" in output.lower()
+        assert (
+            "[entity:" in output.lower()
+            or "entity: avi simon" in output.lower()
+            or ("avi simon" in output.lower() and "person" in output.lower())
         ), (
             f"Expected entity injection for 'Avi Simon' in hook output. "
             f"This is the Phase A gap (baseline = FAIL).\n"
@@ -574,8 +662,10 @@ class TestPromptHookEntityInjection:
     def test_entity_detected_fedor(self):
         """Hook should detect 'Fedor' as a known entity and inject entity label."""
         output = self._call_hook("What is Fedor working on with GitHub access?")
-        assert "[entity:" in output.lower() or "entity: fedor" in output.lower() or (
-            "fedor" in output.lower() and "person" in output.lower()
+        assert (
+            "[entity:" in output.lower()
+            or "entity: fedor" in output.lower()
+            or ("fedor" in output.lower() and "person" in output.lower())
         ), (
             f"Expected entity injection for 'Fedor' in hook output. "
             f"Phase A gap (baseline = FAIL).\n"
@@ -618,19 +708,25 @@ def run_hook_baseline() -> dict:
         r = subprocess.run(
             ["python3", str(hook_path)],
             input=json.dumps({"prompt": prompt}),
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return r.stdout
 
     hook_cases = [
-        ("hook_entity_avi_simon", "What are Avi Simon's meeting preferences?",
-         ["[entity:", "entity: avi simon", "person"]),
-        ("hook_entity_fedor", "What is Fedor working on with GitHub access?",
-         ["[entity:", "entity: fedor", "person"]),
-        ("hook_entity_first_line", "Tell me about Avi Simon and his 6PM project",
-         ["[entity"]),  # entity header must be first line
-        ("hook_no_entity_generic", "How does authentication work in Python?",
-         None),  # None = expect entity NOT present
+        (
+            "hook_entity_avi_simon",
+            "What are Avi Simon's meeting preferences?",
+            ["[entity:", "entity: avi simon", "person"],
+        ),
+        ("hook_entity_fedor", "What is Fedor working on with GitHub access?", ["[entity:", "entity: fedor", "person"]),
+        (
+            "hook_entity_first_line",
+            "Tell me about Avi Simon and his 6PM project",
+            ["[entity"],
+        ),  # entity header must be first line
+        ("hook_no_entity_generic", "How does authentication work in Python?", None),  # None = expect entity NOT present
     ]
 
     cases = []
@@ -645,13 +741,15 @@ def run_hook_baseline() -> dict:
         else:
             passed = any(e.lower() in output_lower for e in expected)
 
-        cases.append({
-            "name": name,
-            "query": prompt,
-            "expected": expected,
-            "passed": passed,
-            "output_preview": output[:150],
-        })
+        cases.append(
+            {
+                "name": name,
+                "query": prompt,
+                "expected": expected,
+                "passed": passed,
+                "output_preview": output[:150],
+            }
+        )
         if passed:
             pass_count += 1
 
@@ -692,8 +790,8 @@ if __name__ == "__main__":
         "search": baseline,
         "hook": hook_baseline,
         "combined_score_pct": round(
-            (baseline["pass_count"] + hook_baseline["pass_count"])
-            / (baseline["total"] + hook_baseline["total"]) * 100, 1
+            (baseline["pass_count"] + hook_baseline["pass_count"]) / (baseline["total"] + hook_baseline["total"]) * 100,
+            1,
         ),
     }
     print(f"\nCombined: {combined['combined_score_pct']}%")
