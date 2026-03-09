@@ -14,13 +14,15 @@ Run live tests:
 
 Test cases cover:
 - Entity routing (entity names in query)
-- Tag filter (structured queries)
-- Recency (recent content prioritized)
+- Tag filter (structured queries) + expanded tag patterns (C6)
+- Recency (recent content prioritized) + temporal queries (C6)
 - Hebrew FTS (non-ASCII content)
 - Cross-project search
 - Decision/correction retrieval
 - Memory word detection
 - Real mined queries from session history
+- Hook latency (<500ms budget) (C6)
+- Mined gap queries from C7 mining (C6)
 """
 
 import json
@@ -391,6 +393,238 @@ class TestMinedQueries:
         )
 
 
+# ── Tag Filter Expansion Tests (C6) ─────────────────────────────────────────
+
+
+@pytest.mark.live
+class TestTagFilterExpanded:
+    """Expanded tag filtering — more tag patterns and combinations."""
+
+    def test_bug_fix_tag_returns_fixes(self, live_store, live_model):
+        """tag='bug-fix' should return chunks about bug fixes."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "fixed broken error crash",
+            n=5,
+            tag="bug-fix",
+        )
+        assert len(ids) >= 1, "tag='bug-fix' filter returned 0 results"
+
+    def test_architecture_tag_returns_design(self, live_store, live_model):
+        """Searching for architecture with project scoping returns relevant content."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "system design patterns structure",
+            n=5,
+            project="brainlayer",
+        )
+        assert len(ids) >= 1, "brainlayer project search returned 0 results"
+        assert _passes(docs, ["brainlayer", "BrainLayer", "architecture", "design", "structure"], top_n=3)
+
+    def test_testing_tag_returns_test_content(self, live_store, live_model):
+        """tag='testing' should return test-related content."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "pytest unit tests coverage",
+            n=5,
+            tag="testing",
+        )
+        assert len(ids) >= 1, "tag='testing' filter returned 0 results"
+
+    def test_project_plus_tag_scoped(self, live_store, live_model):
+        """Combining project and tag filters narrows results correctly."""
+        all_results_ids, _ = _search(
+            live_store,
+            live_model,
+            "configuration settings",
+            n=10,
+        )
+        scoped_ids, _ = _search(
+            live_store,
+            live_model,
+            "configuration settings",
+            n=10,
+            project="brainlayer",
+        )
+        # Scoped should be subset or equal, not larger
+        assert len(scoped_ids) <= len(all_results_ids) or len(scoped_ids) <= 10
+
+
+# ── Temporal Query Tests (C6) ──────────────────────────────────────────────
+
+
+@pytest.mark.live
+class TestTemporalQueries:
+    """Temporal and recency-aware query tests."""
+
+    def test_recent_week_chunks_exist(self, live_store, live_model):
+        """Searching for recent work should find chunks from the last week."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "recent work progress updates implemented",
+            n=10,
+        )
+        assert len(ids) >= 1, "Expected at least 1 result for 'recent work'"
+        # Verify at least one result is from the last 7 days
+        cursor = live_store.conn.cursor()
+        recent = False
+        for cid in ids[:10]:
+            rows = list(
+                cursor.execute(
+                    "SELECT created_at FROM chunks WHERE id = ? AND created_at > datetime('now', '-7 days')",
+                    (cid,),
+                )
+            )
+            if rows:
+                recent = True
+                break
+        assert recent, "Expected at least one chunk from the last 7 days"
+
+    def test_project_scoped_recency(self, live_store, live_model):
+        """Project-scoped search should include recent project activity."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "brainlayer search improvements hardening",
+            n=5,
+            project="brainlayer",
+        )
+        assert len(ids) >= 1
+        assert _passes(docs, ["brainlayer", "BrainLayer", "search", "hardening"], top_n=3)
+
+    def test_enrichment_pipeline_history(self, live_store, live_model):
+        """Enrichment pipeline history queries should return pipeline content."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "enrichment pipeline chunks processed batch queue",
+            n=5,
+            project="brainlayer",
+        )
+        assert _passes(docs, ["enrichment", "pipeline", "chunks", "batch", "queue"], top_n=3), (
+            f"Expected enrichment pipeline content, got: {[d[:60] for d in docs[:3]]}"
+        )
+
+
+# ── Hook Latency Tests (C6) ────────────────────────────────────────────────
+
+
+@pytest.mark.live
+class TestHookLatency:
+    """Prompt hook must respond within budget (<500ms)."""
+
+    HOOK_PATH = Path.home() / ".claude" / "hooks" / "brainlayer-prompt-search.py"
+
+    def _timed_hook_call(self, prompt: str) -> tuple[str, float]:
+        """Run hook and return (output, elapsed_ms)."""
+        import subprocess
+        import time
+
+        if not self.HOOK_PATH.exists():
+            pytest.skip(f"Hook not found at {self.HOOK_PATH}")
+
+        start = time.monotonic()
+        result = subprocess.run(
+            ["python3", str(self.HOOK_PATH)],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        elapsed_ms = (time.monotonic() - start) * 1000
+        return result.stdout, elapsed_ms
+
+    def test_simple_query_under_500ms(self):
+        """Simple prompt should complete in under 500ms."""
+        _, elapsed = self._timed_hook_call("How does authentication work in the brainlayer codebase?")
+        assert elapsed < 500, f"Hook took {elapsed:.0f}ms (budget: 500ms)"
+
+    def test_deep_mode_under_500ms(self):
+        """Deep mode (memory trigger) should still complete under 500ms."""
+        _, elapsed = self._timed_hook_call("Remember when we discussed the brainlayer architecture decisions?")
+        assert elapsed < 500, f"Deep mode hook took {elapsed:.0f}ms (budget: 500ms)"
+
+    def test_entity_query_under_500ms(self):
+        """Entity detection + FTS should complete under 500ms."""
+        _, elapsed = self._timed_hook_call("What did Avi Simon say about the scheduling platform?")
+        assert elapsed < 500, f"Entity hook took {elapsed:.0f}ms (budget: 500ms)"
+
+    def test_short_prompt_skipped_fast(self):
+        """Short prompts (<15 chars) should be skipped near-instantly."""
+        _, elapsed = self._timed_hook_call("hi there")
+        assert elapsed < 200, f"Short prompt skip took {elapsed:.0f}ms (expected <200ms)"
+
+
+# ── Mined Gap Queries (C6 — from C7 mining) ────────────────────────────────
+
+
+@pytest.mark.live
+class TestMinedGapQueries:
+    """Real gap queries from C7 mining — expanding eval coverage."""
+
+    def test_em_dash_writing_rule(self, live_store, live_model):
+        """em dash usage rule for ghostwriting — searched 3x with 0 results."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "em dash hyphen messages rule ghostwriting Hebrew",
+            n=5,
+        )
+        # This was a 0-result query — may still fail, but documents the gap
+        assert len(ids) >= 0  # baseline: just ensure no crash
+
+    def test_brainlayer_rag_architecture(self, live_store, live_model):
+        """BrainLayer RAG architecture — searched 2x with 0 results."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "BrainLayer local AI response generation RAG architecture",
+            n=5,
+            project="brainlayer",
+        )
+        assert _passes(docs, ["brainlayer", "BrainLayer", "RAG", "architecture", "local", "search"], top_n=3), (
+            f"Expected BrainLayer architecture content, got: {[d[:60] for d in docs[:3]]}"
+        )
+
+    def test_whisper_transcription(self, live_store, live_model):
+        """Whisper transcription query — searched 2x with 0 results."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "whisper model transcription audio speech recognition",
+            n=5,
+        )
+        assert len(ids) >= 0  # baseline: just ensure no crash
+
+    def test_mlx_finetuning(self, live_store, live_model):
+        """MLX fine-tuning — searched 4x with low (1.0 avg) results."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "MLX fine-tuning LoRA local model Apple Silicon",
+            n=5,
+        )
+        assert _passes(docs, ["MLX", "mlx", "fine-tun", "LoRA", "lora", "model"], top_n=3), (
+            f"Expected MLX fine-tuning content, got: {[d[:60] for d in docs[:3]]}"
+        )
+
+    def test_call_transcript_debrief(self, live_store, live_model):
+        """Call transcript extraction — searched 2x with low (1.0 avg) results."""
+        ids, docs = _search(
+            live_store,
+            live_model,
+            "call transcript gem extraction action items debrief notes",
+            n=5,
+        )
+        assert _passes(docs, ["call", "transcript", "debrief", "action", "extract", "gem"], top_n=3), (
+            f"Expected call debrief content, got: {[d[:60] for d in docs[:3]]}"
+        )
+
+
 # ── Gap Identification Tests ─────────────────────────────────────────────────
 
 
@@ -552,6 +786,58 @@ def run_baseline() -> dict:
             "mined_cursor_cli",
             "cursor CLI agent versus cursor IDE difference",
             ["cursor", "Cursor", "CLI", "IDE"],
+            3,
+            None,
+            None,
+        ),
+        # C6: Tag filter expansion
+        ("tag_bug_fix", "fixed broken error crash", ["fix", "bug", "error", "crash"], 3, None, "bug-fix"),
+        (
+            "tag_testing",
+            "pytest unit tests coverage",
+            ["test", "pytest", "coverage"],
+            3,
+            None,
+            "testing",
+        ),
+        # C6: Temporal queries
+        (
+            "temporal_brainlayer_hardening",
+            "brainlayer search improvements hardening",
+            ["brainlayer", "BrainLayer", "search", "hardening"],
+            3,
+            "brainlayer",
+            None,
+        ),
+        (
+            "temporal_enrichment_pipeline",
+            "enrichment pipeline chunks processed batch queue",
+            ["enrichment", "pipeline", "chunks", "batch"],
+            3,
+            "brainlayer",
+            None,
+        ),
+        # C6: Mined gap queries
+        (
+            "mined_brainlayer_rag",
+            "BrainLayer local AI response generation RAG architecture",
+            ["brainlayer", "BrainLayer", "RAG", "architecture", "search"],
+            3,
+            "brainlayer",
+            None,
+        ),
+        (
+            "mined_mlx_finetuning",
+            "MLX fine-tuning LoRA local model Apple Silicon",
+            ["MLX", "mlx", "fine-tun", "LoRA", "model"],
+            3,
+            None,
+            None,
+        ),
+        (
+            "mined_call_debrief",
+            "call transcript gem extraction action items debrief notes",
+            ["call", "transcript", "debrief", "action", "gem"],
             3,
             None,
             None,

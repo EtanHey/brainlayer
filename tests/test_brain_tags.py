@@ -11,12 +11,10 @@ All tests use tmp_path fixtures (isolated DB — no production data).
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
 from brainlayer.vector_store import VectorStore
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
