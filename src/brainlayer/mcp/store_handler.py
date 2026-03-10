@@ -324,27 +324,28 @@ async def _store(
 
         chunk_id = result["id"]
 
-        # Schedule background embedding via daemon thread (non-blocking)
-        def _background_embed():
-            try:
-                model = _get_embedding_model()
-                embed_pending_chunks(store=store, embed_fn=model.embed_query)
-            except Exception as e:
-                logger.debug("Background embedding failed: %s", e)
+        # Schedule background embedding + flush in a single daemon thread.
+        # CRITICAL: must use a separate VectorStore connection — APSW enforces
+        # same-thread usage. The main thread's `store.conn` cannot be shared.
+        db_path = store.db_path
 
-        t = threading.Thread(target=_background_embed, daemon=True)
+        def _background_embed_and_flush():
+            from ..vector_store import VectorStore as _VS
+
+            bg_store = None
+            try:
+                bg_store = _VS(db_path)
+                model = _get_embedding_model()
+                embed_pending_chunks(store=bg_store, embed_fn=model.embed_query)
+                _flush_pending_stores(bg_store, model.embed_query)
+            except Exception as e:
+                logger.warning("Background embedding/flush failed: %s", e)
+            finally:
+                if bg_store:
+                    bg_store.close()
+
+        t = threading.Thread(target=_background_embed_and_flush, daemon=True)
         t.start()
-
-        # Also flush any pending queued stores in background
-        def _background_flush():
-            try:
-                model = _get_embedding_model()
-                _flush_pending_stores(store, model.embed_query)
-            except Exception as e:
-                logger.debug("Pending store flush failed: %s", e)
-
-        t2 = threading.Thread(target=_background_flush, daemon=True)
-        t2.start()
 
         parts = [f"Stored memory `{chunk_id}`"]
         structured = {"chunk_id": chunk_id, "related": result["related"]}
