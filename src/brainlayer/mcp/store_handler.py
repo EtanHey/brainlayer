@@ -336,10 +336,20 @@ async def _store(
             try:
                 bg_store = _VS(db_path)
                 model = _get_embedding_model()
-                embed_pending_chunks(store=bg_store, embed_fn=model.embed_query)
-                _flush_pending_stores(bg_store, model.embed_query)
+                embed_fn = model.embed_query
+                count = embed_pending_chunks(store=bg_store, embed_fn=embed_fn)
+                if count > 0:
+                    logger.info("Embedded %d pending chunks", count)
+                _flush_pending_stores(bg_store, embed_fn)
             except Exception as e:
-                logger.warning("Background embedding/flush failed: %s", e)
+                logger.warning("Background embedding failed: %s", e)
+                # Model loading failed — still try to flush queued stores
+                # in deferred mode (without embeddings) so they aren't stranded
+                if bg_store:
+                    try:
+                        _flush_pending_stores(bg_store, None)
+                    except Exception as flush_err:
+                        logger.warning("Fallback flush also failed: %s", flush_err)
             finally:
                 if bg_store:
                     bg_store.close()

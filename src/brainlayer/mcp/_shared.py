@@ -3,34 +3,41 @@
 import logging
 import os
 import re
+import threading
 
 from mcp.types import CallToolResult, TextContent
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded globals
+# Lazy-loaded globals with thread-safe initialization
 _vector_store = None
 _embedding_model = None
+_store_lock = threading.Lock()
+_model_lock = threading.Lock()
 
 
 def _get_vector_store():
-    """Get or initialize the global VectorStore."""
+    """Get or initialize the global VectorStore (thread-safe)."""
     global _vector_store
     if _vector_store is None:
-        from ..paths import DEFAULT_DB_PATH
-        from ..vector_store import VectorStore
+        with _store_lock:
+            if _vector_store is None:
+                from ..paths import DEFAULT_DB_PATH
+                from ..vector_store import VectorStore
 
-        _vector_store = VectorStore(DEFAULT_DB_PATH)
+                _vector_store = VectorStore(DEFAULT_DB_PATH)
     return _vector_store
 
 
 def _get_embedding_model():
-    """Get or initialize the global embedding model."""
+    """Get or initialize the global embedding model (thread-safe)."""
     global _embedding_model
     if _embedding_model is None:
-        from ..embeddings import get_embedding_model
+        with _model_lock:
+            if _embedding_model is None:
+                from ..embeddings import get_embedding_model
 
-        _embedding_model = get_embedding_model()
+                _embedding_model = get_embedding_model()
     return _embedding_model
 
 
