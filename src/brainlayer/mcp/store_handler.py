@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 
 import apsw
 from mcp.types import CallToolResult, TextContent
@@ -289,58 +290,63 @@ async def _store(
     function_name: str | None = None,
     line_number: int | None = None,
 ):
-    """Store a memory into BrainLayer. Buffers to JSONL on DB lock."""
+    """Store a memory into BrainLayer with deferred embedding.
+
+    The chunk is stored immediately without waiting for embedding generation.
+    A background task embeds pending chunks after the response is sent.
+    """
     try:
-        from ..store import store_memory
+        from ..store import embed_pending_chunks, store_memory
 
         store = _get_vector_store()
-        model = _get_embedding_model()
         normalized_project = _normalize_project_name(project)
 
-        loop = asyncio.get_running_loop()
-
-        def _embed(text: str) -> list[float]:
-            return model.embed_query(text)
-
-        result = await loop.run_in_executor(
-            None,
-            lambda: store_memory(
-                store=store,
-                embed_fn=_embed,
-                content=content,
-                memory_type=memory_type,
-                project=normalized_project,
-                tags=tags,
-                importance=importance,
-                confidence_score=confidence_score,
-                outcome=outcome,
-                reversibility=reversibility,
-                files_changed=files_changed,
-                entity_id=entity_id,
-                status=status,
-                severity=severity,
-                file_path=file_path,
-                function_name=function_name,
-                line_number=line_number,
-            ),
+        # Store WITHOUT embedding — returns immediately (no executor needed)
+        result = store_memory(
+            store=store,
+            embed_fn=None,
+            content=content,
+            memory_type=memory_type,
+            project=normalized_project,
+            tags=tags,
+            importance=importance,
+            confidence_score=confidence_score,
+            outcome=outcome,
+            reversibility=reversibility,
+            files_changed=files_changed,
+            entity_id=entity_id,
+            status=status,
+            severity=severity,
+            file_path=file_path,
+            function_name=function_name,
+            line_number=line_number,
         )
 
-        try:
-            flushed = await loop.run_in_executor(None, lambda: _flush_pending_stores(store, _embed))
-        except Exception as e:
-            logger.debug("Pending store flush failed: %s", e)
-            flushed = 0
-
         chunk_id = result["id"]
-        parts = [f"Stored memory `{chunk_id}`"]
-        if flushed > 0:
-            parts.append(f"(also flushed {flushed} queued items)")
-        if result["related"]:
-            parts.append(f"\n**Related memories ({len(result['related'])}):**")
-            for r in result["related"]:
-                summary = r.get("summary") or r.get("content", "")[:100]
-                parts.append(f"- {summary}")
 
+        # Schedule background embedding via daemon thread (non-blocking)
+        def _background_embed():
+            try:
+                model = _get_embedding_model()
+                embed_pending_chunks(store=store, embed_fn=model.embed_query)
+            except Exception as e:
+                logger.debug("Background embedding failed: %s", e)
+
+        t = threading.Thread(target=_background_embed, daemon=True)
+        t.start()
+
+        # Also flush any pending queued stores in background
+        def _background_flush():
+            try:
+                model = _get_embedding_model()
+                _flush_pending_stores(store, model.embed_query)
+            except Exception as e:
+                logger.debug("Pending store flush failed: %s", e)
+
+        t2 = threading.Thread(target=_background_flush, daemon=True)
+        t2.start()
+
+        parts = [f"Stored memory `{chunk_id}`"]
         structured = {"chunk_id": chunk_id, "related": result["related"]}
         return ([TextContent(type="text", text="\n".join(parts))], structured)
 

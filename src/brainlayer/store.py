@@ -1,19 +1,32 @@
 """brainlayer_store — Write-side memory for BrainLayer.
 
 Store ideas, mistakes, decisions, learnings, todos, and bookmarks
-into the BrainLayer knowledge base. Items are embedded at write time
-and searchable immediately.
+into the BrainLayer knowledge base.
+
+When embed_fn is provided, items are embedded synchronously at write time.
+When embed_fn is None, items are stored without embedding (deferred mode)
+and are still searchable via FTS5. Embeddings are backfilled later by
+embed_pending_chunks().
 
 Usage:
     from brainlayer.store import store_memory
 
+    # Deferred (fast) — no embedding, returns immediately
     result = store_memory(
         store=vector_store,
-        embed_fn=model.embed_query,
+        embed_fn=None,
         content="Always use exponential backoff for retries",
         memory_type="learning",
         project="my-project",
         tags=["reliability", "api"],
+    )
+
+    # Synchronous (slow) — embeds at write time
+    result = store_memory(
+        store=vector_store,
+        embed_fn=model.embed_query,
+        content="...",
+        memory_type="learning",
     )
 """
 
@@ -32,7 +45,7 @@ VALID_MEMORY_TYPES = ["idea", "mistake", "decision", "learning", "todo", "bookma
 
 def store_memory(
     store: VectorStore,
-    embed_fn: Callable[[str], List[float]],
+    embed_fn: Optional[Callable[[str], List[float]]],
     content: str,
     memory_type: str,
     project: Optional[str] = None,
@@ -54,6 +67,9 @@ def store_memory(
     Args:
         store: VectorStore instance.
         embed_fn: Function that takes text and returns a 1024-dim embedding vector.
+                  If None, the chunk is stored without embedding (deferred mode).
+                  Un-embedded chunks are searchable via FTS5 and will be embedded
+                  later by embed_pending_chunks().
         content: The text content to store.
         memory_type: One of VALID_MEMORY_TYPES.
         project: Optional project name to scope the memory.
@@ -93,11 +109,12 @@ def store_memory(
     chunk_id = f"manual-{uuid.uuid4().hex[:16]}"
     now = datetime.now(timezone.utc).isoformat()
 
-    # Embed at write time
-    embedding = embed_fn(content)
-
-    # Search for related existing memories BEFORE inserting
-    related = _find_related(store, embedding, project=project, limit=3)
+    # Embed at write time (if embed_fn provided), otherwise defer
+    embedding = None
+    related: List[Dict[str, Any]] = []
+    if embed_fn is not None:
+        embedding = embed_fn(content)
+        related = _find_related(store, embedding, project=project, limit=3)
 
     # Build metadata dict
     meta = {"memory_type": memory_type}
@@ -149,16 +166,13 @@ def store_memory(
         ),
     )
 
-    # Insert embedding into chunk_vectors
-    cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-    cursor.execute(
-        "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-        (chunk_id, serialize_f32(embedding)),
-    )
-
-    # Also insert into FTS5 for keyword search
-    # (The trigger handles this for INSERT INTO chunks, but since we bypass
-    # the normal upsert_chunks flow, verify it's there)
+    # Insert embedding into chunk_vectors (only if we have one)
+    if embedding is not None:
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        cursor.execute(
+            "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
+            (chunk_id, serialize_f32(embedding)),
+        )
 
     # Link to entity if entity_id provided (per-person memory tagging)
     if entity_id:
@@ -177,6 +191,57 @@ def store_memory(
         "id": chunk_id,
         "related": related,
     }
+
+
+def embed_pending_chunks(
+    store: VectorStore,
+    embed_fn: Callable[[str], List[float]],
+    batch_size: int = 50,
+) -> int:
+    """Backfill embeddings for chunks stored without them.
+
+    Finds chunks in the chunks table that have no corresponding row in
+    chunk_vectors and generates embeddings for them.
+
+    Args:
+        store: VectorStore instance.
+        embed_fn: Function that takes text and returns a 1024-dim embedding vector.
+        batch_size: Max chunks to process in one call.
+
+    Returns:
+        Number of chunks embedded.
+    """
+    cursor = store.conn.cursor()
+    rows = list(
+        cursor.execute(
+            """
+            SELECT c.id, c.content FROM chunks c
+            LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
+            WHERE v.chunk_id IS NULL AND c.source = 'manual'
+            ORDER BY c.created_at ASC
+            LIMIT ?
+            """,
+            (batch_size,),
+        )
+    )
+
+    if not rows:
+        return 0
+
+    count = 0
+    for chunk_id, content in rows:
+        try:
+            embedding = embed_fn(content)
+            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+            cursor.execute(
+                "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
+                (chunk_id, serialize_f32(embedding)),
+            )
+            count += 1
+        except Exception as e:
+            logger.warning("Failed to embed chunk %s: %s", chunk_id, e)
+
+    return count
 
 
 def _find_related(
