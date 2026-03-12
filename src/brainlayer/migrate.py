@@ -17,13 +17,14 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 from .embeddings import get_embedding_model
+from .paths import get_db_path
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 # Paths
 CHROMADB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "chromadb.backup"
-SQLITE_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+SQLITE_PATH = get_db_path()
 
 
 def migrate_from_chromadb() -> bool:

@@ -38,11 +38,12 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from brainlayer.vector_store import VectorStore
+from brainlayer.paths import get_db_path
 from brainlayer.pipeline.enrichment import parse_enrichment
 
 # ── Config ──────────────────────────────────────────────────────────────
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DEFAULT_DB_PATH = get_db_path()
 EXPORT_DIR = Path(__file__).resolve().parent / "backfill_data"
 MODEL = "models/gemini-2.5-flash"
 

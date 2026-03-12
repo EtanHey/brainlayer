@@ -34,8 +34,7 @@ All BrainLayer configuration is via environment variables. No config files neede
 The database path is resolved in this order:
 
 1. `BRAINLAYER_DB` environment variable (highest priority)
-2. Legacy path `~/.local/share/zikaron/zikaron.db` (if it exists — for migration)
-3. Canonical path `~/.local/share/brainlayer/brainlayer.db` (default for fresh installs)
+2. Canonical path `~/.local/share/brainlayer/brainlayer.db` (default)
 
 ## Data Sources
 

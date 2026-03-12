@@ -1,16 +1,12 @@
 {
   "search": {
     "run_date": "2026-03-09",
-    "db": "/Users/etanheyman/.local/share/zikaron/zikaron.db",
+    "db": "/Users/etanheyman/.local/share/brainlayer/brainlayer.db",
     "cases": [
       {
         "name": "entity_avi_simon",
         "query": "Avi Simon platform invites schedule",
-        "expected_snippets": [
-          "avi simon",
-          "6pm",
-          "6PM"
-        ],
+        "expected_snippets": ["avi simon", "6pm", "6PM"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -22,11 +18,7 @@
       {
         "name": "entity_fedor",
         "query": "Fedor iOS build handover GitHub",
-        "expected_snippets": [
-          "fedor",
-          "Fedor",
-          "iOS"
-        ],
+        "expected_snippets": ["fedor", "Fedor", "iOS"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -38,11 +30,7 @@
       {
         "name": "entity_yuval_mehayom",
         "query": "MeHayom Yuval sprint payment",
-        "expected_snippets": [
-          "yuval",
-          "Yuval",
-          "MeHayom"
-        ],
+        "expected_snippets": ["yuval", "Yuval", "MeHayom"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -54,11 +42,7 @@
       {
         "name": "tag_decision",
         "query": "important decision",
-        "expected_snippets": [
-          "decision",
-          "DECISION",
-          "chose"
-        ],
+        "expected_snippets": ["decision", "DECISION", "chose"],
         "top_n": 3,
         "project": null,
         "tag": "decision",
@@ -70,10 +54,7 @@
       {
         "name": "tag_voicelayer_scoped",
         "query": "architecture decision voicelayer",
-        "expected_snippets": [
-          "VoiceLayer",
-          "voice"
-        ],
+        "expected_snippets": ["VoiceLayer", "voice"],
         "top_n": 3,
         "project": "voicelayer",
         "tag": null,
@@ -85,11 +66,7 @@
       {
         "name": "recency_milestone",
         "query": "measurement mandate evals before improvements",
-        "expected_snippets": [
-          "measurement",
-          "evals",
-          "baseline"
-        ],
+        "expected_snippets": ["measurement", "evals", "baseline"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -101,11 +78,7 @@
       {
         "name": "hebrew_style_correction",
         "query": "em dashes Hebrew writing style correction freelance",
-        "expected_snippets": [
-          "hebrew",
-          "Hebrew",
-          "em dash"
-        ],
+        "expected_snippets": ["hebrew", "Hebrew", "em dash"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -117,11 +90,7 @@
       {
         "name": "cross_fts5_architecture",
         "query": "FTS5 search quality gaps summary tags indexed",
-        "expected_snippets": [
-          "FTS5",
-          "fts5",
-          "summary"
-        ],
+        "expected_snippets": ["FTS5", "fts5", "summary"],
         "top_n": 3,
         "project": "brainlayer",
         "tag": null,
@@ -133,11 +102,7 @@
       {
         "name": "cross_golems_monorepo",
         "query": "golems monorepo architecture golem-powers CLI",
-        "expected_snippets": [
-          "golems",
-          "golem",
-          "monorepo"
-        ],
+        "expected_snippets": ["golems", "golem", "monorepo"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -149,11 +114,7 @@
       {
         "name": "decision_voicelayer_rule",
         "query": "voicelayer local CLI voice tools architecture rule",
-        "expected_snippets": [
-          "local",
-          "CLI",
-          "VoiceLayer"
-        ],
+        "expected_snippets": ["local", "CLI", "VoiceLayer"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -165,11 +126,7 @@
       {
         "name": "decision_brainlayer_v3",
         "query": "BrainLayer v3 architecture decisions sqlite-vec",
-        "expected_snippets": [
-          "BrainLayer",
-          "architecture",
-          "v3"
-        ],
+        "expected_snippets": ["BrainLayer", "architecture", "v3"],
         "top_n": 3,
         "project": "brainlayer",
         "tag": null,
@@ -181,11 +138,7 @@
       {
         "name": "memory_whoop",
         "query": "remember when we discussed WHOOP recovery score",
-        "expected_snippets": [
-          "whoop",
-          "Whoop",
-          "WHOOP"
-        ],
+        "expected_snippets": ["whoop", "Whoop", "WHOOP"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -197,11 +150,7 @@
       {
         "name": "memory_coach_schedule",
         "query": "morning schedule wake up huberman protocol",
-        "expected_snippets": [
-          "schedule",
-          "morning",
-          "huberman"
-        ],
+        "expected_snippets": ["schedule", "morning", "huberman"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -213,11 +162,7 @@
       {
         "name": "mined_search_quality",
         "query": "brainlayer search quality evaluation evals measurement mandate",
-        "expected_snippets": [
-          "measurement",
-          "evals",
-          "baseline"
-        ],
+        "expected_snippets": ["measurement", "evals", "baseline"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -229,11 +174,7 @@
       {
         "name": "mined_enrichment_backend",
         "query": "enrichment MLX Groq backend progress stats chunks",
-        "expected_snippets": [
-          "enrichment",
-          "MLX",
-          "Groq"
-        ],
+        "expected_snippets": ["enrichment", "MLX", "Groq"],
         "top_n": 3,
         "project": "brainlayer",
         "tag": null,
@@ -245,11 +186,7 @@
       {
         "name": "mined_6pm_decisions",
         "query": "6pm scheduling architecture confirmed decisions",
-        "expected_snippets": [
-          "6pm",
-          "6PM",
-          "scheduling"
-        ],
+        "expected_snippets": ["6pm", "6PM", "scheduling"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -261,11 +198,7 @@
       {
         "name": "mined_cursor_cli",
         "query": "cursor CLI agent versus cursor IDE difference",
-        "expected_snippets": [
-          "cursor",
-          "Cursor",
-          "CLI"
-        ],
+        "expected_snippets": ["cursor", "Cursor", "CLI"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -277,11 +210,7 @@
       {
         "name": "gap_auth_cross_project",
         "query": "authentication JWT tokens security implementation",
-        "expected_snippets": [
-          "auth",
-          "JWT",
-          "token"
-        ],
+        "expected_snippets": ["auth", "JWT", "token"],
         "top_n": 3,
         "project": null,
         "tag": null,
@@ -320,31 +249,21 @@
       {
         "name": "hook_entity_avi_simon",
         "query": "What are Avi Simon's meeting preferences?",
-        "expected": [
-          "[entity:",
-          "entity: avi simon",
-          "person"
-        ],
+        "expected": ["[entity:", "entity: avi simon", "person"],
         "passed": true,
         "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
       },
       {
         "name": "hook_entity_fedor",
         "query": "What is Fedor working on with GitHub access?",
-        "expected": [
-          "[entity:",
-          "entity: fedor",
-          "person"
-        ],
+        "expected": ["[entity:", "entity: fedor", "person"],
         "passed": true,
         "output_preview": "[Entity: Fedor \u2014 person]\n- [? (orchestrator)] coachClaude session transcript \u2014 March 9-10, 2026. ~/Gits/golems/packages/coach | ## Key Events: | ### 1"
       },
       {
         "name": "hook_entity_first_line",
         "query": "Tell me about Avi Simon and his 6PM project",
-        "expected": [
-          "[entity"
-        ],
+        "expected": ["[entity"],
         "passed": true,
         "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
       },

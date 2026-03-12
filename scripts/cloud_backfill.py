@@ -41,11 +41,12 @@ from brainlayer.pipeline.enrichment import (
     build_prompt,
     parse_enrichment,
 )
+from brainlayer.paths import get_db_path
 from brainlayer.pipeline.sanitize import Sanitizer, SanitizeConfig
 
 # ── Config ──────────────────────────────────────────────────────────────
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DEFAULT_DB_PATH = get_db_path()
 EXPORT_DIR = Path(__file__).resolve().parent / "backfill_data"
 CHECKPOINT_TABLE = "enrichment_checkpoints"
 

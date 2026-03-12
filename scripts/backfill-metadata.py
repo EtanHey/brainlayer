@@ -9,9 +9,10 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
-DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DB_PATH = get_db_path()
 
 # Hebrew character range
 HEBREW_RE = re.compile(r'[\u0590-\u05FF]')

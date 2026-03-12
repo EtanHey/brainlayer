@@ -71,14 +71,8 @@ def main():
     args = parser.parse_args()
 
     if not args.db.exists():
-        # Try legacy path
-        legacy_db = Path.home() / ".local/share/zikaron/zikaron.db"
-        if legacy_db.exists():
-            args.db = legacy_db
-            print(f"Using legacy database: {args.db}")
-        else:
-            print(f"Database not found: {args.db}")
-            sys.exit(1)
+        print(f"Database not found: {args.db}")
+        sys.exit(1)
 
     output_dir = args.output_dir or Path.home() / ".local/share/brainlayer/storage/style"
     output_dir.mkdir(parents=True, exist_ok=True)

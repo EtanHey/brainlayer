@@ -31,6 +31,10 @@
         <string>1</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
+        <key>BRAINLAYER_ENRICH_BACKEND</key>
+        <string>groq</string>
+        <key>GROQ_API_KEY</key>
+        <string>__GROQ_API_KEY__</string>
     </dict>
 
     <key>RunAtLoad</key>

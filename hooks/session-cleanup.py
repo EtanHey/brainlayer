@@ -20,19 +20,15 @@ import time
 MAX_AGE_HOURS = 6
 WAL_THRESHOLD_MB = 100  # only checkpoint if WAL > this size
 MCP_PATTERNS = ("brainlayer-mcp", "voicelayer-mcp")
-DB_PATHS = [
-    os.path.expanduser("~/.local/share/zikaron/zikaron.db"),
-    os.path.expanduser("~/.local/share/brainlayer/brainlayer.db"),
-]
+_CANONICAL_DB = os.path.expanduser("~/.local/share/brainlayer/brainlayer.db")
 
 
 def get_db_path():
     env = os.environ.get("BRAINLAYER_DB")
     if env and os.path.exists(env):
         return env
-    for p in DB_PATHS:
-        if os.path.exists(p):
-            return p
+    if os.path.exists(_CANONICAL_DB):
+        return _CANONICAL_DB
     return None
 
 

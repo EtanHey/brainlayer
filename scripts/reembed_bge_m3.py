@@ -18,10 +18,14 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 import apsw
 import numpy as np
 import sqlite_vec
 from sentence_transformers import SentenceTransformer
+
+from brainlayer.paths import get_db_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DEFAULT_DB = get_db_path()
 MODEL_NAME = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024
 MAX_CHARS = 512  # Match existing truncation

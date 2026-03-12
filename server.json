@@ -21,7 +21,7 @@
       "packageArguments": [],
       "environmentVariables": [
         {
-          "name": "BRAINLAYER_DB_PATH",
+          "name": "BRAINLAYER_DB",
           "description": "Path to the sqlite-vec database file. Defaults to ~/.local/share/brainlayer/brainlayer.db",
           "isRequired": false,
           "isSecret": false

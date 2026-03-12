@@ -32,25 +32,13 @@ class TestDBPathResolution:
         with patch.dict(os.environ, {"BRAINLAYER_DB": custom}):
             assert get_db_path() == Path(custom)
 
-    def test_legacy_path_preferred_over_canonical(self, tmp_path):
-        """Legacy zikaron path should be used if it exists."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Remove env var if set
-            os.environ.pop("BRAINLAYER_DB", None)
-            with patch("brainlayer.paths._LEGACY_DB_PATH", tmp_path / "legacy.db"):
-                # Create the file so .exists() returns True
-                (tmp_path / "legacy.db").touch()
-                result = get_db_path()
-                assert result == tmp_path / "legacy.db"
-
-    def test_canonical_path_when_legacy_missing(self, tmp_path):
+    def test_canonical_path_for_fresh_install(self, tmp_path):
         """Canonical path should be used for fresh installs."""
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("BRAINLAYER_DB", None)
-            with patch("brainlayer.paths._LEGACY_DB_PATH", tmp_path / "nonexistent.db"):
-                with patch("brainlayer.paths._CANONICAL_DB_PATH", tmp_path / "canonical.db"):
-                    result = get_db_path()
-                    assert result == tmp_path / "canonical.db"
+            with patch("brainlayer.paths._CANONICAL_DB_PATH", tmp_path / "canonical.db"):
+                result = get_db_path()
+                assert result == tmp_path / "canonical.db"
 
 
 # ============================================================================

@@ -6,8 +6,7 @@
 
 | What | Path | Size | Notes |
 |------|------|------|-------|
-| **Main database** | `~/.local/share/brainlayer/brainlayer.db` | ~3.8 GB | 335K+ chunks, sqlite-vec + FTS5 |
-| **Legacy path** | `~/.local/share/zikaron/zikaron.db` | symlink | Auto-resolved by `paths.py` if no canonical path exists |
+| **Main database** | `~/.local/share/brainlayer/brainlayer.db` | ~8 GB | 297K+ chunks, sqlite-vec + FTS5 |
 | **Current sessions** | `~/.claude/projects/{encoded-path}/*.jsonl` | ~805 files | Claude Code session transcripts |
 | **Archived sessions** | `~/.claude-archive/{project-id}/archive-{timestamp}/` | 1.2 GB | Moved by session-archiver |
 
@@ -16,14 +15,7 @@
 BrainLayer resolves the database path in this order (see `src/brainlayer/paths.py`):
 
 1. **`BRAINLAYER_DB` env var** — explicit override
-2. **`~/.local/share/zikaron/zikaron.db`** — legacy path (if exists, use it)
-3. **`~/.local/share/brainlayer/brainlayer.db`** — canonical path (for fresh installs)
-
-### Why the legacy path?
-
-The project was originally called "Zikaron" and all data lives at the legacy path.
-Renaming the 3.8 GB database is risky and unnecessary — the code resolves it automatically.
-When users install BrainLayer fresh (no existing data), it uses the canonical path.
+2. **`~/.local/share/brainlayer/brainlayer.db`** — canonical path
 
 ## Session Archiver
 
@@ -109,8 +101,7 @@ These chunks are still searchable — they just don't have `created_at` timestam
 ### BrainLayer extraction (Feb 19, 2026)
 
 Extracted to standalone repository.
-Code moved, data stayed at `~/.local/share/zikaron/zikaron.db`.
-`paths.py` handles the legacy path transparently.
+Code moved, data consolidated at `~/.local/share/brainlayer/brainlayer.db` (March 2026).
 
 ## Vertex AI Batch Enrichment (Feb 17-18, 2026)
 

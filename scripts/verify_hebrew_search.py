@@ -9,12 +9,16 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 import apsw
 import numpy as np
 import sqlite_vec
 from sentence_transformers import SentenceTransformer
 
-DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+from brainlayer.paths import get_db_path
+
+DB_PATH = get_db_path()
 MODEL = "BAAI/bge-m3"
 
 

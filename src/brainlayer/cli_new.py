@@ -1,13 +1,12 @@
 """Updated CLI commands using daemon client."""
 
-from pathlib import Path
-
 import typer
 from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
 from .client import get_client
+from .paths import get_db_path
 
 console = Console()
 
@@ -113,7 +112,7 @@ def migrate_command() -> None:
 
         rprint("[bold blue]זיכרון[/] - Migration Tool\n")
 
-        sqlite_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+        sqlite_path = get_db_path()
 
         if sqlite_path.exists():
             response = typer.confirm("sqlite-vec database already exists. Overwrite?")
