@@ -8,8 +8,6 @@ from pathlib import Path
 
 import typer
 from rich import print as rprint
-
-from ..paths import get_db_path
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -22,6 +20,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
+
+from ..paths import get_db_path
 
 app = typer.Typer(
     name="brainlayer",
