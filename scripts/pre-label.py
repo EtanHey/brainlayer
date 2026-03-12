@@ -14,9 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
-DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DB_PATH = get_db_path()
 OUTPUT = Path(__file__).parent.parent / "data" / "labeled-samples.json"
 TAXONOMY = Path(__file__).parent.parent / "src" / "brainlayer" / "taxonomy.json"
 SAMPLE_SIZE = 200

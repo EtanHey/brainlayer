@@ -17,26 +17,11 @@ class TestGetDbPath:
         with patch.dict(os.environ, {"BRAINLAYER_DB": str(db_path)}):
             assert get_db_path() == db_path
 
-    def test_legacy_path_if_exists(self, tmp_path):
-        """Legacy zikaron path used when it exists."""
-        legacy = tmp_path / "zikaron.db"
-        legacy.touch()
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("brainlayer.paths._LEGACY_DB_PATH", legacy),
-            patch("brainlayer.paths._CANONICAL_DB_PATH", tmp_path / "brainlayer.db"),
-        ):
-            # Remove env var if set
-            os.environ.pop("BRAINLAYER_DB", None)
-            assert get_db_path() == legacy
-
     def test_canonical_path_fresh_install(self, tmp_path):
-        """Canonical path used when no legacy DB exists."""
+        """Canonical path used when no DB exists yet."""
         canonical = tmp_path / "brainlayer" / "brainlayer.db"
-        legacy = tmp_path / "nonexistent" / "zikaron.db"
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("brainlayer.paths._LEGACY_DB_PATH", legacy),
             patch("brainlayer.paths._CANONICAL_DB_PATH", canonical),
         ):
             os.environ.pop("BRAINLAYER_DB", None)

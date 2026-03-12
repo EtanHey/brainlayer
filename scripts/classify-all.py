@@ -14,9 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
-DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DB_PATH = get_db_path()
 MODEL_DIR = Path(__file__).parent.parent / "data" / "models" / "setfit-tagger"
 BATCH_SIZE = 64
 

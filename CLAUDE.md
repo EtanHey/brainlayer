@@ -30,9 +30,9 @@ brainlayer enrich
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
 - Post-processing: Enrichment, Brain Graph, Obsidian export
-- Storage: currently `~/.local/share/zikaron/zikaron.db` (legacy path, 5GB+). Target: `~/.local/share/brainlayer/brainlayer.db`
-- DB path resolved by `paths.py:get_db_path()` — prefers zikaron if it exists, falls through to brainlayer
-- 8 scripts in `scripts/` hardcode `brainlayer.db` path — need fixing during DB consolidation
+- Storage: `~/.local/share/brainlayer/brainlayer.db` (canonical path, ~8GB)
+- DB path resolved by `paths.py:get_db_path()` — env var override or canonical path
+- All scripts and CLI use `paths.py` for DB path resolution
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
 ## Classification & Chunking Rules

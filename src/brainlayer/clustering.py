@@ -26,7 +26,6 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import apsw
@@ -41,9 +40,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
+from .paths import get_db_path
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+DEFAULT_DB = get_db_path()
 EMBEDDING_DIM = 1024
 
 # Target cluster counts at each level

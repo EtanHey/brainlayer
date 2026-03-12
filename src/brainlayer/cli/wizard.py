@@ -8,6 +8,8 @@ import platform
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+
+from ..paths import get_db_path
 from pathlib import Path
 from typing import Optional
 
@@ -50,7 +52,7 @@ def detect_environment() -> dict:
     env["whatsapp_available"] = False
 
     # Check for existing DB
-    default_db = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    default_db = get_db_path()
     env["existing_db"] = default_db.exists()
 
     return env

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import typer
 from rich import print as rprint
+
+from ..paths import get_db_path
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -174,7 +176,7 @@ def review(
 
         from ..vector_store import VectorStore
 
-        db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+        db_path = get_db_path()
         store = VectorStore(db_path)
         cursor = store.conn.cursor()
 
@@ -279,7 +281,7 @@ def clear(confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirma
     try:
         from pathlib import Path
 
-        db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+        db_path = get_db_path()
 
         if not confirm:
             confirm = typer.confirm("Are you sure you want to clear the knowledge base?")
@@ -1011,7 +1013,7 @@ def git_overlay(
     """Build git overlay: cross-reference sessions with git history (Phase 8b)."""
     from ..vector_store import VectorStore
 
-    db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    db_path = get_db_path()
     store = VectorStore(db_path)
 
     try:
@@ -1084,7 +1086,7 @@ def group_operations(
     """Group chunks into logical operations (Phase 8a)."""
     from ..vector_store import VectorStore
 
-    db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    db_path = get_db_path()
     store = VectorStore(db_path)
 
     try:
@@ -1169,7 +1171,7 @@ def topic_chains(
     """Build topic chains + regression detection (Phase 8d)."""
     from ..vector_store import VectorStore
 
-    db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    db_path = get_db_path()
     store = VectorStore(db_path)
 
     try:
@@ -1276,7 +1278,7 @@ def plan_linking(
     """Link sessions to active plans (Phase 8c)."""
     from ..vector_store import VectorStore
 
-    db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    db_path = get_db_path()
     store = VectorStore(db_path)
 
     try:
@@ -1380,7 +1382,7 @@ def export_obsidian(
     """Export BrainLayer data to Obsidian vault (Phase 9)."""
     from ..vector_store import VectorStore
 
-    db_path = Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db"
+    db_path = get_db_path()
     store = VectorStore(db_path)
 
     try:
