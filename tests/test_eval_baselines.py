@@ -33,6 +33,15 @@ import pytest
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 EVAL_CASES_FILE = Path(__file__).parent / "eval_baselines.json"
+REPO_HOOK_PATH = Path(__file__).parent.parent / "hooks" / "brainlayer-prompt-search.py"
+HOME_HOOK_PATH = Path.home() / ".claude" / "hooks" / "brainlayer-prompt-search.py"
+
+
+def _resolve_hook_path() -> Path:
+    """Prefer the repo hook under test over a mutable installed dotfile copy."""
+    if REPO_HOOK_PATH.exists():
+        return REPO_HOOK_PATH
+    return HOME_HOOK_PATH
 
 
 @pytest.fixture(scope="module")
@@ -517,7 +526,7 @@ class TestTemporalQueries:
 class TestHookLatency:
     """Prompt hook must respond within budget (<500ms)."""
 
-    HOOK_PATH = Path.home() / ".claude" / "hooks" / "brainlayer-prompt-search.py"
+    HOOK_PATH = _resolve_hook_path()
 
     def _timed_hook_call(self, prompt: str) -> tuple[str, float]:
         """Run hook and return (output, elapsed_ms)."""
@@ -913,7 +922,7 @@ class TestPromptHookEntityInjection:
     After Phase A: PASS (hook detects entities → injects KG profile + linked chunks).
     """
 
-    HOOK_PATH = Path.home() / ".claude" / "hooks" / "brainlayer-prompt-search.py"
+    HOOK_PATH = _resolve_hook_path()
 
     def _call_hook(self, prompt: str) -> str:
         """Run the hook subprocess and return its stdout."""
@@ -986,7 +995,7 @@ def run_hook_baseline() -> dict:
     """
     import subprocess
 
-    hook_path = Path.home() / ".claude" / "hooks" / "brainlayer-prompt-search.py"
+    hook_path = _resolve_hook_path()
 
     def call_hook(prompt: str) -> str:
         if not hook_path.exists():

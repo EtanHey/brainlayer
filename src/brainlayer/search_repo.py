@@ -1,12 +1,73 @@
 """Search and retrieval methods for VectorStore (mixin)."""
 
+import copy
 import json
 import math
 import os
+import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ._helpers import _escape_fts5_query, serialize_f32
+
+# ── hybrid_search result cache ───────────────────────────────────────────────
+# Caches identical (store, query_text, filters) → results for 60s.
+# Warm repeated queries (e.g. hook firing on the same prompt twice) return
+# instantly instead of re-running the full 303K-vector brute-force scan.
+#
+# Correctness constraints:
+# - Store-scoped: different DB files must never share cached results.
+# - Filter-scoped: all query-affecting filters belong in the cache key.
+# - Copy-on-read: callers enrich and mutate result metadata after search.
+_HYBRID_CACHE_TTL = 60.0  # seconds
+_HYBRID_CACHE_MAX = 128   # max entries (LRU eviction)
+
+# Module-level LRU cache: {cache_key: (result, timestamp)}
+_hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
+
+
+def _hybrid_cache_key(
+    store_key: str,
+    query_text: str,
+    n_results: int,
+    project_filter: Optional[str],
+    content_type_filter: Optional[str],
+    source_filter: Optional[str],
+    sender_filter: Optional[str],
+    language_filter: Optional[str],
+    tag_filter: Optional[str],
+    intent_filter: Optional[str],
+    importance_min: Optional[float],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    sentiment_filter: Optional[str],
+    entity_id: Optional[str],
+    k: int,
+) -> tuple:
+    return (
+        store_key,
+        query_text,
+        n_results,
+        project_filter,
+        content_type_filter,
+        source_filter,
+        sender_filter,
+        language_filter,
+        tag_filter,
+        intent_filter,
+        importance_min,
+        date_from,
+        date_to,
+        sentiment_filter,
+        entity_id,
+        k,
+    )
+
+
+def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
+    """Return a defensive deep copy of cached hybrid_search results."""
+    return copy.deepcopy(result)
 
 
 class SearchMixin:
@@ -352,7 +413,40 @@ class SearchMixin:
         Args:
             entity_id: If provided, only return chunks linked to this entity
                        via kg_entity_chunks. Used for per-person memory scoping.
+
+        Result cache: identical (store + query_text + filters) calls within 60s
+        return cached results, avoiding repeated brute-force 303K-vector scans.
+        Cache is module-level LRU (128 entries) with defensive copy-on-read.
         """
+
+        # ── Cache lookup ─────────────────────────────────────────────────────
+        store_key = os.fspath(getattr(self, "db_path", "<unknown-db>"))
+        cache_key = _hybrid_cache_key(
+            store_key,
+            query_text,
+            n_results,
+            project_filter,
+            content_type_filter,
+            source_filter,
+            sender_filter,
+            language_filter,
+            tag_filter,
+            intent_filter,
+            importance_min,
+            date_from,
+            date_to,
+            sentiment_filter,
+            entity_id,
+            k,
+        )
+        now = time.monotonic()
+        if cache_key in _hybrid_cache:
+            cached_result, cached_at = _hybrid_cache[cache_key]
+            if now - cached_at < _HYBRID_CACHE_TTL:
+                _hybrid_cache.move_to_end(cache_key)  # LRU touch
+                return _clone_hybrid_result(cached_result)
+            else:
+                del _hybrid_cache[cache_key]
 
         # 1. Semantic search — get more results for fusion (uses _read_cursor via search())
         semantic = self.search(
@@ -566,12 +660,20 @@ class SearchMixin:
         metadatas = [s[3] for s in scored[:n_results]]
         distances = [s[4] for s in scored[:n_results]]
 
-        return {
+        result = {
             "ids": [ids],
             "documents": [documents],
             "metadatas": [metadatas],
             "distances": [distances],
         }
+
+        # ── Cache store ──────────────────────────────────────────────────────
+        _hybrid_cache[cache_key] = (_clone_hybrid_result(result), time.monotonic())
+        _hybrid_cache.move_to_end(cache_key)
+        if len(_hybrid_cache) > _HYBRID_CACHE_MAX:
+            _hybrid_cache.popitem(last=False)  # evict oldest
+
+        return result
 
     def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""

@@ -24,11 +24,14 @@ Usage:
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import apsw
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -49,6 +52,10 @@ from brainlayer.pipeline.sanitize import Sanitizer, SanitizeConfig
 DEFAULT_DB_PATH = get_db_path()
 EXPORT_DIR = Path(__file__).resolve().parent / "backfill_data"
 CHECKPOINT_TABLE = "enrichment_checkpoints"
+CHECKPOINT_DB_PATH = DEFAULT_DB_PATH.with_name("enrichment_checkpoints.db")
+CHECKPOINT_STABLE_STATUSES = ("submitted", "completed", "imported", "expired")
+CHECKPOINT_WRITE_MAX_RETRIES = 6
+CHECKPOINT_WRITE_BASE_DELAY = 0.25
 
 # Gemini Batch API limits (Tier 1)
 # AIDEV-NOTE: Tier 1 has low enqueued-token quota for 2.5-flash batch.
@@ -57,6 +64,8 @@ CHECKPOINT_TABLE = "enrichment_checkpoints"
 MAX_TOKENS_PER_JOB = 350_000  # Conservative: stay under Tier 1 enqueued limit
 AVG_PROMPT_TOKENS = 700  # Estimated avg tokens per chunk prompt
 CHUNKS_PER_JOB = MAX_TOKENS_PER_JOB // AVG_PROMPT_TOKENS  # ~500
+BATCH_INPUT_COST_PER_MILLION = 0.075
+BATCH_OUTPUT_COST_PER_MILLION = 0.30
 
 # Supabase usage logging
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -83,12 +92,64 @@ ENRICHMENT_SCHEMA = {
     "required": ["summary", "tags", "importance", "intent", "primary_symbols", "resolved_query", "epistemic_level", "debt_impact", "external_deps"],
 }
 
+CHECKPOINT_COLUMNS = (
+    "batch_id",
+    "backend",
+    "model",
+    "status",
+    "chunk_count",
+    "jsonl_path",
+    "submitted_at",
+    "completed_at",
+    "error",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+)
+
+
+def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
+    """Build a Gemini Batch API request line with thinking disabled.
+
+    thinkingBudget=0 is mandatory for this backfill job class. On February 18,
+    2026, non-zero thinking tokens caused a high-cost incident on
+    gemini-2.5-flash. Centralizing the payload keeps export behavior testable.
+    """
+    return {
+        "key": chunk_id,
+        "request": {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        },
+    }
+
+
+def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
+    """Estimate Gemini 2.5 Flash Batch API cost using the 50% batch discount."""
+    return (
+        input_tokens * BATCH_INPUT_COST_PER_MILLION + output_tokens * BATCH_OUTPUT_COST_PER_MILLION
+    ) / 1_000_000
+
 
 # ── DB helpers ──────────────────────────────────────────────────────────
 
-def ensure_checkpoint_table(store: VectorStore) -> None:
-    """Create checkpoint table if it doesn't exist."""
-    cursor = store.conn.cursor()
+def _open_checkpoint_conn() -> apsw.Connection:
+    """Open the sidecar checkpoint DB without VectorStore startup hooks."""
+    CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = apsw.Connection(str(CHECKPOINT_DB_PATH))
+    conn.setbusytimeout(5000)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def _ensure_checkpoint_table_in_conn(conn: apsw.Connection) -> None:
+    """Create checkpoint table in the sidecar DB if it does not exist."""
+    cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {CHECKPOINT_TABLE} (
             batch_id TEXT PRIMARY KEY,
@@ -107,33 +168,202 @@ def ensure_checkpoint_table(store: VectorStore) -> None:
     """)
 
 
-def save_checkpoint(store: VectorStore, batch_id: str, **kwargs) -> None:
-    """Insert or update a checkpoint row."""
+def _main_checkpoint_rows(store: Optional[VectorStore]) -> List[tuple]:
+    """Read legacy checkpoint rows from the main DB for one-way migration."""
+    if store is None:
+        return []
+
     cursor = store.conn.cursor()
-    existing = list(cursor.execute(
-        f"SELECT batch_id FROM {CHECKPOINT_TABLE} WHERE batch_id = ?", [batch_id]
-    ))
-    if existing:
-        sets = ", ".join(f"{k} = ?" for k in kwargs)
-        params = list(kwargs.values()) + [batch_id]
-        cursor.execute(f"UPDATE {CHECKPOINT_TABLE} SET {sets} WHERE batch_id = ?", params)
-    else:
-        cols = ["batch_id"] + list(kwargs.keys())
-        vals = [batch_id] + list(kwargs.values())
-        placeholders = ", ".join("?" for _ in cols)
+    table_exists = list(
         cursor.execute(
-            f"INSERT INTO {CHECKPOINT_TABLE} ({', '.join(cols)}) VALUES ({placeholders})",
-            vals,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (CHECKPOINT_TABLE,),
         )
+    )
+    if not table_exists:
+        return []
+
+    return list(cursor.execute(f"SELECT {', '.join(CHECKPOINT_COLUMNS)} FROM {CHECKPOINT_TABLE}"))
+
+
+def _migrate_checkpoints_from_main_db(store: Optional[VectorStore], conn: apsw.Connection) -> int:
+    """Copy legacy checkpoint rows into the sidecar DB so state is preserved."""
+    rows = _main_checkpoint_rows(store)
+    if not rows:
+        return 0
+
+    placeholders = ", ".join("?" for _ in CHECKPOINT_COLUMNS)
+    conn.cursor().executemany(
+        f"""
+        INSERT OR REPLACE INTO {CHECKPOINT_TABLE} ({', '.join(CHECKPOINT_COLUMNS)})
+        VALUES ({placeholders})
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+def _get_recorded_jsonl_paths(statuses: tuple[str, ...]) -> set[str]:
+    """Return JSONL paths already represented by stable checkpoint states."""
+    if not CHECKPOINT_DB_PATH.exists():
+        return set()
+
+    conn = _open_checkpoint_conn()
+    try:
+        _ensure_checkpoint_table_in_conn(conn)
+        placeholders = ", ".join("?" for _ in statuses)
+        rows = list(
+            conn.cursor().execute(
+                f"""
+                SELECT jsonl_path
+                FROM {CHECKPOINT_TABLE}
+                WHERE status IN ({placeholders})
+                  AND jsonl_path IS NOT NULL
+                """,
+                statuses,
+            )
+        )
+        return {row[0] for row in rows if row and row[0]}
+    finally:
+        conn.close()
+
+
+def get_unsubmitted_export_files(export_dir: Optional[Path] = None) -> List[Path]:
+    """Reuse existing JSONL exports and skip files already checkpointed."""
+    export_dir = export_dir or EXPORT_DIR
+    existing_files = sorted(export_dir.glob("batch_*.jsonl"))
+    if not existing_files:
+        return []
+
+    recorded_paths = _get_recorded_jsonl_paths(CHECKPOINT_STABLE_STATUSES)
+    return [path for path in existing_files if str(path) not in recorded_paths]
+
+
+def ensure_checkpoint_table(store: VectorStore) -> None:
+    """Create the sidecar checkpoint DB and migrate legacy rows if present."""
+    conn = _open_checkpoint_conn()
+    try:
+        _ensure_checkpoint_table_in_conn(conn)
+        _migrate_checkpoints_from_main_db(store, conn)
+    finally:
+        conn.close()
+
+
+def save_checkpoint(store: VectorStore, batch_id: str, **kwargs) -> None:
+    """Insert or update a checkpoint row in the sidecar checkpoint DB."""
+    del store  # Legacy signature retained for callers; checkpoint writes avoid the main DB.
+    last_error: Exception | None = None
+
+    for attempt in range(CHECKPOINT_WRITE_MAX_RETRIES):
+        conn = None
+        try:
+            conn = _open_checkpoint_conn()
+            _ensure_checkpoint_table_in_conn(conn)
+            cursor = conn.cursor()
+            existing = list(
+                cursor.execute(
+                    f"SELECT batch_id FROM {CHECKPOINT_TABLE} WHERE batch_id = ?",
+                    [batch_id],
+                )
+            )
+            if existing:
+                sets = ", ".join(f"{k} = ?" for k in kwargs)
+                params = list(kwargs.values()) + [batch_id]
+                cursor.execute(f"UPDATE {CHECKPOINT_TABLE} SET {sets} WHERE batch_id = ?", params)
+            else:
+                cols = ["batch_id"] + list(kwargs.keys())
+                vals = [batch_id] + list(kwargs.values())
+                placeholders = ", ".join("?" for _ in cols)
+                cursor.execute(
+                    f"INSERT INTO {CHECKPOINT_TABLE} ({', '.join(cols)}) VALUES ({placeholders})",
+                    vals,
+                )
+            return
+        except apsw.BusyError as exc:
+            last_error = exc
+            if attempt == CHECKPOINT_WRITE_MAX_RETRIES - 1:
+                break
+            time.sleep(CHECKPOINT_WRITE_BASE_DELAY * (2**attempt))
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if last_error is not None:
+        raise last_error
 
 
 def get_pending_jobs(store: VectorStore) -> List[Dict[str, Any]]:
     """Get jobs that need polling (submitted but not completed/failed)."""
-    cursor = store.conn.cursor()
-    rows = list(cursor.execute(
-        f"SELECT batch_id, backend, model, status, jsonl_path FROM {CHECKPOINT_TABLE} WHERE status = 'submitted'"
-    ))
-    return [{"batch_id": r[0], "backend": r[1], "model": r[2], "status": r[3], "jsonl_path": r[4]} for r in rows]
+    del store  # Retained for signature compatibility.
+    conn = _open_checkpoint_conn()
+    try:
+        _ensure_checkpoint_table_in_conn(conn)
+        rows = list(
+            conn.cursor().execute(
+                f"""
+                SELECT batch_id, backend, model, status, jsonl_path
+                FROM {CHECKPOINT_TABLE}
+                WHERE status = 'submitted'
+                """
+            )
+        )
+        return [{"batch_id": r[0], "backend": r[1], "model": r[2], "status": r[3], "jsonl_path": r[4]} for r in rows]
+    finally:
+        conn.close()
+
+
+class ReadOnlyBackfillStore:
+    """Minimal read-only store for export-only runs when VectorStore open is blocked."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
+        self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=5)
+
+    def _read_cursor(self):
+        return self.conn.cursor()
+
+    def get_enrichment_stats(self) -> Dict[str, Any]:
+        cursor = self._read_cursor()
+        total = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        enriched = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
+        ).fetchone()[0]
+        skipped = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"
+        ).fetchone()[0]
+        remaining = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0]
+        enrichable = total - skipped
+        by_intent = cursor.execute(
+            """
+            SELECT intent, COUNT(*) FROM chunks
+            WHERE intent IS NOT NULL
+            GROUP BY intent ORDER BY COUNT(*) DESC
+            """
+        ).fetchall()
+        return {
+            "total_chunks": total,
+            "enrichable": enrichable,
+            "enriched": enriched,
+            "skipped": skipped,
+            "remaining": remaining,
+            "percent": round(enriched / enrichable * 100, 1) if enrichable > 0 else 0,
+            "naive_percent": round((enriched + skipped) / total * 100, 1) if total > 0 else 0,
+            "by_intent": {row[0]: row[1] for row in by_intent},
+        }
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+def open_backfill_store(db_path: Path, *, allow_read_only_fallback: bool = False):
+    """Open the main DB for backfill work, with read-only fallback for export-only runs."""
+    try:
+        return VectorStore(db_path)
+    except apsw.BusyError:
+        if not allow_read_only_fallback:
+            raise
+        print("Main DB open hit BusyError; falling back to read-only export mode.")
+        return ReadOnlyBackfillStore(db_path)
 
 
 # ── Export ──────────────────────────────────────────────────────────────
@@ -258,14 +488,8 @@ def export_unenriched_chunks(
                     # No sanitization — use local prompt builder
                     prompt = build_prompt(chunk_dict)
 
-                # Gemini Batch API format (camelCase — raw JSONL uses REST API casing)
-                request_line = {
-                    "key": chunk_id,
-                    "request": {
-                        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                        "generationConfig": {"responseMimeType": "application/json"},
-                    },
-                }
+                # Gemini Batch API format uses camelCase field names.
+                request_line = build_batch_request_line(chunk_id, prompt)
                 f.write(json.dumps(request_line) + "\n")
 
         jsonl_files.append(filename)
@@ -275,8 +499,8 @@ def export_unenriched_chunks(
     if sanitizer is not None:
         mapping_path = EXPORT_DIR / "pii_mapping.json"
         sanitizer.save_mapping(mapping_path)
+        print(f"Mapping saved to: {mapping_path}")
     print(f"\nPII sanitization: {total_pii_found}/{len(rows)} chunks had PII stripped")
-    print(f"Mapping saved to: {mapping_path}")
     print(f"Exported {len(rows)} chunks to {len(jsonl_files)} JSONL files")
     return jsonl_files
 
@@ -571,7 +795,7 @@ def run_full_backfill(
     submit_only: bool = False,
 ) -> None:
     """Run the full backfill: export → submit → poll → import."""
-    store = VectorStore(db_path)
+    store = open_backfill_store(db_path, allow_read_only_fallback=(submit_only or dry_run))
     ensure_checkpoint_table(store)
 
     try:
@@ -580,9 +804,22 @@ def run_full_backfill(
         print(f"Current enrichment: {stats['enriched']}/{stats['total_chunks']} ({stats['percent']}%)")
         print(f"Remaining: {stats['remaining']}\n")
 
-        # Step 1: Export
+        # Step 1: Export or reuse existing batch files
         max_chunks = sample if sample > 0 else 0
-        jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
+        if submit_only and sample == 0:
+            jsonl_files = get_unsubmitted_export_files()
+            if jsonl_files:
+                print(
+                    f"Reusing {len(jsonl_files)} existing JSONL batch files not yet checkpointed "
+                    f"from {EXPORT_DIR}"
+                )
+            elif list(EXPORT_DIR.glob("batch_*.jsonl")):
+                print("All existing JSONL batch files are already checkpointed. No new submissions needed.")
+                return
+            else:
+                jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
+        else:
+            jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
 
         if not jsonl_files:
             print("Nothing to export!")
@@ -634,8 +871,7 @@ def run_full_backfill(
                     um = job.usage_metadata
                     in_tok = getattr(um, "prompt_token_count", 0) or 0
                     out_tok = getattr(um, "candidates_token_count", 0) or 0
-                    # Gemini 2.5 Flash: $0.15/1M input, $0.60/1M output (Tier 1)
-                    cost = (in_tok * 0.15 + out_tok * 0.60) / 1_000_000
+                    cost = estimate_batch_cost_usd(in_tok, out_tok)
                     log_batch_usage(batch_name, model, in_tok, out_tok, cost)
 
                 save_checkpoint(store, batch_id=batch_name, status="completed",
@@ -684,7 +920,7 @@ def resume_backfill(db_path: Path) -> None:
                     um = batch_job.usage_metadata
                     in_tok = getattr(um, "prompt_token_count", 0) or 0
                     out_tok = getattr(um, "candidates_token_count", 0) or 0
-                    cost = (in_tok * 0.075 + out_tok * 0.30) / 1_000_000
+                    cost = estimate_batch_cost_usd(in_tok, out_tok)
                     log_batch_usage(job["batch_id"], job.get("model", "gemini"), in_tok, out_tok, cost)
 
                 save_checkpoint(store, batch_id=job["batch_id"], status="completed",
@@ -707,11 +943,20 @@ def show_status(db_path: Path) -> None:
     ensure_checkpoint_table(store)
 
     try:
-        cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            f"SELECT batch_id, backend, model, status, chunk_count, submitted_at, completed_at, error "
-            f"FROM {CHECKPOINT_TABLE} ORDER BY submitted_at DESC"
-        ))
+        conn = _open_checkpoint_conn()
+        try:
+            _ensure_checkpoint_table_in_conn(conn)
+            rows = list(
+                conn.cursor().execute(
+                    f"""
+                    SELECT batch_id, backend, model, status, chunk_count, submitted_at, completed_at, error
+                    FROM {CHECKPOINT_TABLE}
+                    ORDER BY submitted_at DESC
+                    """
+                )
+            )
+        finally:
+            conn.close()
 
         if not rows:
             print("No batch jobs recorded.")
