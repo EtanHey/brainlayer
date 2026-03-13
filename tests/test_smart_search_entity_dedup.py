@@ -5,6 +5,8 @@ TDD tests — written before implementation.
 
 import asyncio
 from collections import Counter
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from brainlayer.vector_store import VectorStore
 
@@ -200,6 +202,34 @@ class TestBrainExpand:
         # Should get an error about chunk not found, NOT "Unknown tool"
         text = result.content[0].text if hasattr(result, "content") else result[0].text
         assert "Unknown tool" not in text
+
+    def test_brain_expand_manual_chunk_id_returns_target_content(self, tmp_path):
+        """brain_expand should expand manual-* chunk IDs created via brain_store."""
+        from brainlayer.mcp import call_tool
+        from brainlayer.store import store_memory
+
+        store = VectorStore(tmp_path / "test.db")
+
+        with patch(
+            "brainlayer.store.uuid.uuid4",
+            return_value=SimpleNamespace(hex="480177bae8ba4dd2cafebabedeadbeef"),
+        ):
+            stored = store_memory(
+                store=store,
+                embed_fn=_dummy_embed,
+                content="Manual chunk content should still expand without conversation context",
+                memory_type="note",
+                project="brainlayer",
+            )
+
+        assert stored["id"] == "manual-480177bae8ba4dd2"
+
+        with patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store):
+            result = asyncio.run(call_tool("brain_expand", {"chunk_id": stored["id"]}))
+
+        text = result.content[0].text if hasattr(result, "content") else result[0].text
+        assert "Unknown chunk_id" not in text
+        assert "Manual chunk content should still expand without conversation context" in text
 
 
 # ============================================================

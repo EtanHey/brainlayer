@@ -581,7 +581,7 @@ class SearchMixin:
         target = list(
             cursor.execute(
                 """
-            SELECT conversation_id, position, content, metadata
+            SELECT conversation_id, position, content, metadata, content_type
             FROM chunks WHERE id = ?
         """,
                 (chunk_id,),
@@ -591,13 +591,23 @@ class SearchMixin:
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
 
-        conv_id, position, content, metadata = target[0]
+        conv_id, position, content, metadata, content_type = target[0]
 
         if not conv_id or position is None:
+            # Standalone chunks (for example, manual-* chunks created via brain_store)
+            # have no conversation_id/position. They should still be expandable as a
+            # single target chunk instead of being treated as missing.
             return {
                 "target": {"id": chunk_id, "content": content, "position": None},
-                "context": [],
-                "error": "Chunk has no conversation context (conversation_id/position not set)",
+                "context": [
+                    {
+                        "id": chunk_id,
+                        "content": content,
+                        "position": None,
+                        "content_type": content_type,
+                        "is_target": True,
+                    }
+                ],
             }
 
         # Get surrounding chunks
