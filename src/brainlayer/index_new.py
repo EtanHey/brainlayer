@@ -79,6 +79,7 @@ def index_chunks_to_sqlite(
                 "conversation_id": conversation_id,
                 "position": i,
                 "sender": chunk.metadata.get("sender"),
+                "source": chunk.metadata.get("source", "claude_code"),
             }
         )
 

@@ -5,6 +5,7 @@ import re as _re
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich import print as rprint
@@ -1538,6 +1539,69 @@ def index_fast(
 
     except typer.Exit:
         raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("ingest-codex")
+def ingest_codex(
+    path: Optional[Path] = typer.Argument(
+        None,
+        help="Codex session JSONL file or sessions directory (default: ~/.codex/sessions)",
+    ),
+    project: str = typer.Option(None, "--project", "-p", help="Override project name"),
+    since_days: int = typer.Option(None, "--since-days", "-d", help="Only process last N days"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Parse but do not write to DB"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print each classified entry"),
+) -> None:
+    """Ingest Codex (GPT-5.4) session transcripts into BrainLayer.
+
+    Normalizes ~/.codex/sessions/YYYY/MM/DD/*.jsonl into searchable chunks
+    with source='codex_cli'. Already-indexed sessions are skipped automatically.
+    """
+    from ..ingest.codex import ingest_codex_dir, ingest_codex_session
+    from ..paths import DEFAULT_DB_PATH
+
+    db_path = DEFAULT_DB_PATH
+
+    try:
+        if path and path.is_file():
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Codex session: [bold]{path.name}[/]")
+            with console.status("Indexing..."):
+                n = ingest_codex_session(
+                    path,
+                    db_path=db_path,
+                    project_override=project,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+            rprint(f"[bold green]✓[/] Indexed [bold]{n}[/] chunks from {path.name}")
+        else:
+            sessions_root = path if path else None
+            label = str(sessions_root) if sessions_root else "~/.codex/sessions"
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Codex sessions from: [bold]{label}[/]")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Scanning sessions...", total=None)
+                files, chunks = ingest_codex_dir(
+                    sessions_dir=sessions_root,
+                    db_path=db_path,
+                    project_override=project,
+                    since_days=since_days,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+                progress.update(task, description=f"Done — {files} files, {chunks:,} chunks")
+            tag = " [dim](dry run)[/]" if dry_run else ""
+            rprint(f"[bold green]✓[/] Processed [bold]{files}[/] session files, [bold]{chunks:,}[/] chunks{tag}")
+    except FileNotFoundError as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

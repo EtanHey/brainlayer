@@ -624,17 +624,26 @@ def poll_gemini_batch(batch_name: str, timeout_hours: float = 25) -> Dict[str, A
 
     print(f"\nPolling job: {batch_name}")
     while time.time() < deadline:
-        batch_job = client.batches.get(name=batch_name)
+        try:
+            batch_job = client.batches.get(name=batch_name)
+        except Exception as exc:
+            err_str = str(exc)
+            if "404" in err_str or "NOT_FOUND" in err_str:
+                print(f"  Job not found (404) — may have expired: {batch_name}")
+                return {"state": "failed", "error": "NOT_FOUND (expired or invalid)"}
+            raise
+        # state may be "JOB_STATE_SUCCEEDED" or "JobState.JOB_STATE_SUCCEEDED"
         state = str(batch_job.state)
+        state_normalized = state.split(".")[-1]  # strip "JobState." prefix if present
 
-        if state == "JOB_STATE_SUCCEEDED":
+        if state_normalized == "JOB_STATE_SUCCEEDED":
             print("  Job SUCCEEDED!")
             return {"state": "succeeded", "job": batch_job}
-        elif state == "JOB_STATE_FAILED":
+        elif state_normalized == "JOB_STATE_FAILED":
             error = getattr(batch_job, "error", "unknown error")
             print(f"  Job FAILED: {error}")
             return {"state": "failed", "error": str(error), "job": batch_job}
-        elif state == "JOB_STATE_CANCELLED":
+        elif state_normalized == "JOB_STATE_CANCELLED":
             print("  Job CANCELLED")
             return {"state": "failed", "error": "cancelled"}
 
@@ -674,8 +683,8 @@ def download_gemini_results(batch_job) -> List[Dict[str, Any]]:
     print(f"  Downloading results: {file_name}")
 
     try:
-        # Download the result file
-        content = client.files.download(name=file_name)
+        # Download the result file (SDK uses file= not name=)
+        content = client.files.download(file=file_name)
         if isinstance(content, bytes):
             content = content.decode("utf-8")
 
@@ -963,13 +972,24 @@ def resume_backfill(db_path: Path) -> None:
             return
 
         print(f"Found {len(pending)} pending jobs to resume")
-        for job in pending:
-            print(f"\nResuming: {job['batch_id']}")
-            result = poll_gemini_batch(job["batch_id"])
+        imported_count = 0
+        failed_count = 0
+        for i, job in enumerate(pending):
+            print(f"\nResuming [{i+1}/{len(pending)}]: {job['batch_id']}")
+            try:
+                result = poll_gemini_batch(job["batch_id"])
+            except Exception as exc:
+                print(f"  ERROR polling job: {exc}")
+                save_checkpoint(store, batch_id=job["batch_id"], status="failed",
+                                error=str(exc)[:500],
+                                completed_at=datetime.now(timezone.utc).isoformat())
+                failed_count += 1
+                continue
 
             if result["state"] == "succeeded":
                 batch_results = download_gemini_results(result["job"])
                 import_results(store, batch_results, job["batch_id"])
+                imported_count += 1
 
                 # Log usage to Supabase (best-effort)
                 batch_job = result.get("job")
@@ -986,9 +1006,11 @@ def resume_backfill(db_path: Path) -> None:
                 save_checkpoint(store, batch_id=job["batch_id"], status="failed",
                                 error=result.get("error", "unknown"),
                                 completed_at=datetime.now(timezone.utc).isoformat())
+                failed_count += 1
 
         final_stats = store.get_enrichment_stats()
-        print(f"\nEnrichment: {final_stats['enriched']}/{final_stats['total_chunks']} ({final_stats['percent']}%)")
+        print(f"\nImported {imported_count} jobs, {failed_count} failed")
+        print(f"Enrichment: {final_stats['enriched']}/{final_stats['total_chunks']} ({final_stats['percent']}%)")
 
     finally:
         store.close()
