@@ -106,6 +106,7 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 markers = [
     "integration: tests that need the real production DB (268K+ chunks)",
     "slow: tests that load ML models or take >30s",
