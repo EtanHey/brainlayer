@@ -18,6 +18,7 @@ from brainlayer.pipeline.enrichment_tiers import (
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
+
 def _dt(days_ago: int) -> str:
     """Return ISO timestamp N days ago in UTC."""
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
@@ -28,6 +29,7 @@ OLD = _dt(30)
 VERY_OLD = _dt(365)
 
 # ── T0: IMMEDIATE — manual / digest / high-signal memory types ───────────
+
 
 def test_manual_source_is_tier0():
     """Manually stored chunks (brain_store) must always be tier 0."""
@@ -54,6 +56,7 @@ def test_digest_source_is_tier0_regardless_of_age():
 
 
 # ── T1: HOURLY — recent claude_code ──────────────────────────────────────
+
 
 def test_recent_claude_code_ai_code_is_tier1():
     """Recent ai_code from claude_code sessions is tier 1."""
@@ -100,6 +103,7 @@ def test_within_recency_window_is_tier1():
 
 # ── T2: LAZY — old claude_code backlog ───────────────────────────────────
 
+
 def test_old_claude_code_assistant_text_is_tier2():
     """Old assistant_text backlog (>7 days) from claude_code is tier 2."""
     tier = classify_chunk_tier(source="claude_code", content_type="assistant_text", created_at=OLD)
@@ -127,6 +131,7 @@ def test_just_past_recency_window_is_tier2():
 
 # ── T3: EXPLICIT — youtube transcripts ──────────────────────────────────
 
+
 def test_youtube_source_is_tier3():
     """YouTube transcript chunks are always tier 3 regardless of content type or age."""
     tier = classify_chunk_tier(source="youtube", content_type="assistant_text", created_at=RECENT)
@@ -153,6 +158,7 @@ def test_unknown_source_recent_is_tier1():
 
 # ── None / missing created_at ────────────────────────────────────────────
 
+
 def test_none_created_at_defaults_to_tier2_for_claude_code():
     """Chunks with no created_at timestamp are treated as old (T2 for claude_code)."""
     tier = classify_chunk_tier(source="claude_code", content_type="assistant_text", created_at=None)
@@ -160,6 +166,7 @@ def test_none_created_at_defaults_to_tier2_for_claude_code():
 
 
 # ── get_tier_content_types ───────────────────────────────────────────────
+
 
 def test_get_tier_content_types_returns_high_value_for_t1():
     """T1 content types should include the core high-value types."""
@@ -171,6 +178,7 @@ def test_get_tier_content_types_returns_high_value_for_t1():
 
 
 # ── get_tier_source_filter ───────────────────────────────────────────────
+
 
 def test_get_tier_source_filter_t1_excludes_youtube():
     """T1 source filter must exclude youtube so it's not processed hourly."""

@@ -17,11 +17,12 @@ from typing import List, Optional, Set
 
 # ── Tier definition ──────────────────────────────────────────────────────
 
+
 class EnrichmentTier(IntEnum):
     T0_IMMEDIATE = 0  # manual / digest — enrich immediately
-    T1_HOURLY = 1     # recent claude_code — hourly local run
-    T2_LAZY = 2       # old claude_code backlog — lazy / remote batch
-    T3_EXPLICIT = 3   # youtube — explicit request only
+    T1_HOURLY = 1  # recent claude_code — hourly local run
+    T2_LAZY = 2  # old claude_code backlog — lazy / remote batch
+    T3_EXPLICIT = 3  # youtube — explicit request only
 
 
 # ── Constants ────────────────────────────────────────────────────────────
@@ -40,6 +41,7 @@ T1_CONTENT_TYPES: List[str] = ["ai_code", "stack_trace", "user_message", "assist
 
 
 # ── Classifier ───────────────────────────────────────────────────────────
+
 
 def classify_chunk_tier(
     source: str,
@@ -87,6 +89,7 @@ def _is_recent(created_at: Optional[str], recency_days: int) -> bool:
 
 
 # ── Selectors ────────────────────────────────────────────────────────────
+
 
 def get_tier_content_types(tier: EnrichmentTier) -> List[str]:
     """Return the content types relevant for a given tier.
