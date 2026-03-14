@@ -54,3 +54,6 @@ uv.lock
 
 # Claude scratchpad
 claude.scratchpad.md
+
+# MCP config (contains secrets)
+.mcp.json
