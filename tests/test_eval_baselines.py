@@ -927,6 +927,7 @@ class TestPromptHookEntityInjection:
     def _call_hook(self, prompt: str) -> str:
         """Run the hook subprocess and return its stdout."""
         import subprocess
+
         from brainlayer.paths import get_db_path
 
         if not self.HOOK_PATH.exists():
