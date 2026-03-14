@@ -9,6 +9,9 @@ from mcp.types import TextContent
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
 _retry_delay = 0.1  # base delay in seconds (exposed for test patching)
+_VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
+_MAX_PUBLIC_NUM_RESULTS = 100
+_MIN_PUBLIC_NUM_RESULTS = 1
 
 from ._shared import (
     _build_compact_result,
@@ -123,6 +126,13 @@ async def _brain_search(
     detail: str = "compact",
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
+
+    if detail not in _VALID_SEARCH_DETAILS:
+        return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
+    if num_results < _MIN_PUBLIC_NUM_RESULTS or num_results > _MAX_PUBLIC_NUM_RESULTS:
+        return _error_result(
+            f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
+        )
 
     if project is None and entity_id is None and source not in ("youtube", "whatsapp", "telegram", "all"):
         try:

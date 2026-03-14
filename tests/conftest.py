@@ -1,6 +1,7 @@
 """Shared test fixtures for BrainLayer tests."""
 
 import os
+import uuid
 
 import pytest
 
@@ -11,6 +12,16 @@ def pytest_configure(config):
         "markers",
         "live: mark test as requiring a live production DB (skipped in CI if DB absent)",
     )
+
+
+@pytest.fixture
+def eval_project() -> str:
+    """Return a unique project name for each eval test case.
+
+    Prevents cross-case data contamination when eval tests seed brain_store
+    chunks. Each test invocation gets its own project namespace.
+    """
+    return f"eval-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
