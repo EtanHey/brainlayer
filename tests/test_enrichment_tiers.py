@@ -9,8 +9,6 @@ Tiers:
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from brainlayer.pipeline.enrichment_tiers import (
     EnrichmentTier,
     classify_chunk_tier,
