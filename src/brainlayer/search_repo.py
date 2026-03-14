@@ -1,6 +1,7 @@
 """Search and retrieval methods for VectorStore (mixin)."""
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -27,9 +28,30 @@ _HYBRID_CACHE_MAX = 128   # max entries (LRU eviction)
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
 
 
+def clear_hybrid_search_cache(store_key: Any = None) -> None:
+    """Clear cached hybrid search results, optionally scoped to a single DB."""
+    if store_key is None:
+        _hybrid_cache.clear()
+        return
+
+    normalized_store_key = os.fspath(store_key)
+    stale_keys = [key for key in _hybrid_cache if key and key[0] == normalized_store_key]
+    for key in stale_keys:
+        _hybrid_cache.pop(key, None)
+
+
+def _hybrid_embedding_key(query_embedding: Optional[List[float]]) -> bytes:
+    """Hash embeddings so cache keys stay stable across equivalent iterables."""
+    if query_embedding is None:
+        return b""
+    embedding_bytes = serialize_f32([float(value) for value in query_embedding])
+    return hashlib.sha256(embedding_bytes).digest()
+
+
 def _hybrid_cache_key(
     store_key: str,
     query_text: str,
+    query_embedding: Optional[List[float]],
     n_results: int,
     project_filter: Optional[str],
     content_type_filter: Optional[str],
@@ -48,6 +70,7 @@ def _hybrid_cache_key(
     return (
         store_key,
         query_text,
+        _hybrid_embedding_key(query_embedding),
         n_results,
         project_filter,
         content_type_filter,
@@ -424,6 +447,7 @@ class SearchMixin:
         cache_key = _hybrid_cache_key(
             store_key,
             query_text,
+            query_embedding,
             n_results,
             project_filter,
             content_type_filter,

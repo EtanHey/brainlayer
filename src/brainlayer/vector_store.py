@@ -702,6 +702,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
                 (chunk_id, serialize_f32(embedding)),
             )
+        from .search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
@@ -712,6 +715,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
         cursor.execute("UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,))
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        from .search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
         return True
 
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:

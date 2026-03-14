@@ -152,6 +152,9 @@ class SessionMixin:
         for attempt in range(3):
             try:
                 cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+                from .search_repo import clear_hybrid_search_cache
+
+                clear_hybrid_search_cache(getattr(self, "db_path", None))
                 return
             except apsw.BusyError:
                 if attempt < 2:

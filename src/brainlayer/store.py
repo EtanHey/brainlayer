@@ -187,6 +187,10 @@ def store_memory(
             context=f"Stored via brain_store: {memory_type}",
         )
 
+    from .search_repo import clear_hybrid_search_cache
+
+    clear_hybrid_search_cache(getattr(store, "db_path", None))
+
     return {
         "id": chunk_id,
         "related": related,

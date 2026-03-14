@@ -17,7 +17,6 @@ import pytest
 from brainlayer.search_repo import _hybrid_cache
 from brainlayer.vector_store import VectorStore
 
-
 # ── Fix 1: detail parameter validation ──────────────────────────────────────
 
 
@@ -383,6 +382,106 @@ class TestHybridSearchLatency:
 
         assert second["documents"][0][0] == "topic content"
         assert "session_summary" not in second["metadatas"][0][0]
+
+    def test_cache_key_includes_query_embedding(self, store):
+        """Same query text with different embeddings must not share cached rankings."""
+        from brainlayer.store import store_memory
+
+        store_memory(store, self._embed, content="alpha marker", memory_type="note", project="cache-project")
+        store_memory(store, self._embed, content="beta marker", memory_type="note", project="cache-project")
+
+        result_alpha = store.hybrid_search(
+            query_embedding=self._embed("alpha marker"),
+            query_text="shared semantic query",
+            n_results=1,
+        )
+        result_beta = store.hybrid_search(
+            query_embedding=self._embed("beta marker"),
+            query_text="shared semantic query",
+            n_results=1,
+        )
+
+        assert result_alpha["documents"][0][0] == "alpha marker"
+        assert result_beta["documents"][0][0] == "beta marker"
+
+    def test_cache_invalidates_after_store_memory(self, store):
+        """Writes via store_memory must clear cached empty results."""
+        from brainlayer.store import store_memory
+
+        query = "semantic cache invalidation"
+        query_embed = self._embed(query)
+        first = store.hybrid_search(query_embedding=query_embed, query_text="cache miss text", n_results=1)
+        assert first["documents"][0] == []
+
+        store_memory(store, self._embed, content=query, memory_type="note", project="cache-project")
+
+        second = store.hybrid_search(query_embedding=query_embed, query_text="cache miss text", n_results=1)
+        assert second["documents"][0][0] == query
+
+    def test_cache_invalidates_after_update_enrichment(self, store):
+        """Updating enrichment metadata must invalidate cached filtered searches."""
+        from brainlayer.store import store_memory
+
+        stored = store_memory(store, self._embed, content="enrichment candidate", memory_type="note", project="cache-project")
+        query_embed = self._embed("enrichment candidate")
+
+        first = store.hybrid_search(
+            query_embedding=query_embed,
+            query_text="semantic enrichment lookup",
+            n_results=1,
+            tag_filter="new-tag",
+        )
+        assert first["documents"][0] == []
+
+        store.update_enrichment(stored["id"], tags=["new-tag"])
+
+        second = store.hybrid_search(
+            query_embedding=query_embed,
+            query_text="semantic enrichment lookup",
+            n_results=1,
+            tag_filter="new-tag",
+        )
+        assert second["documents"][0][0] == "enrichment candidate"
+
+    def test_cache_invalidates_after_update_chunk(self, store):
+        """Chunk edits must invalidate cached results."""
+        from brainlayer.store import store_memory
+
+        stored = store_memory(store, self._embed, content="old chunk content", memory_type="note", project="cache-project")
+        query_embed = self._embed("old chunk content")
+
+        first = store.hybrid_search(
+            query_embedding=query_embed,
+            query_text="semantic edit lookup",
+            n_results=1,
+            tag_filter="edited-tag",
+        )
+        assert first["documents"][0] == []
+
+        store.update_chunk(stored["id"], tags=["edited-tag"])
+
+        second = store.hybrid_search(
+            query_embedding=query_embed,
+            query_text="semantic edit lookup",
+            n_results=1,
+            tag_filter="edited-tag",
+        )
+        assert second["documents"][0][0] == "old chunk content"
+
+    def test_cache_invalidates_after_archive_chunk(self, store):
+        """Archiving a chunk must evict any cached positive hit."""
+        from brainlayer.store import store_memory
+
+        stored = store_memory(store, self._embed, content="archived content", memory_type="note", project="cache-project")
+        query_embed = self._embed("archived content")
+
+        first = store.hybrid_search(query_embedding=query_embed, query_text="semantic archive lookup", n_results=1)
+        assert first["documents"][0][0] == "archived content"
+
+        store.archive_chunk(stored["id"])
+
+        second = store.hybrid_search(query_embedding=query_embed, query_text="semantic archive lookup", n_results=1)
+        assert second["documents"][0] == []
 
     @pytest.mark.live
     def test_hybrid_search_warm_p50_under_500ms(self, live_store, live_model):

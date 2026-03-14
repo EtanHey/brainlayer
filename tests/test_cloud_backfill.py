@@ -7,8 +7,8 @@ from pathlib import Path
 import apsw
 import pytest
 
-from scripts import cloud_backfill
 from brainlayer.vector_store import VectorStore
+from scripts import cloud_backfill
 
 
 def _insert_unenriched_chunk(store: VectorStore, chunk_id: str, content: str, content_type: str = "assistant_text") -> None:
@@ -246,3 +246,82 @@ def test_open_backfill_store_falls_back_to_read_only_when_vectorstore_is_locked(
         assert isinstance(store, cloud_backfill.ReadOnlyBackfillStore)
     finally:
         store.close()
+
+
+def test_get_pending_jobs_is_scoped_to_the_selected_db(tmp_path, monkeypatch):
+    """Pending jobs for one DB must not leak into another DB's resume path."""
+    monkeypatch.setattr(cloud_backfill, "CHECKPOINT_DB_PATH", tmp_path / "shared-sidecar.db", raising=False)
+
+    db_dir_a = tmp_path / "db-a"
+    db_dir_b = tmp_path / "db-b"
+    db_dir_a.mkdir()
+    db_dir_b.mkdir()
+
+    store_a = VectorStore(db_dir_a / "brainlayer.db")
+    store_b = VectorStore(db_dir_b / "brainlayer.db")
+    try:
+        cloud_backfill.save_checkpoint(
+            store_a,
+            batch_id="batch-a",
+            backend="gemini",
+            model="models/gemini-2.5-flash",
+            status="submitted",
+            chunk_count=10,
+            jsonl_path="/tmp/a.jsonl",
+        )
+
+        assert [job["batch_id"] for job in cloud_backfill.get_pending_jobs(store_a)] == ["batch-a"]
+        assert cloud_backfill.get_pending_jobs(store_b) == []
+    finally:
+        store_a.close()
+        store_b.close()
+
+
+def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path, monkeypatch):
+    """submit-only should export new unenriched chunks instead of returning early."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    checkpoint_db = tmp_path / "enrichment_checkpoints.db"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+    monkeypatch.setattr(cloud_backfill, "CHECKPOINT_DB_PATH", checkpoint_db, raising=False)
+
+    old_file = export_dir / "batch_001.jsonl"
+    old_file.write_text("{}\n")
+    new_file = export_dir / "batch_002.jsonl"
+
+    cloud_backfill.save_checkpoint(
+        None,
+        batch_id="imported-batch",
+        backend="gemini",
+        model="models/gemini-2.5-flash",
+        status="imported",
+        chunk_count=500,
+        jsonl_path=str(old_file),
+    )
+
+    exported_paths: list[Path] = []
+    submitted_paths: list[Path] = []
+
+    def fake_export(*args, **kwargs):
+        exported_paths.append(new_file)
+        new_file.write_text("{}\n")
+        return [new_file]
+
+    def fake_submit(jsonl_path, model, store):
+        submitted_paths.append(Path(jsonl_path))
+        return f"job-{Path(jsonl_path).stem}"
+
+    monkeypatch.setattr(cloud_backfill, "export_unenriched_chunks", fake_export)
+    monkeypatch.setattr(cloud_backfill, "submit_gemini_batch", fake_submit)
+    monkeypatch.setattr(cloud_backfill.time, "sleep", lambda *_args, **_kwargs: None)
+
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        _insert_unenriched_chunk(store, "chunk-1", "new unenriched content that still needs export")
+    finally:
+        store.close()
+
+    cloud_backfill.run_full_backfill(tmp_path / "brainlayer.db", submit_only=True)
+
+    assert exported_paths == [new_file]
+    assert submitted_paths == [new_file]

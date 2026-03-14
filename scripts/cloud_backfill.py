@@ -36,16 +36,15 @@ import apsw
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from brainlayer.vector_store import VectorStore
+from brainlayer.paths import get_db_path
 from brainlayer.pipeline.enrichment import (
-    ENRICHMENT_PROMPT,
     HIGH_VALUE_TYPES,
     build_external_prompt,
     build_prompt,
     parse_enrichment,
 )
-from brainlayer.paths import get_db_path
-from brainlayer.pipeline.sanitize import Sanitizer, SanitizeConfig
+from brainlayer.pipeline.sanitize import SanitizeConfig, Sanitizer
+from brainlayer.vector_store import VectorStore
 
 # ── Config ──────────────────────────────────────────────────────────────
 
@@ -136,10 +135,28 @@ def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
 
 # ── DB helpers ──────────────────────────────────────────────────────────
 
-def _open_checkpoint_conn() -> apsw.Connection:
+def get_checkpoint_db_path(db_path: Path | str | None = None) -> Path:
+    """Resolve the checkpoint sidecar path for a selected main DB."""
+    if db_path is None:
+        return CHECKPOINT_DB_PATH
+    return Path(db_path).with_name("enrichment_checkpoints.db")
+
+
+def _store_db_path(store: Any | None) -> Path | None:
+    """Best-effort DB path lookup from a store-like object."""
+    if store is None:
+        return None
+    db_path = getattr(store, "db_path", None)
+    if db_path is None:
+        return None
+    return Path(db_path)
+
+
+def _open_checkpoint_conn(db_path: Path | str | None = None) -> apsw.Connection:
     """Open the sidecar checkpoint DB without VectorStore startup hooks."""
-    CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = apsw.Connection(str(CHECKPOINT_DB_PATH))
+    checkpoint_db_path = get_checkpoint_db_path(db_path)
+    checkpoint_db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = apsw.Connection(str(checkpoint_db_path))
     conn.setbusytimeout(5000)
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
@@ -203,12 +220,13 @@ def _migrate_checkpoints_from_main_db(store: Optional[VectorStore], conn: apsw.C
     return len(rows)
 
 
-def _get_recorded_jsonl_paths(statuses: tuple[str, ...]) -> set[str]:
+def _get_recorded_jsonl_paths(statuses: tuple[str, ...], db_path: Path | str | None = None) -> set[str]:
     """Return JSONL paths already represented by stable checkpoint states."""
-    if not CHECKPOINT_DB_PATH.exists():
+    checkpoint_db_path = get_checkpoint_db_path(db_path)
+    if not checkpoint_db_path.exists():
         return set()
 
-    conn = _open_checkpoint_conn()
+    conn = _open_checkpoint_conn(db_path)
     try:
         _ensure_checkpoint_table_in_conn(conn)
         placeholders = ", ".join("?" for _ in statuses)
@@ -228,20 +246,20 @@ def _get_recorded_jsonl_paths(statuses: tuple[str, ...]) -> set[str]:
         conn.close()
 
 
-def get_unsubmitted_export_files(export_dir: Optional[Path] = None) -> List[Path]:
+def get_unsubmitted_export_files(export_dir: Optional[Path] = None, db_path: Path | str | None = None) -> List[Path]:
     """Reuse existing JSONL exports and skip files already checkpointed."""
     export_dir = export_dir or EXPORT_DIR
     existing_files = sorted(export_dir.glob("batch_*.jsonl"))
     if not existing_files:
         return []
 
-    recorded_paths = _get_recorded_jsonl_paths(CHECKPOINT_STABLE_STATUSES)
+    recorded_paths = _get_recorded_jsonl_paths(CHECKPOINT_STABLE_STATUSES, db_path=db_path)
     return [path for path in existing_files if str(path) not in recorded_paths]
 
 
 def ensure_checkpoint_table(store: VectorStore) -> None:
     """Create the sidecar checkpoint DB and migrate legacy rows if present."""
-    conn = _open_checkpoint_conn()
+    conn = _open_checkpoint_conn(_store_db_path(store))
     try:
         _ensure_checkpoint_table_in_conn(conn)
         _migrate_checkpoints_from_main_db(store, conn)
@@ -251,13 +269,13 @@ def ensure_checkpoint_table(store: VectorStore) -> None:
 
 def save_checkpoint(store: VectorStore, batch_id: str, **kwargs) -> None:
     """Insert or update a checkpoint row in the sidecar checkpoint DB."""
-    del store  # Legacy signature retained for callers; checkpoint writes avoid the main DB.
     last_error: Exception | None = None
+    checkpoint_db_path = _store_db_path(store)
 
     for attempt in range(CHECKPOINT_WRITE_MAX_RETRIES):
         conn = None
         try:
-            conn = _open_checkpoint_conn()
+            conn = _open_checkpoint_conn(checkpoint_db_path)
             _ensure_checkpoint_table_in_conn(conn)
             cursor = conn.cursor()
             existing = list(
@@ -294,8 +312,7 @@ def save_checkpoint(store: VectorStore, batch_id: str, **kwargs) -> None:
 
 def get_pending_jobs(store: VectorStore) -> List[Dict[str, Any]]:
     """Get jobs that need polling (submitted but not completed/failed)."""
-    del store  # Retained for signature compatibility.
-    conn = _open_checkpoint_conn()
+    conn = _open_checkpoint_conn(_store_db_path(store))
     try:
         _ensure_checkpoint_table_in_conn(conn)
         rows = list(
@@ -807,17 +824,20 @@ def run_full_backfill(
         # Step 1: Export or reuse existing batch files
         max_chunks = sample if sample > 0 else 0
         if submit_only and sample == 0:
-            jsonl_files = get_unsubmitted_export_files()
+            jsonl_files = get_unsubmitted_export_files(db_path=db_path)
             if jsonl_files:
                 print(
                     f"Reusing {len(jsonl_files)} existing JSONL batch files not yet checkpointed "
                     f"from {EXPORT_DIR}"
                 )
-            elif list(EXPORT_DIR.glob("batch_*.jsonl")):
-                print("All existing JSONL batch files are already checkpointed. No new submissions needed.")
-                return
             else:
                 jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
+                if not jsonl_files:
+                    if get_pending_jobs(store):
+                        print("Existing batch jobs are already submitted. Run --resume to import them.")
+                    elif list(EXPORT_DIR.glob("batch_*.jsonl")):
+                        print("All existing JSONL batch files are already checkpointed. No new submissions needed.")
+                    return
         else:
             jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
 
