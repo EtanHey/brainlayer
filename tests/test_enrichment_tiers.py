@@ -144,16 +144,35 @@ def test_youtube_source_old_is_still_tier3():
     assert tier == EnrichmentTier.T3_EXPLICIT
 
 
+def test_unknown_source_defaults_to_tier2():
+    """Unknown/unrecognized source defaults to T2 (lazy backlog), regardless of age.
+
+    Only claude_code participates in T1 (recency-gated). Unrecognised sources
+    are treated as lazy backlog to prevent them from crowding hourly enrichment.
+    """
+    tier = classify_chunk_tier(source="unknown", content_type="assistant_text", created_at=RECENT)
+    assert tier == EnrichmentTier.T2_LAZY
+
+
 def test_unknown_source_old_is_tier2():
-    """Unknown/unrecognized source that is old defaults to T2 (lazy backlog)."""
+    """Old unknown source is also T2 (same as recent unknown)."""
     tier = classify_chunk_tier(source="unknown", content_type="assistant_text", created_at=OLD)
     assert tier == EnrichmentTier.T2_LAZY
 
 
-def test_unknown_source_recent_is_tier1():
-    """Unknown source that is recent defaults to T1."""
-    tier = classify_chunk_tier(source="unknown", content_type="assistant_text", created_at=RECENT)
-    assert tier == EnrichmentTier.T1_HOURLY
+# ── Noise content type — never enrich ────────────────────────────────────
+
+
+def test_noise_content_type_is_tier3_explicit():
+    """Noise chunks should never be enriched by default (T3 = explicit only)."""
+    tier = classify_chunk_tier(source="claude_code", content_type="noise", created_at=RECENT)
+    assert tier == EnrichmentTier.T3_EXPLICIT
+
+
+def test_noise_content_type_overrides_t0_source():
+    """Even a T0 source should yield T3 if content_type is noise."""
+    tier = classify_chunk_tier(source="manual", content_type="noise", created_at=RECENT)
+    assert tier == EnrichmentTier.T3_EXPLICIT
 
 
 # ── None / missing created_at ────────────────────────────────────────────

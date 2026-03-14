@@ -39,6 +39,13 @@ DEFAULT_RECENCY_DAYS: int = 7
 # High-value content types enriched at T1 (and T2 for old backlog).
 T1_CONTENT_TYPES: List[str] = ["ai_code", "stack_trace", "user_message", "assistant_text"]
 
+# Content types that should never be enriched (low-signal noise).
+SKIP_CONTENT_TYPES: frozenset = frozenset({"noise"})
+
+# Only these sources participate in the T1/T2 recency gate.
+# Unrecognised sources fall through to T2 (lazy backlog) rather than T1.
+T1_T2_SOURCES: frozenset = frozenset({"claude_code"})
+
 
 # ── Classifier ───────────────────────────────────────────────────────────
 
@@ -60,6 +67,10 @@ def classify_chunk_tier(
     Returns:
         EnrichmentTier for the chunk.
     """
+    # Noise is never worth enriching, regardless of source.
+    if content_type in SKIP_CONTENT_TYPES:
+        return EnrichmentTier.T3_EXPLICIT
+
     # T0: always-on sources (manual brain_store, digested documents)
     if source in T0_SOURCES:
         return EnrichmentTier.T0_IMMEDIATE
@@ -68,7 +79,12 @@ def classify_chunk_tier(
     if source in T3_SOURCES:
         return EnrichmentTier.T3_EXPLICIT
 
-    # For all other sources (claude_code, unknown, …): age determines tier.
+    # Only recognised T1/T2 sources participate in the recency gate.
+    # Unknown sources default to lazy backlog (T2) rather than crowding T1.
+    if source not in T1_T2_SOURCES:
+        return EnrichmentTier.T2_LAZY
+
+    # Claude code: age determines tier.
     if _is_recent(created_at, recency_days):
         return EnrichmentTier.T1_HOURLY
     return EnrichmentTier.T2_LAZY
