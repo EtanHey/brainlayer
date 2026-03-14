@@ -37,12 +37,14 @@ import apsw
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from brainlayer.paths import get_db_path
+from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
 from brainlayer.pipeline.enrichment import (
     HIGH_VALUE_TYPES,
     build_external_prompt,
     build_prompt,
     parse_enrichment,
 )
+from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
 from brainlayer.pipeline.sanitize import SanitizeConfig, Sanitizer
 from brainlayer.vector_store import VectorStore
 
@@ -691,6 +693,28 @@ def download_gemini_results(batch_job) -> List[Dict[str, Any]]:
 
 # ── Import results ──────────────────────────────────────────────────────
 
+def _clear_imported_enrichment(store: VectorStore, chunk_id: str) -> None:
+    """Remove enrichment written by a failed remote import so the chunk can retry."""
+    store.conn.cursor().execute(
+        """
+        UPDATE chunks
+        SET enriched_at = NULL,
+            summary = NULL,
+            tags = NULL,
+            importance = NULL,
+            intent = NULL,
+            primary_symbols = NULL,
+            resolved_query = NULL,
+            epistemic_level = NULL,
+            version_scope = NULL,
+            debt_impact = NULL,
+            external_deps = NULL
+        WHERE id = ?
+        """,
+        (chunk_id,),
+    )
+
+
 def import_results(
     store: VectorStore,
     results: List[Dict[str, Any]],
@@ -751,6 +775,19 @@ def import_results(
                 debt_impact=enrichment.get("debt_impact"),
                 external_deps=enrichment.get("external_deps"),
             )
+            try:
+                extract_kg_from_chunk(
+                    store=store,
+                    chunk_id=chunk_id,
+                    seed_entities=DEFAULT_SEED_ENTITIES,
+                    use_llm=False,
+                    use_gliner=False,
+                )
+            except Exception as exc:
+                print(f"  WARNING: KG extraction failed for {chunk_id}: {exc}")
+                _clear_imported_enrichment(store, chunk_id)
+                failed += 1
+                continue
             success += 1
         else:
             failed += 1

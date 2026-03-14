@@ -327,3 +327,142 @@ def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path
 
     assert exported_paths == [new_file]
     assert submitted_paths == [new_file]
+
+
+def test_import_results_triggers_seed_only_kg_extraction(tmp_path, monkeypatch):
+    """Remote batch imports should repopulate KG links for newly enriched chunks."""
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        _insert_unenriched_chunk(
+            store,
+            "chunk-1",
+            "brainlayer rollout notes from the remote enrichment import path.",
+        )
+
+        seed_entities = {"project": ["brainlayer"]}
+        calls = []
+
+        def fake_extract_kg_from_chunk(*, store, chunk_id, seed_entities, use_llm, use_gliner):
+            calls.append(
+                {
+                    "chunk_id": chunk_id,
+                    "seed_entities": seed_entities,
+                    "use_llm": use_llm,
+                    "use_gliner": use_gliner,
+                }
+            )
+            return {"entities_created": 1, "relations_created": 0, "chunks_linked": 1}
+
+        monkeypatch.setattr(cloud_backfill, "DEFAULT_SEED_ENTITIES", seed_entities, raising=False)
+        monkeypatch.setattr(cloud_backfill, "extract_kg_from_chunk", fake_extract_kg_from_chunk, raising=False)
+        monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
+
+        results = [
+            {
+                "key": "chunk-1",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": json.dumps(
+                                            {
+                                                "summary": "Remote enrichment imported successfully.",
+                                                "tags": ["brainlayer", "kg"],
+                                                "importance": 7,
+                                                "intent": "implementing",
+                                                "primary_symbols": ["scripts/cloud_backfill.py"],
+                                                "resolved_query": "How does remote batch import keep KG data in sync?",
+                                                "epistemic_level": "validated",
+                                                "debt_impact": "resolution",
+                                                "external_deps": [],
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }
+        ]
+
+        counts = cloud_backfill.import_results(store, results, "batch-1")
+
+        assert counts == {"success": 1, "failed": 0, "skipped": 0}
+        assert calls == [
+            {
+                "chunk_id": "chunk-1",
+                "seed_entities": seed_entities,
+                "use_llm": False,
+                "use_gliner": False,
+            }
+        ]
+    finally:
+        store.close()
+
+
+def test_import_results_keeps_chunk_retryable_when_kg_extraction_fails(tmp_path, monkeypatch):
+    """KG extraction failures should not permanently mark the chunk as imported."""
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        _insert_unenriched_chunk(
+            store,
+            "chunk-1",
+            "brainlayer rollout notes from the remote enrichment import path.",
+        )
+
+        monkeypatch.setattr(
+            cloud_backfill,
+            "extract_kg_from_chunk",
+            lambda **kwargs: (_ for _ in ()).throw(RuntimeError("kg failed")),
+            raising=False,
+        )
+        monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
+
+        results = [
+            {
+                "key": "chunk-1",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": json.dumps(
+                                            {
+                                                "summary": "Remote enrichment imported successfully.",
+                                                "tags": ["brainlayer", "kg"],
+                                                "importance": 7,
+                                                "intent": "implementing",
+                                                "primary_symbols": ["scripts/cloud_backfill.py"],
+                                                "resolved_query": "How does remote batch import keep KG data in sync?",
+                                                "epistemic_level": "validated",
+                                                "debt_impact": "resolution",
+                                                "external_deps": [],
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }
+        ]
+
+        counts = cloud_backfill.import_results(store, results, "batch-1")
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT enriched_at, summary, tags FROM chunks WHERE id = ?",
+                ("chunk-1",),
+            )
+            .fetchone()
+        )
+
+        assert counts == {"success": 0, "failed": 1, "skipped": 0}
+        assert row == (None, None, None)
+    finally:
+        store.close()
