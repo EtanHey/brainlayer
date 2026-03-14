@@ -927,9 +927,12 @@ class TestPromptHookEntityInjection:
     def _call_hook(self, prompt: str) -> str:
         """Run the hook subprocess and return its stdout."""
         import subprocess
+        from brainlayer.paths import get_db_path
 
         if not self.HOOK_PATH.exists():
             pytest.skip(f"Hook not found at {self.HOOK_PATH}")
+        if not get_db_path().exists():
+            pytest.skip("Production DB not found — hook tests require a live DB")
 
         result = subprocess.run(
             ["python3", str(self.HOOK_PATH)],

@@ -422,7 +422,9 @@ class TestHybridSearchLatency:
         """Updating enrichment metadata must invalidate cached filtered searches."""
         from brainlayer.store import store_memory
 
-        stored = store_memory(store, self._embed, content="enrichment candidate", memory_type="note", project="cache-project")
+        stored = store_memory(
+            store, self._embed, content="enrichment candidate", memory_type="note", project="cache-project"
+        )
         query_embed = self._embed("enrichment candidate")
 
         first = store.hybrid_search(
@@ -447,7 +449,9 @@ class TestHybridSearchLatency:
         """Chunk edits must invalidate cached results."""
         from brainlayer.store import store_memory
 
-        stored = store_memory(store, self._embed, content="old chunk content", memory_type="note", project="cache-project")
+        stored = store_memory(
+            store, self._embed, content="old chunk content", memory_type="note", project="cache-project"
+        )
         query_embed = self._embed("old chunk content")
 
         first = store.hybrid_search(
@@ -472,7 +476,9 @@ class TestHybridSearchLatency:
         """Archiving a chunk must evict any cached positive hit."""
         from brainlayer.store import store_memory
 
-        stored = store_memory(store, self._embed, content="archived content", memory_type="note", project="cache-project")
+        stored = store_memory(
+            store, self._embed, content="archived content", memory_type="note", project="cache-project"
+        )
         query_embed = self._embed("archived content")
 
         first = store.hybrid_search(query_embedding=query_embed, query_text="semantic archive lookup", n_results=1)
@@ -507,6 +513,5 @@ class TestHybridSearchLatency:
 
         p50 = sorted(latencies)[len(latencies) // 2]
         assert p50 < 500, (
-            f"hybrid_search warm p50={p50:.0f}ms exceeds 500ms budget. "
-            f"All latencies: {[f'{l:.0f}' for l in latencies]}"
+            f"hybrid_search warm p50={p50:.0f}ms exceeds 500ms budget. All latencies: {[f'{l:.0f}' for l in latencies]}"
         )

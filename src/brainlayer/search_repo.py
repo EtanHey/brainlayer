@@ -22,7 +22,7 @@ from ._helpers import _escape_fts5_query, serialize_f32
 # - Filter-scoped: all query-affecting filters belong in the cache key.
 # - Copy-on-read: callers enrich and mutate result metadata after search.
 _HYBRID_CACHE_TTL = 60.0  # seconds
-_HYBRID_CACHE_MAX = 128   # max entries (LRU eviction)
+_HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()

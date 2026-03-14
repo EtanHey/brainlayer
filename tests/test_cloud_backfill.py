@@ -11,7 +11,9 @@ from brainlayer.vector_store import VectorStore
 from scripts import cloud_backfill
 
 
-def _insert_unenriched_chunk(store: VectorStore, chunk_id: str, content: str, content_type: str = "assistant_text") -> None:
+def _insert_unenriched_chunk(
+    store: VectorStore, chunk_id: str, content: str, content_type: str = "assistant_text"
+) -> None:
     """Insert a minimal unenriched chunk eligible for export."""
     cursor = store.conn.cursor()
     cursor.execute(
