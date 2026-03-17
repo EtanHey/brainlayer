@@ -3,6 +3,10 @@
 // Wraps SQLite3 C API directly (no external dependencies).
 // Configures: WAL mode, FTS5, busy_timeout=5000, cache_size=-64000, synchronous=NORMAL.
 // Single-writer: only BrainBar writes. Concurrent reads are safe (WAL).
+//
+// IMPORTANT: Schema matches the production BrainLayer DB (312K chunks).
+// Column names: id (not chunk_id), conversation_id (not session_id),
+// source_file (NOT NULL), metadata (JSON), etc.
 
 import Foundation
 import SQLite3
@@ -35,67 +39,72 @@ final class BrainDatabase: @unchecked Sendable {
         exec("PRAGMA cache_size = -64000")
         exec("PRAGMA synchronous = NORMAL")
 
-        // Create schema
-        createSchema()
+        // Create schema only for NEW databases (test DBs).
+        // Production DB already has schema — don't interfere.
+        ensureSchema()
     }
 
-    private func createSchema() {
-        // Main chunks table
-        exec("""
-            CREATE TABLE IF NOT EXISTS chunks (
-                chunk_id TEXT PRIMARY KEY,
-                session_id TEXT,
-                project TEXT,
-                content TEXT NOT NULL,
-                content_type TEXT DEFAULT 'assistant_text',
-                importance INTEGER DEFAULT 5,
-                tags TEXT DEFAULT '[]',
-                source TEXT DEFAULT 'claude_code',
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                summary TEXT,
-                intent TEXT,
-                sentiment TEXT
-            )
-        """)
-
-        // FTS5 virtual table for full-text search
-        let hadFTS = (try? tableExists("chunks_fts")) ?? false
-        exec("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                content,
-                summary,
-                tags,
-                content='chunks',
-                content_rowid='rowid'
-            )
-        """)
-        // Backfill FTS index from existing chunks (critical when opening existing DB)
-        if !hadFTS {
-            exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+    private func ensureSchema() {
+        // If chunks table already exists (production DB), don't touch schema.
+        if (try? tableExists("chunks")) == true {
+            return
         }
 
-        // FTS sync triggers
+        // New/test DB — create production-compatible schema
+        exec("""
+            CREATE TABLE IF NOT EXISTS chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                source_file TEXT NOT NULL DEFAULT 'brainbar',
+                project TEXT,
+                content_type TEXT DEFAULT 'assistant_text',
+                value_type TEXT,
+                char_count INTEGER DEFAULT 0,
+                source TEXT DEFAULT 'claude_code',
+                sender TEXT,
+                language TEXT,
+                conversation_id TEXT,
+                position INTEGER,
+                context_summary TEXT,
+                tags TEXT DEFAULT '[]',
+                tag_confidence REAL,
+                summary TEXT,
+                importance REAL DEFAULT 5,
+                intent TEXT,
+                enriched_at TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        // FTS5 — matches production: content, summary, tags, resolved_query, chunk_id UNINDEXED
+        exec("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                content, summary, tags, resolved_query, chunk_id UNINDEXED
+            )
+        """)
+
+        // FTS sync triggers (match production trigger names)
         exec("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts(rowid, content, summary, tags)
-                VALUES (new.rowid, new.content, new.summary, new.tags);
+                INSERT INTO chunks_fts(rowid, content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.rowid, new.content, new.summary, new.tags, NULL, new.id);
             END
         """)
 
         exec("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
-                INSERT INTO chunks_fts(chunks_fts, rowid, content, summary, tags)
-                VALUES ('delete', old.rowid, old.content, old.summary, old.tags);
+                INSERT INTO chunks_fts(chunks_fts, rowid, content, summary, tags, resolved_query, chunk_id)
+                VALUES ('delete', old.rowid, old.content, old.summary, old.tags, NULL, old.id);
             END
         """)
 
         exec("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
-                INSERT INTO chunks_fts(chunks_fts, rowid, content, summary, tags)
-                VALUES ('delete', old.rowid, old.content, old.summary, old.tags);
-                INSERT INTO chunks_fts(rowid, content, summary, tags)
-                VALUES (new.rowid, new.content, new.summary, new.tags);
+                INSERT INTO chunks_fts(chunks_fts, rowid, content, summary, tags, resolved_query, chunk_id)
+                VALUES ('delete', old.rowid, old.content, old.summary, old.tags, NULL, old.id);
+                INSERT INTO chunks_fts(rowid, content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.rowid, new.content, new.summary, new.tags, NULL, new.id);
             END
         """)
     }
@@ -144,14 +153,14 @@ final class BrainDatabase: @unchecked Sendable {
         return sqlite3_column_int(stmt, 0) > 0
     }
 
-    // MARK: - Insert chunk
+    // MARK: - Insert chunk (production schema)
 
     func insertChunk(id: String, content: String, sessionId: String, project: String, contentType: String, importance: Int) throws {
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = """
-            INSERT OR REPLACE INTO chunks (chunk_id, content, session_id, project, content_type, importance)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count)
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?)
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -160,27 +169,29 @@ final class BrainDatabase: @unchecked Sendable {
         let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         sqlite3_bind_text(stmt, 1, id, -1, TRANSIENT)
         sqlite3_bind_text(stmt, 2, content, -1, TRANSIENT)
-        sqlite3_bind_text(stmt, 3, sessionId, -1, TRANSIENT)
-        sqlite3_bind_text(stmt, 4, project, -1, TRANSIENT)
-        sqlite3_bind_text(stmt, 5, contentType, -1, TRANSIENT)
-        sqlite3_bind_int(stmt, 6, Int32(importance))
+        sqlite3_bind_text(stmt, 3, project, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 4, contentType, -1, TRANSIENT)
+        sqlite3_bind_int(stmt, 5, Int32(importance))
+        sqlite3_bind_text(stmt, 6, sessionId, -1, TRANSIENT)
+        sqlite3_bind_int(stmt, 7, Int32(content.count))
 
         let stepRC = sqlite3_step(stmt)
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
     }
 
-    // MARK: - FTS5 Search
+    // MARK: - FTS5 Search (production schema)
 
     func search(query: String, limit: Int) throws -> [[String: Any]] {
         guard let db else { throw DBError.notOpen }
 
-        // Sanitize query for FTS5 — escape double quotes, wrap tokens in quotes
         let sanitized = sanitizeFTS5Query(query)
 
         var stmt: OpaquePointer?
+        // Production FTS5: content, summary, tags, resolved_query, chunk_id UNINDEXED
+        // Join on rowid. Use production column names (id, conversation_id, etc.)
         let sql = """
-            SELECT c.chunk_id, c.content, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.session_id
+            SELECT c.id, c.content, c.project, c.content_type, c.importance,
+                   c.created_at, c.summary, c.tags, c.conversation_id
             FROM chunks_fts f
             JOIN chunks c ON f.rowid = c.rowid
             WHERE chunks_fts MATCH ?
@@ -213,7 +224,7 @@ final class BrainDatabase: @unchecked Sendable {
         return results
     }
 
-    // MARK: - Store (brain_store)
+    // MARK: - Store (brain_store, production schema)
 
     func store(content: String, tags: [String], importance: Int, source: String) throws -> String {
         let id = "brainbar-\(UUID().uuidString.lowercased().prefix(12))"
@@ -228,8 +239,8 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = """
-            INSERT INTO chunks (chunk_id, content, tags, importance, source, content_type)
-            VALUES (?, ?, ?, ?, ?, 'user_message')
+            INSERT INTO chunks (id, content, metadata, source_file, tags, importance, source, content_type, char_count)
+            VALUES (?, ?, '{}', 'brainbar-store', ?, ?, ?, 'user_message', ?)
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -241,6 +252,7 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_text(stmt, 3, tagsJSON, -1, TRANSIENT)
         sqlite3_bind_int(stmt, 4, Int32(importance))
         sqlite3_bind_text(stmt, 5, source, -1, TRANSIENT)
+        sqlite3_bind_int(stmt, 6, Int32(content.count))
 
         let stepRC = sqlite3_step(stmt)
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
@@ -267,7 +279,6 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func sanitizeFTS5Query(_ query: String) -> String {
-        // Split into tokens, quote each one for safety, strip FTS5 special chars
         let tokens = query.split(separator: " ").compactMap { token -> String? in
             let cleaned = token
                 .replacingOccurrences(of: "\"", with: "")
