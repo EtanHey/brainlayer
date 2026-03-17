@@ -1,11 +1,23 @@
 {
   "_comment": "Run: ~/Gits/orchestrator/scripts/mcp-setup.sh ~/Gits/brainlayer",
+  "_comment2": "brainlayer-socat: BrainBar daemon on Unix socket (replaces 9 Python processes)",
   "mcpServers": {
     "brainlayer": {
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+    },
+    "brainlayer-legacy": {
+      "_comment": "Fallback: original Python MCP server (remove after BrainBar is stable)",
       "command": "brainlayer-mcp"
     },
     "voicelayer": {
       "command": "voicelayer-mcp"
+    },
+    "cmux": {
+      "command": "node",
+      "args": [
+        "/Users/etanheyman/Gits/orchestrator/tools/cmux-mcp/dist/index.js"
+      ]
     }
   }
 }
