@@ -223,10 +223,13 @@ class TestClassifyToolOutput:
 class TestParseCodexSession:
     def test_real_user_message_is_parsed(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _user_msg("Fix the authentication bug in auth.py"),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _user_msg("Fix the authentication bug in auth.py"),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert entries[0]["content_type"] == "user_message"
@@ -236,40 +239,52 @@ class TestParseCodexSession:
 
     def test_developer_messages_skipped(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _developer_msg("You are a coding agent. sandbox_mode is danger-full-access."),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _developer_msg("You are a coding agent. sandbox_mode is danger-full-access."),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_system_injections_skipped(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _user_msg("# AGENTS.md instructions for /Users/test/Gits/myproject\n\nYou are Codex..."),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _user_msg("# AGENTS.md instructions for /Users/test/Gits/myproject\n\nYou are Codex..."),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_environment_context_skipped(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _user_msg("<environment_context>\n<cwd>/Users/test/Gits/myproject</cwd>\n</environment_context>"),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _user_msg("<environment_context>\n<cwd>/Users/test/Gits/myproject</cwd>\n</environment_context>"),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_assistant_message_parsed(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _assistant_msg(
-                "I found the bug in the authentication middleware. "
-                "The token expiry check was comparing timestamps incorrectly."
-            ),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _assistant_msg(
+                    "I found the bug in the authentication middleware. "
+                    "The token expiry check was comparing timestamps incorrectly."
+                ),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert entries[0]["content_type"] == "assistant_text"
@@ -277,12 +292,13 @@ class TestParseCodexSession:
 
     def test_assistant_message_with_code_is_ai_code(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _assistant_msg(
-                "Here's the fix:\n```python\ndef check_token(t):\n    return t.is_valid()\n```"
-            ),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _assistant_msg("Here's the fix:\n```python\ndef check_token(t):\n    return t.is_valid()\n```"),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert entries[0]["content_type"] == "ai_code"
@@ -290,10 +306,13 @@ class TestParseCodexSession:
     def test_tool_output_parsed(self, tmp_path):
         f = tmp_path / "session.jsonl"
         tool_out = "Process exited with code 0\n" + "some output " * 10
-        _write_jsonl(f, [
-            _session_meta(),
-            _tool_output(tool_out),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _tool_output(tool_out),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert entries[0]["content_type"] == "file_read"
@@ -302,47 +321,62 @@ class TestParseCodexSession:
         f = tmp_path / "session.jsonl"
         text = "some tool result text that is definitely long enough to pass the minimum threshold"
         raw = json.dumps([{"type": "text", "text": text}])
-        _write_jsonl(f, [
-            _session_meta(),
-            _tool_output(raw),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _tool_output(raw),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert "some tool result text" in entries[0]["content"]
 
     def test_function_call_skipped(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _function_call("brain_search", '{"query": "auth bug"}'),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _function_call("brain_search", '{"query": "auth bug"}'),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_reasoning_skipped(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _reasoning(),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _reasoning(),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_short_user_message_filtered(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(),
-            _user_msg("ok"),  # too short
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _user_msg("ok"),  # too short
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert entries == []
 
     def test_session_metadata_propagated(self, tmp_path):
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(session_id="abc-123", cwd="/Users/test/Gits/golems"),
-            _user_msg("Implement the new feature for the dashboard"),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(session_id="abc-123", cwd="/Users/test/Gits/golems"),
+                _user_msg("Implement the new feature for the dashboard"),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         e = entries[0]
@@ -357,10 +391,13 @@ class TestParseCodexSession:
             '  File "auth.py", line 42, in check_token\n'
             "AssertionError: token expired\n"
         ) * 3  # ensure long enough
-        _write_jsonl(f, [
-            _session_meta(),
-            _tool_output(trace),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(),
+                _tool_output(trace),
+            ],
+        )
         entries = list(parse_codex_session(f))
         assert len(entries) == 1
         assert entries[0]["content_type"] == "stack_trace"
@@ -368,21 +405,24 @@ class TestParseCodexSession:
     def test_mixed_session(self, tmp_path):
         """Full session with system noise + real content."""
         f = tmp_path / "session.jsonl"
-        _write_jsonl(f, [
-            _session_meta(session_id="full-session", cwd="/Users/test/Gits/brainlayer"),
-            _developer_msg("sandbox_mode instructions ..."),
-            _user_msg("# AGENTS.md instructions for /Users/test/Gits/brainlayer\n..."),
-            _user_msg("<environment_context>\n<cwd>/Users/test/Gits/brainlayer</cwd>\n</environment_context>"),
-            _reasoning(),
-            _user_msg("Add a test for the codex ingestion adapter"),
-            _function_call("brain_search", '{"query": "codex adapter tests"}'),
-            _tool_output("No results found in BrainLayer for this query. " * 3),
-            _assistant_msg(
-                "I'll write the test. The key cases are: system injection filtering, "
-                "assistant message classification, and tool output parsing."
-            ),
-            _assistant_msg("Here's the implementation:\n```python\ndef test_codex():\n    pass\n```"),
-        ])
+        _write_jsonl(
+            f,
+            [
+                _session_meta(session_id="full-session", cwd="/Users/test/Gits/brainlayer"),
+                _developer_msg("sandbox_mode instructions ..."),
+                _user_msg("# AGENTS.md instructions for /Users/test/Gits/brainlayer\n..."),
+                _user_msg("<environment_context>\n<cwd>/Users/test/Gits/brainlayer</cwd>\n</environment_context>"),
+                _reasoning(),
+                _user_msg("Add a test for the codex ingestion adapter"),
+                _function_call("brain_search", '{"query": "codex adapter tests"}'),
+                _tool_output("No results found in BrainLayer for this query. " * 3),
+                _assistant_msg(
+                    "I'll write the test. The key cases are: system injection filtering, "
+                    "assistant message classification, and tool output parsing."
+                ),
+                _assistant_msg("Here's the implementation:\n```python\ndef test_codex():\n    pass\n```"),
+            ],
+        )
         entries = list(parse_codex_session(f))
         types = [e["content_type"] for e in entries]
         assert "user_message" in types

@@ -377,6 +377,7 @@ def ingest_codex_session(
 
     if db_path is None:
         from ..paths import DEFAULT_DB_PATH
+
         db_path = DEFAULT_DB_PATH
 
     from ..index_new import index_chunks_to_sqlite
@@ -397,6 +398,7 @@ def ingest_codex_session(
     if session_id:
         try:
             from ..vector_store import VectorStore
+
             with VectorStore(db_path) as store:
                 store.store_session_context(
                     session_id=session_id,
@@ -442,10 +444,7 @@ def ingest_codex_dir(
 
     if since_days is not None:
         cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400
-        jsonl_files = [
-            f for f in jsonl_files
-            if f.stat().st_mtime >= cutoff
-        ]
+        jsonl_files = [f for f in jsonl_files if f.stat().st_mtime >= cutoff]
 
     if not jsonl_files:
         logger.info("No Codex session files found in %s", sessions_dir)
@@ -454,17 +453,17 @@ def ingest_codex_dir(
     # Skip files already indexed (check DB for existing source_file entries)
     if not dry_run and db_path is None:
         from ..paths import DEFAULT_DB_PATH
+
         db_path = DEFAULT_DB_PATH
 
     already_indexed: set[str] = set()
     if not dry_run and db_path and db_path.exists():
         try:
             from ..vector_store import VectorStore
+
             with VectorStore(db_path) as store:
                 cursor = store._read_cursor()
-                rows = cursor.execute(
-                    "SELECT DISTINCT source_file FROM chunks WHERE source = 'codex_cli'"
-                )
+                rows = cursor.execute("SELECT DISTINCT source_file FROM chunks WHERE source = 'codex_cli'")
                 already_indexed = {row[0] for row in rows}
         except Exception as exc:
             logger.debug("Could not check existing codex_cli chunks: %s", exc)
@@ -502,15 +501,12 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    parser = argparse.ArgumentParser(
-        description="Ingest Codex session transcripts into BrainLayer."
-    )
+    parser = argparse.ArgumentParser(description="Ingest Codex session transcripts into BrainLayer.")
     parser.add_argument(
         "path",
         nargs="?",
         default=None,
-        help="Path to a Codex session JSONL file or sessions directory "
-             "(default: ~/.codex/sessions)",
+        help="Path to a Codex session JSONL file or sessions directory (default: ~/.codex/sessions)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Parse but do not write to DB")
     parser.add_argument("--project", default=None, help="Override project name")
