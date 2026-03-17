@@ -10,7 +10,8 @@ import SQLite3
 final class BrainDatabase: @unchecked Sendable {
     private var db: OpaquePointer?
     private let path: String
-    private let queue = DispatchQueue(label: "com.brainlayer.brainbar.db")
+    /// Whether the database opened successfully.
+    private(set) var isOpen: Bool = false
 
     init(path: String) {
         self.path = path
@@ -18,12 +19,15 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func openAndConfigure() {
+        // FULLMUTEX: SQLite serializes C-level access. Needed because WAL concurrent
+        // reads come from GCD threads, and close() could race with in-flight queries.
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(path, &db, flags, nil)
         guard rc == SQLITE_OK else {
-            NSLog("[BrainBar] Failed to open database: %d", rc)
+            NSLog("[BrainBar] Failed to open database at %@: %d", path, rc)
             return
         }
+        isOpen = true
 
         // Configure PRAGMAs
         exec("PRAGMA journal_mode = WAL")
@@ -100,7 +104,15 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - PRAGMA queries
 
+    private static let allowedPragmas: Set<String> = [
+        "journal_mode", "busy_timeout", "cache_size", "synchronous",
+        "wal_checkpoint", "page_count", "page_size", "freelist_count"
+    ]
+
     func pragma(_ name: String) throws -> String {
+        guard Self.allowedPragmas.contains(name) else {
+            throw DBError.invalidPragma(name)
+        }
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "PRAGMA \(name)", -1, &stmt, nil)
@@ -250,11 +262,16 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func sanitizeFTS5Query(_ query: String) -> String {
-        // Split into tokens, quote each one for safety
-        let tokens = query.split(separator: " ").map { token -> String in
-            let cleaned = token.replacingOccurrences(of: "\"", with: "")
+        // Split into tokens, quote each one for safety, strip FTS5 special chars
+        let tokens = query.split(separator: " ").compactMap { token -> String? in
+            let cleaned = token
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "*", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            guard !cleaned.isEmpty else { return nil }
             return "\"\(cleaned)\""
         }
+        guard !tokens.isEmpty else { return "\"\"" }
         return tokens.joined(separator: " OR ")
     }
 
@@ -265,6 +282,7 @@ final class BrainDatabase: @unchecked Sendable {
         case prepare(Int32)
         case step(Int32)
         case noResult
+        case invalidPragma(String)
 
         var errorDescription: String? {
             switch self {
@@ -272,6 +290,7 @@ final class BrainDatabase: @unchecked Sendable {
             case .prepare(let rc): return "SQLite prepare failed: \(rc)"
             case .step(let rc): return "SQLite step failed: \(rc)"
             case .noResult: return "No result"
+            case .invalidPragma(let name): return "PRAGMA '\(name)' not in allowlist"
             }
         }
     }

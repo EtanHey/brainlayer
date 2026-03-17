@@ -63,6 +63,12 @@ final class BrainBarServer: @unchecked Sendable {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = socketPath.utf8CString
+        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            NSLog("[BrainBar] Socket path too long (%d > %d): %@",
+                  pathBytes.count, MemoryLayout.size(ofValue: addr.sun_path), socketPath)
+            close(fd)
+            return
+        }
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
                 pathBytes.withUnsafeBufferPointer { src in
@@ -84,7 +90,7 @@ final class BrainBarServer: @unchecked Sendable {
 
         chmod(socketPath, 0o600)
 
-        guard listen(fd, 5) == 0 else {
+        guard listen(fd, 16) == 0 else {
             NSLog("[BrainBar] Failed to listen: errno %d", errno)
             close(fd)
             unlink(socketPath)
@@ -164,7 +170,15 @@ final class BrainBarServer: @unchecked Sendable {
             var totalWritten = 0
             while totalWritten < framed.count {
                 let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), framed.count - totalWritten)
-                if n <= 0 { break }
+                if n < 0 {
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        // Kernel buffer full — brief retry
+                        usleep(1000) // 1ms
+                        continue
+                    }
+                    break // Real error
+                }
+                if n == 0 { break } // EOF
                 totalWritten += n
             }
         }

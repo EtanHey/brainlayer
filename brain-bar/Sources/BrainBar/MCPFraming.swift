@@ -10,6 +10,8 @@ import Foundation
 struct MCPFraming: Sendable {
     private var buffer = Data()
     private static let separator = Data("\r\n\r\n".utf8)
+    /// Max payload size (10 MB) — prevents DoS via absurd Content-Length values.
+    private static let maxContentLength = 10_000_000
 
     /// Append raw bytes from a socket read.
     mutating func append(_ data: Data) {
@@ -31,7 +33,7 @@ struct MCPFraming: Sendable {
             let headerData = buffer[buffer.startIndex..<separatorRange.lowerBound]
             guard let headerStr = String(data: headerData, encoding: .utf8),
                   let contentLength = parseContentLength(headerStr),
-                  contentLength > 0 else {
+                  contentLength > 0, contentLength <= Self.maxContentLength else {
                 // Invalid or zero-length — skip past this separator
                 buffer = Data(buffer[separatorRange.upperBound...])
                 continue

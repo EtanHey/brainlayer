@@ -162,43 +162,52 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
         let id = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return "{\"chunk_id\": \"\(id)\", \"status\": \"stored\"}"
+        return jsonEncode(["chunk_id": id, "status": "stored"])
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
-        return "{\"mode\": \"context\", \"status\": \"ok\"}"
+        return jsonEncode(["mode": "context", "status": "ok"])
     }
 
     private func handleBrainEntity(_ args: [String: Any]) throws -> String {
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
-        return "{\"query\": \"\(query)\", \"entities\": []}"
+        return jsonEncode(["query": query, "entities": [] as [Any]])
     }
 
     private func handleBrainDigest(_ args: [String: Any]) throws -> String {
         guard args["content"] is String else {
             throw ToolError.missingParameter("content")
         }
-        return "{\"status\": \"digested\", \"chunks_created\": 1}"
+        return jsonEncode(["status": "digested", "chunks_created": 1])
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> String {
         guard let action = args["action"] as? String else {
             throw ToolError.missingParameter("action")
         }
-        return "{\"action\": \"\(action)\", \"status\": \"ok\"}"
+        return jsonEncode(["action": action, "status": "ok"])
     }
 
     private func handleBrainExpand(_ args: [String: Any]) throws -> String {
         guard let chunkId = args["chunk_id"] as? String else {
             throw ToolError.missingParameter("chunk_id")
         }
-        return "{\"chunk_id\": \"\(chunkId)\", \"context\": []}"
+        return jsonEncode(["chunk_id": chunkId, "context": [] as [Any]])
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> String {
-        return "{\"tags\": []}"
+        return jsonEncode(["tags": [] as [Any]])
+    }
+
+    /// Safe JSON encoding — never use string interpolation with user data.
+    private func jsonEncode(_ dict: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let str = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return str
     }
 
     // MARK: - Error helpers
