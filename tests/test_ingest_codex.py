@@ -1,10 +1,7 @@
 """Tests for the Codex CLI session ingestion adapter."""
 
 import json
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from brainlayer.ingest.codex import (
     _classify_tool_output,
@@ -15,7 +12,6 @@ from brainlayer.ingest.codex import (
     _is_system_injection,
     parse_codex_session,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — minimal Codex JSONL session files
