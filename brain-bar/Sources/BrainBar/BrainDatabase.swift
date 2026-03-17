@@ -60,6 +60,7 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         // FTS5 virtual table for full-text search
+        let hadFTS = (try? tableExists("chunks_fts")) ?? false
         exec("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
                 content,
@@ -69,6 +70,10 @@ final class BrainDatabase: @unchecked Sendable {
                 content_rowid='rowid'
             )
         """)
+        // Backfill FTS index from existing chunks (critical when opening existing DB)
+        if !hadFTS {
+            exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        }
 
         // FTS sync triggers
         exec("""

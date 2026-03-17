@@ -106,7 +106,7 @@ final class MCPFramingTests: XCTestCase {
             "result": ["protocolVersion": "2024-11-05"]
         ]
         let framed = try MCPFraming.encode(response)
-        let str = String(data: framed, encoding: .utf8)!
+        let str = try XCTUnwrap(String(data: framed, encoding: .utf8))
 
         XCTAssertTrue(str.hasPrefix("Content-Length: "))
         XCTAssertTrue(str.contains("\r\n\r\n"))

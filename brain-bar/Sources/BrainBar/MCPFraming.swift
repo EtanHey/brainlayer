@@ -13,8 +13,15 @@ struct MCPFraming: Sendable {
     /// Max payload size (10 MB) — prevents DoS via absurd Content-Length values.
     private static let maxContentLength = 10_000_000
 
-    /// Append raw bytes from a socket read.
+    /// Max total buffer size (16 MB) — prevents memory exhaustion from slow/malicious clients.
+    private static let maxBufferSize = 16_000_000
+
+    /// Append raw bytes from a socket read. Drops data if buffer would exceed limit.
     mutating func append(_ data: Data) {
+        guard buffer.count + data.count <= Self.maxBufferSize else {
+            buffer.removeAll()
+            return
+        }
         buffer.append(data)
     }
 

@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
-APP_DIR="/Applications/BrainBar.app"
+APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 
 echo "[build-app] Building BrainBar (release)..."
 swift build -c release --package-path "$PACKAGE_DIR"

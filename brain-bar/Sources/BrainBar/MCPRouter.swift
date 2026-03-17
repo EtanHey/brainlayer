@@ -143,9 +143,9 @@ final class MCPRouter: @unchecked Sendable {
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
-        let limit = args["num_results"] as? Int ?? 5
+        let limit = min(args["num_results"] as? Int ?? 5, 100)
         guard let db = database else {
-            return "[]" // No database — return empty results
+            return "[]"
         }
         let results = try db.search(query: query, limit: limit)
         let data = try JSONSerialization.data(withJSONObject: results)
@@ -166,39 +166,39 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
-        return jsonEncode(["mode": "context", "status": "ok"])
+        throw ToolError.notImplemented("brain_recall")
     }
 
     private func handleBrainEntity(_ args: [String: Any]) throws -> String {
-        guard let query = args["query"] as? String else {
+        guard let _ = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
-        return jsonEncode(["query": query, "entities": [] as [Any]])
+        throw ToolError.notImplemented("brain_entity")
     }
 
     private func handleBrainDigest(_ args: [String: Any]) throws -> String {
         guard args["content"] is String else {
             throw ToolError.missingParameter("content")
         }
-        return jsonEncode(["status": "digested", "chunks_created": 1])
+        throw ToolError.notImplemented("brain_digest")
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> String {
-        guard let action = args["action"] as? String else {
+        guard let _ = args["action"] as? String else {
             throw ToolError.missingParameter("action")
         }
-        return jsonEncode(["action": action, "status": "ok"])
+        throw ToolError.notImplemented("brain_update")
     }
 
     private func handleBrainExpand(_ args: [String: Any]) throws -> String {
-        guard let chunkId = args["chunk_id"] as? String else {
+        guard let _ = args["chunk_id"] as? String else {
             throw ToolError.missingParameter("chunk_id")
         }
-        return jsonEncode(["chunk_id": chunkId, "context": [] as [Any]])
+        throw ToolError.notImplemented("brain_expand")
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> String {
-        return jsonEncode(["tags": [] as [Any]])
+        throw ToolError.notImplemented("brain_tags")
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -228,12 +228,14 @@ final class MCPRouter: @unchecked Sendable {
         case unknownTool(String)
         case missingParameter(String)
         case noDatabase
+        case notImplemented(String)
 
         var errorDescription: String? {
             switch self {
             case .unknownTool(let name): return "Unknown tool: \(name)"
             case .missingParameter(let param): return "Missing required parameter: \(param)"
             case .noDatabase: return "Database not available"
+            case .notImplemented(let tool): return "\(tool) not yet implemented in BrainBar (use Python MCP server)"
             }
         }
     }
