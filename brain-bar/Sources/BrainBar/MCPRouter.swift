@@ -37,8 +37,8 @@ final class MCPRouter: @unchecked Sendable {
         case "initialize":
             return handleInitialize(id: id, params: request["params"] as? [String: Any] ?? [:])
         case "notifications/initialized":
-            // Belt-and-suspenders: some clients send this with an id.
-            return [:]
+            // If a client sends this with an id, ack it so it doesn't hang.
+            return jsonRPCResult(id: id, result: [:] as [String: Any])
         case "tools/list":
             return handleToolsList(id: id)
         case "tools/call":
@@ -156,7 +156,7 @@ final class MCPRouter: @unchecked Sendable {
         }
         let limit = min(args["num_results"] as? Int ?? 5, 100)
         guard let db = database else {
-            return "[]"
+            throw ToolError.noDatabase
         }
         let results = try db.search(query: query, limit: limit)
         let data = try JSONSerialization.data(withJSONObject: results)
