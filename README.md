@@ -249,7 +249,7 @@ BrainLayer can index conversations from multiple sources:
 | Claude Desktop | JSON export | `brainlayer index --source desktop` |
 | WhatsApp | Exported `.txt` chat | `brainlayer index --source whatsapp` |
 | YouTube | Transcripts via yt-dlp | `brainlayer index --source youtube` |
-| Codex CLI | JSONL (`~/.codex/`) | `brainlayer index --source codex` |
+| Codex CLI | JSONL (`~/.codex/sessions`) | `brainlayer ingest-codex` |
 | Markdown | Any `.md` files | `brainlayer index --source markdown` |
 | Manual | Via MCP tool | `brain_store` |
 | Real-time | Claude Code hooks | Live per-message indexing (zero-lag) |
