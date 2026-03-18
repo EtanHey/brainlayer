@@ -981,8 +981,9 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             _brain_search(
                 query=arguments["query"],
                 project=arguments.get("project"),
+                file_path=arguments.get("file_path"),
+                chunk_id=arguments.get("chunk_id"),
                 content_type=arguments.get("content_type"),
-                num_results=arguments.get("num_results", 5),
                 source=arguments.get("source"),
                 tag=arguments.get("tag"),
                 intent=arguments.get("intent"),
@@ -990,6 +991,11 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 date_from=arguments.get("date_from"),
                 date_to=arguments.get("date_to"),
                 sentiment=arguments.get("sentiment"),
+                entity_id=arguments.get("entity_id"),
+                num_results=arguments.get("num_results", 5),
+                before=max(0, min(arguments.get("before", 3), 50)),
+                after=max(0, min(arguments.get("after", 3), 50)),
+                max_results=arguments.get("max_results", 10),
                 detail=arguments.get("detail", "compact"),
             )
         )
