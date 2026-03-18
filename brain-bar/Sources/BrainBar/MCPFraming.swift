@@ -10,6 +10,11 @@ import Foundation
 struct MCPFraming: Sendable {
     private var buffer = Data()
     private static let separator = Data("\r\n\r\n".utf8)
+    /// Current buffer size — for debug logging.
+    var bufferCount: Int { buffer.count }
+    /// Set to false when messages are extracted via the raw JSON fallback.
+    /// Tells the server to respond without Content-Length framing.
+    private(set) var lastExtractUsedContentLength: Bool = true
     /// Max payload size (10 MB) — prevents DoS via absurd Content-Length values.
     private static let maxContentLength = 10_000_000
 
@@ -68,6 +73,7 @@ struct MCPFraming: Sendable {
             // Parse JSON
             if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
                 messages.append(json)
+                lastExtractUsedContentLength = true
             }
         }
 
@@ -98,6 +104,7 @@ struct MCPFraming: Sendable {
             }
             if !messages.isEmpty {
                 buffer = cursor < buffer.endIndex ? Data(buffer[cursor...]) : Data()
+                lastExtractUsedContentLength = false
             }
         }
 

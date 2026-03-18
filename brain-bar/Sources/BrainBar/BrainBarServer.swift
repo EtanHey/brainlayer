@@ -17,10 +17,32 @@ final class BrainBarServer: @unchecked Sendable {
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    private let debugLogPath = "/tmp/brainbar-debug.log"
+
+    private func debugLog(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)\n"
+        if let fh = FileHandle(forWritingAtPath: debugLogPath) {
+            fh.seekToEndOfFile()
+            fh.write(Data(line.utf8))
+            fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: debugLogPath, contents: Data(line.utf8))
+        }
+    }
+
+    private func debugLogData(_ label: String, _ data: Data) {
+        let hex = data.prefix(256).map { String(format: "%02x", $0) }.joined(separator: " ")
+        let text = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+        debugLog("\(label) (\(data.count) bytes)\n  HEX: \(hex)\n  TEXT: \(text)")
+    }
 
     struct ClientState {
         var source: DispatchSourceRead
         var framing: MCPFraming
+        /// Whether this client uses Content-Length framing (LSP-style).
+        /// false = newline-delimited JSON-RPC (Claude Code v2.1+).
+        var usesContentLengthFraming: Bool = true
     }
 
     init(socketPath: String = "/tmp/brainbar.sock", dbPath: String? = nil) {
@@ -114,6 +136,7 @@ final class BrainBarServer: @unchecked Sendable {
         listenSource = source
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
+        debugLog("SERVER STARTED — listening on \(socketPath)")
 
         // 3. NOW open the database (may take time on cold start with 8 GB file).
         //    Connections accepted above queue in the listen backlog.
@@ -150,6 +173,7 @@ final class BrainBarServer: @unchecked Sendable {
 
         clients[clientFD] = ClientState(source: readSource, framing: MCPFraming())
         NSLog("[BrainBar] Client connected (fd: %d)", clientFD)
+        debugLog("CLIENT CONNECTED fd=\(clientFD) (total clients: \(clients.count))")
     }
 
     private func readFromClient(fd: Int32) {
@@ -165,13 +189,26 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         guard var state = clients[fd] else { return }
-        state.framing.append(Data(buf[0..<n]))
+        let incoming = Data(buf[0..<n])
+        debugLogData("RECV fd=\(fd)", incoming)
+        state.framing.append(incoming)
 
         let messages = state.framing.extractMessages()
+        // Detect framing mode from first message extraction
+        if !messages.isEmpty {
+            state.usesContentLengthFraming = state.framing.lastExtractUsedContentLength
+        }
+        debugLog("EXTRACTED \(messages.count) messages from fd=\(fd) (framing=\(state.usesContentLengthFraming ? "content-length" : "newline-json"), buffer remaining: \(state.framing.bufferCount) bytes)")
         for msg in messages {
+            let method = msg["method"] as? String ?? "<no method>"
+            let id = msg["id"]
+            debugLog("  MSG fd=\(fd): method=\(method) id=\(String(describing: id))")
             let response = router.handle(msg)
             if !response.isEmpty {
-                sendResponse(fd: fd, response: response)
+                sendResponse(fd: fd, response: response, useContentLength: state.usesContentLengthFraming)
+                debugLog("  SENT response for method=\(method)")
+            } else {
+                debugLog("  NO RESPONSE for method=\(method) (notification)")
             }
             // sendResponse may have called disconnectClient — stop processing
             if clients[fd] == nil { return }
@@ -180,8 +217,18 @@ final class BrainBarServer: @unchecked Sendable {
         clients[fd] = state
     }
 
-    private func sendResponse(fd: Int32, response: [String: Any]) {
-        guard let framed = try? MCPFraming.encode(response) else { return }
+    private func sendResponse(fd: Int32, response: [String: Any], useContentLength: Bool = true) {
+        let framed: Data
+        if useContentLength {
+            guard let data = try? MCPFraming.encode(response) else { return }
+            framed = data
+        } else {
+            // Newline-delimited JSON-RPC (Claude Code v2.1+ / MCP 2025-11-25)
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: response) else { return }
+            var data = jsonData
+            data.append(0x0A) // trailing \n
+            framed = data
+        }
         framed.withUnsafeBytes { ptr in
             var totalWritten = 0
             var eagainRetries = 0
