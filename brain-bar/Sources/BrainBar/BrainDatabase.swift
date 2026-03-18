@@ -155,12 +155,12 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - Insert chunk (production schema)
 
-    func insertChunk(id: String, content: String, sessionId: String, project: String, contentType: String, importance: Int) throws {
+    func insertChunk(id: String, content: String, sessionId: String, project: String, contentType: String, importance: Int, tags: String = "[]") throws {
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let sql = """
-            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count)
-            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary)
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '')
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -174,6 +174,7 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_int(stmt, 5, Int32(importance))
         sqlite3_bind_text(stmt, 6, sessionId, -1, TRANSIENT)
         sqlite3_bind_int(stmt, 7, Int32(content.count))
+        sqlite3_bind_text(stmt, 8, tags, -1, TRANSIENT)
 
         let stepRC = sqlite3_step(stmt)
         guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
@@ -181,30 +182,48 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - FTS5 Search (production schema)
 
-    func search(query: String, limit: Int) throws -> [[String: Any]] {
+    func search(query: String, limit: Int, project: String? = nil, tag: String? = nil, importanceMin: Double? = nil) throws -> [[String: Any]] {
         guard let db else { throw DBError.notOpen }
 
         let sanitized = sanitizeFTS5Query(query)
 
-        var stmt: OpaquePointer?
-        // Production FTS5: content, summary, tags, resolved_query, chunk_id UNINDEXED
-        // Join on rowid. Use production column names (id, conversation_id, etc.)
+        // Build WHERE clause dynamically with optional filters
+        var conditions = ["chunks_fts MATCH ?"]
+        if project != nil { conditions.append("c.project = ?") }
+        if tag != nil { conditions.append("c.tags LIKE ?") }
+        if importanceMin != nil { conditions.append("c.importance >= ?") }
+
+        let whereClause = conditions.joined(separator: " AND ")
         let sql = """
             SELECT c.id, c.content, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id
             FROM chunks_fts f
             JOIN chunks c ON f.rowid = c.rowid
-            WHERE chunks_fts MATCH ?
+            WHERE \(whereClause)
             ORDER BY rank
             LIMIT ?
         """
+
+        var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }
 
         let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        sqlite3_bind_text(stmt, 1, sanitized, -1, TRANSIENT)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var paramIdx: Int32 = 1
+        sqlite3_bind_text(stmt, paramIdx, sanitized, -1, TRANSIENT); paramIdx += 1
+        if let project {
+            sqlite3_bind_text(stmt, paramIdx, project, -1, TRANSIENT); paramIdx += 1
+        }
+        if let tag {
+            // Tags stored as JSON array string, e.g. '["bug-fix","auth"]'. Use LIKE for containment.
+            let pattern = "%\"\(tag)\"%"
+            sqlite3_bind_text(stmt, paramIdx, pattern, -1, TRANSIENT); paramIdx += 1
+        }
+        if let importanceMin {
+            sqlite3_bind_double(stmt, paramIdx, importanceMin); paramIdx += 1
+        }
+        sqlite3_bind_int(stmt, paramIdx, Int32(limit))
 
         var results: [[String: Any]] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -223,6 +242,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         return results
     }
+
 
     // MARK: - Store (brain_store, production schema)
 

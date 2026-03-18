@@ -17,6 +17,9 @@ final class BrainBarServer: @unchecked Sendable {
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    /// Maximum EAGAIN retries before disconnecting a stalled client.
+    /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
+    static let maxWriteRetries = 10
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -237,8 +240,8 @@ final class BrainBarServer: @unchecked Sendable {
                 if n < 0 {
                     if errno == EAGAIN || errno == EWOULDBLOCK {
                         eagainRetries += 1
-                        if eagainRetries > 50 { // 50 ms cap — never stall the serial queue
-                            NSLog("[BrainBar] Write stalled on fd %d after %d retries — dropping client", fd, eagainRetries)
+                        if eagainRetries > Self.maxWriteRetries {
+                            NSLog("[BrainBar] ⚠️ Write stalled on fd %d after %d EAGAIN retries (%d ms) — disconnecting dead client", fd, eagainRetries, eagainRetries - 1)
                             disconnectClient(fd: fd)
                             return
                         }

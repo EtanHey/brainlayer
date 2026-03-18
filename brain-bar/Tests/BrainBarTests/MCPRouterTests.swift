@@ -138,6 +138,69 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(error?["code"] as? Int, -32601)
     }
 
+    // MARK: - brain_search with filters (H3)
+
+    func testBrainSearchPassesProjectFilter() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-filter-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "f-1", content: "Socket handling code", sessionId: "s1", project: "brainbar", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "f-2", content: "Socket connection code", sessionId: "s2", project: "other-proj", contentType: "assistant_text", importance: 5)
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "socket", "project": "brainbar"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        // Parse the result text as JSON array
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? "[]"
+        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+
+        XCTAssertEqual(results.count, 1, "Should return only brainbar project result")
+        XCTAssertEqual(results.first?["project"] as? String, "brainbar")
+    }
+
+    func testBrainSearchPassesImportanceMinFilter() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-imp-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "i-1", content: "Critical security finding", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 9)
+        try db.insertChunk(id: "i-2", content: "Security review notes", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 3)
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "security", "importance_min": 7] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? "[]"
+        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+
+        XCTAssertEqual(results.count, 1, "Should return only high-importance result")
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "i-1")
+    }
+
     // MARK: - Notifications (no id)
 
     func testNotificationDoesNotRequireResponse() {

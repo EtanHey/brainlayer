@@ -104,6 +104,59 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
     }
 
+    // MARK: - Filter: project
+
+    func testSearchFiltersByProject() throws {
+        try db.insertChunk(id: "proj-a-1", content: "Authentication uses JWT tokens", sessionId: "s1", project: "alpha", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "proj-b-1", content: "Authentication uses OAuth tokens", sessionId: "s2", project: "beta", contentType: "assistant_text", importance: 5)
+
+        let filtered = try db.search(query: "authentication tokens", limit: 10, project: "alpha")
+        XCTAssertEqual(filtered.count, 1, "Should return only alpha project chunk")
+        XCTAssertEqual(filtered.first?["project"] as? String, "alpha")
+    }
+
+    func testSearchWithoutProjectReturnsAll() throws {
+        try db.insertChunk(id: "all-a", content: "Database migration script", sessionId: "s1", project: "alpha", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "all-b", content: "Database migration tool", sessionId: "s2", project: "beta", contentType: "assistant_text", importance: 5)
+
+        let all = try db.search(query: "database migration", limit: 10)
+        XCTAssertEqual(all.count, 2, "Without filter, both projects should be returned")
+    }
+
+    // MARK: - Filter: importance_min
+
+    func testSearchFiltersByImportanceMin() throws {
+        try db.insertChunk(id: "imp-low", content: "Logging configuration setup", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 3)
+        try db.insertChunk(id: "imp-high", content: "Logging security audit", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 8)
+
+        let filtered = try db.search(query: "logging", limit: 10, importanceMin: 7.0)
+        XCTAssertEqual(filtered.count, 1, "Should return only high-importance chunk")
+        XCTAssertEqual(filtered.first?["chunk_id"] as? String, "imp-high")
+    }
+
+    // MARK: - Filter: tag
+
+    func testSearchFiltersByTag() throws {
+        try db.insertChunk(id: "tag-1", content: "Fixed the authentication bug in login flow", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"bug-fix\", \"auth\"]")
+        try db.insertChunk(id: "tag-2", content: "Fixed the authentication bug in signup flow", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5)
+
+        let filtered = try db.search(query: "authentication bug", limit: 10, tag: "bug-fix")
+        XCTAssertEqual(filtered.count, 1, "Should return only tagged chunk")
+        XCTAssertEqual(filtered.first?["chunk_id"] as? String, "tag-1")
+    }
+
+    // MARK: - Filter: combined
+
+    func testSearchCombinesFilters() throws {
+        try db.insertChunk(id: "combo-1", content: "API rate limiting implementation", sessionId: "s1", project: "alpha", contentType: "assistant_text", importance: 9)
+        try db.insertChunk(id: "combo-2", content: "API rate limiting design", sessionId: "s2", project: "beta", contentType: "assistant_text", importance: 9)
+        try db.insertChunk(id: "combo-3", content: "API rate limiting notes", sessionId: "s3", project: "alpha", contentType: "assistant_text", importance: 3)
+
+        let filtered = try db.search(query: "API rate limiting", limit: 10, project: "alpha", importanceMin: 7.0)
+        XCTAssertEqual(filtered.count, 1, "Should match only alpha + high importance")
+        XCTAssertEqual(filtered.first?["chunk_id"] as? String, "combo-1")
+    }
+
     // MARK: - Concurrent reads
 
     func testConcurrentReadsDoNotBlock() throws {

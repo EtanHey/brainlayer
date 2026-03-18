@@ -155,10 +155,16 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("query")
         }
         let limit = min(args["num_results"] as? Int ?? 5, 100)
+        let project = args["project"] as? String
+        let tag = args["tag"] as? String
+        // importance_min may arrive as Int or Double from JSON
+        let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
+            else if let i = args["importance_min"] as? Int { Double(i) }
+            else { nil }
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        let results = try db.search(query: query, limit: limit)
+        let results = try db.search(query: query, limit: limit, project: project, tag: tag, importanceMin: importanceMin)
         let data = try JSONSerialization.data(withJSONObject: results)
         return String(data: data, encoding: .utf8) ?? "[]"
     }
