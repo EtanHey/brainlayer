@@ -173,6 +173,8 @@ final class BrainBarServer: @unchecked Sendable {
             if !response.isEmpty {
                 sendResponse(fd: fd, response: response)
             }
+            // sendResponse may have called disconnectClient — stop processing
+            if clients[fd] == nil { return }
         }
 
         clients[fd] = state
@@ -200,7 +202,11 @@ final class BrainBarServer: @unchecked Sendable {
                     disconnectClient(fd: fd)
                     return
                 }
-                if n == 0 { break } // EOF
+                if n == 0 {
+                    NSLog("[BrainBar] Write returned 0 on fd %d — peer closed", fd)
+                    disconnectClient(fd: fd)
+                    return
+                }
                 totalWritten += n
                 eagainRetries = 0 // reset on successful partial write
             }
