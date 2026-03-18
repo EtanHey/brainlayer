@@ -27,6 +27,13 @@ struct MCPFraming: Sendable {
 
     /// Extract all complete messages from the buffer.
     /// Incomplete messages remain in the buffer for the next append.
+    ///
+    /// Supports two modes:
+    /// 1. Standard MCP Content-Length framing (preferred).
+    /// 2. Raw JSON-RPC fallback — if no Content-Length header is found,
+    ///    tries to parse the buffer as bare JSON. This prevents silent
+    ///    hangs when a client omits framing (e.g. socat manual tests,
+    ///    or a transport that strips headers).
     mutating func extractMessages() -> [[String: Any]] {
         var messages: [[String: Any]] = []
 
@@ -61,6 +68,36 @@ struct MCPFraming: Sendable {
             // Parse JSON
             if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
                 messages.append(json)
+            }
+        }
+
+        // Fallback: raw JSON-RPC without Content-Length framing.
+        // Only triggers when the buffer has data, no \r\n\r\n separator was
+        // found, and no Content-Length messages were already extracted.
+        if messages.isEmpty && !buffer.isEmpty && buffer.range(of: Self.separator) == nil {
+            // Try newline-delimited JSON first (handles echo piped input)
+            let newline = UInt8(0x0A)
+            var cursor = buffer.startIndex
+            while cursor < buffer.endIndex {
+                guard let nlIndex = buffer[cursor...].firstIndex(of: newline) else { break }
+                let lineData = buffer[cursor..<nlIndex]
+                cursor = buffer.index(after: nlIndex)
+                guard !lineData.isEmpty,
+                      let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      json["method"] is String else { continue }
+                messages.append(json)
+            }
+            // Try remaining data after last newline (no trailing newline)
+            if cursor < buffer.endIndex {
+                let tail = buffer[cursor...]
+                if let json = try? JSONSerialization.jsonObject(with: tail) as? [String: Any],
+                   json["method"] is String {
+                    messages.append(json)
+                    cursor = buffer.endIndex
+                }
+            }
+            if !messages.isEmpty {
+                buffer = cursor < buffer.endIndex ? Data(buffer[cursor...]) : Data()
             }
         }
 

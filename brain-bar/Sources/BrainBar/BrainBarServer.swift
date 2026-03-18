@@ -46,12 +46,14 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func startOnQueue() {
-        // Initialize database and router
-        database = BrainDatabase(path: dbPath)
+        // 1. Create router FIRST (no DB dependency).
+        //    initialize + tools/list work without a database.
         router = MCPRouter()
-        router.setDatabase(database)
 
-        // Clean up stale socket
+        // 2. Bind socket BEFORE database init.
+        //    After a restart the socket must exist before Claude Code tries
+        //    to connect via socat.  Connections queue in the listen backlog
+        //    while the DB opens.
         unlink(socketPath)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -112,6 +114,19 @@ final class BrainBarServer: @unchecked Sendable {
         listenSource = source
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
+
+        // 3. NOW open the database (may take time on cold start with 8 GB file).
+        //    Connections accepted above queue in the listen backlog.
+        //    initialize / tools/list already work; tools/call returns a
+        //    graceful error until the DB is ready.
+        let db = BrainDatabase(path: dbPath)
+        if db.isOpen {
+            database = db
+            router.setDatabase(db)
+            NSLog("[BrainBar] Database ready (%@)", dbPath)
+        } else {
+            NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
+        }
     }
 
     private func acceptClient() {
@@ -145,8 +160,7 @@ final class BrainBarServer: @unchecked Sendable {
             if n == -1, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
                 return
             }
-            clients[fd]?.source.cancel()
-            clients.removeValue(forKey: fd)
+            disconnectClient(fd: fd)
             return
         }
 
@@ -168,20 +182,35 @@ final class BrainBarServer: @unchecked Sendable {
         guard let framed = try? MCPFraming.encode(response) else { return }
         framed.withUnsafeBytes { ptr in
             var totalWritten = 0
+            var eagainRetries = 0
             while totalWritten < framed.count {
                 let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), framed.count - totalWritten)
                 if n < 0 {
                     if errno == EAGAIN || errno == EWOULDBLOCK {
-                        // Kernel buffer full — brief retry
-                        usleep(1000) // 1ms
+                        eagainRetries += 1
+                        if eagainRetries > 50 { // 50 ms cap — never stall the serial queue
+                            NSLog("[BrainBar] Write stalled on fd %d after %d retries — dropping client", fd, eagainRetries)
+                            disconnectClient(fd: fd)
+                            return
+                        }
+                        usleep(1000) // 1 ms
                         continue
                     }
-                    break // Real error
+                    NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
+                    disconnectClient(fd: fd)
+                    return
                 }
                 if n == 0 { break } // EOF
                 totalWritten += n
+                eagainRetries = 0 // reset on successful partial write
             }
         }
+    }
+
+    private func disconnectClient(fd: Int32) {
+        clients[fd]?.source.cancel()
+        clients.removeValue(forKey: fd)
+        NSLog("[BrainBar] Client disconnected (fd: %d)", fd)
     }
 
     private func cleanup() {

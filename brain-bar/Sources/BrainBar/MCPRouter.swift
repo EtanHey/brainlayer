@@ -24,20 +24,31 @@ final class MCPRouter: @unchecked Sendable {
             return jsonRPCError(id: request["id"], code: -32600, message: "Invalid request: missing method")
         }
 
-        // Notifications have no id — don't respond
-        let id = request["id"]
-        if id == nil {
-            // Notification — handle silently
+        // Notifications have no id — don't respond.
+        // Check both missing key AND explicit JSON null (NSNull from JSONSerialization).
+        let rawID = request["id"]
+        let isNotification = (rawID == nil || rawID is NSNull)
+        if isNotification {
             return [:]
         }
+        let id = rawID!
 
         switch method {
         case "initialize":
-            return handleInitialize(id: id!, params: request["params"] as? [String: Any] ?? [:])
+            return handleInitialize(id: id, params: request["params"] as? [String: Any] ?? [:])
+        case "notifications/initialized":
+            // Belt-and-suspenders: some clients send this with an id.
+            return [:]
         case "tools/list":
-            return handleToolsList(id: id!)
+            return handleToolsList(id: id)
         case "tools/call":
-            return handleToolsCall(id: id!, params: request["params"] as? [String: Any] ?? [:])
+            return handleToolsCall(id: id, params: request["params"] as? [String: Any] ?? [:])
+        case "resources/list":
+            return jsonRPCResult(id: id, result: ["resources": [Any]()])
+        case "prompts/list":
+            return jsonRPCResult(id: id, result: ["prompts": [Any]()])
+        case "ping":
+            return jsonRPCResult(id: id, result: [:] as [String: Any])
         default:
             return jsonRPCError(id: id, code: -32601, message: "Method not found: \(method)")
         }
@@ -211,6 +222,14 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     // MARK: - Error helpers
+
+    private func jsonRPCResult(id: Any, result: [String: Any]) -> [String: Any] {
+        return [
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        ]
+    }
 
     private func jsonRPCError(id: Any?, code: Int, message: String) -> [String: Any] {
         var response: [String: Any] = [
