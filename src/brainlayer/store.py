@@ -221,7 +221,7 @@ def embed_pending_chunks(
             """
             SELECT c.id, c.content FROM chunks c
             LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
-            WHERE v.chunk_id IS NULL AND c.source = 'manual'
+            WHERE v.chunk_id IS NULL AND c.source IN ('manual', 'mcp')
             ORDER BY c.created_at ASC
             LIMIT ?
             """,

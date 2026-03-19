@@ -134,7 +134,7 @@ class SearchMixin:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 filter_params.append(entity_id)
             if project_filter:
-                where_clauses.append("c.project = ?")
+                where_clauses.append("(c.project = ? OR c.project IS NULL)")
                 filter_params.append(project_filter)
             if content_type_filter:
                 where_clauses.append("c.content_type = ?")
@@ -201,7 +201,7 @@ class SearchMixin:
                 where_clauses.append("id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 params.append(entity_id)
             if project_filter:
-                where_clauses.append("project = ?")
+                where_clauses.append("(project = ? OR project IS NULL)")
                 params.append(project_filter)
             if content_type_filter:
                 where_clauses.append("content_type = ?")
@@ -510,7 +510,7 @@ class SearchMixin:
             fts_extra.append("AND ec.entity_id = ?")
             fts_params.append(entity_id)
         if project_filter:
-            fts_extra.append("AND c.project = ?")
+            fts_extra.append("AND (c.project = ? OR c.project IS NULL)")
             fts_params.append(project_filter)
         if source_filter:
             fts_extra.append("AND c.source = ?")
@@ -644,7 +644,7 @@ class SearchMixin:
             if fts_rank is not None and sem_entry is None:
                 if source_filter and meta.get("source") != source_filter:
                     continue
-                if project_filter and meta.get("project") != project_filter:
+                if project_filter and meta.get("project") not in (project_filter, None):
                     continue
                 if content_type_filter and meta.get("content_type") != content_type_filter:
                     continue
