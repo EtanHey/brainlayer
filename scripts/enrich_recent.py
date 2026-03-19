@@ -9,7 +9,10 @@ import apsw
 from google import genai
 from google.genai import types
 
-API_KEY = os.environ.get("GOOGLE_API_KEY", "AIzaSyC4tEa3Zh01rvrAB49nFA57NDBEClv3VOo")
+API_KEY = os.environ.get("GOOGLE_API_KEY")
+if not API_KEY:
+    print("ERROR: GOOGLE_API_KEY environment variable required")
+    sys.exit(1)
 MODEL = "gemini-2.5-flash"
 DB_PATH = os.path.expanduser("~/.local/share/brainlayer/brainlayer.db")
 BATCH_COMMIT = 50
@@ -109,11 +112,19 @@ def main():
                 errors += 1
                 continue
 
-            # Build new tags: merge old + new faceted
+            # Validate and extract fields
             topics = parsed.get("b_topics", [])
             activity = parsed.get("c_activity", "")
             domains = parsed.get("d_domain", [])
             confidence = parsed.get("e_confidence", 0)
+            if not isinstance(topics, list):
+                topics = []
+            if not isinstance(domains, list):
+                domains = []
+            if not isinstance(confidence, (int, float)):
+                confidence = 0
+            topics = [t for t in topics if isinstance(t, str)]
+            domains = [d for d in domains if isinstance(d, str)]
 
             new_tags = list(topics)
             if activity:
