@@ -12,7 +12,7 @@
 
 ---
 
-**317,000+ chunks indexed** · **1,002 Python + 28 Swift tests** · **Real-time indexing hooks** · **9 MCP tools** · **BrainBar daemon (209KB)** · **Zero cloud dependencies**
+**224,000+ chunks indexed** · **1,002 Python + 28 Swift tests** · **Real-time indexing hooks** · **9 MCP tools** · **BrainBar daemon (209KB)** · **Zero cloud dependencies**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -161,16 +161,17 @@ BrainLayer enriches each chunk with 10 structured metadata fields using a local 
 | `debt_impact` | `introduction`, `resolution`, `none` |
 | `external_deps` | "grammy, Supabase, Railway" |
 
-Two local LLM backends:
+Three enrichment backends (auto-detect: MLX → Ollama → Groq, override via `BRAINLAYER_ENRICH_BACKEND`):
 
 | Backend | Best for | Speed |
 |---------|----------|-------|
-| **MLX** (Apple Silicon) | M1/M2/M3 Macs | 21-87% faster than Ollama |
+| **Groq** (cloud) | When local LLMs are unavailable | ~1-2s/chunk |
+| **MLX** (Apple Silicon) | M1/M2/M3 Macs (preferred) | 21-87% faster than Ollama |
 | **Ollama** | Any platform | ~1s/chunk (short), ~13s (long) |
 
 ```bash
 brainlayer enrich                              # Default backend (auto-detects)
-BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich --batch-size=100
+BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich --batch-size=100
 ```
 
 ## Why BrainLayer?
@@ -214,7 +215,7 @@ All configuration is via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path |
-| `BRAINLAYER_ENRICH_BACKEND` | auto-detect (MLX on Apple Silicon, else Ollama) | Enrichment LLM backend |
+| `BRAINLAYER_ENRICH_BACKEND` | auto-detect (MLX → Ollama → Groq) | Enrichment LLM backend (`mlx`, `ollama`, or `groq`) |
 | `BRAINLAYER_ENRICH_MODEL` | `glm-4.7-flash` | Ollama model name |
 | `BRAINLAYER_MLX_MODEL` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | MLX model identifier |
 | `BRAINLAYER_OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
