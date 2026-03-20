@@ -9,15 +9,21 @@
 // - Single-writer architecture (no concurrent writes)
 
 import XCTest
+import SQLite3
 @testable import BrainBar
 
 final class DatabaseTests: XCTestCase {
     var db: BrainDatabase!
     var tempDBPath: String!
+    var tempMetadataPath: String!
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-test-\(UUID().uuidString).db"
+        let url = URL(fileURLWithPath: tempDBPath)
+        let directory = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        tempMetadataPath = directory.appendingPathComponent("\(stem).brainbar-meta.db").path
         db = BrainDatabase(path: tempDBPath)
     }
 
@@ -26,6 +32,9 @@ final class DatabaseTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        try? FileManager.default.removeItem(atPath: tempMetadataPath)
+        try? FileManager.default.removeItem(atPath: tempMetadataPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempMetadataPath + "-shm")
         super.tearDown()
     }
 
@@ -65,13 +74,25 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testAgentSubscriptionsTableExists() throws {
-        let exists = try db.tableExists("agent_subscriptions")
+        let exists = try db.auxiliaryTableExists("agent_subscriptions")
         XCTAssertTrue(exists, "agent_subscriptions table must exist")
     }
 
     func testAgentReadsTableExists() throws {
-        let exists = try db.tableExists("agent_reads")
+        let exists = try db.auxiliaryTableExists("agent_reads")
         XCTAssertTrue(exists, "agent_reads table must exist")
+    }
+
+    func testUpsertSubscriptionRecoversMissingAuxiliaryTables() throws {
+        db.metadataExec("DROP TABLE IF EXISTS agent_reads")
+        db.metadataExec("DROP TABLE IF EXISTS agent_subscriptions")
+
+        let record = try db.upsertSubscription(agentID: "agent-a", tags: ["agent-message"])
+
+        XCTAssertEqual(record.agentID, "agent-a")
+        XCTAssertEqual(record.tags, ["agent-message"])
+        XCTAssertTrue(try db.auxiliaryTableExists("agent_subscriptions"))
+        XCTAssertTrue(try db.auxiliaryTableExists("agent_reads"))
     }
 
     // MARK: - Search (FTS5)
@@ -112,6 +133,37 @@ final class DatabaseTests: XCTestCase {
         // Verify it's searchable
         let results = try db.search(query: "GRDB SQLite", limit: 10)
         XCTAssertFalse(results.isEmpty)
+    }
+
+    func testStoreRetriesThroughTransientWriteLock() throws {
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(tempDBPath, &lockDB, flags, nil), SQLITE_OK)
+        guard let lockDB else {
+            XCTFail("Failed to open secondary lock connection")
+            return
+        }
+        defer { sqlite3_close(lockDB) }
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+
+        let releaseExpectation = expectation(description: "release write lock")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5.5, execute: DispatchWorkItem {
+            sqlite3_exec(lockDB, "COMMIT", nil, nil, nil)
+            releaseExpectation.fulfill()
+        })
+
+        let startedAt = Date()
+        let chunkID = try db.store(
+            content: "Store after transient lock",
+            tags: ["retry"],
+            importance: 5,
+            source: "mcp"
+        )
+
+        XCTAssertFalse(chunkID.isEmpty)
+        XCTAssertGreaterThan(Date().timeIntervalSince(startedAt), 5.0)
+        wait(for: [releaseExpectation], timeout: 7.0)
     }
 
     // MARK: - Filter: project
