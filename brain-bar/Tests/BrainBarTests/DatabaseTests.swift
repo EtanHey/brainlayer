@@ -15,15 +15,10 @@ import SQLite3
 final class DatabaseTests: XCTestCase {
     var db: BrainDatabase!
     var tempDBPath: String!
-    var tempMetadataPath: String!
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-test-\(UUID().uuidString).db"
-        let url = URL(fileURLWithPath: tempDBPath)
-        let directory = url.deletingLastPathComponent()
-        let stem = url.deletingPathExtension().lastPathComponent
-        tempMetadataPath = directory.appendingPathComponent("\(stem).brainbar-meta.db").path
         db = BrainDatabase(path: tempDBPath)
     }
 
@@ -32,9 +27,6 @@ final class DatabaseTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
-        try? FileManager.default.removeItem(atPath: tempMetadataPath)
-        try? FileManager.default.removeItem(atPath: tempMetadataPath + "-wal")
-        try? FileManager.default.removeItem(atPath: tempMetadataPath + "-shm")
         super.tearDown()
     }
 
@@ -73,26 +65,26 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "chunks_fts FTS5 table must exist")
     }
 
-    func testAgentSubscriptionsTableExists() throws {
-        let exists = try db.auxiliaryTableExists("agent_subscriptions")
-        XCTAssertTrue(exists, "agent_subscriptions table must exist")
+    func testBrainbarAgentsTableExists() throws {
+        let exists = try db.tableExists("brainbar_agents")
+        XCTAssertTrue(exists, "brainbar_agents table must exist")
     }
 
-    func testAgentReadsTableExists() throws {
-        let exists = try db.auxiliaryTableExists("agent_reads")
-        XCTAssertTrue(exists, "agent_reads table must exist")
+    func testBrainbarSubscriptionsTableExists() throws {
+        let exists = try db.tableExists("brainbar_subscriptions")
+        XCTAssertTrue(exists, "brainbar_subscriptions table must exist")
     }
 
-    func testUpsertSubscriptionRecoversMissingAuxiliaryTables() throws {
-        db.metadataExec("DROP TABLE IF EXISTS agent_reads")
-        db.metadataExec("DROP TABLE IF EXISTS agent_subscriptions")
+    func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
+        db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
+        db.exec("DROP TABLE IF EXISTS brainbar_agents")
 
         let record = try db.upsertSubscription(agentID: "agent-a", tags: ["agent-message"])
 
         XCTAssertEqual(record.agentID, "agent-a")
         XCTAssertEqual(record.tags, ["agent-message"])
-        XCTAssertTrue(try db.auxiliaryTableExists("agent_subscriptions"))
-        XCTAssertTrue(try db.auxiliaryTableExists("agent_reads"))
+        XCTAssertTrue(try db.tableExists("brainbar_agents"))
+        XCTAssertTrue(try db.tableExists("brainbar_subscriptions"))
     }
 
     // MARK: - Search (FTS5)
@@ -121,14 +113,15 @@ final class DatabaseTests: XCTestCase {
     // MARK: - Store
 
     func testStoreCreatesChunk() throws {
-        let id = try db.store(
+        let stored = try db.store(
             content: "Decision: Use GRDB for SQLite access",
             tags: ["decision", "architecture"],
             importance: 8,
             source: "mcp"
         )
 
-        XCTAssertFalse(id.isEmpty, "store should return a chunk ID")
+        XCTAssertFalse(stored.chunkID.isEmpty, "store should return a chunk ID")
+        XCTAssertGreaterThan(stored.rowID, 0)
 
         // Verify it's searchable
         let results = try db.search(query: "GRDB SQLite", limit: 10)
@@ -154,14 +147,14 @@ final class DatabaseTests: XCTestCase {
         })
 
         let startedAt = Date()
-        let chunkID = try db.store(
+        let stored = try db.store(
             content: "Store after transient lock",
             tags: ["retry"],
             importance: 5,
             source: "mcp"
         )
 
-        XCTAssertFalse(chunkID.isEmpty)
+        XCTAssertFalse(stored.chunkID.isEmpty)
         XCTAssertGreaterThan(Date().timeIntervalSince(startedAt), 5.0)
         wait(for: [releaseExpectation], timeout: 7.0)
     }

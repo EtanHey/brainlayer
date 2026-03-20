@@ -12,10 +12,12 @@ import Foundation
 final class MCPRouter: @unchecked Sendable {
     private struct StoreResultPayload: Encodable {
         let chunkID: String
+        let rowID: Int64
         let status: String
 
         enum CodingKeys: String, CodingKey {
             case chunkID = "chunk_id"
+            case rowID = "rowid"
             case status
         }
     }
@@ -54,7 +56,9 @@ final class MCPRouter: @unchecked Sendable {
         case "tools/call":
             return handleToolsCall(id: id, params: request["params"] as? [String: Any] ?? [:])
         case "resources/list":
-            return jsonRPCResult(id: id, result: ["resources": [Any]()])
+            return handleResourcesList(id: id)
+        case "resources/read":
+            return handleResourcesRead(id: id, params: request["params"] as? [String: Any] ?? [:])
         case "prompts/list":
             return jsonRPCResult(id: id, result: ["prompts": [Any]()])
         case "ping":
@@ -74,6 +78,10 @@ final class MCPRouter: @unchecked Sendable {
                 "protocolVersion": "2024-11-05",
                 "capabilities": [
                     "tools": ["listChanged": false],
+                    "resources": [
+                        "subscribe": true,
+                        "listChanged": false
+                    ],
                     "experimental": [
                         "claude/channel": [:] as [String: Any]
                     ]
@@ -96,6 +104,31 @@ final class MCPRouter: @unchecked Sendable {
                 "tools": Self.toolDefinitions
             ]
         ]
+    }
+
+    private func handleResourcesList(id: Any) -> [String: Any] {
+        let resources = (try? database?.resourceList()) ?? []
+        return jsonRPCResult(id: id, result: ["resources": resources])
+    }
+
+    private func handleResourcesRead(id: Any, params: [String: Any]) -> [String: Any] {
+        guard let uri = params["uri"] as? String else {
+            return jsonRPCError(id: id, code: -32602, message: "Missing resource uri")
+        }
+
+        do {
+            let rows = try database?.resourceRead(uri: uri) ?? []
+            let text = String(data: try JSONSerialization.data(withJSONObject: rows), encoding: .utf8) ?? "[]"
+            return jsonRPCResult(id: id, result: [
+                "contents": [[
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": text
+                ]]
+            ])
+        } catch {
+            return jsonRPCError(id: id, code: -32000, message: error.localizedDescription)
+        }
     }
 
     // MARK: - tools/call
@@ -160,6 +193,8 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainSubscribe(arguments)
         case "brain_unsubscribe":
             return try handleBrainUnsubscribe(arguments)
+        case "brain_ack":
+            return try handleBrainAck(arguments)
         default:
             throw ToolError.unknownTool(name)
         }
@@ -174,14 +209,14 @@ final class MCPRouter: @unchecked Sendable {
         let limit = min(args["num_results"] as? Int ?? 5, 100)
         let project = args["project"] as? String
         let tag = args["tag"] as? String
-        let subscriberID = args["subscriber_id"] as? String
+        let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
         // importance_min may arrive as Int or Double from JSON
         let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
             else if let i = args["importance_min"] as? Int { Double(i) }
             else { nil }
         if unreadOnly && subscriberID == nil {
-            throw ToolError.missingParameter("subscriber_id")
+            throw ToolError.missingParameter("agent_id")
         }
         guard let db = database else {
             throw ToolError.noDatabase
@@ -208,8 +243,8 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        let id = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return jsonEncode(StoreResultPayload(chunkID: id, status: "stored"))
+        let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
+        return jsonEncode(StoreResultPayload(chunkID: stored.chunkID, rowID: stored.rowID, status: "stored"))
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
@@ -249,8 +284,8 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainSubscribe(_ args: [String: Any]) throws -> String {
-        guard let _ = args["subscriber_id"] as? String else {
-            throw ToolError.missingParameter("subscriber_id")
+        guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
+            throw ToolError.missingParameter("agent_id")
         }
         guard let _ = args["tags"] as? [String] else {
             throw ToolError.missingParameter("tags")
@@ -259,10 +294,20 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainUnsubscribe(_ args: [String: Any]) throws -> String {
-        guard let _ = args["subscriber_id"] as? String else {
-            throw ToolError.missingParameter("subscriber_id")
+        guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
+            throw ToolError.missingParameter("agent_id")
         }
         throw ToolError.notImplemented("brain_unsubscribe")
+    }
+
+    private func handleBrainAck(_ args: [String: Any]) throws -> String {
+        guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
+            throw ToolError.missingParameter("agent_id")
+        }
+        guard args["seq"] is Int || args["seq"] is Int64 else {
+            throw ToolError.missingParameter("seq")
+        }
+        throw ToolError.notImplemented("brain_ack")
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -326,8 +371,8 @@ final class MCPRouter: @unchecked Sendable {
                     "project": ["type": "string", "description": "Filter by project name"],
                     "tag": ["type": "string", "description": "Filter by tag"],
                     "importance_min": ["type": "number", "description": "Minimum importance score (1-10)"],
-                    "subscriber_id": ["type": "string", "description": "Optional agent/subscriber id for unread filtering"],
-                    "unread_only": ["type": "boolean", "description": "Return only chunks not yet marked read by subscriber_id"],
+                    "agent_id": ["type": "string", "description": "Optional stable agent id for unread filtering"],
+                    "unread_only": ["type": "boolean", "description": "Return only chunks not yet acknowledged by agent_id"],
                     "detail": ["type": "string", "enum": ["compact", "full"], "description": "Result detail level"],
                 ] as [String: Any],
                 "required": ["query"]
@@ -420,10 +465,10 @@ final class MCPRouter: @unchecked Sendable {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "subscriber_id": ["type": "string", "description": "Stable agent or session identifier"],
+                    "agent_id": ["type": "string", "description": "Stable agent identifier"],
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags to receive live notifications for"],
                 ] as [String: Any],
-                "required": ["subscriber_id", "tags"]
+                "required": ["agent_id", "tags"]
             ] as [String: Any]
         ],
         [
@@ -432,10 +477,22 @@ final class MCPRouter: @unchecked Sendable {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "subscriber_id": ["type": "string", "description": "Stable agent or session identifier"],
+                    "agent_id": ["type": "string", "description": "Stable agent identifier"],
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Optional subset of tags to remove"],
                 ] as [String: Any],
-                "required": ["subscriber_id"]
+                "required": ["agent_id"]
+            ] as [String: Any]
+        ],
+        [
+            "name": "brain_ack",
+            "description": "Acknowledge that an agent processed messages through the given chunk rowid.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "agent_id": ["type": "string", "description": "Stable agent identifier"],
+                    "seq": ["type": "integer", "description": "Highest chunk rowid acknowledged by the agent"],
+                ] as [String: Any],
+                "required": ["agent_id", "seq"]
             ] as [String: Any]
         ],
     ]

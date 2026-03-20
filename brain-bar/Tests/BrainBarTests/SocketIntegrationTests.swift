@@ -91,7 +91,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 10)
+        XCTAssertEqual(tools?.count, 11)
     }
 
     // MARK: - MCP tools/call brain_search over socket
@@ -118,7 +118,7 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNotNil(response["result"])
     }
 
-    func testMCPBrainSubscribeOverSocketReturnsLastSeen() throws {
+    func testMCPBrainSubscribeOverSocketReturnsCursorState() throws {
         _ = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
@@ -132,7 +132,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_subscribe",
                 "arguments": [
-                    "subscriber_id": "agent-1",
+                    "agent_id": "agent-1",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -144,8 +144,10 @@ final class SocketIntegrationTests: XCTestCase {
         let payload = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
 
         XCTAssertEqual(payload?["status"] as? String, "subscribed")
-        XCTAssertEqual(payload?["subscriber_id"] as? String, "agent-1")
-        XCTAssertNotNil(payload?["last_seen"])
+        XCTAssertEqual(payload?["agent_id"] as? String, "agent-1")
+        XCTAssertEqual(payload?["last_delivered_seq"] as? Int, 0)
+        XCTAssertEqual(payload?["last_acked_seq"] as? Int, 0)
+        XCTAssertNotNil(payload?["generation"])
     }
 
     func testMCPBrainUnsubscribeOverSocketReturnsResult() throws {
@@ -162,7 +164,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_subscribe",
                 "arguments": [
-                    "subscriber_id": "agent-1",
+                    "agent_id": "agent-1",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -175,7 +177,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_unsubscribe",
                 "arguments": [
-                    "subscriber_id": "agent-1",
+                    "agent_id": "agent-1",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -187,10 +189,10 @@ final class SocketIntegrationTests: XCTestCase {
         let payload = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
 
         XCTAssertEqual(payload?["status"] as? String, "unsubscribed")
-        XCTAssertEqual(payload?["subscriber_id"] as? String, "agent-1")
+        XCTAssertEqual(payload?["agent_id"] as? String, "agent-1")
     }
 
-    func testMatchingStorePushesChannelNotificationAndMarksChunkRead() throws {
+    func testMatchingStorePushesChannelNotificationAndRequiresAckToClearUnread() throws {
         let subscriberFD = try connectClient()
         defer { close(subscriberFD) }
 
@@ -202,7 +204,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_subscribe",
                 "arguments": [
-                    "subscriber_id": "agent-live",
+                    "agent_id": "agent-live",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -240,6 +242,9 @@ final class SocketIntegrationTests: XCTestCase {
         let params = notification["params"] as? [String: Any]
         let content = params?["content"] as? String ?? ""
         XCTAssertTrue(content.contains("Live push message for agent live"))
+        let meta = params?["meta"] as? [String: Any]
+        let rowID = (meta?["rowid"] as? String).flatMap(Int.init)
+        XCTAssertNotNil(rowID)
 
         let unreadResponse = try sendMCPRequest([
             "jsonrpc": "2.0",
@@ -249,7 +254,7 @@ final class SocketIntegrationTests: XCTestCase {
                 "name": "brain_search",
                 "arguments": [
                     "query": "Live push message",
-                    "subscriber_id": "agent-live",
+                    "agent_id": "agent-live",
                     "unread_only": true
                 ] as [String: Any]
             ]
@@ -259,7 +264,40 @@ final class SocketIntegrationTests: XCTestCase {
         let unreadContent = unreadResult?["content"] as? [[String: Any]]
         let unreadText = unreadContent?.first?["text"] as? String ?? "[]"
         let unreadMatches = (try? JSONSerialization.jsonObject(with: Data(unreadText.utf8))) as? [[String: Any]] ?? []
-        XCTAssertTrue(unreadMatches.isEmpty, "Live-delivered chunk should be marked read")
+        XCTAssertEqual(unreadMatches.count, 1, "Live-delivered chunk should stay unread until ack")
+
+        let ackResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_ack",
+                "arguments": [
+                    "agent_id": "agent-live",
+                    "seq": rowID as Any
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(ackResponse["error"])
+
+        let clearedResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "Live push message",
+                    "agent_id": "agent-live",
+                    "unread_only": true
+                ] as [String: Any]
+            ]
+        ])
+        let clearedResult = clearedResponse["result"] as? [String: Any]
+        let clearedContent = clearedResult?["content"] as? [[String: Any]]
+        let clearedText = clearedContent?.first?["text"] as? String ?? "[]"
+        let clearedMatches = (try? JSONSerialization.jsonObject(with: Data(clearedText.utf8))) as? [[String: Any]] ?? []
+        XCTAssertTrue(clearedMatches.isEmpty, "Acked chunk should no longer be unread")
     }
 
     func testDeadSubscriberDoesNotBlockLiveSubscriberNotification() throws {
@@ -272,7 +310,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_subscribe",
                 "arguments": [
-                    "subscriber_id": "agent-dead",
+                    "agent_id": "agent-dead",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -290,7 +328,7 @@ final class SocketIntegrationTests: XCTestCase {
             "params": [
                 "name": "brain_subscribe",
                 "arguments": [
-                    "subscriber_id": "agent-live-2",
+                    "agent_id": "agent-live-2",
                     "tags": ["agent-message"]
                 ] as [String: Any]
             ]
@@ -316,6 +354,62 @@ final class SocketIntegrationTests: XCTestCase {
         let params = notification["params"] as? [String: Any]
         let content = params?["content"] as? String ?? ""
         XCTAssertTrue(content.contains("Fanout survives dead subscriber"))
+    }
+
+    func testSecondConnectionTakesOverAgentIdentity() throws {
+        let firstFD = try connectClient()
+        defer { close(firstFD) }
+        try initializeClient(fd: firstFD, name: "first")
+        try sendMCPRequest(on: firstFD, request: [
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "agent_id": "agent-takeover",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: firstFD)
+
+        let secondFD = try connectClient()
+        defer { close(secondFD) }
+        try initializeClient(fd: secondFD, name: "second")
+        try sendMCPRequest(on: secondFD, request: [
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "agent_id": "agent-takeover",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: secondFD)
+
+        var oneByte = [UInt8](repeating: 0, count: 1)
+        let firstRead = read(firstFD, &oneByte, 1)
+        XCTAssertLessThanOrEqual(firstRead, 0, "First socket should be closed after takeover")
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Takeover delivery",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+
+        let notification = try readMCPMessage(fd: secondFD)
+        XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
     }
 
     // MARK: - C1: Write retry cap
@@ -366,6 +460,125 @@ final class SocketIntegrationTests: XCTestCase {
                        "clientInfo": ["name": "second", "version": "1.0"]]
         ])
         XCTAssertNotNil(secondResponse["result"], "Serial queue must not be blocked — second client should get response")
+    }
+
+    func testStdioAdapterBridgesInitializeAndSubscribe() throws {
+        let adapterPath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Scripts/brainbar_stdio_adapter.py")
+            .path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "python3",
+            adapterPath,
+            "--socket",
+            testSocketPath,
+        ]
+
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = Pipe()
+        try process.run()
+        defer {
+            process.terminate()
+            process.waitUntilExit()
+        }
+
+        try sendLineJSON([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "adapter", "version": "1.0"]
+            ]
+        ], to: stdinPipe.fileHandleForWriting)
+
+        let initializeResponse = try readLineJSON(from: stdoutPipe.fileHandleForReading)
+        let capabilities = (initializeResponse["result"] as? [String: Any])?["capabilities"] as? [String: Any]
+        let experimental = capabilities?["experimental"] as? [String: Any]
+        XCTAssertEqual((experimental?["claude/channel"] as? [String: Any])?.isEmpty, true)
+
+        try sendLineJSON([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "agent_id": "adapter-agent",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ], to: stdinPipe.fileHandleForWriting)
+
+        let subscribeResponse = try readLineJSON(from: stdoutPipe.fileHandleForReading)
+        let result = subscribeResponse["result"] as? [String: Any]
+        XCTAssertNotNil(result)
+    }
+
+    func testStdioAdapterDrainsResponsesAfterStdinEOF() throws {
+        let adapterPath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Scripts/brainbar_stdio_adapter.py")
+            .path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "python3",
+            adapterPath,
+            "--socket",
+            testSocketPath,
+        ]
+
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = Pipe()
+        try process.run()
+
+        try sendLineJSON([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "adapter-eof", "version": "1.0"]
+            ]
+        ], to: stdinPipe.fileHandleForWriting)
+        try sendLineJSON([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ], to: stdinPipe.fileHandleForWriting)
+        try stdinPipe.fileHandleForWriting.close()
+
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let outputLines = String(decoding: stdoutData, as: UTF8.self)
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        XCTAssertEqual(outputLines.count, 2)
+
+        let initializeResponse = try JSONSerialization.jsonObject(with: Data(outputLines[0].utf8)) as? [String: Any]
+        XCTAssertNotNil(initializeResponse?["result"])
+
+        let toolsResponse = try JSONSerialization.jsonObject(with: Data(outputLines[1].utf8)) as? [String: Any]
+        let tools = (toolsResponse?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+        XCTAssertEqual(tools?.count, 11)
     }
 
     // MARK: - C2: Socket path length validation
@@ -487,5 +700,38 @@ final class SocketIntegrationTests: XCTestCase {
         }
 
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading response"])
+    }
+
+    private func sendLineJSON(_ object: [String: Any], to handle: FileHandle) throws {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        handle.write(data)
+        handle.write(Data([0x0A]))
+    }
+
+    private func readLineJSON(from handle: FileHandle, timeout: TimeInterval = 5.0) throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var buffer = Data()
+        let fd = handle.fileDescriptor
+        let flags = fcntl(fd, F_GETFL)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        var readBuf = [UInt8](repeating: 0, count: 4096)
+        while Date() < deadline {
+            let count = read(fd, &readBuf, readBuf.count)
+            if count > 0 {
+                buffer.append(contentsOf: readBuf[0..<count])
+                if let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer[..<newlineIndex]
+                    return try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+                }
+            } else if count == 0 {
+                Thread.sleep(forTimeInterval: 0.01)
+            } else {
+                if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+        throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
     }
 }
