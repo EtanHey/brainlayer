@@ -190,6 +190,134 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(payload?["subscriber_id"] as? String, "agent-1")
     }
 
+    func testMatchingStorePushesChannelNotificationAndMarksChunkRead() throws {
+        let subscriberFD = try connectClient()
+        defer { close(subscriberFD) }
+
+        try initializeClient(fd: subscriberFD, name: "subscriber")
+        try sendMCPRequest(on: subscriberFD, request: [
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "subscriber_id": "agent-live",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: subscriberFD)
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "publisher", "version": "1.0"]
+            ]
+        ])
+
+        let publishResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live push message for agent live",
+                    "tags": ["agent-message"],
+                    "importance": 6
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(publishResponse["error"])
+
+        let notification = try readMCPMessage(fd: subscriberFD)
+        XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
+        let params = notification["params"] as? [String: Any]
+        let content = params?["content"] as? String ?? ""
+        XCTAssertTrue(content.contains("Live push message for agent live"))
+
+        let unreadResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "Live push message",
+                    "subscriber_id": "agent-live",
+                    "unread_only": true
+                ] as [String: Any]
+            ]
+        ])
+
+        let unreadResult = unreadResponse["result"] as? [String: Any]
+        let unreadContent = unreadResult?["content"] as? [[String: Any]]
+        let unreadText = unreadContent?.first?["text"] as? String ?? "[]"
+        let unreadMatches = (try? JSONSerialization.jsonObject(with: Data(unreadText.utf8))) as? [[String: Any]] ?? []
+        XCTAssertTrue(unreadMatches.isEmpty, "Live-delivered chunk should be marked read")
+    }
+
+    func testDeadSubscriberDoesNotBlockLiveSubscriberNotification() throws {
+        let deadFD = try connectClient()
+        try initializeClient(fd: deadFD, name: "dead-subscriber")
+        try sendMCPRequest(on: deadFD, request: [
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "subscriber_id": "agent-dead",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: deadFD)
+        close(deadFD)
+
+        let liveFD = try connectClient()
+        defer { close(liveFD) }
+        try initializeClient(fd: liveFD, name: "live-subscriber")
+        try sendMCPRequest(on: liveFD, request: [
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "subscriber_id": "agent-live-2",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: liveFD)
+
+        let storeResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Fanout survives dead subscriber",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(storeResponse["error"])
+
+        let notification = try readMCPMessage(fd: liveFD)
+        XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
+        let params = notification["params"] as? [String: Any]
+        let content = params?["content"] as? String ?? ""
+        XCTAssertTrue(content.contains("Fanout survives dead subscriber"))
+    }
+
     // MARK: - C1: Write retry cap
 
     func testServerDisconnectsStalledClient() throws {
@@ -267,9 +395,15 @@ final class SocketIntegrationTests: XCTestCase {
     // MARK: - Helper
 
     private func sendMCPRequest(_ request: [String: Any]) throws -> [String: Any] {
+        let fd = try connectClient()
+        defer { close(fd) }
+        try sendMCPRequest(on: fd, request: request)
+        return try readMCPMessage(fd: fd)
+    }
+
+    private func connectClient() throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "socket() failed"]) }
-        defer { close(fd) }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -287,10 +421,29 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         guard connectResult == 0 else {
+            close(fd)
             throw NSError(domain: "test", code: 2, userInfo: [NSLocalizedDescriptionKey: "connect() failed: errno \(errno)"])
         }
+        let flags = fcntl(fd, F_GETFL)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        return fd
+    }
 
-        // Send Content-Length framed request
+    private func initializeClient(fd: Int32, name: String) throws {
+        try sendMCPRequest(on: fd, request: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": name, "version": "1.0"]
+            ]
+        ])
+        _ = try readMCPMessage(fd: fd)
+    }
+
+    private func sendMCPRequest(on fd: Int32, request: [String: Any]) throws {
         let jsonData = try JSONSerialization.data(withJSONObject: request)
         let header = "Content-Length: \(jsonData.count)\r\n\r\n"
         var frame = Data(header.utf8)
@@ -302,11 +455,12 @@ final class SocketIntegrationTests: XCTestCase {
         guard sent == frame.count else {
             throw NSError(domain: "test", code: 3, userInfo: [NSLocalizedDescriptionKey: "write() incomplete"])
         }
+    }
 
-        // Read response with Content-Length framing
+    private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {
         var buffer = Data()
         var readBuf = [UInt8](repeating: 0, count: 65536)
-        let deadline = Date().addingTimeInterval(5.0)
+        let deadline = Date().addingTimeInterval(timeout)
 
         while Date() < deadline {
             let n = read(fd, &readBuf, readBuf.count)
@@ -326,7 +480,7 @@ final class SocketIntegrationTests: XCTestCase {
                 }
             } else if n == 0 {
                 break // EOF
-            } else if errno != EAGAIN && errno != EINTR {
+            } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
                 break
             }
             Thread.sleep(forTimeInterval: 0.01)

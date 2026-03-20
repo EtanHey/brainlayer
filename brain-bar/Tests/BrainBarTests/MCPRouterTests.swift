@@ -241,6 +241,42 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(results.first?["chunk_id"] as? String, "i-1")
     }
 
+    func testBrainSearchUnreadOnlyFiltersReadChunks() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-unread-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "read-1", content: "Agent message already delivered", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
+        try db.insertChunk(id: "unread-1", content: "Agent message still unread", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
+        _ = try db.upsertSubscription(agentID: "agent-1", tags: ["agent-message"])
+        try db.markChunkRead(agentID: "agent-1", chunkID: "read-1")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "agent message",
+                    "subscriber_id": "agent-1",
+                    "unread_only": true
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? "[]"
+        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+
+        XCTAssertEqual(results.count, 1, "Should return only unread chunks for the subscriber")
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "unread-1")
+    }
+
     // MARK: - Notifications (no id)
 
     func testNotificationDoesNotRequireResponse() {

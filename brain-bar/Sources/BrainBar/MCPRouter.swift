@@ -161,14 +161,27 @@ final class MCPRouter: @unchecked Sendable {
         let limit = min(args["num_results"] as? Int ?? 5, 100)
         let project = args["project"] as? String
         let tag = args["tag"] as? String
+        let subscriberID = args["subscriber_id"] as? String
+        let unreadOnly = args["unread_only"] as? Bool ?? false
         // importance_min may arrive as Int or Double from JSON
         let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
             else if let i = args["importance_min"] as? Int { Double(i) }
             else { nil }
+        if unreadOnly && subscriberID == nil {
+            throw ToolError.missingParameter("subscriber_id")
+        }
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        let results = try db.search(query: query, limit: limit, project: project, tag: tag, importanceMin: importanceMin)
+        let results = try db.search(
+            query: query,
+            limit: limit,
+            project: project,
+            tag: tag,
+            importanceMin: importanceMin,
+            subscriberID: subscriberID,
+            unreadOnly: unreadOnly
+        )
         let data = try JSONSerialization.data(withJSONObject: results)
         return String(data: data, encoding: .utf8) ?? "[]"
     }
@@ -300,6 +313,8 @@ final class MCPRouter: @unchecked Sendable {
                     "project": ["type": "string", "description": "Filter by project name"],
                     "tag": ["type": "string", "description": "Filter by tag"],
                     "importance_min": ["type": "number", "description": "Minimum importance score (1-10)"],
+                    "subscriber_id": ["type": "string", "description": "Optional agent/subscriber id for unread filtering"],
+                    "unread_only": ["type": "boolean", "description": "Return only chunks not yet marked read by subscriber_id"],
                     "detail": ["type": "string", "enum": ["compact", "full"], "description": "Result detail level"],
                 ] as [String: Any],
                 "required": ["query"]

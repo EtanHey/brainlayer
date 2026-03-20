@@ -218,7 +218,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - FTS5 Search (production schema)
 
-    func search(query: String, limit: Int, project: String? = nil, tag: String? = nil, importanceMin: Double? = nil) throws -> [[String: Any]] {
+    func search(query: String, limit: Int, project: String? = nil, tag: String? = nil, importanceMin: Double? = nil, subscriberID: String? = nil, unreadOnly: Bool = false) throws -> [[String: Any]] {
         guard let db else { throw DBError.notOpen }
 
         let sanitized = sanitizeFTS5Query(query)
@@ -228,13 +228,16 @@ final class BrainDatabase: @unchecked Sendable {
         if project != nil { conditions.append("c.project = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
         if importanceMin != nil { conditions.append("c.importance >= ?") }
+        if unreadOnly { conditions.append("r.chunk_id IS NULL") }
 
         let whereClause = conditions.joined(separator: " AND ")
+        let joinClause = unreadOnly ? "LEFT JOIN agent_reads r ON r.chunk_id = c.id AND r.agent_id = ?" : ""
         let sql = """
             SELECT c.id, c.content, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id
             FROM chunks_fts f
             JOIN chunks c ON c.id = f.chunk_id
+            \(joinClause)
             WHERE \(whereClause)
             ORDER BY rank
             LIMIT ?
@@ -247,6 +250,10 @@ final class BrainDatabase: @unchecked Sendable {
 
         let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         var paramIdx: Int32 = 1
+        if unreadOnly {
+            bindOptionalText(subscriberID, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
         sqlite3_bind_text(stmt, paramIdx, sanitized, -1, TRANSIENT); paramIdx += 1
         if let project {
             sqlite3_bind_text(stmt, paramIdx, project, -1, TRANSIENT); paramIdx += 1
@@ -466,12 +473,6 @@ final class BrainDatabase: @unchecked Sendable {
 
     func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {
         guard let db else { throw DBError.notOpen }
-        var conditions = ["r.chunk_id IS NULL"]
-        if let tags, !tags.isEmpty {
-            for _ in tags {
-                conditions.append("c.tags LIKE ?")
-            }
-        }
 
         let tagClause: String
         if let tags, !tags.isEmpty {

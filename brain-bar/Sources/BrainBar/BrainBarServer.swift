@@ -234,25 +234,30 @@ final class BrainBarServer: @unchecked Sendable {
             case "brain_unsubscribe":
                 return handleUnsubscribeTool(fd: fd, id: request["id"], arguments: toolCall.arguments)
             default:
-                break
+                let response = router.handle(request)
+                if toolCall.name == "brain_store", !isToolError(response) {
+                    publishStoredChunk(response: response, arguments: toolCall.arguments)
+                }
+                return response
             }
         }
         return router.handle(request)
     }
 
-    private func sendResponse(fd: Int32, response: [String: Any], useContentLength: Bool = true) {
+    @discardableResult
+    private func sendResponse(fd: Int32, response: [String: Any], useContentLength: Bool = true) -> Bool {
         let framed: Data
         if useContentLength {
-            guard let data = try? MCPFraming.encode(response) else { return }
+            guard let data = try? MCPFraming.encode(response) else { return false }
             framed = data
         } else {
             // Newline-delimited JSON-RPC (Claude Code v2.1+ / MCP 2025-11-25)
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: response) else { return }
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: response) else { return false }
             var data = jsonData
             data.append(0x0A) // trailing \n
             framed = data
         }
-        framed.withUnsafeBytes { ptr in
+        return framed.withUnsafeBytes { ptr in
             var totalWritten = 0
             var eagainRetries = 0
             while totalWritten < framed.count {
@@ -263,23 +268,24 @@ final class BrainBarServer: @unchecked Sendable {
                         if eagainRetries > Self.maxWriteRetries {
                             NSLog("[BrainBar] ⚠️ Write stalled on fd %d after %d EAGAIN retries (%d ms) — disconnecting dead client", fd, eagainRetries, eagainRetries - 1)
                             disconnectClient(fd: fd)
-                            return
+                            return false
                         }
                         usleep(1000) // 1 ms
                         continue
                     }
                     NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
                     disconnectClient(fd: fd)
-                    return
+                    return false
                 }
                 if n == 0 {
                     NSLog("[BrainBar] Write returned 0 on fd %d — peer closed", fd)
                     disconnectClient(fd: fd)
-                    return
+                    return false
                 }
                 totalWritten += n
                 eagainRetries = 0 // reset on successful partial write
             }
+            return true
         }
     }
 
@@ -396,6 +402,11 @@ final class BrainBarServer: @unchecked Sendable {
         return response
     }
 
+    private func isToolError(_ response: [String: Any]) -> Bool {
+        let result = response["result"] as? [String: Any]
+        return result?["isError"] as? Bool == true
+    }
+
     private func parseToolCall(_ request: [String: Any]) -> (name: String, arguments: [String: Any])? {
         guard let method = request["method"] as? String, method == "tools/call",
               let params = request["params"] as? [String: Any],
@@ -404,6 +415,58 @@ final class BrainBarServer: @unchecked Sendable {
         }
         let arguments = params["arguments"] as? [String: Any] ?? [:]
         return (name, arguments)
+    }
+
+    private func publishStoredChunk(response: [String: Any], arguments: [String: Any]) {
+        guard let chunkID = extractChunkID(from: response),
+              let content = arguments["content"] as? String,
+              let tags = arguments["tags"] as? [String],
+              !tags.isEmpty else {
+            return
+        }
+
+        let importance = arguments["importance"] as? Int ?? 5
+        let tagSet = Set(tags)
+        for (clientFD, client) in Array(clients) {
+            guard let subscriberID = client.subscriberID,
+                  !client.subscribedTags.isDisjoint(with: tagSet) else {
+                continue
+            }
+
+            let notification: [String: Any] = [
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": [
+                    "content": content,
+                    "meta": [
+                        "chunk_id": chunkID,
+                        "subscriber_id": subscriberID,
+                        "tags": tags.joined(separator: ","),
+                        "importance": String(importance),
+                    ]
+                ] as [String: Any]
+            ]
+
+            let delivered = sendResponse(
+                fd: clientFD,
+                response: notification,
+                useContentLength: client.usesContentLengthFraming
+            )
+            if delivered {
+                try? database?.markChunkRead(agentID: subscriberID, chunkID: chunkID)
+            }
+        }
+    }
+
+    private func extractChunkID(from response: [String: Any]) -> String? {
+        guard let result = response["result"] as? [String: Any],
+              let content = result["content"] as? [[String: Any]],
+              let text = content.first?["text"] as? String,
+              let data = text.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return payload["chunk_id"] as? String
     }
 
     private func jsonString(_ payload: [String: Any]) -> String {
