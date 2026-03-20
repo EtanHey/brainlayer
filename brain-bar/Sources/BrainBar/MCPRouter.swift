@@ -143,6 +143,10 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainExpand(arguments)
         case "brain_tags":
             return try handleBrainTags(arguments)
+        case "brain_subscribe":
+            return try handleBrainSubscribe(arguments)
+        case "brain_unsubscribe":
+            return try handleBrainUnsubscribe(arguments)
         default:
             throw ToolError.unknownTool(name)
         }
@@ -216,6 +220,23 @@ final class MCPRouter: @unchecked Sendable {
 
     private func handleBrainTags(_ args: [String: Any]) throws -> String {
         throw ToolError.notImplemented("brain_tags")
+    }
+
+    private func handleBrainSubscribe(_ args: [String: Any]) throws -> String {
+        guard let _ = args["subscriber_id"] as? String else {
+            throw ToolError.missingParameter("subscriber_id")
+        }
+        guard let _ = args["tags"] as? [String] else {
+            throw ToolError.missingParameter("tags")
+        }
+        throw ToolError.notImplemented("brain_subscribe")
+    }
+
+    private func handleBrainUnsubscribe(_ args: [String: Any]) throws -> String {
+        guard let _ = args["subscriber_id"] as? String else {
+            throw ToolError.missingParameter("subscriber_id")
+        }
+        throw ToolError.notImplemented("brain_unsubscribe")
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -363,6 +384,30 @@ final class MCPRouter: @unchecked Sendable {
                 "properties": [
                     "query": ["type": "string", "description": "Optional search query to filter tags"],
                 ] as [String: Any],
+            ] as [String: Any]
+        ],
+        [
+            "name": "brain_subscribe",
+            "description": "Subscribe an agent to push notifications for matching tags.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "subscriber_id": ["type": "string", "description": "Stable agent or session identifier"],
+                    "tags": ["type": "array", "items": ["type": "string"], "description": "Tags to receive live notifications for"],
+                ] as [String: Any],
+                "required": ["subscriber_id", "tags"]
+            ] as [String: Any]
+        ],
+        [
+            "name": "brain_unsubscribe",
+            "description": "Remove some or all tag subscriptions for an agent.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "subscriber_id": ["type": "string", "description": "Stable agent or session identifier"],
+                    "tags": ["type": "array", "items": ["type": "string"], "description": "Optional subset of tags to remove"],
+                ] as [String: Any],
+                "required": ["subscriber_id"]
             ] as [String: Any]
         ],
     ]

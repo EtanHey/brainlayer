@@ -91,7 +91,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 8)
+        XCTAssertEqual(tools?.count, 10)
     }
 
     // MARK: - MCP tools/call brain_search over socket
@@ -116,6 +116,78 @@ final class SocketIntegrationTests: XCTestCase {
 
         XCTAssertNil(response["error"], "brain_search should not error")
         XCTAssertNotNil(response["result"])
+    }
+
+    func testMCPBrainSubscribeOverSocketReturnsLastSeen() throws {
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "subscriber", "version": "1.0"]]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "subscriber_id": "agent-1",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? "{}"
+        let payload = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+
+        XCTAssertEqual(payload?["status"] as? String, "subscribed")
+        XCTAssertEqual(payload?["subscriber_id"] as? String, "agent-1")
+        XCTAssertNotNil(payload?["last_seen"])
+    }
+
+    func testMCPBrainUnsubscribeOverSocketReturnsResult() throws {
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "subscriber", "version": "1.0"]]
+        ])
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "subscriber_id": "agent-1",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_unsubscribe",
+                "arguments": [
+                    "subscriber_id": "agent-1",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? "{}"
+        let payload = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+
+        XCTAssertEqual(payload?["status"] as? String, "unsubscribed")
+        XCTAssertEqual(payload?["subscriber_id"] as? String, "agent-1")
     }
 
     // MARK: - C1: Write retry cap

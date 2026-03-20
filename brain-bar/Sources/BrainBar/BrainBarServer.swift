@@ -46,6 +46,8 @@ final class BrainBarServer: @unchecked Sendable {
         /// Whether this client uses Content-Length framing (LSP-style).
         /// false = newline-delimited JSON-RPC (Claude Code v2.1+).
         var usesContentLengthFraming: Bool = true
+        var subscriberID: String?
+        var subscribedTags: Set<String> = []
     }
 
     init(socketPath: String = "/tmp/brainbar.sock", dbPath: String? = nil) {
@@ -206,7 +208,7 @@ final class BrainBarServer: @unchecked Sendable {
             let method = msg["method"] as? String ?? "<no method>"
             let id = msg["id"]
             debugLog("  MSG fd=\(fd): method=\(method) id=\(String(describing: id))")
-            let response = router.handle(msg)
+            let response = handleMessage(fd: fd, request: msg)
             if !response.isEmpty {
                 sendResponse(fd: fd, response: response, useContentLength: state.usesContentLengthFraming)
                 debugLog("  SENT response for method=\(method)")
@@ -217,7 +219,25 @@ final class BrainBarServer: @unchecked Sendable {
             if clients[fd] == nil { return }
         }
 
-        clients[fd] = state
+        if var latest = clients[fd] {
+            latest.framing = state.framing
+            latest.usesContentLengthFraming = state.usesContentLengthFraming
+            clients[fd] = latest
+        }
+    }
+
+    private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
+        if let toolCall = parseToolCall(request) {
+            switch toolCall.name {
+            case "brain_subscribe":
+                return handleSubscribeTool(fd: fd, id: request["id"], arguments: toolCall.arguments)
+            case "brain_unsubscribe":
+                return handleUnsubscribeTool(fd: fd, id: request["id"], arguments: toolCall.arguments)
+            default:
+                break
+            }
+        }
+        return router.handle(request)
     }
 
     private func sendResponse(fd: Int32, response: [String: Any], useContentLength: Bool = true) {
@@ -264,6 +284,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func disconnectClient(fd: Int32) {
+        if let subscriberID = clients[fd]?.subscriberID {
+            try? database?.markSubscriberDisconnected(agentID: subscriberID)
+        }
         clients[fd]?.source.cancel()
         clients.removeValue(forKey: fd)
         NSLog("[BrainBar] Client disconnected (fd: %d)", fd)
@@ -280,5 +303,114 @@ final class BrainBarServer: @unchecked Sendable {
         unlink(socketPath)
         database?.close()
         NSLog("[BrainBar] Server stopped")
+    }
+
+    private func handleSubscribeTool(fd: Int32, id: Any?, arguments: [String: Any]) -> [String: Any] {
+        guard let subscriberID = arguments["subscriber_id"] as? String,
+              let tags = arguments["tags"] as? [String],
+              let database else {
+            return toolErrorResponse(id: id, message: "Database not available")
+        }
+
+        do {
+            let record = try database.upsertSubscription(agentID: subscriberID, tags: tags)
+            if var client = clients[fd] {
+                client.subscriberID = subscriberID
+                client.subscribedTags = Set(record.tags)
+                clients[fd] = client
+            }
+            let unreadCount = try database.unreadCount(agentID: subscriberID, tags: record.tags)
+            let payload: [String: Any] = [
+                "status": "subscribed",
+                "subscriber_id": subscriberID,
+                "tags": record.tags,
+                "last_seen": record.lastSeen ?? NSNull(),
+                "unread_count": unreadCount,
+            ]
+            return jsonRPCTextResult(id: id, text: jsonString(payload))
+        } catch {
+            return toolErrorResponse(id: id, message: error.localizedDescription)
+        }
+    }
+
+    private func handleUnsubscribeTool(fd: Int32, id: Any?, arguments: [String: Any]) -> [String: Any] {
+        guard let subscriberID = arguments["subscriber_id"] as? String,
+              let database else {
+            return toolErrorResponse(id: id, message: "Database not available")
+        }
+
+        do {
+            let tags = arguments["tags"] as? [String]
+            let record = try database.removeSubscription(agentID: subscriberID, tags: tags)
+            if var client = clients[fd] {
+                client.subscriberID = subscriberID
+                client.subscribedTags = Set(record.tags)
+                clients[fd] = client
+            }
+            let payload: [String: Any] = [
+                "status": "unsubscribed",
+                "subscriber_id": subscriberID,
+                "tags": record.tags,
+                "last_seen": record.lastSeen ?? NSNull(),
+            ]
+            return jsonRPCTextResult(id: id, text: jsonString(payload))
+        } catch {
+            return toolErrorResponse(id: id, message: error.localizedDescription)
+        }
+    }
+
+    private func toolErrorResponse(id: Any?, message: String) -> [String: Any] {
+        var response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "content": [
+                ["type": "text", "text": "Error: \(message)"]
+            ],
+            "isError": true
+        ]
+        if let id {
+            response["id"] = id
+        }
+        response["result"] = [
+            "content": [
+                ["type": "text", "text": "Error: \(message)"]
+            ],
+            "isError": true
+        ] as [String: Any]
+        response.removeValue(forKey: "content")
+        response.removeValue(forKey: "isError")
+        return response
+    }
+
+    private func jsonRPCTextResult(id: Any?, text: String) -> [String: Any] {
+        var response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "result": [
+                "content": [
+                    ["type": "text", "text": text]
+                ]
+            ] as [String: Any]
+        ]
+        if let id {
+            response["id"] = id
+        }
+        return response
+    }
+
+    private func parseToolCall(_ request: [String: Any]) -> (name: String, arguments: [String: Any])? {
+        guard let method = request["method"] as? String, method == "tools/call",
+              let params = request["params"] as? [String: Any],
+              let name = params["name"] as? String else {
+            return nil
+        }
+        let arguments = params["arguments"] as? [String: Any] ?? [:]
+        return (name, arguments)
+    }
+
+    private func jsonString(_ payload: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
     }
 }

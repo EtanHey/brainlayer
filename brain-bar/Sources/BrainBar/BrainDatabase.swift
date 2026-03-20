@@ -12,6 +12,15 @@ import Foundation
 import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
+    struct SubscriberRecord: Sendable {
+        let agentID: String
+        let tags: [String]
+        let lastSeen: String?
+        let lastDeliveredAt: String?
+        let lastConnectedAt: String?
+        let disconnectedAt: String?
+    }
+
     private var db: OpaquePointer?
     private let path: String
     /// Whether the database opened successfully.
@@ -46,64 +55,93 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func ensureSchema() {
         // If chunks table already exists (production DB), don't touch schema.
-        if (try? tableExists("chunks")) == true {
-            return
+        if (try? tableExists("chunks")) != true {
+            // New/test DB — create production-compatible schema
+            exec("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    source_file TEXT NOT NULL DEFAULT 'brainbar',
+                    project TEXT,
+                    content_type TEXT DEFAULT 'assistant_text',
+                    value_type TEXT,
+                    char_count INTEGER DEFAULT 0,
+                    source TEXT DEFAULT 'claude_code',
+                    sender TEXT,
+                    language TEXT,
+                    conversation_id TEXT,
+                    position INTEGER,
+                    context_summary TEXT,
+                    tags TEXT DEFAULT '[]',
+                    tag_confidence REAL,
+                    summary TEXT,
+                    importance REAL DEFAULT 5,
+                    intent TEXT,
+                    enriched_at TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+
+            // FTS5 — matches production: content, summary, tags, resolved_query, chunk_id UNINDEXED
+            exec("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    content, summary, tags, resolved_query, chunk_id UNINDEXED
+                )
+            """)
+
+            // FTS sync triggers — match production (no explicit rowid; JOIN uses chunk_id)
+            exec("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                END
+            """)
+
+            exec("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                    DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                END
+            """)
+
+            exec("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+                    DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                END
+            """)
         }
 
-        // New/test DB — create production-compatible schema
+        // Lightweight BrainBar-specific durability for subscriptions and read receipts.
         exec("""
-            CREATE TABLE IF NOT EXISTS chunks (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                metadata TEXT NOT NULL DEFAULT '{}',
-                source_file TEXT NOT NULL DEFAULT 'brainbar',
-                project TEXT,
-                content_type TEXT DEFAULT 'assistant_text',
-                value_type TEXT,
-                char_count INTEGER DEFAULT 0,
-                source TEXT DEFAULT 'claude_code',
-                sender TEXT,
-                language TEXT,
-                conversation_id TEXT,
-                position INTEGER,
-                context_summary TEXT,
-                tags TEXT DEFAULT '[]',
-                tag_confidence REAL,
-                summary TEXT,
-                importance REAL DEFAULT 5,
-                intent TEXT,
-                enriched_at TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
+            CREATE TABLE IF NOT EXISTS agent_subscriptions (
+                agent_id TEXT PRIMARY KEY,
+                tags TEXT NOT NULL DEFAULT '[]',
+                last_seen TEXT,
+                last_delivered_at TEXT,
+                last_connected_at TEXT,
+                disconnected_at TEXT
             )
         """)
 
-        // FTS5 — matches production: content, summary, tags, resolved_query, chunk_id UNINDEXED
         exec("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                content, summary, tags, resolved_query, chunk_id UNINDEXED
+            CREATE TABLE IF NOT EXISTS agent_reads (
+                agent_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                read_at TEXT NOT NULL,
+                PRIMARY KEY (agent_id, chunk_id)
             )
         """)
 
-        // FTS sync triggers — match production (no explicit rowid; JOIN uses chunk_id)
         exec("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
-            END
+            CREATE INDEX IF NOT EXISTS idx_agent_reads_agent_id
+            ON agent_reads(agent_id, read_at DESC)
         """)
 
         exec("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
-                DELETE FROM chunks_fts WHERE chunk_id = old.id;
-            END
-        """)
-
-        exec("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
-                DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
-            END
+            CREATE INDEX IF NOT EXISTS idx_agent_reads_chunk_id
+            ON agent_reads(chunk_id)
         """)
     }
 
@@ -278,6 +316,200 @@ final class BrainDatabase: @unchecked Sendable {
         return id
     }
 
+    func upsertSubscription(agentID: String, tags: [String]) throws -> SubscriberRecord {
+        let existing = try subscription(agentID: agentID)
+        let mergedTags = Array(Set((existing?.tags ?? []) + tags)).sorted()
+        let tagsJSON = try encodeJSON(mergedTags)
+        let now = Self.timestamp()
+
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = """
+            INSERT INTO agent_subscriptions (agent_id, tags, last_connected_at, disconnected_at)
+            VALUES (?, ?, ?, NULL)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                tags = excluded.tags,
+                last_connected_at = excluded.last_connected_at,
+                disconnected_at = NULL
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, agentID, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 2, tagsJSON, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 3, now, -1, TRANSIENT)
+
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+
+        return try subscription(agentID: agentID) ?? SubscriberRecord(
+            agentID: agentID,
+            tags: mergedTags,
+            lastSeen: nil,
+            lastDeliveredAt: nil,
+            lastConnectedAt: now,
+            disconnectedAt: nil
+        )
+    }
+
+    func removeSubscription(agentID: String, tags: [String]?) throws -> SubscriberRecord {
+        let existing = try subscription(agentID: agentID) ?? SubscriberRecord(
+            agentID: agentID,
+            tags: [],
+            lastSeen: nil,
+            lastDeliveredAt: nil,
+            lastConnectedAt: nil,
+            disconnectedAt: nil
+        )
+        let updatedTags: [String]
+        if let tags, !tags.isEmpty {
+            let removalSet = Set(tags)
+            updatedTags = existing.tags.filter { !removalSet.contains($0) }.sorted()
+        } else {
+            updatedTags = []
+        }
+
+        let tagsJSON = try encodeJSON(updatedTags)
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = """
+            INSERT INTO agent_subscriptions (agent_id, tags)
+            VALUES (?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET tags = excluded.tags
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, agentID, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 2, tagsJSON, -1, TRANSIENT)
+
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+
+        return try subscription(agentID: agentID) ?? SubscriberRecord(
+            agentID: agentID,
+            tags: updatedTags,
+            lastSeen: existing.lastSeen,
+            lastDeliveredAt: existing.lastDeliveredAt,
+            lastConnectedAt: existing.lastConnectedAt,
+            disconnectedAt: existing.disconnectedAt
+        )
+    }
+
+    func subscription(agentID: String) throws -> SubscriberRecord? {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT agent_id, tags, last_seen, last_delivered_at, last_connected_at, disconnected_at
+            FROM agent_subscriptions
+            WHERE agent_id = ?
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, agentID, -1, TRANSIENT)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return SubscriberRecord(
+            agentID: columnText(stmt, 0) ?? agentID,
+            tags: decodeJSONArray(columnText(stmt, 1)),
+            lastSeen: columnText(stmt, 2),
+            lastDeliveredAt: columnText(stmt, 3),
+            lastConnectedAt: columnText(stmt, 4),
+            disconnectedAt: columnText(stmt, 5)
+        )
+    }
+
+    func markSubscriberDisconnected(agentID: String) throws {
+        try updateSubscriptionTimestamps(
+            agentID: agentID,
+            lastSeen: nil,
+            lastDeliveredAt: nil,
+            disconnectedAt: Self.timestamp()
+        )
+    }
+
+    func markChunkRead(agentID: String, chunkID: String) throws {
+        let now = Self.timestamp()
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = """
+            INSERT INTO agent_reads (agent_id, chunk_id, read_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(agent_id, chunk_id) DO UPDATE SET read_at = excluded.read_at
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, agentID, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 2, chunkID, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 3, now, -1, TRANSIENT)
+
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+
+        try updateSubscriptionTimestamps(
+            agentID: agentID,
+            lastSeen: now,
+            lastDeliveredAt: now,
+            disconnectedAt: nil
+        )
+    }
+
+    func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {
+        guard let db else { throw DBError.notOpen }
+        var conditions = ["r.chunk_id IS NULL"]
+        if let tags, !tags.isEmpty {
+            for _ in tags {
+                conditions.append("c.tags LIKE ?")
+            }
+        }
+
+        let tagClause: String
+        if let tags, !tags.isEmpty {
+            let orTerms = Array(repeating: "c.tags LIKE ?", count: tags.count).joined(separator: " OR ")
+            tagClause = " AND (\(orTerms))"
+        } else {
+            tagClause = ""
+        }
+
+        let sql = """
+            SELECT COUNT(*)
+            FROM chunks c
+            LEFT JOIN agent_reads r
+              ON r.chunk_id = c.id AND r.agent_id = ?
+            WHERE r.chunk_id IS NULL\(tagClause)
+        """
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        var paramIdx: Int32 = 1
+        sqlite3_bind_text(stmt, paramIdx, agentID, -1, TRANSIENT)
+        paramIdx += 1
+        if let tags {
+            for tag in tags where !tag.isEmpty {
+                let pattern = "%\"\(tag)\"%"
+                sqlite3_bind_text(stmt, paramIdx, pattern, -1, TRANSIENT)
+                paramIdx += 1
+            }
+        }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
     // MARK: - Helpers
 
     func exec(_ sql: String) {
@@ -294,6 +526,57 @@ final class BrainDatabase: @unchecked Sendable {
     private func columnText(_ stmt: OpaquePointer?, _ col: Int32) -> String? {
         guard let cStr = sqlite3_column_text(stmt, col) else { return nil }
         return String(cString: cStr)
+    }
+
+    private func encodeJSON(_ array: [String]) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: array)
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private func decodeJSONArray(_ text: String?) -> [String] {
+        guard let text,
+              let data = text.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return []
+        }
+        return array
+    }
+
+    private func updateSubscriptionTimestamps(agentID: String, lastSeen: String?, lastDeliveredAt: String?, disconnectedAt: String?) throws {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = """
+            INSERT INTO agent_subscriptions (agent_id, tags, last_seen, last_delivered_at, disconnected_at)
+            VALUES (?, '[]', ?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                last_seen = COALESCE(excluded.last_seen, agent_subscriptions.last_seen),
+                last_delivered_at = COALESCE(excluded.last_delivered_at, agent_subscriptions.last_delivered_at),
+                disconnected_at = excluded.disconnected_at
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, agentID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        bindOptionalText(lastSeen, to: stmt, index: 2)
+        bindOptionalText(lastDeliveredAt, to: stmt, index: 3)
+        bindOptionalText(disconnectedAt, to: stmt, index: 4)
+
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+    }
+
+    private func bindOptionalText(_ value: String?, to stmt: OpaquePointer?, index: Int32) {
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        if let value {
+            sqlite3_bind_text(stmt, index, value, -1, TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, index)
+        }
+    }
+
+    private static func timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
     }
 
     private func sanitizeFTS5Query(_ query: String) -> String {

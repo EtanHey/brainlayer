@@ -64,6 +64,16 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "chunks_fts FTS5 table must exist")
     }
 
+    func testAgentSubscriptionsTableExists() throws {
+        let exists = try db.tableExists("agent_subscriptions")
+        XCTAssertTrue(exists, "agent_subscriptions table must exist")
+    }
+
+    func testAgentReadsTableExists() throws {
+        let exists = try db.tableExists("agent_reads")
+        XCTAssertTrue(exists, "agent_reads table must exist")
+    }
+
     // MARK: - Search (FTS5)
 
     func testFTSSearchReturnsResults() throws {
