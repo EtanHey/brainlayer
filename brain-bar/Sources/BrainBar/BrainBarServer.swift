@@ -9,6 +9,70 @@
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
+    private struct SubscriptionPayload: Encodable {
+        let status: String
+        let subscriberID: String
+        let tags: [String]
+        let lastSeen: String?
+        let unreadCount: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case subscriberID = "subscriber_id"
+            case tags
+            case lastSeen = "last_seen"
+            case unreadCount = "unread_count"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(status, forKey: .status)
+            try container.encode(subscriberID, forKey: .subscriberID)
+            try container.encode(tags, forKey: .tags)
+            if let lastSeen {
+                try container.encode(lastSeen, forKey: .lastSeen)
+            } else {
+                try container.encodeNil(forKey: .lastSeen)
+            }
+            if let unreadCount {
+                try container.encode(unreadCount, forKey: .unreadCount)
+            }
+        }
+    }
+
+    private struct ChannelNotification: Encodable {
+        let jsonrpc = "2.0"
+        let method = "notifications/claude/channel"
+        let params: Params
+
+        struct Params: Encodable {
+            let content: String
+            let meta: Meta
+        }
+
+        struct Meta: Encodable {
+            let chunkID: String
+            let subscriberID: String
+            let tags: String
+            let importance: String
+
+            enum CodingKeys: String, CodingKey {
+                case chunkID = "chunk_id"
+                case subscriberID = "subscriber_id"
+                case tags
+                case importance
+            }
+        }
+    }
+
+    private struct StoreResultPayload: Decodable {
+        let chunkID: String
+
+        enum CodingKeys: String, CodingKey {
+            case chunkID = "chunk_id"
+        }
+    }
+
     private let socketPath: String
     private let dbPath: String
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
@@ -326,13 +390,13 @@ final class BrainBarServer: @unchecked Sendable {
                 clients[fd] = client
             }
             let unreadCount = try database.unreadCount(agentID: subscriberID, tags: record.tags)
-            let payload: [String: Any] = [
-                "status": "subscribed",
-                "subscriber_id": subscriberID,
-                "tags": record.tags,
-                "last_seen": record.lastSeen ?? NSNull(),
-                "unread_count": unreadCount,
-            ]
+            let payload = SubscriptionPayload(
+                status: "subscribed",
+                subscriberID: subscriberID,
+                tags: record.tags,
+                lastSeen: record.lastSeen,
+                unreadCount: unreadCount
+            )
             return jsonRPCTextResult(id: id, text: jsonString(payload))
         } catch {
             return toolErrorResponse(id: id, message: error.localizedDescription)
@@ -353,12 +417,13 @@ final class BrainBarServer: @unchecked Sendable {
                 client.subscribedTags = Set(record.tags)
                 clients[fd] = client
             }
-            let payload: [String: Any] = [
-                "status": "unsubscribed",
-                "subscriber_id": subscriberID,
-                "tags": record.tags,
-                "last_seen": record.lastSeen ?? NSNull(),
-            ]
+            let payload = SubscriptionPayload(
+                status: "unsubscribed",
+                subscriberID: subscriberID,
+                tags: record.tags,
+                lastSeen: record.lastSeen,
+                unreadCount: nil
+            )
             return jsonRPCTextResult(id: id, text: jsonString(payload))
         } catch {
             return toolErrorResponse(id: id, message: error.localizedDescription)
@@ -433,23 +498,24 @@ final class BrainBarServer: @unchecked Sendable {
                 continue
             }
 
-            let notification: [String: Any] = [
-                "jsonrpc": "2.0",
-                "method": "notifications/claude/channel",
-                "params": [
-                    "content": content,
-                    "meta": [
-                        "chunk_id": chunkID,
-                        "subscriber_id": subscriberID,
-                        "tags": tags.joined(separator: ","),
-                        "importance": String(importance),
-                    ]
-                ] as [String: Any]
-            ]
+            let notification = ChannelNotification(
+                params: .init(
+                    content: content,
+                    meta: .init(
+                        chunkID: chunkID,
+                        subscriberID: subscriberID,
+                        tags: tags.joined(separator: ","),
+                        importance: String(importance)
+                    )
+                )
+            )
+            guard let notificationObject = jsonObject(notification) else {
+                continue
+            }
 
             let delivered = sendResponse(
                 fd: clientFD,
-                response: notification,
+                response: notificationObject,
                 useContentLength: client.usesContentLengthFraming
             )
             if delivered {
@@ -463,17 +529,25 @@ final class BrainBarServer: @unchecked Sendable {
               let content = result["content"] as? [[String: Any]],
               let text = content.first?["text"] as? String,
               let data = text.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let payload = try? JSONDecoder().decode(StoreResultPayload.self, from: data) else {
             return nil
         }
-        return payload["chunk_id"] as? String
+        return payload.chunkID
     }
 
-    private func jsonString(_ payload: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+    private func jsonString<T: Encodable>(_ payload: T) -> String {
+        guard let data = try? JSONEncoder().encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             return "{}"
         }
         return text
+    }
+
+    private func jsonObject<T: Encodable>(_ payload: T) -> [String: Any]? {
+        guard let data = try? JSONEncoder().encode(payload),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object
     }
 }

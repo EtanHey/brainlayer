@@ -10,6 +10,16 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private struct StoreResultPayload: Encodable {
+        let chunkID: String
+        let status: String
+
+        enum CodingKeys: String, CodingKey {
+            case chunkID = "chunk_id"
+            case status
+        }
+    }
+
     private var database: BrainDatabase?
 
     /// Inject database for tool handlers.
@@ -199,7 +209,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
         let id = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return jsonEncode(["chunk_id": id, "status": "stored"])
+        return jsonEncode(StoreResultPayload(chunkID: id, status: "stored"))
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
@@ -256,8 +266,8 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
-    private func jsonEncode(_ dict: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+    private func jsonEncode<T: Encodable>(_ value: T) -> String {
+        guard let data = try? JSONEncoder().encode(value),
               let str = String(data: data, encoding: .utf8) else {
             return "{}"
         }
