@@ -63,7 +63,10 @@ final class MCPRouter: @unchecked Sendable {
             "result": [
                 "protocolVersion": "2024-11-05",
                 "capabilities": [
-                    "tools": ["listChanged": false]
+                    "tools": ["listChanged": false],
+                    "experimental": [
+                        "claude/channel": [:] as [String: Any]
+                    ]
                 ],
                 "serverInfo": [
                     "name": "brainbar",

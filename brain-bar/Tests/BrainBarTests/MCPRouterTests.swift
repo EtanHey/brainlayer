@@ -35,6 +35,8 @@ final class MCPRouterTests: XCTestCase {
         // Must declare tool capabilities
         let capabilities = result?["capabilities"] as? [String: Any]
         XCTAssertNotNil(capabilities?["tools"])
+        let experimental = capabilities?["experimental"] as? [String: Any]
+        XCTAssertEqual((experimental?["claude/channel"] as? [String: Any])?.isEmpty, true)
     }
 
     // MARK: - Tools list
