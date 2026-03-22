@@ -16,6 +16,7 @@ BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 PYTHON3="${PYTHON3:-$(which python3 2>/dev/null || echo "/usr/bin/python3")}"
 GROQ_API_KEY="${GROQ_API_KEY:-$(op item get GROQ_API_KEY --reveal --fields credential 2>/dev/null || echo "")}"
+GOOGLE_API_KEY="${GOOGLE_API_KEY:-$(op item get "Google AI API Key" --reveal --fields credential 2>/dev/null || echo "")}"
 
 if [ ! -x "$BRAINLAYER_BIN" ]; then
     echo "ERROR: brainlayer binary not found at $BRAINLAYER_BIN"
@@ -43,6 +44,7 @@ install_plist() {
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__PYTHON3__|$PYTHON3|g" \
         -e "s|__GROQ_API_KEY__|$GROQ_API_KEY|g" \
+        -e "s|__GOOGLE_API_KEY__|$GOOGLE_API_KEY|g" \
         "$src" > "$dst"
 
     echo "Installed: $dst"

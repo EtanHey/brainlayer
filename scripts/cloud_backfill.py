@@ -21,6 +21,14 @@ Usage:
     python3 scripts/cloud_backfill.py --status
 """
 
+import warnings
+
+warnings.warn(
+    "scripts/cloud_backfill.py is deprecated. Use 'brainlayer enrich --mode batch' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import argparse
 import json
 import os

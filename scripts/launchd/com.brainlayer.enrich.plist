@@ -9,10 +9,12 @@
     <array>
         <string>__BRAINLAYER_BIN__</string>
         <string>enrich</string>
-        <string>--batch-size</string>
-        <string>50</string>
-        <string>--max</string>
-        <string>500</string>
+        <string>--mode</string>
+        <string>realtime</string>
+        <string>--since-hours</string>
+        <string>24</string>
+        <string>--limit</string>
+        <string>25</string>
     </array>
 
     <key>StartInterval</key>
@@ -31,14 +33,12 @@
         <string>1</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
-        <key>BRAINLAYER_ENRICH_BACKEND</key>
-        <string>groq</string>
-        <key>GROQ_API_KEY</key>
-        <string>__GROQ_API_KEY__</string>
+        <key>GOOGLE_API_KEY</key>
+        <string>__GOOGLE_API_KEY__</string>
     </dict>
 
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>Nice</key>
     <integer>15</integer>

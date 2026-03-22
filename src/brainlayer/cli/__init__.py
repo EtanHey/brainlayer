@@ -372,7 +372,7 @@ def digest(
     project: str = typer.Option(None, "--project", "-p", help="Project name"),
     participants: str = typer.Option(None, "--participants", help="Comma-separated participant names"),
 ) -> None:
-    """Digest raw content into structured knowledge (entities, sentiment, actions)."""
+    """Digest raw content into enriched knowledge (entities, faceted tags, sentiment, actions)."""
     try:
         from ..embeddings import get_embedding_model
         from ..paths import DEFAULT_DB_PATH
@@ -405,6 +405,14 @@ def digest(
             console.print(f"[bold green]Digest complete![/] ID: {result['digest_id']}")
             console.print(f"[bold]Summary:[/] {result['summary']}")
             console.print(f"[bold]Sentiment:[/] {result['sentiment']['label']} ({result['sentiment']['score']:.2f})")
+            if result.get("tags"):
+                console.print(f"[bold]Tags:[/] {', '.join(result['tags'])}")
+            if result.get("enrichment"):
+                enrichment = result["enrichment"]
+                console.print(
+                    f"[bold]Enrichment:[/] {enrichment.get('status', 'unknown')} "
+                    f"({enrichment.get('provider', 'n/a')}:{enrichment.get('model', 'n/a')})"
+                )
             console.print(f"[bold]Entities:[/] {result['stats']['entities_found']}")
             console.print(f"[bold]Relations:[/] {result['stats']['relations_found']}")
 
@@ -872,26 +880,21 @@ def consolidate(
 
 @app.command("enrich")
 def enrich(
-    batch_size: int = typer.Option(50, "--batch-size", "-b", help="Chunks per batch"),
-    max_chunks: int = typer.Option(0, "--max", "-m", help="Max chunks (0=unlimited)"),
-    no_context: bool = typer.Option(False, "--no-context", help="Skip surrounding context"),
-    backend: str = typer.Option(None, "--backend", help="LLM backend: ollama, mlx, groq (default: auto-detect)"),
-    recent: int = typer.Option(None, "--recent", "-r", help="Only enrich chunks from the last N hours"),
+    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime, batch, local"),
+    limit: int = typer.Option(25, "--limit", "-n", help="Max chunks to process"),
+    since_hours: int = typer.Option(
+        24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
+    ),
+    phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run"),
+    parallel: int = typer.Option(2, "--parallel", help="Local mode: concurrent workers"),
+    backend: str = typer.Option("mlx", "--backend", help="Local mode backend (default: mlx)"),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
 ) -> None:
-    """Enrich chunks with LLM-generated metadata (summary, tags, importance, intent)."""
+    """Enrich chunks via controller-backed realtime, batch, or local modes."""
     try:
-        from ..pipeline.enrichment import DEFAULT_DB_PATH, run_enrichment
+        from ..enrichment_controller import enrich_batch, enrich_local, enrich_realtime
+        from ..paths import DEFAULT_DB_PATH
         from ..vector_store import VectorStore
-
-        # Set backend override before run_enrichment reads ENRICH_BACKEND
-        if backend:
-            import os
-
-            import brainlayer.pipeline.enrichment as enrich_mod
-
-            os.environ["BRAINLAYER_ENRICH_BACKEND"] = backend
-            enrich_mod.ENRICH_BACKEND = backend
 
         if stats_only:
             store = VectorStore(DEFAULT_DB_PATH)
@@ -905,12 +908,23 @@ def enrich(
             finally:
                 store.close()
         else:
-            run_enrichment(
-                batch_size=batch_size,
-                max_chunks=max_chunks,
-                with_context=not no_context,
-                since_hours=recent,
-            )
+            if mode not in ("realtime", "batch", "local"):
+                raise typer.BadParameter(f"Invalid mode: {mode}")
+            store = VectorStore(get_db_path())
+            try:
+                if mode == "realtime":
+                    result = enrich_realtime(store, limit=limit, since_hours=since_hours)
+                elif mode == "batch":
+                    result = enrich_batch(store, phase=phase, limit=limit)
+                elif mode == "local":
+                    result = enrich_local(store, limit=limit, parallel=parallel, backend=backend)
+
+                console.print(
+                    f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
+                    f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
+                )
+            finally:
+                store.close()
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

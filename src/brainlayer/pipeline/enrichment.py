@@ -393,6 +393,7 @@ def build_external_prompt(
     chunk: Dict[str, Any],
     sanitizer: "Sanitizer",
     context_chunks: Optional[List[Dict[str, Any]]] = None,
+    prompt_template: Optional[str] = None,
 ) -> tuple[str, "SanitizeResult"]:
     """Build enrichment prompt with MANDATORY PII sanitization for external APIs.
 
@@ -446,7 +447,9 @@ def build_external_prompt(
     if context_section:
         context_section = context_section.replace("{", "{{").replace("}", "}}")
 
-    prompt = ENRICHMENT_PROMPT.format(
+    template = prompt_template or ENRICHMENT_PROMPT
+
+    prompt = template.format(
         project=chunk.get("project", "unknown"),
         content_type=chunk.get("content_type", "unknown"),
         content=safe_content,
