@@ -882,7 +882,9 @@ def consolidate(
 def enrich(
     mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime, batch, local"),
     limit: int = typer.Option(25, "--limit", "-n", help="Max chunks to process"),
-    since_hours: int = typer.Option(24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"),
+    since_hours: int = typer.Option(
+        24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
+    ),
     phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run"),
     parallel: int = typer.Option(2, "--parallel", help="Local mode: concurrent workers"),
     backend: str = typer.Option("mlx", "--backend", help="Local mode backend (default: mlx)"),

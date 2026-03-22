@@ -51,9 +51,7 @@ def parse_etime(etime_str):
 def cleanup_stale_mcp():
     """Kill orphaned/stale MCP processes. Returns count killed."""
     try:
-        out = subprocess.check_output(
-            ["ps", "-eo", "pid,ppid,etime,command"], text=True, timeout=3
-        )
+        out = subprocess.check_output(["ps", "-eo", "pid,ppid,etime,command"], text=True, timeout=3)
     except (subprocess.SubprocessError, FileNotFoundError):
         return 0
 
@@ -83,9 +81,7 @@ def cleanup_stale_mcp():
         elif age > age_threshold:
             # Check if parent claude has active node/bun children (excluding voicelayer)
             try:
-                children = subprocess.check_output(
-                    ["pgrep", "-P", str(ppid)], text=True, timeout=2
-                ).strip().split("\n")
+                children = subprocess.check_output(["pgrep", "-P", str(ppid)], text=True, timeout=2).strip().split("\n")
                 # If parent only has MCP children, it's idle
                 active_children = 0
                 for child_pid in children:
@@ -93,8 +89,7 @@ def cleanup_stale_mcp():
                         continue
                     try:
                         child_cmd = subprocess.check_output(
-                            ["ps", "-p", child_pid.strip(), "-o", "command="],
-                            text=True, timeout=1
+                            ["ps", "-p", child_pid.strip(), "-o", "command="], text=True, timeout=1
                         ).strip()
                         if not any(pat in child_cmd for pat in MCP_PATTERNS):
                             active_children += 1

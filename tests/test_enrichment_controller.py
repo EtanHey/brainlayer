@@ -203,7 +203,9 @@ def test_enrich_local_does_not_call_build_external_prompt(monkeypatch):
     monkeypatch.setattr(controller, "build_prompt", MagicMock(return_value="local-prompt"))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kwargs: '{"summary":"sum","tags":["python"]}')
-    monkeypatch.setattr(controller, "_call_local_backend", lambda *args, **kwargs: '{"summary":"sum","tags":["python"]}')
+    monkeypatch.setattr(
+        controller, "_call_local_backend", lambda *args, **kwargs: '{"summary":"sum","tags":["python"]}'
+    )
 
     result = controller.enrich_local(store, limit=1)
 

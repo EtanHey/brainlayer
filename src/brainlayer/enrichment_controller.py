@@ -167,7 +167,9 @@ def enrich_batch(
     """Process backlog via Gemini Batch API."""
     ensure_checkpoint_table(store)
     pending = get_pending_jobs(store) if phase in {"poll", "run"} else []
-    export_files = get_unsubmitted_export_files(db_path=getattr(store, "db_path", None)) if phase in {"submit", "run"} else []
+    export_files = (
+        get_unsubmitted_export_files(db_path=getattr(store, "db_path", None)) if phase in {"submit", "run"} else []
+    )
     attempted = len(pending) + len(export_files)
     return EnrichmentResult(mode="batch", attempted=attempted, enriched=0, skipped=0, failed=0, errors=[])
 

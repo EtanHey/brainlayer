@@ -39,9 +39,7 @@ async def _brain_digest(
             from ..enrichment_controller import enrich_realtime
 
             loop = asyncio.get_event_loop()
-            enrich_result = await loop.run_in_executor(
-                None, lambda: enrich_realtime(store=store, limit=limit)
-            )
+            enrich_result = await loop.run_in_executor(None, lambda: enrich_realtime(store=store, limit=limit))
             result = {
                 "mode": enrich_result.mode,
                 "attempted": enrich_result.attempted,

@@ -187,7 +187,9 @@ def _parse_faceted_enrichment(text: Optional[str]) -> Optional[Dict[str, Any]]:
         if not isinstance(domains, list):
             return None
         clean_domains = [
-            str(domain).strip().lower() for domain in domains if isinstance(domain, str) and domain.strip().startswith("dom:")
+            str(domain).strip().lower()
+            for domain in domains
+            if isinstance(domain, str) and domain.strip().startswith("dom:")
         ][:3]
 
         confidence = payload.get("confidence", 0.0)
@@ -407,8 +409,8 @@ def digest_content(
 
     merged_tags: List[str] = []
     if _is_successful_faceted_result(faceted_result):
-        merged_tags = faceted_result.get("topics", []) + [faceted_result.get("activity", "")] + faceted_result.get(
-            "domains", []
+        merged_tags = (
+            faceted_result.get("topics", []) + [faceted_result.get("activity", "")] + faceted_result.get("domains", [])
         )
         merged_tags = [tag for tag in merged_tags if tag]
         faceted_result = {**faceted_result, "status": "enriched"}  # status last to prevent override
