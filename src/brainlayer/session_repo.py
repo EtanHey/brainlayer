@@ -27,11 +27,37 @@ class SessionMixin:
         since_hours: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Get chunks that haven't been enriched yet, for batch processing."""
-        cursor = self._read_cursor()
-
         effective_min = min_char_count if min_char_count is not None else source_aware_min_chars(source)
+        return self.get_enrichment_candidates(
+            limit=batch_size,
+            since_hours=since_hours,
+            source=source,
+            content_types=content_types,
+            min_content_length=effective_min,
+            order="newest",
+        )
+
+    def get_enrichment_candidates(
+        self,
+        limit: int = 25,
+        since_hours: Optional[int] = None,
+        source: Optional[str] = None,
+        content_types: Optional[List[str]] = None,
+        chunk_ids: Optional[List[str]] = None,
+        min_content_length: int = 50,
+        order: str = "newest",
+    ) -> List[Dict[str, Any]]:
+        """Single source of truth for what chunks still need enrichment."""
+        if chunk_ids is not None and len(chunk_ids) == 0:
+            return []
+
+        cursor = self._read_cursor()
+        effective_min = max(min_content_length, source_aware_min_chars(source))
         where = ["enriched_at IS NULL", "char_count >= ?"]
-        params: list = [effective_min]
+        params: list[Any] = [effective_min]
+
+        if since_hours is not None:
+            where.append(f"created_at > datetime('now', '-{int(since_hours)} hours')")
 
         if source:
             where.append("source = ?")
@@ -42,30 +68,24 @@ class SessionMixin:
             where.append(f"content_type IN ({placeholders})")
             params.extend(content_types)
 
-        if since_hours is not None:
-            where.append(f"created_at > datetime('now', '-{int(since_hours)} hours')")
+        if chunk_ids:
+            placeholders = ",".join("?" for _ in chunk_ids)
+            where.append(f"id IN ({placeholders})")
+            params.extend(chunk_ids)
 
-        params.append(batch_size)
+        order_clause = "DESC" if order != "oldest" else "ASC"
+        params.append(limit)
 
         results = list(
             cursor.execute(
                 f"""
-            SELECT id, content, source_file, project, content_type,
-                   conversation_id, position, char_count, source
-            FROM chunks
-            WHERE {" AND ".join(where)}
-            ORDER BY
-                CASE source
-                    WHEN 'claude_code' THEN 0
-                    WHEN 'manual' THEN 0
-                    WHEN 'digest' THEN 1
-                    WHEN 'whatsapp' THEN 2
-                    WHEN 'youtube' THEN 3
-                    ELSE 1
-                END,
-                rowid DESC
-            LIMIT ?
-        """,
+                SELECT id, content, source_file, project, content_type,
+                       conversation_id, position, char_count, source, created_at
+                FROM chunks
+                WHERE {" AND ".join(where)}
+                ORDER BY rowid {order_clause}
+                LIMIT ?
+                """,
                 params,
             )
         )
@@ -80,7 +100,8 @@ class SessionMixin:
                 "conversation_id": row[5],
                 "position": row[6],
                 "char_count": row[7],
-                "source": row[8] if len(row) > 8 else None,
+                "source": row[8],
+                "created_at": row[9],
             }
             for row in results
         ]

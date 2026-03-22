@@ -7,6 +7,14 @@ Usage:
   --limit N: process N chunks (default: all unfaceted)
 """
 
+import warnings
+
+warnings.warn(
+    "scripts/enrichment_backfill.py is deprecated. Use 'brainlayer enrich --mode realtime' or brain_digest mode='enrich' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import json
 import os
 import sys

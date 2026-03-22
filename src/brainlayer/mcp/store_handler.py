@@ -24,20 +24,43 @@ _QUEUE_MAX_SIZE = 100
 
 
 async def _brain_digest(
-    content: str,
+    content: str | None = None,
     title: str | None = None,
     project: str | None = None,
     participants: list[str] | None = None,
+    mode: str = "digest",
+    limit: int = 25,
 ) -> CallToolResult:
     """Handle brain_digest tool call."""
-    from ..pipeline.digest import digest_content
-
     store = _get_vector_store()
-    model = _get_embedding_model()
-    loop = asyncio.get_event_loop()
-    norm_project = _normalize_project_name(project) if project else None
 
     try:
+        if mode == "enrich":
+            from ..enrichment_controller import enrich_realtime
+
+            result = enrich_realtime(store=store, limit=limit)
+            result = {
+                "mode": result.mode,
+                "attempted": result.attempted,
+                "enriched": result.enriched,
+                "skipped": result.skipped,
+                "failed": result.failed,
+                "errors": result.errors,
+            }
+            return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+
+        if mode != "digest":
+            return _error_result(f"Unknown brain_digest mode: {mode}")
+
+        if not content or not content.strip():
+            return _error_result("content is required for brain_digest mode='digest'")
+
+        from ..pipeline.digest import digest_content
+
+        model = _get_embedding_model()
+        loop = asyncio.get_event_loop()
+        norm_project = _normalize_project_name(project) if project else None
+
         result = await loop.run_in_executor(
             None,
             lambda: digest_content(

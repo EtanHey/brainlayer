@@ -195,6 +195,55 @@ def test_digest_extracts_action_items(tmp_path):
     assert isinstance(result["questions"], list)
 
 
+def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_path):
+    """digest_content writes faceted Gemini tags into the chunk enrichment fields."""
+    from brainlayer.pipeline.digest import digest_content
+
+    store = VectorStore(tmp_path / "test.db")
+
+    def fake_faceted_enrich(*, content, project, title, participants):  # noqa: ARG001
+        return {
+            "topics": ["brainlayer-search-quality", "entity-memory-scope"],
+            "activity": "act:designing",
+            "domains": ["dom:mcp", "dom:python"],
+            "confidence": 0.91,
+            "provider": "gemini",
+            "model": "gemini-2.5-flash-lite",
+        }
+
+    result = digest_content(
+        content="We decided BrainLayer digest should add faceted enrichment through Gemini.",
+        store=store,
+        embed_fn=_dummy_embed,
+        project="brainlayer",
+        faceted_enrich_fn=fake_faceted_enrich,
+    )
+
+    assert result["tags"] == [
+        "brainlayer-search-quality",
+        "entity-memory-scope",
+        "act:designing",
+        "dom:mcp",
+        "dom:python",
+    ]
+    assert result["enrichment"]["status"] == "enriched"
+    assert result["enrichment"]["confidence"] == 0.91
+
+    cursor = store.conn.cursor()
+    row = list(
+        cursor.execute(
+            "SELECT tags, intent, summary, enriched_at FROM chunks WHERE id = ?",
+            [result["digest_id"]],
+        )
+    )[0]
+
+    assert row[0] is not None
+    assert "act:designing" in row[0]
+    assert row[1] == "designing"
+    assert row[2] == result["summary"]
+    assert row[3] is not None
+
+
 # --- Task 3: brain_digest MCP tool schema ---
 
 
@@ -210,7 +259,7 @@ def test_brain_digest_tool_exists():
 
 
 def test_brain_digest_schema_has_required_fields():
-    """brain_digest tool has content as required field."""
+    """brain_digest tool exposes digest fields and mode-based enrich controls."""
     import asyncio
 
     from brainlayer.mcp import list_tools
@@ -221,7 +270,29 @@ def test_brain_digest_schema_has_required_fields():
     assert "content" in props
     assert "title" in props
     assert "participants" in props
-    assert "content" in digest.inputSchema.get("required", [])
+    assert "mode" in props
+    assert "limit" in props
+
+
+def test_brain_digest_description_teaches_routing():
+    """brain_digest description explains when to use it and how it differs from brain_store."""
+    import asyncio
+
+    from brainlayer.mcp import list_tools
+
+    tools = asyncio.run(list_tools())
+    digest = next(t for t in tools if t.name == "brain_digest")
+    desc = digest.description.lower()
+
+    assert "brain_store" in desc
+    assert "after producing large content" in desc
+    assert "after brain_store" in desc
+    assert "on schedule for backfill" in desc
+    assert "faceted tags" in desc
+    assert "sanitizes pii" in desc
+    assert "realtime" in desc
+    assert "batch" in desc
+    assert "local" in desc
 
 
 # --- Task 4: brain_entity MCP tool ---

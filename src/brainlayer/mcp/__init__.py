@@ -95,8 +95,8 @@ server = Server(
         "type is auto-detected from content. Pass importance (1-10) for critical items.\n"
         "- brain_recall(mode): session/operational context. "
         "mode=context (default, what am I working on), sessions, operations, plan, summary, stats.\n"
-        "- brain_digest(content): ingest raw content (transcripts, docs, articles). "
-        "Extracts entities, relations, sentiment, action items, decisions, questions. "
+        "- brain_digest(content): deeply ingest large content (research, audits, transcripts, docs). "
+        "Extracts entities, relations, faceted tags, sentiment, action items, decisions, questions, and sanitizes PII before external enrichment calls. "
         "Creates a new searchable chunk with source='digest'.\n"
         "- brain_entity(query): look up a known entity in the knowledge graph. "
         "Returns entity type, relations, and evidence chunks.\n"
@@ -603,20 +603,43 @@ Returns: Structured JSON or Markdown depending on mode.""",
         Tool(
             name="brain_digest",
             title="Digest Content",
-            description="""Ingest raw content (transcripts, documents, articles) and extract structured knowledge.
+            description="""Deeply ingest and enrich large content such as research dumps, audit output, transcripts, and long documents.
 
-Creates a new chunk with source="digest", extracts entities and relations (KG),
-analyzes sentiment, and identifies action items, decisions, and questions.
+When to use:
+- after producing large content that should become searchable knowledge
+- after brain_store when you want slower, deeper enrichment for a chunk or document
+- on schedule for backfill runs over older content
 
-Returns: Structured JSON with digest_id, summary, entities, relations,
-action_items, decisions, questions, sentiment, and stats.""",
+What it does:
+- creates a new chunk with source="digest"
+- extracts entities and relations into the knowledge graph
+- adds faceted tags (topics + dom:* + act:*)
+- analyzes sentiment and identifies action items, decisions, and questions
+- sanitizes PII before any external API enrichment call
+
+How it differs from brain_store:
+- brain_store = fast write, minimal processing, optimized for immediate capture
+- brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing
+
+Modes in the digest pipeline:
+- realtime: single chunk/document, instant enrichment
+- batch: backlog/backfill processing via Gemini Batch API
+- local: offline/private enrichment via MLX
+
+Returns: Structured JSON with digest_id, summary, tags, entities, relations,
+action_items, decisions, questions, sentiment, enrichment status, and stats.""",
             annotations=_WRITE,
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["digest", "enrich"],
+                        "description": "digest (default): ingest provided content. enrich: run realtime enrichment on existing DB chunks.",
+                    },
                     "content": {
                         "type": "string",
-                        "description": "Raw text content to digest (transcript, document, article, meeting notes)",
+                        "description": "Raw text content to deeply digest and enrich (research, audit, transcript, article, meeting notes)",
                     },
                     "title": {
                         "type": "string",
@@ -631,8 +654,15 @@ action_items, decisions, questions, sentiment, and stats.""",
                         "items": {"type": "string"},
                         "description": "Optional list of known participant names (improves entity extraction)",
                     },
+                    "limit": {
+                        "type": "integer",
+                        "default": 25,
+                        "minimum": 1,
+                        "maximum": 5000,
+                        "description": "For mode=enrich: max number of existing chunks to enrich via realtime mode.",
+                    },
                 },
-                "required": ["content"],
+                "required": [],
             },
         ),
         Tool(
@@ -929,10 +959,12 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
     elif name == "brain_digest":
         return await _brain_digest(
-            content=arguments["content"],
+            content=arguments.get("content"),
             title=arguments.get("title"),
             project=arguments.get("project"),
             participants=arguments.get("participants"),
+            mode=arguments.get("mode", "digest"),
+            limit=arguments.get("limit", 25),
         )
 
     elif name == "brain_expand":
