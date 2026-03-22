@@ -908,6 +908,8 @@ def enrich(
             finally:
                 store.close()
         else:
+            if mode not in ("realtime", "batch", "local"):
+                raise typer.BadParameter(f"Invalid mode: {mode}")
             store = VectorStore(get_db_path())
             try:
                 if mode == "realtime":
@@ -916,8 +918,6 @@ def enrich(
                     result = enrich_batch(store, phase=phase, limit=limit)
                 elif mode == "local":
                     result = enrich_local(store, limit=limit, parallel=parallel, backend=backend)
-                else:
-                    raise typer.BadParameter(f"Invalid mode: {mode}")
 
                 console.print(
                     f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
