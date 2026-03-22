@@ -8,7 +8,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from .pipeline.enrichment import (
     build_external_prompt,
