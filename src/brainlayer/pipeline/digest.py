@@ -411,7 +411,7 @@ def digest_content(
             "domains", []
         )
         merged_tags = [tag for tag in merged_tags if tag]
-        faceted_result = {"status": "enriched", **faceted_result}
+        faceted_result = {**faceted_result, "status": "enriched"}  # status last to prevent override
         store.update_enrichment(
             chunk_id=chunk_id,
             summary=summary,

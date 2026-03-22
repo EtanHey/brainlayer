@@ -38,14 +38,17 @@ async def _brain_digest(
         if mode == "enrich":
             from ..enrichment_controller import enrich_realtime
 
-            result = enrich_realtime(store=store, limit=limit)
+            loop = asyncio.get_event_loop()
+            enrich_result = await loop.run_in_executor(
+                None, lambda: enrich_realtime(store=store, limit=limit)
+            )
             result = {
-                "mode": result.mode,
-                "attempted": result.attempted,
-                "enriched": result.enriched,
-                "skipped": result.skipped,
-                "failed": result.failed,
-                "errors": result.errors,
+                "mode": enrich_result.mode,
+                "attempted": enrich_result.attempted,
+                "enriched": enrich_result.enriched,
+                "skipped": enrich_result.skipped,
+                "failed": enrich_result.failed,
+                "errors": enrich_result.errors,
             }
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
 
