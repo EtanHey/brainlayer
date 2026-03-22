@@ -40,6 +40,10 @@ nav:
     - Enrichment Runbook: enrichment-runbook.md
     - Local Models: local-models-guide.md
     - MCP Config: mcp-config.md
+  - Decisions:
+    - ADR Template: adr/0000-template.md
+    - "ADR-0001: sqlite-vec": adr/0001-sqlite-vec-over-dedicated-vector-db.md
+    - "ADR-0002: RRF Hybrid Search": adr/0002-reciprocal-rank-fusion-for-hybrid-search.md
   - Roadmap: roadmap.md
   - Contributing: contributing.md
 
