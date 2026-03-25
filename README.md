@@ -7,12 +7,12 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-9%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1030%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C083%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
 ---
 
-**224,000+ chunks indexed** · **1,002 Python + 28 Swift tests** · **Real-time indexing hooks** · **9 MCP tools** · **BrainBar daemon (209KB)** · **Zero cloud dependencies**
+**224,000+ chunks indexed** · **1,083 Python + 54 Swift tests** · **Real-time indexing hooks** · **9 MCP tools** · **BrainBar daemon (209KB)** · **Zero cloud dependencies**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -134,7 +134,7 @@ graph LR
 
 | Tool | Description |
 |------|-------------|
-| `brain_digest` | Ingest raw content — entity extraction, relations, sentiment, action items. |
+| `brain_digest` | Ingest raw content — two modes: `digest` (entity extraction, relations, action items) and `enrich` (run realtime LLM enrichment on existing chunks). |
 | `brain_entity` | Look up entities in the knowledge graph — type, relations, evidence. |
 | `brain_expand` | Expand a chunk_id with N surrounding chunks for full context. |
 | `brain_update` | Update, archive, or merge existing memories. |
@@ -259,10 +259,10 @@ BrainLayer can index conversations from multiple sources:
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (1,002 Python tests)
+pytest tests/                           # Full suite (1,083 Python tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
-# BrainBar (Swift): 28 tests via Xcode
+# BrainBar (Swift): 54 tests via Xcode
 ```
 
 ## Roadmap

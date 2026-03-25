@@ -1,5 +1,4 @@
 # BrainLayer (זיכרון) - Local Knowledge Pipeline
-@~/Gits/orchestrator/standards/autonomous-workflow.md
 
 > Memory for Claude Code conversations: index, search, enrich, and visualize sessions.
 
@@ -11,34 +10,9 @@
 
 ## BrainBar Stub Warnings
 
-BrainBar Swift daemon has 4 STUB tools returning fake success:
-- brain_digest, brain_update, brain_expand, brain_tags — ALL BROKEN
-- Working: brain_search, brain_store, brain_recall, brain_entity
-- Last successful digest: March 14, 2026
-
-## Compact Instructions
-
-When compacting this session, follow these rules strictly:
-
-### NEVER preserve
-- /loop, QUEUE-OPERATION, cron polling (3+ identical system/cron messages = keep ZERO)
-- BrainLayer search injections (re-injected fresh each turn)
-- Full file contents re-readable from disk (keep path + one-line summary of decision made)
-
-### ALWAYS preserve verbatim
-- User vision/goal/decision statements (if stated 3x+, note "[USER STATED Nx]")
-- User repetitions in DIFFERENT places = importance signal, keep ONE with annotation
-- Short user messages (approvals, frustration signals) — these carry intent
-- Sprint plan with priority ratings
-- All decisions with rationale (WHY not just WHAT)
-- Modified file paths with one-line change summary
-
-### Structure summary as
-1. **Session Intent**: What the user wants (exact quotes)
-2. **Decisions Made**: Each + rationale + who
-3. **Artifact Trail**: Files, tests, commands
-4. **Current State**: Working/broken/in-progress
-5. **Next Steps**: Ordered by sprint plan priority
+BrainBar Swift daemon has 3 STUB tools returning fake success:
+- brain_update, brain_expand, brain_tags — BROKEN (return success, save nothing)
+- Working: brain_search, brain_store, brain_recall, brain_entity, brain_digest, brain_get_person
 
 ---
 
@@ -79,15 +53,13 @@ brainlayer enrich
 - Primary backend: **MLX** (`Qwen2.5-Coder-14B-Instruct-4bit`) on Apple Silicon (port 8080)
 - Fallback: Ollama (`glm-4.7-flash`) on port 11434, auto-switches after 3 consecutive MLX failures
 - Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
-- Worker script: `golems/scripts/enrichment-lazy.sh` (launchd, nice=20, batch=50)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
-- Known issue: 72K empty 0-char chunks from tool-call-only turns pollute the queue (FIXED 2026-03-01, deleted)
 
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
-- MCP tools (8): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person` (legacy `brainlayer_*` aliases still work)
+- MCP tools (9): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_tags` (legacy `brainlayer_*` aliases still work)
 - MCP server entrypoint: `brainlayer-mcp`
 
 ## Exports

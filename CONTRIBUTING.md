@@ -15,7 +15,7 @@ pip install -e ".[dev]"
 
 ```text
 src/brainlayer/
-├── mcp/                  # MCP server (14 tools, stdio-based)
+├── mcp/                  # MCP server (9 tools, stdio-based)
 │   └── __init__.py
 ├── pipeline/             # Indexing pipeline stages
 │   ├── extract.py        #   Stage 1: Parse JSONL conversations
@@ -39,7 +39,7 @@ src/brainlayer/
 ## Running Tests
 
 ```bash
-# Full test suite (268 tests, ~6s)
+# Full test suite (1,083 tests, ~6s)
 pytest tests/
 
 # Skip integration tests (need production DB + embedding model)
