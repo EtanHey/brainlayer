@@ -246,13 +246,13 @@ class TestMCPToolCount:
     """Verify MCP server has correct tool count."""
 
     def test_tool_count(self):
-        """MCP server should have 9 tools: search, store, recall, digest, entity, get_person, update, expand, tags."""
+        """MCP server should have 11 tools: search, store, recall, digest, entity, get_person, update, expand, tags, supersede, archive."""
         import asyncio
 
         from brainlayer.mcp import list_tools
 
         tools = asyncio.run(list_tools())
-        assert len(tools) == 9
+        assert len(tools) == 11
 
     def test_consolidated_tools_registered(self):
         """brain_search, brain_store, brain_recall are registered."""
