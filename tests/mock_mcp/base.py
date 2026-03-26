@@ -7,6 +7,7 @@ raw argument dicts — matching how the real brainlayer MCP server works.
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 from contextlib import asynccontextmanager
@@ -66,6 +67,8 @@ class MockMcpServer:
             handler = mock_ref._handlers.get(name)
             if handler:
                 result = handler(args)
+                if inspect.isawaitable(result):
+                    result = await result
             else:
                 result = json.dumps({"mock": True, "tool": name})
 
@@ -128,7 +131,7 @@ class MockMcpServer:
         return calls[index].arguments
 
     def called_before(self, first: str, second: str) -> bool:
-        """True if first tool was called before second tool."""
+        """True if first occurrence of first tool was called before first occurrence of second tool."""
         first_idx = next((i for i, c in enumerate(self._call_log) if c.tool_name == first), None)
         second_idx = next((i for i, c in enumerate(self._call_log) if c.tool_name == second), None)
         if first_idx is None or second_idx is None:
@@ -136,7 +139,7 @@ class MockMcpServer:
         return first_idx < second_idx
 
     def called_between(self, before: str, middle: str, after: str) -> bool:
-        """True if middle was called between before and after."""
+        """True if first occurrence of middle was called between first occurrences of before and after."""
         before_idx = next((i for i, c in enumerate(self._call_log) if c.tool_name == before), None)
         middle_idx = next((i for i, c in enumerate(self._call_log) if c.tool_name == middle), None)
         after_idx = next((i for i, c in enumerate(self._call_log) if c.tool_name == after), None)

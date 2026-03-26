@@ -84,6 +84,7 @@ def assert_call_sequence(source: MockMcpServer | list[str], expected_sequence: l
     names = _get_names(source)
     pos = 0
     for tool in expected_sequence:
+        search_start = pos
         found = False
         while pos < len(names):
             if names[pos] == tool:
@@ -93,8 +94,8 @@ def assert_call_sequence(source: MockMcpServer | list[str], expected_sequence: l
             pos += 1
         if not found:
             raise AssertionError(
-                f"Expected sequence {expected_sequence} but '{tool}' not found after position {pos}. "
-                f"Call log: {names}"
+                f"Expected sequence {expected_sequence} but '{tool}' not found "
+                f"after position {search_start}. Call log: {names}"
             )
 
 

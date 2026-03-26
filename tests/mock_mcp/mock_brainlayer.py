@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from typing import Any
@@ -63,8 +64,8 @@ class MockBrainLayer(MockMcpServer):
         search_fixture: list[dict[str, Any]] | None = None,
         recall_fixture: dict[str, Any] | None = None,
     ):
-        self._search_fixture = search_fixture or DEFAULT_SEARCH_RESULTS
-        self._recall_fixture = recall_fixture or DEFAULT_RECALL
+        self._search_fixture = search_fixture if search_fixture is not None else copy.deepcopy(DEFAULT_SEARCH_RESULTS)
+        self._recall_fixture = recall_fixture if recall_fixture is not None else copy.deepcopy(DEFAULT_RECALL)
         self.stored_items: list[dict[str, Any]] = []
         super().__init__("mock-brainlayer")
 
@@ -170,6 +171,12 @@ class MockBrainLayer(MockMcpServer):
         })
 
     def clear_fixtures(self) -> None:
-        """Clear all search fixtures and stored items."""
+        """Clear search fixtures and stored items (does not clear call log)."""
         self._search_fixture.clear()
+        self.stored_items.clear()
+
+    def reset(self) -> None:
+        """Clear call log, restore default fixtures, and clear stored items."""
+        super().reset()
+        self._search_fixture = copy.deepcopy(DEFAULT_SEARCH_RESULTS)
         self.stored_items.clear()

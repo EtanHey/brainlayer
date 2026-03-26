@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -73,10 +74,10 @@ class MockGitHub(MockMcpServer):
         reviews_fixture: dict[str, Any] | None = None,
         merge_fixture: dict[str, Any] | None = None,
     ):
-        self._pr_fixture = pr_fixture or DEFAULT_PR
-        self._checks_fixture = checks_fixture or DEFAULT_CHECKS
-        self._reviews_fixture = reviews_fixture or DEFAULT_REVIEWS
-        self._merge_fixture = merge_fixture or DEFAULT_MERGE
+        self._pr_fixture = pr_fixture if pr_fixture is not None else copy.deepcopy(DEFAULT_PR)
+        self._checks_fixture = checks_fixture if checks_fixture is not None else copy.deepcopy(DEFAULT_CHECKS)
+        self._reviews_fixture = reviews_fixture if reviews_fixture is not None else copy.deepcopy(DEFAULT_REVIEWS)
+        self._merge_fixture = merge_fixture if merge_fixture is not None else copy.deepcopy(DEFAULT_MERGE)
         super().__init__("mock-github")
 
     def _register_tools(self) -> None:
@@ -174,6 +175,14 @@ class MockGitHub(MockMcpServer):
 
     def _handle_pr_merge(self, args: dict[str, Any]) -> str:
         return json.dumps(self._merge_fixture)
+
+    def reset(self) -> None:
+        """Clear call log and restore default fixtures."""
+        super().reset()
+        self._pr_fixture = copy.deepcopy(DEFAULT_PR)
+        self._checks_fixture = copy.deepcopy(DEFAULT_CHECKS)
+        self._reviews_fixture = copy.deepcopy(DEFAULT_REVIEWS)
+        self._merge_fixture = copy.deepcopy(DEFAULT_MERGE)
 
     # --- Convenience: configure failure scenarios ---
 
