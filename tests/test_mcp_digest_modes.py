@@ -93,5 +93,5 @@ def test_brain_digest_input_schema_includes_mode_and_limit():
     props = digest.inputSchema["properties"]
 
     assert "mode" in props
-    assert props["mode"]["enum"] == ["digest", "enrich"]
+    assert props["mode"]["enum"] == ["digest", "enrich", "connect"]
     assert "limit" in props

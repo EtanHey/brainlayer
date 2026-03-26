@@ -9,6 +9,7 @@ Takes raw content (transcripts, documents, articles), extracts:
 Creates a new chunk with source="digest" and links extracted entities.
 """
 
+import json
 import logging
 import os
 import random
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Confidence tier thresholds
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 MEDIUM_CONFIDENCE_THRESHOLD = 0.5
+SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
 
 # Action item patterns
 ACTION_PATTERNS = [
@@ -444,6 +446,220 @@ def digest_content(
             **tier_stats,
         },
     }
+
+
+def digest_connect(
+    content: str,
+    store: VectorStore,
+    embed_fn: Callable[[str], List[float]],
+    title: Optional[str] = None,
+    project: Optional[str] = None,
+    participants: Optional[List[str]] = None,
+    max_related: int = 5,
+) -> Dict[str, Any]:
+    """Search-connect-propose pipeline for intelligent content integration.
+
+    Unlike digest_content() which stores immediately, this function returns
+    a PROPOSAL that the calling agent decides whether to accept. This is the
+    domain agent pattern: heavy analysis here, execution decision by caller.
+
+    Pipeline:
+    1. Extract key facts, entities, decisions from new content
+    2. Search existing knowledge for each extracted entity/topic
+    3. Find connections — related chunks that discuss the same topics
+    4. Find contradictions — existing chunks that conflict with new content
+    5. Propose supersedes — stale chunks this new content should replace
+    6. Return structured proposal with all findings
+
+    Args:
+        content: New content to analyze and connect
+        store: VectorStore instance for searching existing knowledge
+        embed_fn: Embedding function for semantic search
+        title: Optional title for the content
+        project: Optional project filter for search
+        participants: Optional list of known participant names
+        max_related: Max related chunks to return per search (default 5)
+
+    Returns:
+        DigestProposal dict with: extracted facts, connections found,
+        contradictions detected, supersede proposals, and suggested stores.
+    """
+    if not content or not content.strip():
+        raise ValueError("content must be non-empty")
+
+    # Step 1: Extract key facts from the new content
+    seed_entities = _build_seed_entities(participants)
+    chunk_dict = {"id": "connect-preview", "content": content}
+    extraction_result = process_chunk(chunk_dict, seed_entities=seed_entities)
+
+    unique_entities = _dedup_entities(extraction_result.entities)
+    entities = [
+        {
+            "name": e.text,
+            "entity_type": e.entity_type,
+            "confidence": e.confidence,
+        }
+        for e in unique_entities
+    ]
+
+    decisions = _extract_decisions(content)
+    action_items = _extract_action_items(content)
+    questions = _extract_questions(content)
+
+    # Step 2: Search existing knowledge for each entity/topic
+    search_queries = []
+    # Use entity names as search queries
+    for entity in entities:
+        if entity["confidence"] >= MEDIUM_CONFIDENCE_THRESHOLD:
+            search_queries.append(entity["name"])
+    # Use the title or first line as a topic query
+    topic_query = title or content.split("\n")[0][:200]
+    if topic_query not in search_queries:
+        search_queries.insert(0, topic_query)
+    # Use decisions as search queries (may contradict existing)
+    for decision in decisions[:3]:
+        if decision not in search_queries:
+            search_queries.append(decision)
+
+    # Step 3: Find connections via search
+    connections: List[Dict[str, Any]] = []
+    seen_chunk_ids: set = set()
+
+    for query in search_queries[:10]:  # Cap at 10 searches
+        try:
+            query_embedding = embed_fn(query)
+            results = store.hybrid_search(
+                query_embedding=query_embedding,
+                query_text=query,
+                n_results=max_related,
+                project_filter=project,
+            )
+            # hybrid_search returns {"ids": [[...]], "documents": [[...]], "metadatas": [[...]], "distances": [[...]]}
+            ids = results.get("ids", [[]])[0]
+            docs = results.get("documents", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
+            dists = results.get("distances", [[]])[0]
+            for cid, doc, meta, dist in zip(ids, docs, metas, dists):
+                if cid in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(cid)
+                score = 1 - dist if dist is not None else 0
+                tags = meta.get("tags") or []
+                if isinstance(tags, str):
+                    try:
+                        tags = json.loads(tags)
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
+                connections.append({
+                    "chunk_id": cid,
+                    "content_preview": (doc or "")[:300],
+                    "score": score,
+                    "matched_query": query,
+                    "project": meta.get("project"),
+                    "content_type": meta.get("content_type"),
+                    "date": meta.get("created_at"),
+                    "tags": tags,
+                    "importance": meta.get("importance"),
+                })
+        except Exception as e:
+            logger.warning("digest_connect search failed for query '%s': %s", query, e)
+
+    # Step 4: Find contradictions — existing chunks with deprecation language
+    # that share keywords with the new decisions
+    contradictions: List[Dict[str, Any]] = []
+    seen_contradiction_chunks: set = set()
+    for conn in connections:
+        preview = conn["content_preview"].lower()
+        if not any(
+            word in preview
+            for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]
+        ):
+            continue
+        # Find which decision(s) relate to this chunk by keyword overlap
+        for decision in decisions:
+            decision_words = set(decision.lower().split()) - {"to", "the", "a", "an", "we", "i", "is", "are", "was"}
+            if len(decision_words) < 2:
+                continue
+            overlap = sum(1 for w in decision_words if w in preview)
+            if overlap >= 2 and conn["chunk_id"] not in seen_contradiction_chunks:
+                seen_contradiction_chunks.add(conn["chunk_id"])
+                contradictions.append({
+                    "new_decision": decision,
+                    "existing_chunk_id": conn["chunk_id"],
+                    "existing_preview": conn["content_preview"],
+                    "reason": "Existing chunk contains replacement/deprecation language with keyword overlap",
+                })
+
+    # Step 5: Propose supersedes — chunks that this new content should replace
+    supersede_proposals: List[Dict[str, Any]] = []
+    content_lower = content.lower()
+    for conn in connections:
+        preview_lower = conn["content_preview"].lower()
+        # If the connected chunk discusses the same topic with lower importance
+        # or is older content about the same decision, propose supersede
+        is_same_topic = conn["score"] > SUPERSEDE_SIMILARITY_THRESHOLD
+        is_old_decision = conn["content_type"] == "decision" and any(
+            d.lower() in preview_lower for d in decisions
+        )
+        if is_same_topic or is_old_decision:
+            supersede_proposals.append({
+                "chunk_id": conn["chunk_id"],
+                "content_preview": conn["content_preview"],
+                "reason": "high_similarity" if is_same_topic else "updated_decision",
+                "score": conn["score"],
+            })
+
+    # Step 6: Build the proposed store actions
+    suggested_stores: List[Dict[str, Any]] = []
+    # Suggest storing the new content as a chunk
+    suggested_stores.append({
+        "action": "store",
+        "content": content,
+        "title": title,
+        "project": project,
+        "tags": [e["name"].lower().replace(" ", "-") for e in entities[:5]],
+        "importance": _auto_propose_importance(entities, decisions, action_items),
+        "supersedes": [s["chunk_id"] for s in supersede_proposals],
+    })
+
+    return {
+        "status": "proposal",
+        "content_preview": (title or content[:200]).strip(),
+        "extracted": {
+            "entities": entities,
+            "decisions": decisions,
+            "action_items": action_items,
+            "questions": questions,
+        },
+        "connections": connections[:20],  # Cap response size
+        "contradictions": contradictions,
+        "supersede_proposals": supersede_proposals,
+        "suggested_stores": suggested_stores,
+        "stats": {
+            "entities_found": len(entities),
+            "searches_performed": min(len(search_queries), 10),
+            "connections_found": len(connections),
+            "contradictions_found": len(contradictions),
+            "supersedes_proposed": len(supersede_proposals),
+        },
+    }
+
+
+def _auto_propose_importance(
+    entities: List[Dict],
+    decisions: List[str],
+    action_items: List[str],
+) -> int:
+    """Heuristic importance score for proposed store action."""
+    score = 5  # baseline
+    if decisions:
+        score += 2
+    if action_items:
+        score += 1
+    high_conf = sum(1 for e in entities if e.get("confidence", 0) >= HIGH_CONFIDENCE_THRESHOLD)
+    if high_conf >= 3:
+        score += 1
+    return min(score, 10)
 
 
 def entity_lookup(
