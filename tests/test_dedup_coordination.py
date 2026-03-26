@@ -18,6 +18,7 @@ HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, HOOKS_DIR)
 
 from dedup_coordination import (
+    _lock_path,
     coord_path,
     get_injected_ids,
     is_handoff_prompt,
@@ -37,13 +38,13 @@ def session_id():
 
 @pytest.fixture(autouse=True)
 def cleanup_coord_file(session_id):
-    """Remove coordination file after each test."""
+    """Remove coordination and lock files after each test."""
     yield
-    path = coord_path(session_id)
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
+    for path in [coord_path(session_id), _lock_path(session_id)]:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 # ── Coordination File Read/Write ─────────────────────────────────────────────
@@ -80,6 +81,14 @@ class TestCoordFileIO:
         path = coord_path(session_id)
         with open(path, "w") as f:
             json.dump({"schema_version": 999, "session_id": session_id}, f)
+        result = read_coord(session_id)
+        assert result is None
+
+    def test_read_non_dict_json_returns_none(self, session_id):
+        """JSON arrays or strings should not crash — return None."""
+        path = coord_path(session_id)
+        with open(path, "w") as f:
+            json.dump([1, 2, 3], f)
         result = read_coord(session_id)
         assert result is None
 
@@ -134,7 +143,7 @@ class TestRegisterChunks:
         assert "chunk-3" in data["injected_ids_set"]
         # Only chunk-3 should be added as new entry
         assert len(data["injected_chunks"]) == 3  # 2 from first + 1 new
-        assert data["total_tokens_injected"] == 150  # 100 + 50
+        assert data["total_tokens_injected"] == 125  # 100 + 25 (50 * 1/2 new chunks)
 
     def test_register_preserves_source_hook(self, session_id):
         register_chunks(
@@ -197,6 +206,11 @@ class TestHandoffDetection:
 
     def test_case_insensitive(self):
         assert is_handoff_prompt("HANDOFF to the next agent")
+
+    def test_bare_agent_name_not_handoff(self):
+        """Bare agent names should NOT trigger handoff — only multi-word patterns."""
+        assert not is_handoff_prompt("Ask coachClaude about the schedule")
+        assert not is_handoff_prompt("orcClaude said the tests pass")
 
 
 # ── Mark Handoff Session ─────────────────────────────────────────────────────
