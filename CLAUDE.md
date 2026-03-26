@@ -50,27 +50,53 @@ brainlayer enrich
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
 ## Enrichment
-- Primary backend: **MLX** (`Qwen2.5-Coder-14B-Instruct-4bit`) on Apple Silicon (port 8080)
-- Fallback: Ollama (`glm-4.7-flash`) on port 11434, auto-switches after 3 consecutive MLX failures
+- Primary backend: **Groq** (cloud, configured in launchd plist)
+- Fallback: Gemini via `enrichment_controller.py`, Ollama as offline last-resort
 - Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
+- Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 0.2 = 12 RPM)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
 
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
 - Backlog API: `/backlog/items` (GET/POST/PATCH/DELETE)
-- MCP tools (9): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_tags` (legacy `brainlayer_*` aliases still work)
+- MCP tools (11): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work)
 - MCP server entrypoint: `brainlayer-mcp`
 
 ## Exports
 - `brainlayer brain-export` -> graph JSON for dashboard
 - `brainlayer export-obsidian` -> Markdown vault (backlinks + tags)
 
+## Real-time JSONL Watcher
+- `brainlayer watch` — persistent watcher for `~/.claude/projects/*.jsonl`
+- LaunchAgent: `com.brainlayer.watch.plist` (KeepAlive, Nice=10)
+- 4-layer content filters: entry type whitelist → classify → chunk min-length → system-reminder strip
+- Offset persistence: `~/.local/share/brainlayer/offsets.json` (survives restarts)
+- Rewind detection: file shrink = checkpoint restore → soft-archives reverted chunks
+- Axiom telemetry: startup, flush, error, heartbeat (60s) to `brainlayer-watcher` dataset
+- Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
+
+## Chunk Lifecycle
+- Columns: `superseded_by`, `aggregated_into`, `archived_at` on chunks table
+- Default search excludes lifecycle-managed chunks; `include_archived=True` shows history
+- `brain_supersede`: safety gate for personal data (journals, notes, health/finance)
+- `brain_archive`: soft-delete with timestamp
+- `brain_store` gains `supersedes` param for atomic store-and-replace
+
+## Session Dedup Coordination
+- `/tmp/brainlayer_session_{id}.json` — shared between SessionStart and UserPromptSubmit hooks
+- SessionStart writes injected chunk_ids; UserPromptSubmit skips already-injected
+- Handoff detection: prompts with "handoff", "session-handoff" skip auto-search
+- Module: `hooks/dedup_coordination.py`
+
 ## Data & Locks
 - DB: `~/.local/share/brainlayer/brainlayer.db`
+- Watcher offsets: `~/.local/share/brainlayer/offsets.json`
 - Prompts cache: `~/.local/share/brainlayer/prompts/`
+- Watcher logs: `~/.local/share/brainlayer/logs/watch.{log,err}`
 - Socket: `/tmp/brainlayer.sock`
 - Enrichment lock: `/tmp/brainlayer-enrichment.lock`
+- Session dedup: `/tmp/brainlayer_session_*.json`
 
 ## Bulk DB Operations (SAFETY)
 1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)

@@ -1,22 +1,22 @@
 # BrainLayer
 
-> Persistent memory and knowledge graph for AI agents — 9 MCP tools, real-time indexing hooks, and a native macOS daemon for always-on recall across every conversation.
+> Persistent memory and knowledge graph for AI agents — 11 MCP tools, real-time JSONL watcher, Axiom telemetry, and a native macOS daemon for always-on recall across every conversation.
 
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-9%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1%2C083%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
+[![MCP](https://img.shields.io/badge/MCP-11%20tools-green.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-1%2C204%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
 ---
 
-**224,000+ chunks indexed** · **1,083 Python + 54 Swift tests** · **Real-time indexing hooks** · **9 MCP tools** · **BrainBar daemon (209KB)** · **Zero cloud dependencies**
+**281,000+ chunks indexed** · **1,204 Python + 54 Swift tests** · **Real-time JSONL watcher** · **11 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
-BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-compatible AI agent the ability to remember, think, and recall across conversations. Includes **BrainBar** — a 209KB native macOS daemon that provides always-on memory access.
+BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-compatible AI agent the ability to remember, think, and recall across conversations. Features a **real-time JSONL watcher** that indexes conversations within seconds, **chunk lifecycle management** (supersede, archive, search filtering), and **BrainBar** — a 209KB native macOS daemon for always-on memory access.
 
 ```
 "What approach did I use for auth last month?"     →  brain_search
@@ -93,40 +93,45 @@ That's it. Your agent now has persistent memory across every conversation.
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>9 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>11 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
     KG --> D
 
-    E["Claude Code JSONL<br/>conversations"] --> F["Pipeline"]
-    F -->|extract → classify → chunk → embed| D
-    G["Local LLM<br/>Ollama / MLX"] -->|enrich| D
+    E["Claude Code JSONL<br/>conversations"] --> W["Real-time Watcher<br/>~1s polling + filters"]
+    W -->|classify → chunk → insert| D
+    F["Batch Pipeline"] -->|extract → classify → chunk → embed| D
+    G["Gemini / Groq"] -->|enrich| D
 
-    H["Real-time Hooks"] -->|live per-message| D
+    H["Session Hooks"] -->|dedup coordination| D
     I["BrainBar<br/>macOS daemon"] -->|Unix socket MCP| B
+    J["Axiom"] -.->|telemetry| W
 ```
 
-**Everything runs locally.** No cloud accounts, no API keys, no Docker, no database servers.
+**Everything runs locally.** No cloud accounts required — Axiom telemetry and cloud enrichment are optional.
 
 | Component | Implementation |
 |-----------|---------------|
 | Storage | SQLite + [sqlite-vec](https://github.com/asg017/sqlite-vec) (single `.db` file, WAL mode) |
 | Embeddings | `bge-large-en-v1.5` via sentence-transformers (1024 dims, runs on CPU/MPS) |
 | Search | Hybrid: vector similarity + FTS5 keyword, merged with Reciprocal Rank Fusion |
-| Enrichment | Local LLM via Ollama or MLX — 10-field metadata per chunk |
+| Real-time watcher | Polls `~/.claude/projects/` JSONL files (~1s), 4-layer content filters, offset-persistent |
+| Chunk lifecycle | Supersede, archive, search filtering — stale knowledge managed, not lost |
+| Enrichment | Gemini / Groq cloud or local LLM (Ollama / MLX) — 10-field metadata per chunk |
 | MCP Server | stdio-based, MCP SDK v1.26+, compatible with any MCP client |
-| Clustering | Leiden + UMAP for brain graph visualization (optional) |
+| Telemetry | Axiom (`brainlayer-watcher` dataset) — flush metrics, errors, heartbeat, rewind detection |
+| Session dedup | Hook coordination file prevents duplicate chunk injection across session lifecycle |
 | BrainBar | Native macOS daemon (209KB Swift binary) — always-on MCP over Unix socket |
 
-## MCP Tools (9)
+## MCP Tools (11)
 
 ### Core (4)
 
 | Tool | Description |
 |------|-------------|
-| `brain_search` | Semantic search — unified search across query, file_path, chunk_id, filters. |
-| `brain_store` | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. |
+| `brain_search` | Semantic search — unified search across query, file_path, chunk_id, filters. Lifecycle-aware: excludes superseded/archived by default. |
+| `brain_store` | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. Optional `supersedes` param for atomic store-and-replace. |
 | `brain_recall` | Proactive retrieval — current context, sessions, session summaries. |
 | `brain_tags` | Browse and filter by tag — discover what's in memory without a search query. |
 
@@ -139,6 +144,13 @@ graph LR
 | `brain_expand` | Expand a chunk_id with N surrounding chunks for full context. |
 | `brain_update` | Update, archive, or merge existing memories. |
 | `brain_get_person` | Person lookup — entity details, interactions, preferences (~200-500ms). |
+
+### Lifecycle (2)
+
+| Tool | Description |
+|------|-------------|
+| `brain_supersede` | Mark old memory as replaced by new one. Safety gate: personal data requires explicit confirmation. |
+| `brain_archive` | Soft-delete with timestamp. Excluded from default search, accessible via direct lookup. |
 
 ### Backward Compatibility
 
@@ -161,44 +173,47 @@ BrainLayer enriches each chunk with 10 structured metadata fields using a local 
 | `debt_impact` | `introduction`, `resolution`, `none` |
 | `external_deps` | "grammy, Supabase, Railway" |
 
-Three enrichment backends (auto-detect: MLX → Ollama → Groq, override via `BRAINLAYER_ENRICH_BACKEND`):
+Three enrichment backends (override via `BRAINLAYER_ENRICH_BACKEND`):
 
 | Backend | Best for | Speed |
 |---------|----------|-------|
-| **Groq** (cloud) | When local LLMs are unavailable | ~1-2s/chunk |
-| **MLX** (Apple Silicon) | M1/M2/M3 Macs (preferred) | 21-87% faster than Ollama |
-| **Ollama** | Any platform | ~1s/chunk (short), ~13s (long) |
+| **Groq** (cloud) | Primary — fast, reliable | ~1-2s/chunk |
+| **Gemini** (cloud) | Batch enrichment via `enrichment_controller.py` | ~0.6s/chunk |
+| **Ollama** (local) | Offline fallback | ~1-13s/chunk |
 
 ```bash
-brainlayer enrich                              # Default backend (auto-detects)
-BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich --batch-size=100
+brainlayer enrich                              # Default backend
+brainlayer watch                               # Real-time JSONL watcher (persistent)
 ```
 
 ## Why BrainLayer?
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta | LangChain Memory |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **MCP native** | 9 tools | 1 server | 1 server | No | No |
+| **MCP native** | 11 tools | 1 server | 1 server | No | No |
 | **Think / Recall** | Yes | No | No | No | No |
+| **Chunk lifecycle** | Supersede/archive | Auto-dedup | No | No | No |
+| **Real-time watcher** | ~1s JSONL polling | No | No | No | No |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG | Framework |
 | **Zero infra** | `pip install` | API key | API key | Docker | Multiple deps |
 | **Multi-source** | 7 sources | API only | API only | API only | API only |
 | **Enrichment** | 10 fields | Basic | Temporal | Self-write | None |
-| **Session analysis** | Yes | No | No | No | No |
-| **Real-time** | Per-message hooks | No | No | No | No |
+| **Telemetry** | Axiom | No | No | No | No |
 | **Open source** | Apache 2.0 | Apache 2.0 | Source-available | Apache 2.0 | MIT |
 
 BrainLayer is the only memory layer that:
-1. **Thinks before answering** — categorizes past knowledge by intent (decisions, bugs, patterns) instead of raw search results
-2. **Runs on a single file** — no database servers, no Docker, no cloud accounts
-3. **Works with every MCP client** — 9 tools, instant integration, zero SDK
-4. **Knowledge graph** — entities, relations, and person lookup across all indexed data
+1. **Indexes in real-time** — JSONL watcher ingests conversations within seconds, not hours
+2. **Manages knowledge lifecycle** — supersede stale facts, archive old decisions, search only current knowledge
+3. **Runs on a single file** — no database servers, no Docker, no cloud accounts
+4. **Works with every MCP client** — 11 tools, instant integration, zero SDK
+5. **Knowledge graph** — entities, relations, and person lookup across all indexed data
 
 ## CLI Reference
 
 ```bash
 brainlayer init               # Interactive setup wizard
-brainlayer index              # Index new conversations
+brainlayer index              # Batch index conversations
+brainlayer watch              # Real-time JSONL watcher (persistent, ~1s latency)
 brainlayer search "query"     # Semantic + keyword search
 brainlayer enrich             # Run LLM enrichment on new chunks
 brainlayer enrich-sessions    # Session-level analysis (decisions, learnings)
@@ -227,6 +242,8 @@ All configuration is via environment variables:
 | `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment backend |
 | `BRAINLAYER_GROQ_URL` | `https://api.groq.com/openai/v1/chat/completions` | Groq API endpoint |
 | `BRAINLAYER_GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model for enrichment |
+| `AXIOM_TOKEN` | (unset) | Axiom API token for watcher telemetry (optional) |
+| `BRAINLAYER_ENRICH_RATE` | `0.2` | Enrichment requests per second (0.2 = 12 RPM) |
 
 ## Optional Extras
 
@@ -237,6 +254,7 @@ pip install "brainlayer[youtube]"   # YouTube transcript indexing
 pip install "brainlayer[ast]"       # AST-aware code chunking (tree-sitter)
 pip install "brainlayer[kg]"        # GliNER entity extraction (209M params, EN+HE)
 pip install "brainlayer[style]"     # ChromaDB vector store (alternative backend)
+pip install "brainlayer[telemetry]" # Axiom observability (optional — degrades gracefully)
 pip install "brainlayer[dev]"       # Development: pytest, ruff
 ```
 
@@ -253,13 +271,13 @@ BrainLayer can index conversations from multiple sources:
 | Codex CLI | JSONL (`~/.codex/sessions`) | `brainlayer ingest-codex` |
 | Markdown | Any `.md` files | `brainlayer index --source markdown` |
 | Manual | Via MCP tool | `brain_store` |
-| Real-time | Claude Code hooks | Live per-message indexing (zero-lag) |
+| Real-time | `brainlayer watch` LaunchAgent | JSONL watcher (~1s latency, 4-layer filters, checkpoint rewind detection) |
 
 ## Testing
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (1,083 Python tests)
+pytest tests/                           # Full suite (1,204 Python tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
 # BrainBar (Swift): 54 tests via Xcode

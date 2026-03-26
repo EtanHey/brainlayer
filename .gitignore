@@ -57,3 +57,10 @@ claude.scratchpad.md
 
 # MCP config (contains secrets)
 .mcp.json
+.mcp.json.bak
+
+# Claude Code project settings
+.claude/
+
+# Progress trackers (ephemeral)
+scripts/.kg_rebuild_progress.json

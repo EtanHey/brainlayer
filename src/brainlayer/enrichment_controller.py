@@ -114,7 +114,9 @@ def enrich_realtime(
     store,
     limit: int = 25,
     since_hours: int = 24,
-    rate_per_second: float = 0.2,  # 12 RPM — safe for Gemini free-tier 15 RPM limit
+    rate_per_second: float = float(
+        os.environ.get("BRAINLAYER_ENRICH_RATE", "0.2")
+    ),  # Default 12 RPM. Tier 1 allows 2000 RPM (~33/s)
     max_retries: int = 12,
     chunk_ids: list[str] | None = None,
 ) -> EnrichmentResult:
