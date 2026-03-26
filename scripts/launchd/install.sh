@@ -94,7 +94,7 @@ case "${1:-all}" in
         remove_plist wal-checkpoint
         ;;
     *)
-        echo "Usage: $0 [index|enrichment|checkpoint|all|remove]"
+        echo "Usage: $0 [index|enrich|enrichment|checkpoint|all|remove]"
         exit 1
         ;;
 esac

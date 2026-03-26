@@ -34,6 +34,7 @@ from ._shared import (
 from ._shared import (
     _normalize_project_name as _normalize_project_name,
 )
+from .enrich_handler import _brain_enrich
 from .entity_handler import _brain_entity, _brain_get_person
 from .search_handler import (
     _brain_recall,
@@ -51,7 +52,6 @@ from .search_handler import (
     _stats,
     _think,
 )
-from .enrich_handler import _brain_enrich
 from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _brain_update, _store, _store_new
 from .tags_handler import _brain_tags_mcp
 

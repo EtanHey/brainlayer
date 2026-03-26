@@ -37,7 +37,7 @@ async def _brain_enrich(
         if stats:
             return await _enrich_stats(store)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if mode == "realtime":
             from ..enrichment_controller import enrich_realtime
