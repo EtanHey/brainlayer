@@ -849,12 +849,8 @@ def test_enrichment_plist_has_correct_label():
     tree = ET.parse(plist_path)
     root = tree.getroot()
     d = root.find("dict")
-    keys = [el.text for el in d.findall("key")]
-    vals = [el.text for el in d if el.tag == "string"]
 
-    assert "Label" in keys
-    label_idx = keys.index("Label")
-    # Get the string element right after the Label key
+    # Find the string element right after the Label key
     elements = list(d)
     for i, el in enumerate(elements):
         if el.tag == "key" and el.text == "Label":
