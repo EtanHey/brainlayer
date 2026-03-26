@@ -629,21 +629,24 @@ How it differs from brain_store:
 - brain_store = fast write, minimal processing, optimized for immediate capture
 - brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing
 
-Modes in the digest pipeline:
-- realtime: single chunk/document, instant enrichment
-- batch: backlog/backfill processing via Gemini Batch API
-- local: offline/private enrichment via MLX
+Modes:
+- digest (default): ingest content, extract entities, store as searchable chunk
+- connect: search→connect→propose pattern. Analyzes content, searches existing knowledge
+  for related chunks, finds contradictions, proposes supersedes for stale content.
+  Returns a PROPOSAL — does NOT store anything. Caller decides what to accept.
+- enrich: run realtime enrichment on existing DB chunks (backfill)
 
 Returns: Structured JSON with digest_id, summary, tags, entities, relations,
-action_items, decisions, questions, sentiment, enrichment status, and stats.""",
+action_items, decisions, questions, sentiment, enrichment status, and stats.
+For mode=connect: returns proposal with connections, contradictions, supersede proposals.""",
             annotations=_WRITE,
             inputSchema={
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["digest", "enrich"],
-                        "description": "digest (default): ingest provided content. enrich: run realtime enrichment on existing DB chunks.",
+                        "enum": ["digest", "enrich", "connect"],
+                        "description": "digest (default): ingest content and store. connect: search→connect→propose without storing (returns proposal). enrich: run realtime enrichment on existing DB chunks.",
                     },
                     "content": {
                         "type": "string",

@@ -446,6 +446,201 @@ def digest_content(
     }
 
 
+def digest_connect(
+    content: str,
+    store: VectorStore,
+    embed_fn: Callable[[str], List[float]],
+    title: Optional[str] = None,
+    project: Optional[str] = None,
+    participants: Optional[List[str]] = None,
+    max_related: int = 5,
+) -> Dict[str, Any]:
+    """Search-connect-propose pipeline for intelligent content integration.
+
+    Unlike digest_content() which stores immediately, this function returns
+    a PROPOSAL that the calling agent decides whether to accept. This is the
+    domain agent pattern: heavy analysis here, execution decision by caller.
+
+    Pipeline:
+    1. Extract key facts, entities, decisions from new content
+    2. Search existing knowledge for each extracted entity/topic
+    3. Find connections — related chunks that discuss the same topics
+    4. Find contradictions — existing chunks that conflict with new content
+    5. Propose supersedes — stale chunks this new content should replace
+    6. Return structured proposal with all findings
+
+    Args:
+        content: New content to analyze and connect
+        store: VectorStore instance for searching existing knowledge
+        embed_fn: Embedding function for semantic search
+        title: Optional title for the content
+        project: Optional project filter for search
+        participants: Optional list of known participant names
+        max_related: Max related chunks to return per search (default 5)
+
+    Returns:
+        DigestProposal dict with: extracted facts, connections found,
+        contradictions detected, supersede proposals, and suggested stores.
+    """
+    if not content or not content.strip():
+        raise ValueError("content must be non-empty")
+
+    # Step 1: Extract key facts from the new content
+    seed_entities = _build_seed_entities(participants)
+    chunk_dict = {"id": "connect-preview", "content": content}
+    extraction_result = process_chunk(chunk_dict, seed_entities=seed_entities)
+
+    unique_entities = _dedup_entities(extraction_result.entities)
+    entities = [
+        {
+            "name": e.text,
+            "entity_type": e.entity_type,
+            "confidence": e.confidence,
+        }
+        for e in unique_entities
+    ]
+
+    decisions = _extract_decisions(content)
+    action_items = _extract_action_items(content)
+    questions = _extract_questions(content)
+
+    # Step 2: Search existing knowledge for each entity/topic
+    search_queries = []
+    # Use entity names as search queries
+    for entity in entities:
+        if entity["confidence"] >= MEDIUM_CONFIDENCE_THRESHOLD:
+            search_queries.append(entity["name"])
+    # Use the title or first line as a topic query
+    topic_query = title or content.split("\n")[0][:200]
+    if topic_query not in search_queries:
+        search_queries.insert(0, topic_query)
+    # Use decisions as search queries (may contradict existing)
+    for decision in decisions[:3]:
+        if decision not in search_queries:
+            search_queries.append(decision)
+
+    # Step 3: Find connections via search
+    connections: List[Dict[str, Any]] = []
+    seen_chunk_ids: set = set()
+
+    for query in search_queries[:10]:  # Cap at 10 searches
+        try:
+            query_embedding = embed_fn(query)
+            results = store.hybrid_search(
+                query_embedding=query_embedding,
+                query_text=query,
+                n_results=max_related,
+                project_filter=project,
+            )
+            for chunk in results.get("chunks", []):
+                cid = chunk.get("id", "")
+                if cid in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(cid)
+                connections.append({
+                    "chunk_id": cid,
+                    "content_preview": (chunk.get("content") or "")[:300],
+                    "score": chunk.get("score", 0),
+                    "matched_query": query,
+                    "project": chunk.get("project"),
+                    "content_type": chunk.get("content_type"),
+                    "date": chunk.get("created_at") or chunk.get("date"),
+                    "tags": chunk.get("tags") or [],
+                    "importance": chunk.get("importance"),
+                })
+        except Exception as e:
+            logger.warning("digest_connect search failed for query '%s': %s", query, e)
+
+    # Step 4: Find contradictions — existing decisions that conflict
+    contradictions: List[Dict[str, Any]] = []
+    for decision in decisions:
+        for conn in connections:
+            preview = conn["content_preview"].lower()
+            # Simple heuristic: if both mention the same entity but with different
+            # verbs (chose/switched/replaced/deprecated), flag as potential contradiction
+            if any(
+                word in preview
+                for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]
+            ):
+                contradictions.append({
+                    "new_decision": decision,
+                    "existing_chunk_id": conn["chunk_id"],
+                    "existing_preview": conn["content_preview"],
+                    "reason": "Existing chunk contains replacement/deprecation language",
+                })
+
+    # Step 5: Propose supersedes — chunks that this new content should replace
+    supersede_proposals: List[Dict[str, Any]] = []
+    content_lower = content.lower()
+    for conn in connections:
+        preview_lower = conn["content_preview"].lower()
+        # If the connected chunk discusses the same topic with lower importance
+        # or is older content about the same decision, propose supersede
+        is_same_topic = conn["score"] > 0.85
+        is_old_decision = conn["content_type"] == "decision" and any(
+            d.lower() in preview_lower for d in decisions
+        )
+        if is_same_topic or is_old_decision:
+            supersede_proposals.append({
+                "chunk_id": conn["chunk_id"],
+                "content_preview": conn["content_preview"],
+                "reason": "high_similarity" if is_same_topic else "updated_decision",
+                "score": conn["score"],
+            })
+
+    # Step 6: Build the proposed store actions
+    suggested_stores: List[Dict[str, Any]] = []
+    # Suggest storing the new content as a chunk
+    suggested_stores.append({
+        "action": "store",
+        "content": content,
+        "title": title,
+        "project": project,
+        "tags": [e["name"].lower().replace(" ", "-") for e in entities[:5]],
+        "importance": _auto_propose_importance(entities, decisions, action_items),
+        "supersedes": [s["chunk_id"] for s in supersede_proposals],
+    })
+
+    return {
+        "status": "proposal",
+        "content_preview": (title or content[:200]).strip(),
+        "extracted": {
+            "entities": entities,
+            "decisions": decisions,
+            "action_items": action_items,
+            "questions": questions,
+        },
+        "connections": connections[:20],  # Cap response size
+        "contradictions": contradictions,
+        "supersede_proposals": supersede_proposals,
+        "suggested_stores": suggested_stores,
+        "stats": {
+            "entities_found": len(entities),
+            "searches_performed": min(len(search_queries), 10),
+            "connections_found": len(connections),
+            "contradictions_found": len(contradictions),
+            "supersedes_proposed": len(supersede_proposals),
+        },
+    }
+
+
+def _auto_propose_importance(
+    entities: List[Dict],
+    decisions: List[str],
+    action_items: List[str],
+) -> int:
+    """Heuristic importance score for proposed store action."""
+    score = 5  # baseline
+    if decisions:
+        score += 2
+    if action_items:
+        score += 1
+    high_conf = sum(1 for e in entities if e.get("confidence", 0) >= HIGH_CONFIDENCE_THRESHOLD)
+    if high_conf >= 3:
+        score += 1
+    return min(score, 10)
+
+
 def entity_lookup(
     query: str,
     store: VectorStore,

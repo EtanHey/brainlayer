@@ -33,10 +33,10 @@ async def _brain_digest(
 ) -> CallToolResult:
     """Handle brain_digest tool call."""
     # Validate inputs before initializing DB connection
-    if mode not in ("digest", "enrich"):
+    if mode not in ("digest", "enrich", "connect"):
         return _error_result(f"Unknown brain_digest mode: {mode}")
-    if mode == "digest" and (not content or not content.strip()):
-        return _error_result("content is required for brain_digest mode='digest'")
+    if mode in ("digest", "connect") and (not content or not content.strip()):
+        return _error_result(f"content is required for brain_digest mode='{mode}'")
 
     store = _get_vector_store()
 
@@ -56,23 +56,36 @@ async def _brain_digest(
             }
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
 
-        from ..pipeline.digest import digest_content
+        from ..pipeline.digest import digest_connect, digest_content
 
         model = _get_embedding_model()
         loop = asyncio.get_event_loop()
         norm_project = _normalize_project_name(project) if project else None
 
-        result = await loop.run_in_executor(
-            None,
-            lambda: digest_content(
-                content=content,
-                store=store,
-                embed_fn=model.embed_query,
-                title=title,
-                project=norm_project,
-                participants=participants,
-            ),
-        )
+        if mode == "connect":
+            result = await loop.run_in_executor(
+                None,
+                lambda: digest_connect(
+                    content=content,
+                    store=store,
+                    embed_fn=model.embed_query,
+                    title=title,
+                    project=norm_project,
+                    participants=participants,
+                ),
+            )
+        else:
+            result = await loop.run_in_executor(
+                None,
+                lambda: digest_content(
+                    content=content,
+                    store=store,
+                    embed_fn=model.embed_query,
+                    title=title,
+                    project=norm_project,
+                    participants=participants,
+                ),
+            )
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
     except ValueError as e:
         return _error_result(str(e))
