@@ -9,6 +9,7 @@ Takes raw content (transcripts, documents, articles), extracts:
 Creates a new chunk with source="digest" and links extracted entities.
 """
 
+import json
 import logging
 import os
 import random
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Confidence tier thresholds
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 MEDIUM_CONFIDENCE_THRESHOLD = 0.5
+SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
 
 # Action item patterns
 ACTION_PATTERNS = [
@@ -532,21 +534,32 @@ def digest_connect(
                 n_results=max_related,
                 project_filter=project,
             )
-            for chunk in results.get("chunks", []):
-                cid = chunk.get("id", "")
+            # hybrid_search returns {"ids": [[...]], "documents": [[...]], "metadatas": [[...]], "distances": [[...]]}
+            ids = results.get("ids", [[]])[0]
+            docs = results.get("documents", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
+            dists = results.get("distances", [[]])[0]
+            for cid, doc, meta, dist in zip(ids, docs, metas, dists):
                 if cid in seen_chunk_ids:
                     continue
                 seen_chunk_ids.add(cid)
+                score = 1 - dist if dist is not None else 0
+                tags = meta.get("tags") or []
+                if isinstance(tags, str):
+                    try:
+                        tags = json.loads(tags)
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
                 connections.append({
                     "chunk_id": cid,
-                    "content_preview": (chunk.get("content") or "")[:300],
-                    "score": chunk.get("score", 0),
+                    "content_preview": (doc or "")[:300],
+                    "score": score,
                     "matched_query": query,
-                    "project": chunk.get("project"),
-                    "content_type": chunk.get("content_type"),
-                    "date": chunk.get("created_at") or chunk.get("date"),
-                    "tags": chunk.get("tags") or [],
-                    "importance": chunk.get("importance"),
+                    "project": meta.get("project"),
+                    "content_type": meta.get("content_type"),
+                    "date": meta.get("created_at"),
+                    "tags": tags,
+                    "importance": meta.get("importance"),
                 })
         except Exception as e:
             logger.warning("digest_connect search failed for query '%s': %s", query, e)
@@ -584,7 +597,7 @@ def digest_connect(
         preview_lower = conn["content_preview"].lower()
         # If the connected chunk discusses the same topic with lower importance
         # or is older content about the same decision, propose supersede
-        is_same_topic = conn["score"] > 0.85
+        is_same_topic = conn["score"] > SUPERSEDE_SIMILARITY_THRESHOLD
         is_old_decision = conn["content_type"] == "decision" and any(
             d.lower() in preview_lower for d in decisions
         )

@@ -29,10 +29,31 @@ class TestDigestConnectUnit:
     """Test the digest_connect function directly with mocked dependencies."""
 
     def _make_mock_store(self, search_results=None):
-        """Create a mock VectorStore that returns configurable search results."""
+        """Create a mock VectorStore that returns configurable hybrid_search results.
+
+        Accepts a list of chunk dicts with id/content/score/project/content_type/etc.
+        Converts to the real hybrid_search format: {ids: [[...]], documents: [[...]], ...}
+        """
         store = MagicMock()
         chunks = search_results or []
-        store.hybrid_search.return_value = {"chunks": chunks}
+        # Convert to the real hybrid_search return format
+        ids = [c.get("id", "") for c in chunks]
+        docs = [c.get("content", "") for c in chunks]
+        metas = [
+            {
+                k: v for k, v in c.items()
+                if k not in ("id", "content", "score")
+            }
+            for c in chunks
+        ]
+        # Convert score to distance (distance = 1 - score)
+        dists = [1 - c.get("score", 0) for c in chunks]
+        store.hybrid_search.return_value = {
+            "ids": [ids],
+            "documents": [docs],
+            "metadatas": [metas],
+            "distances": [dists],
+        }
         return store
 
     def _make_mock_embed(self):
