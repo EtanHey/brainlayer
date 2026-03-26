@@ -221,6 +221,17 @@ def main():
     if prompt.strip().startswith("/"):
         sys.exit(0)
 
+    # Handoff detection: skip auto-search to avoid duplicate injection
+    # (SessionStart already injected handoff context)
+    try:
+        from dedup_coordination import is_handoff_prompt
+
+        if is_handoff_prompt(prompt):
+            print("[BrainLayer: Handoff prompt detected. Skipping automatic search to avoid duplicate injection.]")
+            sys.exit(0)
+    except ImportError:
+        pass
+
     deep = is_deep_mode(prompt_lower)
     keywords = extract_keywords(prompt)
 
@@ -231,6 +242,17 @@ def main():
     if not db_path:
         sys.exit(0)
 
+    # Load already-injected chunk IDs from coordination file
+    already_injected = set()
+    session_id = hook_input.get("session_id", "")
+    try:
+        from dedup_coordination import get_injected_ids
+
+        if session_id:
+            already_injected = get_injected_ids(session_id)
+    except ImportError:
+        pass
+
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -238,12 +260,16 @@ def main():
     except sqlite3.Error:
         sys.exit(0)
 
-    limit = 8 if deep else 3
+    # Over-fetch to compensate for dedup removals
+    base_limit = 8 if deep else 3
+    limit = base_limit + len(already_injected) if already_injected else base_limit
 
     # Build FTS5 query: join keywords with OR for broader matching
     fts_query = " OR ".join(f'"{kw}"' for kw in keywords)
 
     lines = []
+    new_chunk_ids = []
+    new_briefs = []
     try:
         # Phase A: Entity routing — detect known entity names in prompt
         # and inject entity profile before FTS results.
@@ -263,7 +289,7 @@ def main():
         if elapsed_ms(start) < DEADLINE_MS:
             rows = conn.execute(
                 """
-                SELECT c.content, c.importance, c.project, c.tags, c.created_at
+                SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
                 FROM chunks_fts f
                 JOIN chunks c ON c.id = f.chunk_id
                 WHERE chunks_fts MATCH ?
@@ -273,20 +299,31 @@ def main():
                 (fts_query, limit),
             ).fetchall()
 
-            if rows:
+            # Filter out already-injected chunks (dedup)
+            filtered_rows = []
+            for row in rows:
+                chunk_id = row[0]
+                if chunk_id not in already_injected:
+                    filtered_rows.append(row)
+                if len(filtered_rows) >= base_limit:
+                    break
+
+            if filtered_rows:
                 mode_label = "deep" if deep else "auto"
                 if lines:
                     # Entity section already started — add separator
                     lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
                 else:
                     lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
-                for content, importance, project, tags, created_at in rows:
+                for chunk_id, content, importance, project, tags, created_at in filtered_rows:
                     date = created_at[:10] if created_at else "?"
                     imp = f" imp:{importance:.0f}" if importance else ""
                     proj = f" ({project})" if project else ""
                     lines.append(
                         f"- [{date}{imp}{proj}] {truncate(content)}"
                     )
+                    new_chunk_ids.append(chunk_id)
+                    new_briefs.append(truncate(content, max_chars=80))
 
                 if not deep:
                     lines.append(
@@ -299,6 +336,22 @@ def main():
 
     if lines:
         print("\n".join(lines))
+
+    # Register newly injected chunks in coordination file
+    if session_id and new_chunk_ids:
+        try:
+            from dedup_coordination import register_chunks
+
+            token_estimate = sum(len(b) // 4 for b in new_briefs)
+            register_chunks(
+                session_id=session_id,
+                chunk_ids=new_chunk_ids,
+                source_hook="UserPromptSubmit",
+                briefs=new_briefs,
+                token_estimate=token_estimate,
+            )
+        except Exception:
+            pass  # Best-effort coordination
 
     sys.exit(0)
 

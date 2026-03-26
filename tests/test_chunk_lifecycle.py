@@ -99,10 +99,12 @@ class TestSupersedeChunk:
         store.supersede_chunk(old["id"], new["id"])
 
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT chunk_id FROM chunk_vectors WHERE chunk_id = ?",
-            (old["id"],),
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT chunk_id FROM chunk_vectors WHERE chunk_id = ?",
+                (old["id"],),
+            )
+        )
         assert len(rows) == 0
 
     def test_supersede_nonexistent_old_returns_false(self, store, mock_embed):

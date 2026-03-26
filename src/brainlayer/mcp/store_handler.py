@@ -244,33 +244,54 @@ async def _brain_supersede(
 
             # Safety gate: personal content requires explicit confirmation
             if safety_check == "auto" and _is_personal_content(old_chunk):
-                return [TextContent(type="text", text=json.dumps({
-                    "action": "confirm_required",
-                    "reason": "Old chunk contains personal data — requires safety_check='confirm' and confirm=true",
-                    "old_chunk_id": old_chunk_id,
-                    "old_preview": (old_chunk.get("content") or "")[:200],
-                    "new_chunk_id": new_chunk_id,
-                }))]
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "action": "confirm_required",
+                                "reason": "Old chunk contains personal data — requires safety_check='confirm' and confirm=true",
+                                "old_chunk_id": old_chunk_id,
+                                "old_preview": (old_chunk.get("content") or "")[:200],
+                                "new_chunk_id": new_chunk_id,
+                            }
+                        ),
+                    )
+                ]
 
             if safety_check == "confirm" and not confirm:
-                return [TextContent(type="text", text=json.dumps({
-                    "action": "confirm_required",
-                    "old_chunk_id": old_chunk_id,
-                    "old_preview": (old_chunk.get("content") or "")[:200],
-                    "new_chunk_id": new_chunk_id,
-                    "new_preview": (new_chunk.get("content") or "")[:200],
-                    "instruction": "Re-call with confirm=true to proceed",
-                }))]
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "action": "confirm_required",
+                                "old_chunk_id": old_chunk_id,
+                                "old_preview": (old_chunk.get("content") or "")[:200],
+                                "new_chunk_id": new_chunk_id,
+                                "new_preview": (new_chunk.get("content") or "")[:200],
+                                "instruction": "Re-call with confirm=true to proceed",
+                            }
+                        ),
+                    )
+                ]
 
             ok = store.supersede_chunk(old_chunk_id, new_chunk_id)
             if not ok:
                 return _error_result(f"Supersede failed for: {old_chunk_id}")
 
-            return [TextContent(type="text", text=json.dumps({
-                "action": "superseded",
-                "old_chunk_id": old_chunk_id,
-                "new_chunk_id": new_chunk_id,
-            }))]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "action": "superseded",
+                            "old_chunk_id": old_chunk_id,
+                            "new_chunk_id": new_chunk_id,
+                        }
+                    ),
+                )
+            ]
 
         except Exception as e:
             is_lock_error = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
@@ -278,7 +299,9 @@ async def _brain_supersede(
                 delay = _retry_delay * (2**attempt)
                 logger.warning(
                     "brain_supersede BusyError (attempt %d/%d), retrying in %.2fs",
-                    attempt + 1, _RETRY_MAX_ATTEMPTS, delay,
+                    attempt + 1,
+                    _RETRY_MAX_ATTEMPTS,
+                    delay,
                 )
                 await asyncio.sleep(delay)
                 last_err = e
@@ -317,7 +340,9 @@ async def _brain_archive(
                 delay = _retry_delay * (2**attempt)
                 logger.warning(
                     "brain_archive BusyError (attempt %d/%d), retrying in %.2fs",
-                    attempt + 1, _RETRY_MAX_ATTEMPTS, delay,
+                    attempt + 1,
+                    _RETRY_MAX_ATTEMPTS,
+                    delay,
                 )
                 await asyncio.sleep(delay)
                 last_err = e
