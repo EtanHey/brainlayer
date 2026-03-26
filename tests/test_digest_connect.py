@@ -76,9 +76,9 @@ class TestDigestConnectUnit:
             embed_fn=embed_fn,
         )
 
-        entity_names = [e["name"] for e in result["extracted"]["entities"]]
-        # Should find at least one entity (BrainLayer, SQLite, Claude Code, etc.)
-        assert len(result["extracted"]["entities"]) >= 0  # Entity extraction may vary
+        # Should extract entities — the extraction pipeline finds entities in the content
+        assert "entities" in result["extracted"]
+        assert isinstance(result["extracted"]["entities"], list)
 
     def test_extracts_decisions(self):
         """Decisions are extracted from the content."""

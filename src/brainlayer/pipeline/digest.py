@@ -551,22 +551,30 @@ def digest_connect(
         except Exception as e:
             logger.warning("digest_connect search failed for query '%s': %s", query, e)
 
-    # Step 4: Find contradictions — existing decisions that conflict
+    # Step 4: Find contradictions — existing chunks with deprecation language
+    # that share keywords with the new decisions
     contradictions: List[Dict[str, Any]] = []
-    for decision in decisions:
-        for conn in connections:
-            preview = conn["content_preview"].lower()
-            # Simple heuristic: if both mention the same entity but with different
-            # verbs (chose/switched/replaced/deprecated), flag as potential contradiction
-            if any(
-                word in preview
-                for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]
-            ):
+    seen_contradiction_chunks: set = set()
+    for conn in connections:
+        preview = conn["content_preview"].lower()
+        if not any(
+            word in preview
+            for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]
+        ):
+            continue
+        # Find which decision(s) relate to this chunk by keyword overlap
+        for decision in decisions:
+            decision_words = set(decision.lower().split()) - {"to", "the", "a", "an", "we", "i", "is", "are", "was"}
+            if len(decision_words) < 2:
+                continue
+            overlap = sum(1 for w in decision_words if w in preview)
+            if overlap >= 2 and conn["chunk_id"] not in seen_contradiction_chunks:
+                seen_contradiction_chunks.add(conn["chunk_id"])
                 contradictions.append({
                     "new_decision": decision,
                     "existing_chunk_id": conn["chunk_id"],
                     "existing_preview": conn["content_preview"],
-                    "reason": "Existing chunk contains replacement/deprecation language",
+                    "reason": "Existing chunk contains replacement/deprecation language with keyword overlap",
                 })
 
     # Step 5: Propose supersedes — chunks that this new content should replace
