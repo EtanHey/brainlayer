@@ -335,6 +335,45 @@ def _infer_recall_mode(arguments: dict) -> str:
     return "context"
 
 
+def _smart_detect_mode(query: str | None, mode: str | None) -> str:
+    """Detect the best recall mode from query text when mode is not explicit.
+
+    Heuristics:
+    - "stats" / "how many" / "count" → stats
+    - "context" / "right now" / "working on" → context
+    - Capitalized proper-noun pattern (e.g. "BrainLayer", "Etan Heyman") → entity
+    - Default → search
+    """
+    if mode is not None:
+        return mode
+    if not query:
+        return "context"
+
+    q_lower = query.lower().strip()
+
+    # Stats signals
+    if any(sig in q_lower for sig in ("stats", "how many", "count", "statistics", "total chunks")):
+        return "stats"
+
+    # Context signals
+    if any(sig in q_lower for sig in ("what am i working on", "right now", "current context", "what's active")):
+        return "context"
+
+    # Entity signals: query is a short capitalized proper-noun phrase (1-3 words, all start uppercase)
+    words = query.strip().split()
+    if 1 <= len(words) <= 3 and all(w[0].isupper() for w in words if len(w) > 0):
+        # Single-word common English words that aren't entities
+        _COMMON_WORDS = frozenset({
+            "The", "How", "What", "When", "Where", "Why", "Who", "Which",
+            "Find", "Search", "Get", "Show", "List", "Tell", "Give",
+        })
+        if len(words) == 1 and words[0] in _COMMON_WORDS:
+            return "search"
+        return "entity"
+
+    return "search"
+
+
 async def _brain_recall(
     mode: str | None = None,
     project: str | None = None,
@@ -343,16 +382,90 @@ async def _brain_recall(
     limit: int = 20,
     session_id: str | None = None,
     plan_name: str | None = None,
+    # --- Phase 1 additions: search + entity mode params ---
+    query: str | None = None,
+    file_path: str | None = None,
+    chunk_id: str | None = None,
+    content_type: str | None = None,
+    source: str | None = None,
+    tag: str | None = None,
+    intent: str | None = None,
+    importance_min: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sentiment: str | None = None,
+    entity_id: str | None = None,
+    num_results: int = 5,
+    before: int = 3,
+    after: int = 3,
+    max_results: int = 10,
+    detail: str = "compact",
+    entity_type: str | None = None,
 ):
-    """Unified recall dispatcher -- routes to session/context handlers."""
-    resolved_mode = mode or _infer_recall_mode(
-        {
-            "session_id": session_id,
-            "plan_name": plan_name,
-            "days": days if days != 7 else None,
-            "limit": limit if limit != 20 else None,
-        }
-    )
+    """Unified recall dispatcher -- routes to session/context/search/entity handlers.
+
+    Phase 1 additions:
+    - mode=search: delegates to _brain_search (hybrid semantic + keyword search)
+    - mode=entity: delegates to _brain_entity (knowledge graph entity lookup)
+    - Smart routing: auto-detects mode from query when mode is not explicit
+    """
+    # If mode is explicitly one of the new modes, use it directly.
+    # If mode is explicitly one of the old modes, use old inference.
+    # If mode is None, use smart detection when query is present,
+    # otherwise fall back to old _infer_recall_mode.
+    if mode in ("search", "entity"):
+        resolved_mode = mode
+    elif mode is not None:
+        # Explicit old mode (context, sessions, operations, plan, summary, stats)
+        resolved_mode = mode
+    elif query is not None:
+        # Smart detection from query text
+        resolved_mode = _smart_detect_mode(query, None)
+    else:
+        # No query, no mode — old inference from other params
+        resolved_mode = _infer_recall_mode(
+            {
+                "session_id": session_id,
+                "plan_name": plan_name,
+                "days": days if days != 7 else None,
+                "limit": limit if limit != 20 else None,
+            }
+        )
+
+    # --- New modes: search + entity ---
+
+    if resolved_mode == "search":
+        if not query:
+            return _error_result("query is required for mode=search")
+        return await _brain_search(
+            query=query,
+            project=project,
+            file_path=file_path,
+            chunk_id=chunk_id,
+            content_type=content_type,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            entity_id=entity_id,
+            num_results=num_results,
+            before=before,
+            after=after,
+            max_results=max_results,
+            detail=detail,
+        )
+
+    if resolved_mode == "entity":
+        if not query:
+            return _error_result("query is required for mode=entity")
+        from .entity_handler import _brain_entity as _entity_handler
+
+        return await _entity_handler(query=query, entity_type=entity_type)
+
+    # --- Original modes ---
 
     if resolved_mode == "context":
         return await _current_context(hours=hours)

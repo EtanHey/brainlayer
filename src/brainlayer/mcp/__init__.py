@@ -82,34 +82,16 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 8 tools:\n"
-        "- brain_search(query): semantic search across 268K+ indexed conversation chunks. "
-        "Returns compact results by default (snippet + chunk_id + score). "
-        "Use detail='full' for verbose output. "
-        "Filters: project, file_path, chunk_id, content_type, tag, intent, importance_min. "
-        "Routing is automatic — pass file_path for file history, no args for current work.\n"
-        "- brain_expand(chunk_id): drill into a specific search result. "
-        "Returns full content + N surrounding chunks for context. "
-        "Use after brain_search to read interesting results in full.\n"
-        "- brain_store(content): save decisions, learnings, mistakes, ideas, todos. "
-        "type is auto-detected from content. Pass importance (1-10) for critical items.\n"
-        "- brain_recall(mode): session/operational context. "
-        "mode=context (default, what am I working on), sessions, operations, plan, summary, stats.\n"
-        "- brain_digest(content): deeply ingest large content (research, audits, transcripts, docs). "
-        "Extracts entities, relations, faceted tags, sentiment, action items, decisions, questions, and sanitizes PII before external enrichment calls. "
-        "Creates a new searchable chunk with source='digest'.\n"
-        "- brain_entity(query): look up a known entity in the knowledge graph. "
-        "Returns entity type, relations, and evidence chunks.\n"
-        "- brain_update(action, chunk_id): update, archive, or merge existing memories. "
-        "action=update (change content/tags/importance), archive (soft-delete), merge (keep one, archive duplicates).\n"
-        "- brain_supersede(old_chunk_id, new_chunk_id): mark old memory as superseded by new one. "
-        "Old chunk drops from default search. Safety check for personal data.\n"
-        "- brain_archive(chunk_id): archive a memory with timestamp. "
-        "Excluded from default search, accessible via direct lookup.\n"
-        "Use brain_search at the start of tasks to retrieve past decisions and patterns.\n"
-        "Use brain_store when you make a decision, hit a bug, learn something, or finish a phase.\n"
-        'project scoping: auto-inferred from cwd. Override with project="all" for cross-project search.\n'
-        "All 14 old brainlayer_* tool names still work (backward compat aliases)."
+        "Memory layer for Claude Code. 3 primary tools:\n"
+        "- brain_recall(query): unified search, entity lookup, and context recall. "
+        "Auto-routes by query or explicit mode (search/entity/context/sessions/stats).\n"
+        "- brain_store(content): persist decisions, learnings, mistakes, ideas, todos. "
+        "Type and importance auto-detected. Immediately searchable.\n"
+        "- brain_digest(content): deeply ingest large content — extracts entities, "
+        "relations, tags, action items. Use for research, audits, transcripts.\n"
+        "brain_search and brain_entity are aliases for brain_recall. "
+        "brain_update/brain_expand/brain_tags are deprecated.\n"
+        'Project scoping: auto-inferred from cwd. Override with project="all".'
     ),
 )
 
@@ -283,7 +265,7 @@ _STORE_OUTPUT_SCHEMA = {
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """List available tools — 7 consolidated tools."""
+    """List available tools — 3 primary + backward-compat aliases."""
     return [
         Tool(
             name="brain_search",
@@ -553,30 +535,42 @@ Designed for copilot agents that need full person context in a single call.""",
         ),
         Tool(
             name="brain_recall",
-            title="Recall Context",
-            description="""Get current working context, browse sessions, or inspect session details.
+            title="Recall / Search / Entity Lookup",
+            description="""Unified memory retrieval — search, entity lookup, context, sessions, stats.
 
-Modes (auto-inferred from params if omitted):
-- context: What am I working on? (default — recent sessions, projects, files, active plan)
-- sessions: Browse recent sessions (set days/limit to tune)
-- operations: Operation groups for a session (requires session_id)
-- plan: Plan-session linkage (requires plan_name or session_id)
-- summary: Enriched session summary (requires session_id)
-- stats: Knowledge base statistics + project list
+Modes (auto-detected from query when omitted):
+- search: hybrid semantic + keyword search (default when query provided)
+- entity: knowledge graph entity lookup (auto-detected for capitalized proper nouns)
+- context: current working context (default when no query)
+- sessions: browse recent sessions (set days/limit)
+- operations: operation groups for a session (requires session_id)
+- plan: plan-session linkage (requires plan_name or session_id)
+- summary: enriched session summary (requires session_id)
+- stats: knowledge base statistics + project list (auto-detected for "stats"/"how many")
+
+Smart routing when mode is omitted:
+- "stats" / "how many" → stats mode
+- "what am I working on" / "right now" → context mode
+- Capitalized proper noun (e.g. "BrainLayer", "Etan Heyman") → entity mode
+- Everything else → search mode
 
 Returns: Structured JSON or Markdown depending on mode.""",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query or entity name. Required for mode=search and mode=entity. Triggers smart mode detection when mode is omitted.",
+                    },
                     "mode": {
                         "type": "string",
-                        "enum": ["context", "sessions", "operations", "plan", "summary", "stats"],
-                        "description": "Recall mode. Auto-inferred from other params if omitted.",
+                        "enum": ["search", "entity", "context", "sessions", "operations", "plan", "summary", "stats"],
+                        "description": "Recall mode. Auto-detected from query if omitted.",
                     },
                     "project": {
                         "type": "string",
-                        "description": "Optional: filter by project name",
+                        "description": "Filter by project name.",
                     },
                     "hours": {
                         "type": "integer",
@@ -604,6 +598,83 @@ Returns: Structured JSON or Markdown depending on mode.""",
                     "plan_name": {
                         "type": "string",
                         "description": "Plan name (mode=plan, e.g. 'local-llm-integration')",
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["person", "company", "project", "golem", "technology", "concept"],
+                        "description": "Filter by entity type (mode=entity only)",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "File path to search for (mode=search). Triggers file-aware routing.",
+                    },
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "Expand context around a specific chunk (mode=search).",
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "enum": [
+                            "ai_code",
+                            "stack_trace",
+                            "user_message",
+                            "assistant_text",
+                            "file_read",
+                            "git_diff",
+                        ],
+                        "description": "Filter by content type (mode=search only)",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["claude_code", "whatsapp", "youtube", "all"],
+                        "description": "Filter by data source (mode=search, default: claude_code).",
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": "Filter by tag (mode=search, e.g. 'bug-fix')",
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": [
+                            "debugging",
+                            "designing",
+                            "configuring",
+                            "discussing",
+                            "deciding",
+                            "implementing",
+                            "reviewing",
+                        ],
+                        "description": "Filter by intent classification (mode=search)",
+                    },
+                    "importance_min": {
+                        "type": "number",
+                        "description": "Minimum importance score 1-10 (mode=search)",
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Filter results from this date (ISO 8601, mode=search)",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Filter results up to this date (ISO 8601, mode=search)",
+                    },
+                    "sentiment": {
+                        "type": "string",
+                        "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
+                        "description": "Filter by sentiment label (mode=search)",
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Number of results (mode=search, default: 5)",
+                    },
+                    "detail": {
+                        "type": "string",
+                        "enum": ["compact", "full"],
+                        "default": "compact",
+                        "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
                     },
                 },
             },
@@ -943,7 +1014,7 @@ async def handle_completion(ref, argument) -> CompleteResult:
         return CompleteResult(completion=Completion(values=intents))
 
     elif arg_name == "mode":
-        modes = ["context", "sessions", "operations", "plan", "summary", "stats"]
+        modes = ["search", "entity", "context", "sessions", "operations", "plan", "summary", "stats"]
         if arg_value:
             modes = [m for m in modes if m.startswith(arg_value)]
         return CompleteResult(completion=Completion(values=modes))
@@ -962,13 +1033,15 @@ async def handle_completion(ref, argument) -> CompleteResult:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]):
-    """Handle tool calls — 7 new tools + 14 backward-compat aliases."""
+    """Handle tool calls — 3 primary tools + backward-compat aliases."""
 
     # --- New consolidated tools ---
 
     if name == "brain_search":
+        # Thin alias: delegates to brain_recall(mode="search")
         return await _with_timeout(
-            _brain_search(
+            _brain_recall(
+                mode="search",
                 query=arguments["query"],
                 project=arguments.get("project"),
                 file_path=arguments.get("file_path"),
@@ -1047,6 +1120,24 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 limit=arguments.get("limit", 20),
                 session_id=arguments.get("session_id"),
                 plan_name=arguments.get("plan_name"),
+                query=arguments.get("query"),
+                file_path=arguments.get("file_path"),
+                chunk_id=arguments.get("chunk_id"),
+                content_type=arguments.get("content_type"),
+                source=arguments.get("source"),
+                tag=arguments.get("tag"),
+                intent=arguments.get("intent"),
+                importance_min=arguments.get("importance_min"),
+                date_from=arguments.get("date_from"),
+                date_to=arguments.get("date_to"),
+                sentiment=arguments.get("sentiment"),
+                entity_id=arguments.get("entity_id"),
+                num_results=arguments.get("num_results", 5),
+                before=max(0, min(arguments.get("before", 3), 50)),
+                after=max(0, min(arguments.get("after", 3), 50)),
+                max_results=arguments.get("max_results", 10),
+                detail=arguments.get("detail", "compact"),
+                entity_type=arguments.get("entity_type"),
             )
         )
 
@@ -1061,42 +1152,60 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brain_expand":
-        ctx_n = max(0, min(arguments.get("context", 3), 20))
-        return await _with_timeout(
-            _context(
-                chunk_id=arguments["chunk_id"],
-                before=ctx_n,
-                after=ctx_n,
-            )
+        # DEPRECATED: use brain_recall(query=chunk_id, mode="search") with chunk_id param instead
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=(
+                        "brain_expand is deprecated. "
+                        "Use brain_recall(mode='search', chunk_id='...') or brain_search(chunk_id='...') instead."
+                    ),
+                )
+            ],
+            isError=True,
         )
 
     elif name == "brain_entity":
+        # Thin alias: delegates to brain_recall(mode="entity")
         return await _with_timeout(
-            _brain_entity(
+            _brain_recall(
+                mode="entity",
                 query=arguments["query"],
                 entity_type=arguments.get("entity_type"),
             )
         )
 
     elif name == "brain_update":
-        return await _brain_update(
-            action=arguments["action"],
-            chunk_id=arguments["chunk_id"],
-            content=arguments.get("content"),
-            tags=arguments.get("tags"),
-            importance=arguments.get("importance"),
-            merge_chunk_ids=arguments.get("merge_chunk_ids"),
+        # DEPRECATED: stub returns isError
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=(
+                        "brain_update is deprecated and non-functional. "
+                        "Use brain_store(supersedes='old_chunk_id') to replace a memory, "
+                        "or brain_supersede/brain_archive for lifecycle management."
+                    ),
+                )
+            ],
+            isError=True,
         )
 
     elif name == "brain_tags":
-        return await _with_timeout(
-            _brain_tags_mcp(
-                action=arguments["action"],
-                pattern=arguments.get("pattern"),
-                content=arguments.get("content"),
-                project=arguments.get("project"),
-                limit=arguments.get("limit", 20),
-            )
+        # DEPRECATED: stub returns isError
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=(
+                        "brain_tags is deprecated and non-functional. "
+                        "Use brain_recall(mode='search', tag='prefix') to find tagged memories, "
+                        "or brain_store(tags=[...]) to add tags when storing."
+                    ),
+                )
+            ],
+            isError=True,
         )
 
     # --- Backward-compat aliases (old tool names route to same handlers) ---

@@ -224,11 +224,18 @@ class TestBrainExpand:
 
         assert stored["id"] == "manual-480177bae8ba4dd2"
 
-        with patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store):
-            result = asyncio.run(call_tool("brain_expand", {"chunk_id": stored["id"]}))
+        # brain_expand is now deprecated (Phase 1: 3-tool simplification).
+        # It returns isError: true with a deprecation message.
+        result = asyncio.run(call_tool("brain_expand", {"chunk_id": stored["id"]}))
 
-        text = result.content[0].text if hasattr(result, "content") else result[0].text
-        assert "Unknown chunk_id" not in text
+        assert result.isError is True
+        assert "deprecated" in result.content[0].text.lower()
+
+        # Equivalent via brain_search chunk_id expansion still works:
+        with patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store):
+            result2 = asyncio.run(call_tool("brain_search", {"query": "expand", "chunk_id": stored["id"]}))
+
+        text = result2.content[0].text if hasattr(result2, "content") else result2[0].text
         assert "Manual chunk content should still expand without conversation context" in text
 
 
