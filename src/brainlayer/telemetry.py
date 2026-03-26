@@ -19,6 +19,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DATASET_WATCHER = "brainlayer-watcher"
+_DATASET_ENRICHMENT = "brainlayer-enrichment"
 
 # Lazy-init client — avoids import-time side effects
 _client = None
@@ -137,6 +138,61 @@ def emit_watcher_error(
     if file_path:
         event["file_path"] = file_path
     return emit(_DATASET_WATCHER, event)
+
+
+# ── Enrichment-specific helpers ────────────────────────────────────────────────
+
+
+def emit_enrichment_start(mode: str, limit: int, pid: int | None = None) -> bool:
+    """Emit enrichment run start event."""
+    return emit(
+        _DATASET_ENRICHMENT,
+        {
+            "_type": "start",
+            "mode": mode,
+            "limit": limit,
+            "pid": pid or os.getpid(),
+            "hostname": os.uname().nodename,
+        },
+    )
+
+
+def emit_enrichment_complete(
+    mode: str,
+    attempted: int,
+    enriched: int,
+    skipped: int,
+    failed: int,
+    duration_ms: float,
+    error_count: int = 0,
+) -> bool:
+    """Emit enrichment run completion event."""
+    return emit(
+        _DATASET_ENRICHMENT,
+        {
+            "_type": "complete",
+            "mode": mode,
+            "attempted": attempted,
+            "enriched": enriched,
+            "skipped": skipped,
+            "failed": failed,
+            "duration_ms": round(duration_ms, 1),
+            "error_count": error_count,
+        },
+    )
+
+
+def emit_enrichment_error(mode: str, chunk_id: str, error: str) -> bool:
+    """Emit per-chunk enrichment error event."""
+    return emit(
+        _DATASET_ENRICHMENT,
+        {
+            "_type": "error",
+            "mode": mode,
+            "chunk_id": chunk_id,
+            "error": error[:300],
+        },
+    )
 
 
 def emit_watcher_heartbeat(

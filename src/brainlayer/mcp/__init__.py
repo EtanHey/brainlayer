@@ -51,6 +51,7 @@ from .search_handler import (
     _stats,
     _think,
 )
+from .enrich_handler import _brain_enrich
 from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _brain_update, _store, _store_new
 from .tags_handler import _brain_tags_mcp
 
@@ -964,6 +965,82 @@ Returns: Structured JSON with chunk_id and optional reason.""",
                 "required": ["chunk_id"],
             },
         ),
+        Tool(
+            name="brain_enrich",
+            title="Enrich Chunks",
+            description="""Run enrichment on unenriched chunks in the knowledge base.
+
+Replaces scattered enrichment scripts with a single unified tool.
+
+Modes:
+- **realtime**: Gemini 2.5 Flash-Lite, single chunk processing, <600ms target latency.
+  Use for recently stored chunks or on-demand enrichment.
+- **batch**: Gemini Batch API at 50% cost discount. For large backlog processing.
+  Phases: submit, poll, import, run (all-in-one).
+- **local**: MLX or Ollama backend. For offline/privacy mode enrichment.
+
+Features:
+- Content-hash dedup: skips chunks whose content has already been enriched elsewhere
+- Idempotent: re-running on already-enriched chunks is a no-op
+- Per-backend rate limiting (configurable via env vars)
+- Axiom telemetry for all operations
+
+Pass stats=true to get enrichment progress without running anything.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["realtime", "batch", "local"],
+                        "default": "realtime",
+                        "description": "Enrichment mode: realtime (Gemini Flash), batch (Gemini Batch API), local (MLX/Ollama).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 25,
+                        "minimum": 1,
+                        "maximum": 5000,
+                        "description": "Maximum number of chunks to process.",
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "default": 24,
+                        "minimum": 1,
+                        "description": "Only enrich chunks from the last N hours (realtime mode only).",
+                    },
+                    "backend": {
+                        "type": "string",
+                        "enum": ["mlx", "ollama"],
+                        "default": "mlx",
+                        "description": "Local backend to use (local mode only).",
+                    },
+                    "parallel": {
+                        "type": "integer",
+                        "default": 2,
+                        "minimum": 1,
+                        "maximum": 8,
+                        "description": "Number of parallel workers (local mode only).",
+                    },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["submit", "poll", "import", "run"],
+                        "default": "run",
+                        "description": "Batch phase: submit (upload), poll (check), import (results), run (all-in-one).",
+                    },
+                    "chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional: specific chunk IDs to enrich (realtime mode only).",
+                    },
+                    "stats": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Return enrichment progress statistics without running enrichment.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1206,6 +1283,18 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 )
             ],
             isError=True,
+        )
+
+    elif name == "brain_enrich":
+        return await _brain_enrich(
+            mode=arguments.get("mode", "realtime"),
+            limit=arguments.get("limit", 25),
+            since_hours=arguments.get("since_hours", 24),
+            backend=arguments.get("backend", "mlx"),
+            parallel=arguments.get("parallel", 2),
+            phase=arguments.get("phase", "run"),
+            chunk_ids=arguments.get("chunk_ids"),
+            stats=arguments.get("stats", False),
         )
 
     # --- Backward-compat aliases (old tool names route to same handlers) ---

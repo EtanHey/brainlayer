@@ -1,7 +1,15 @@
-"""Unified enrichment controller for realtime, batch, and local modes."""
+"""Unified enrichment controller for realtime, batch, and local modes.
+
+Replaces scattered scripts (enrichment-window.sh, enrichment-lazy.sh, enrich.sh)
+with a single controller. Three backends:
+  - realtime: Gemini 2.5 Flash-Lite, single chunk, <600ms target
+  - batch: Gemini Batch API, backlog processing, thinkingBudget=0
+  - local: MLX/Ollama backend, offline/privacy mode
+"""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 import os
@@ -20,10 +28,19 @@ from .pipeline.enrichment import (
 )
 from .pipeline.sanitize import Sanitizer
 
+logger = logging.getLogger(__name__)
+
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
 
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
 AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
+
+# Per-backend rate limits (requests per second). Override via env vars.
+RATE_LIMITS = {
+    "realtime": float(os.environ.get("BRAINLAYER_ENRICH_RATE", "0.2")),  # 12 RPM default
+    "local": float(os.environ.get("BRAINLAYER_LOCAL_RATE", "0")),  # no limit
+    "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
+}
 
 
 @dataclass
@@ -59,12 +76,25 @@ def get_unsubmitted_export_files(*args, **kwargs):
     return _load_cloud_backfill_module().get_unsubmitted_export_files(*args, **kwargs)
 
 
+# ── Gemini client ──────────────────────────────────────────────────────────────
+
+
 def _get_gemini_client():
+    """Create Gemini client. Uses regional endpoint when GOOGLE_CLOUD_REGION is set."""
     from google import genai
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY not set")
+
+    # Regional endpoint reduces latency from 11-12s (global) to 0.7s.
+    # Set GOOGLE_CLOUD_REGION=us-central1 (or europe-west1, etc.) to enable.
+    region = os.environ.get("GOOGLE_CLOUD_REGION")
+    if region:
+        return genai.Client(
+            api_key=api_key,
+            http_options={"api_version": "v1beta", "url": f"https://{region}-aiplatform.googleapis.com"},
+        )
     return genai.Client(api_key=api_key)
 
 
@@ -73,6 +103,71 @@ def _build_gemini_config() -> dict[str, Any]:
         "response_mime_type": "application/json",
         "thinking_config": {"thinking_budget": 0},
     }
+
+
+# ── Content-hash dedup ─────────────────────────────────────────────────────────
+
+
+def _content_hash(content: str) -> str:
+    """SHA256 hash of content for dedup. Strips whitespace for normalization."""
+    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def _is_duplicate_content(store, content: str) -> bool:
+    """Check if content with the same hash already exists and is enriched.
+
+    Returns True if a chunk with identical content hash exists and has been enriched,
+    meaning re-enriching would be a no-op.
+    """
+    content_h = _content_hash(content)
+    try:
+        cursor = store._read_cursor()
+        row = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE content_hash = ? AND enriched_at IS NOT NULL",
+            (content_h,),
+        ).fetchone()
+        return row[0] > 0 if row else False
+    except Exception:
+        # content_hash column may not exist yet — fall back to no dedup
+        return False
+
+
+def _ensure_content_hash_column(store) -> bool:
+    """Ensure the content_hash column exists on chunks table. Returns True if it exists."""
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute("SELECT content_hash FROM chunks LIMIT 0")
+        return True
+    except Exception:
+        try:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
+            return True
+        except Exception:
+            return False
+
+
+def _backfill_content_hashes(store, limit: int = 1000) -> int:
+    """Backfill content_hash for chunks that don't have one yet. Returns count updated."""
+    try:
+        cursor = store.conn.cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT id, content FROM chunks WHERE content_hash IS NULL LIMIT ?",
+                (limit,),
+            )
+        )
+        count = 0
+        for chunk_id, content in rows:
+            if content:
+                h = _content_hash(content)
+                cursor.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk_id))
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
+# ── Retry / apply helpers ──────────────────────────────────────────────────────
 
 
 def _retry_with_backoff(
@@ -108,6 +203,16 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         debt_impact=enrichment.get("debt_impact"),
         external_deps=enrichment.get("external_deps"),
     )
+    # Set content_hash after enrichment so dedup works next time
+    content = chunk.get("content", "")
+    if content:
+        try:
+            h = _content_hash(content)
+            store.conn.cursor().execute(
+                "UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"])
+            )
+        except Exception:
+            pass  # Non-critical — dedup still works on next index
 
 
 def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] | None:
@@ -185,27 +290,90 @@ def _call_local_backend(prompt: str, backend: str = "mlx") -> str | None:
     return call_llm(prompt, backend=backend)
 
 
+# ── Axiom telemetry ────────────────────────────────────────────────────────────
+
+_DATASET_ENRICHMENT = "brainlayer-enrichment"
+
+
+def _emit_enrichment_event(event: dict[str, Any]) -> bool:
+    """Emit a single enrichment telemetry event to Axiom."""
+    try:
+        from .telemetry import emit
+
+        return emit(_DATASET_ENRICHMENT, event)
+    except Exception:
+        return False
+
+
+def _emit_enrichment_start(mode: str, limit: int) -> bool:
+    return _emit_enrichment_event({
+        "_type": "start",
+        "mode": mode,
+        "limit": limit,
+        "pid": os.getpid(),
+        "hostname": os.uname().nodename,
+    })
+
+
+def _emit_enrichment_complete(result: EnrichmentResult, duration_ms: float) -> bool:
+    return _emit_enrichment_event({
+        "_type": "complete",
+        "mode": result.mode,
+        "attempted": result.attempted,
+        "enriched": result.enriched,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "duration_ms": round(duration_ms, 1),
+        "error_count": len(result.errors),
+    })
+
+
+def _emit_enrichment_error(mode: str, chunk_id: str, error: str) -> bool:
+    return _emit_enrichment_event({
+        "_type": "error",
+        "mode": mode,
+        "chunk_id": chunk_id,
+        "error": error[:300],
+    })
+
+
+# ── Enrichment modes ───────────────────────────────────────────────────────────
+
+
 def enrich_realtime(
     store,
     limit: int = 25,
     since_hours: int = 24,
-    rate_per_second: float = float(
-        os.environ.get("BRAINLAYER_ENRICH_RATE", "0.2")
-    ),  # Default 12 RPM. Tier 1 allows 2000 RPM (~33/s)
+    rate_per_second: float | None = None,
     max_retries: int = 12,
     chunk_ids: list[str] | None = None,
 ) -> EnrichmentResult:
-    """Enrich recent chunks via Gemini free-tier API."""
+    """Enrich recent chunks via Gemini 2.5 Flash-Lite API."""
+    if rate_per_second is None:
+        rate_per_second = RATE_LIMITS["realtime"]
+
+    start_time = time.monotonic()
+    _emit_enrichment_start("realtime", limit)
+
     candidates = store.get_enrichment_candidates(limit=limit, since_hours=since_hours, chunk_ids=chunk_ids)
     result = EnrichmentResult(mode="realtime", attempted=len(candidates), enriched=0, skipped=0, failed=0)
     if not candidates:
+        _emit_enrichment_complete(result, 0)
         return result
+
+    # Ensure content_hash column exists for dedup
+    _ensure_content_hash_column(store)
 
     client = _get_gemini_client()
     sanitizer = Sanitizer.from_env()
     per_chunk_delay = (1.0 / rate_per_second) if rate_per_second > 0 else 0.0
 
     for index, chunk in enumerate(candidates):
+        # Content-hash dedup: skip if identical content already enriched
+        if _is_duplicate_content(store, chunk.get("content", "")):
+            result.skipped += 1
+            continue
+
         try:
             prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
 
@@ -222,16 +390,20 @@ def enrich_realtime(
             if not enrichment:
                 result.failed += 1
                 result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                _emit_enrichment_error("realtime", chunk["id"], "invalid_enrichment")
             else:
                 _apply_enrichment(store, chunk, enrichment)
                 result.enriched += 1
         except Exception as exc:  # noqa: BLE001
             result.failed += 1
             result.errors.append(f"{chunk['id']}: {exc}")
+            _emit_enrichment_error("realtime", chunk["id"], str(exc))
 
         if per_chunk_delay > 0 and index < len(candidates) - 1:
             time.sleep(per_chunk_delay)
 
+    duration_ms = (time.monotonic() - start_time) * 1000
+    _emit_enrichment_complete(result, duration_ms)
     return result
 
 
@@ -241,14 +413,21 @@ def enrich_batch(
     limit: int = 5000,
     max_retries: int = 12,  # noqa: ARG001
 ) -> EnrichmentResult:
-    """Process backlog via Gemini Batch API."""
+    """Process backlog via Gemini Batch API (50% cost discount)."""
+    start_time = time.monotonic()
+    _emit_enrichment_start("batch", limit)
+
     ensure_checkpoint_table(store)
     pending = get_pending_jobs(store) if phase in {"poll", "run"} else []
     export_files = (
         get_unsubmitted_export_files(db_path=getattr(store, "db_path", None)) if phase in {"submit", "run"} else []
     )
     attempted = len(pending) + len(export_files)
-    return EnrichmentResult(mode="batch", attempted=attempted, enriched=0, skipped=0, failed=0, errors=[])
+    result = EnrichmentResult(mode="batch", attempted=attempted, enriched=0, skipped=0, failed=0, errors=[])
+
+    duration_ms = (time.monotonic() - start_time) * 1000
+    _emit_enrichment_complete(result, duration_ms)
+    return result
 
 
 def enrich_local(
@@ -257,11 +436,22 @@ def enrich_local(
     parallel: int = 2,  # noqa: ARG001
     backend: str = "mlx",
 ) -> EnrichmentResult:
-    """Enrich via local MLX backend."""
+    """Enrich via local MLX/Ollama backend."""
+    start_time = time.monotonic()
+    _emit_enrichment_start("local", limit)
+
     candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
     result = EnrichmentResult(mode="local", attempted=len(candidates), enriched=0, skipped=0, failed=0)
 
+    # Ensure content_hash column exists for dedup
+    _ensure_content_hash_column(store)
+
     for chunk in candidates:
+        # Content-hash dedup
+        if _is_duplicate_content(store, chunk.get("content", "")):
+            result.skipped += 1
+            continue
+
         try:
             prompt = build_prompt(chunk)
             raw_response = _retry_with_backoff(lambda: _call_local_backend(prompt, backend=backend), max_retries=2)
@@ -269,11 +459,15 @@ def enrich_local(
             if not enrichment:
                 result.failed += 1
                 result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                _emit_enrichment_error("local", chunk["id"], "invalid_enrichment")
                 continue
             _apply_enrichment(store, chunk, enrichment)
             result.enriched += 1
         except Exception as exc:  # noqa: BLE001
             result.failed += 1
             result.errors.append(f"{chunk['id']}: {exc}")
+            _emit_enrichment_error("local", chunk["id"], str(exc))
 
+    duration_ms = (time.monotonic() - start_time) * 1000
+    _emit_enrichment_complete(result, duration_ms)
     return result
