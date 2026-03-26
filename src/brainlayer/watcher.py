@@ -322,11 +322,51 @@ class JSONLWatcher:
     def start(self):
         """Start the watcher loop (blocking). Call stop() from another thread."""
         logger.info("JSONL watcher started: %s", self.watch_dir)
+        start_time = time.monotonic()
+
+        # Emit startup telemetry
+        try:
+            from .telemetry import emit_watcher_error, emit_watcher_heartbeat, emit_watcher_startup
+
+            initial_files = self._discover_jsonl_files()
+            emit_watcher_startup(
+                sessions_watched=len(initial_files),
+                watcher_pid=os.getpid(),
+            )
+        except Exception:
+            pass  # Telemetry must never block startup
+
+        heartbeat_interval_s = 60.0
+        last_heartbeat = time.monotonic()
+
         while not self._stop.is_set():
             try:
                 self.poll_once()
             except Exception as e:
                 logger.error("Poll cycle error: %s", e)
+                try:
+                    emit_watcher_error("poll_cycle", str(e))
+                except Exception:
+                    pass
+
+            # Periodic heartbeat
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_interval_s:
+                try:
+                    emit_watcher_heartbeat(
+                        sessions_tracked=len(self._tailers),
+                        chunks_indexed_total=self.indexer.total_flushed,
+                        uptime_seconds=now - start_time,
+                    )
+                except Exception:
+                    pass
+                last_heartbeat = now
+                logger.info(
+                    "Watcher alive: %d sessions tracked, %d chunks indexed",
+                    len(self._tailers),
+                    self.indexer.total_flushed,
+                )
+
             self._stop.wait(self.poll_interval_s)
 
         # Final flush

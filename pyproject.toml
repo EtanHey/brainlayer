@@ -71,6 +71,9 @@ kg = [
 style = [
     "chromadb>=0.4.0",  # ChromaDB vector store (alternative to sqlite-vec)
 ]
+telemetry = [
+    "axiom-py>=0.10.0",  # Axiom observability (optional — degrades gracefully)
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

@@ -28,6 +28,8 @@
         <string>/usr/local/bin:/usr/bin:/bin:/Users/etanheyman/.local/bin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <key>AXIOM_TOKEN</key>
+        <string></string>
     </dict>
 
     <key>KeepAlive</key>

@@ -55,12 +55,17 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
 
     def flush_to_db(entries: list[dict[str, Any]]) -> None:
         """Process raw JSONL entries through pipeline and insert into DB."""
+        import time as _time
+
+        flush_start = _time.monotonic()
         cursor = store.conn.cursor()
         inserted = 0
         skipped = 0
+        source_files_seen: set[str] = set()
 
         for entry in entries:
             source_file = entry.get("_source_file", "unknown")
+            source_files_seen.add(source_file)
             project = _extract_project_from_source(source_file)
 
             try:
@@ -122,7 +127,22 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                     logger.warning("Insert failed for %s: %s", chunk_id, e)
                     skipped += 1
 
+        latency_ms = (_time.monotonic() - flush_start) * 1000
+
         if inserted > 0:
-            logger.info("Flushed %d chunks (%d skipped)", inserted, skipped)
+            logger.info("Flushed %d chunks (%d skipped) in %.1fms", inserted, skipped, latency_ms)
+
+        # Emit telemetry (best-effort)
+        try:
+            from .telemetry import emit_watcher_flush
+
+            emit_watcher_flush(
+                chunks_indexed=inserted,
+                chunks_skipped=skipped,
+                latency_ms=latency_ms,
+                source_files=list(source_files_seen),
+            )
+        except Exception:
+            pass
 
     return flush_to_db
