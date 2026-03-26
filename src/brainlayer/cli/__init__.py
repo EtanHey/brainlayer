@@ -1470,10 +1470,37 @@ def watch(
 
     on_flush = create_flush_callback(db_path)
 
+    def on_rewind(filepath: str, session_id: str, old_offset: int, new_offset: int):
+        """Handle checkpoint restore — soft-archive chunks from reverted timeline."""
+        from ..vector_store import VectorStore as _VS
+
+        rprint(f"[bold yellow]Rewind detected:[/] {session_id} ({old_offset}→{new_offset})")
+        try:
+            s = _VS(db_path)
+            cursor = s.conn.cursor()
+            # Mark realtime_watcher chunks from this session as archived
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                """UPDATE chunks SET archived_at = ?, value_type = 'ARCHIVED'
+                   WHERE source = 'realtime_watcher'
+                     AND conversation_id = ?
+                     AND archived_at IS NULL""",
+                (now, session_id),
+            )
+            affected = s.conn.changes()
+            if affected > 0:
+                rprint(f"  Archived {affected} chunks from reverted timeline")
+            s.close()
+        except Exception as e:
+            rprint(f"  [red]Failed to archive reverted chunks: {e}[/]")
+
     watcher = JSONLWatcher(
         watch_dir=source,
         registry_path=offsets_path,
         on_flush=on_flush,
+        on_rewind=on_rewind,
         poll_interval_s=poll_interval,
         batch_size=batch_size,
         flush_interval_ms=flush_interval,

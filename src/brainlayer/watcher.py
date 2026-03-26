@@ -98,15 +98,45 @@ class JSONLTailer:
 
     Handles partial writes: buffers incomplete lines until a newline arrives.
     Validates JSON before yielding — skips corrupt lines silently.
+    Detects file rewinds (checkpoint restore) when file shrinks.
     """
 
     def __init__(self, filepath: str, offset: int = 0):
         self.filepath = filepath
         self.offset = offset
         self._buffer = b""
+        self.rewound = False  # Set to True when rewind detected
+        self.rewind_old_offset = 0
+        self.rewind_new_offset = 0
+
+    def check_rewind(self) -> bool:
+        """Check if file has shrunk (checkpoint restore). Returns True if rewound."""
+        try:
+            file_size = os.path.getsize(self.filepath)
+        except OSError:
+            return False
+
+        effective_offset = self.offset + len(self._buffer)
+        if file_size < effective_offset:
+            self.rewind_old_offset = effective_offset
+            self.rewind_new_offset = file_size
+            self.offset = 0  # Reset to start of file
+            self._buffer = b""
+            self.rewound = True
+            logger.warning(
+                "Rewind detected: %s shrank from %d to %d",
+                self.filepath,
+                self.rewind_old_offset,
+                self.rewind_new_offset,
+            )
+            return True
+        return False
 
     def read_new_lines(self) -> list[dict]:
         """Read any new complete lines since last call. Returns parsed JSON dicts."""
+        # Check for rewind before reading
+        self.check_rewind()
+
         try:
             with open(self.filepath, "rb") as f:
                 f.seek(self.offset + len(self._buffer))
@@ -233,12 +263,14 @@ class JSONLWatcher:
         watch_dir: str | Path,
         registry_path: str | Path,
         on_flush: Callable[[list[dict]], None],
+        on_rewind: Callable[[str, str, int, int], None] | None = None,
         poll_interval_s: float = 1.0,
         batch_size: int = 10,
         flush_interval_ms: int = 100,
         registry_flush_interval_s: float = 5.0,
     ):
         self.watch_dir = Path(watch_dir).expanduser()
+        self.on_rewind = on_rewind
         self.registry = OffsetRegistry(Path(registry_path).expanduser())
         self.indexer = BatchIndexer(
             on_flush=on_flush,
@@ -301,6 +333,46 @@ class JSONLWatcher:
         for filepath in files:
             tailer = self._ensure_tailer(filepath)
             new_lines = tailer.read_new_lines()
+
+            # Handle rewind detection (checkpoint restore)
+            if tailer.rewound:
+                session_id = Path(filepath).stem
+                logger.warning(
+                    "Checkpoint restore: %s (offset %d → %d)",
+                    session_id,
+                    tailer.rewind_old_offset,
+                    tailer.rewind_new_offset,
+                )
+                try:
+                    from .telemetry import emit
+
+                    emit(
+                        "brainlayer-watcher",
+                        {
+                            "_type": "rewind_detected",
+                            "session_id": session_id,
+                            "file_path": filepath,
+                            "old_offset": tailer.rewind_old_offset,
+                            "new_offset": tailer.rewind_new_offset,
+                        },
+                    )
+                except Exception:
+                    pass
+
+                # Call rewind callback if set
+                if self.on_rewind:
+                    try:
+                        self.on_rewind(
+                            filepath,
+                            session_id,
+                            tailer.rewind_old_offset,
+                            tailer.rewind_new_offset,
+                        )
+                    except Exception as e:
+                        logger.error("Rewind callback failed: %s", e)
+
+                tailer.rewound = False  # Reset flag
+
             if new_lines:
                 # Tag each line with source metadata
                 for line in new_lines:
