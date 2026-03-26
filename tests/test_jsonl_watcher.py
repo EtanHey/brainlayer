@@ -198,14 +198,15 @@ class TestBatchIndexer:
         indexer.add([{"c": 3}, {"d": 4}])
         assert indexer.total_flushed == 4
 
-    def test_flush_error_doesnt_crash(self):
+    def test_flush_error_retains_buffer(self):
         def bad_flush(items):
             raise RuntimeError("flush failed")
 
         indexer = BatchIndexer(on_flush=bad_flush, batch_size=1)
-        # Should not raise
+        # Should not raise, and buffer should be retained for retry
         indexer.add([{"a": 1}])
         assert indexer.total_flushed == 0
+        assert len(indexer._buffer) == 1  # Retained for retry
 
 
 # ── JSONLWatcher Integration Tests ──────────────────────────────────────────

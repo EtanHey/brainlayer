@@ -199,14 +199,14 @@ class BatchIndexer:
     def _do_flush(self):
         """Internal flush — must be called with _lock held."""
         batch = self._buffer
-        self._buffer = []
         self._last_flush = time.monotonic()
         count = len(batch)
         try:
             self.on_flush(batch)
+            self._buffer = []  # Clear only after successful flush
             self.total_flushed += count
         except Exception as e:
-            logger.error("Batch flush failed (%d items): %s", count, e)
+            logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
 
 
 # ── JSONL Watcher ────────────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ class JSONLWatcher:
         registry_flush_interval_s: float = 5.0,
     ):
         self.watch_dir = Path(watch_dir).expanduser()
-        self.registry = OffsetRegistry(registry_path)
+        self.registry = OffsetRegistry(Path(registry_path).expanduser())
         self.indexer = BatchIndexer(
             on_flush=on_flush,
             batch_size=batch_size,
@@ -255,14 +255,18 @@ class JSONLWatcher:
         """Find all .jsonl files under watch_dir."""
         files = []
         try:
-            for project_dir in self.watch_dir.iterdir():
-                if not project_dir.is_dir():
-                    continue
+            dirs = list(self.watch_dir.iterdir())
+        except OSError:
+            return files
+        for project_dir in dirs:
+            if not project_dir.is_dir():
+                continue
+            try:
                 for f in project_dir.iterdir():
                     if f.suffix == ".jsonl" and f.is_file():
                         files.append(str(f))
-        except OSError:
-            pass
+            except OSError:
+                continue
         return files
 
     def _ensure_tailer(self, filepath: str) -> JSONLTailer:
