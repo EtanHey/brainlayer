@@ -157,6 +157,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("sentiment_label", "TEXT"),
             ("sentiment_score", "REAL"),
             ("sentiment_signals", "TEXT"),
+            # Lifecycle columns (chunk lifecycle management)
+            ("superseded_by", "TEXT"),
+            ("aggregated_into", "TEXT"),
+            ("archived_at", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -708,13 +712,38 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
-        """Soft-delete a chunk by setting value_type to ARCHIVED."""
+        """Soft-delete a chunk by setting value_type to ARCHIVED and archived_at."""
         cursor = self.conn.cursor()
         rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)))
         if not rows:
             return False
-        cursor.execute("UPDATE chunks SET value_type = 'ARCHIVED' WHERE id = ?", (chunk_id,))
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE chunks SET value_type = 'ARCHIVED', archived_at = ? WHERE id = ?",
+            (now, chunk_id),
+        )
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        from .search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
+        return True
+
+    def supersede_chunk(self, old_chunk_id: str, new_chunk_id: str) -> bool:
+        """Mark old chunk as superseded by new chunk. Removes old from vector index."""
+        cursor = self.conn.cursor()
+        old_rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (old_chunk_id,)))
+        if not old_rows:
+            return False
+        new_rows = list(cursor.execute("SELECT id FROM chunks WHERE id = ?", (new_chunk_id,)))
+        if not new_rows:
+            return False
+        cursor.execute(
+            "UPDATE chunks SET superseded_by = ? WHERE id = ?",
+            (new_chunk_id, old_chunk_id),
+        )
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (old_chunk_id,))
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
@@ -726,7 +755,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         rows = list(
             cursor.execute(
                 """SELECT id, content, metadata, source_file, project, content_type,
-                      value_type, tags, importance, created_at, summary
+                      value_type, tags, importance, created_at, summary,
+                      superseded_by, aggregated_into, archived_at
                FROM chunks WHERE id = ?""",
                 (chunk_id,),
             )
@@ -746,6 +776,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "importance": r[8],
             "created_at": r[9],
             "summary": r[10],
+            "superseded_by": r[11],
+            "aggregated_into": r[12],
+            "archived_at": r[13],
         }
 
     # ── Context manager ─────────────────────────────────────────────────

@@ -66,6 +66,7 @@ def _hybrid_cache_key(
     sentiment_filter: Optional[str],
     entity_id: Optional[str],
     k: int,
+    include_archived: bool = False,
 ) -> tuple:
     return (
         store_key,
@@ -85,6 +86,7 @@ def _hybrid_cache_key(
         sentiment_filter,
         entity_id,
         k,
+        include_archived,
     )
 
 
@@ -113,12 +115,15 @@ class SearchMixin:
         date_to: Optional[str] = None,
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
+        include_archived: bool = False,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
         Args:
             entity_id: If provided, only return chunks linked to this entity
                        via kg_entity_chunks. Used for per-person memory scoping.
+            include_archived: If True, include superseded/aggregated/archived
+                              chunks in results (history mode). Default: False.
         """
 
         cursor = self._read_cursor()
@@ -166,6 +171,10 @@ class SearchMixin:
             if sentiment_filter:
                 where_clauses.append("c.sentiment_label = ?")
                 filter_params.append(sentiment_filter)
+            if not include_archived:
+                where_clauses.append("c.superseded_by IS NULL")
+                where_clauses.append("c.aggregated_into IS NULL")
+                where_clauses.append("c.archived_at IS NULL")
 
             where_sql = ""
             if where_clauses:
@@ -230,6 +239,10 @@ class SearchMixin:
             if date_to:
                 where_clauses.append("created_at <= ?")
                 params.append(date_to)
+            if not include_archived:
+                where_clauses.append("superseded_by IS NULL")
+                where_clauses.append("aggregated_into IS NULL")
+                where_clauses.append("archived_at IS NULL")
 
             params.append(n_results)
 
@@ -430,6 +443,7 @@ class SearchMixin:
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
         k: int = 60,
+        include_archived: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -462,6 +476,7 @@ class SearchMixin:
             sentiment_filter,
             entity_id,
             k,
+            include_archived,
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
@@ -488,6 +503,7 @@ class SearchMixin:
             date_to=date_to,
             sentiment_filter=sentiment_filter,
             entity_id=entity_id,
+            include_archived=include_archived,
         )
 
         # Build semantic rank map: chunk_content -> rank
@@ -533,6 +549,10 @@ class SearchMixin:
         if sentiment_filter:
             fts_extra.append("AND c.sentiment_label = ?")
             fts_params.append(sentiment_filter)
+        if not include_archived:
+            fts_extra.append("AND c.superseded_by IS NULL")
+            fts_extra.append("AND c.aggregated_into IS NULL")
+            fts_extra.append("AND c.archived_at IS NULL")
         fts_params.append(n_results * 3)
 
         fts_results = list(

@@ -51,7 +51,7 @@ from .search_handler import (
     _stats,
     _think,
 )
-from .store_handler import _brain_digest, _brain_update, _store, _store_new
+from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _brain_update, _store, _store_new
 from .tags_handler import _brain_tags_mcp
 
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
@@ -102,6 +102,10 @@ server = Server(
         "Returns entity type, relations, and evidence chunks.\n"
         "- brain_update(action, chunk_id): update, archive, or merge existing memories. "
         "action=update (change content/tags/importance), archive (soft-delete), merge (keep one, archive duplicates).\n"
+        "- brain_supersede(old_chunk_id, new_chunk_id): mark old memory as superseded by new one. "
+        "Old chunk drops from default search. Safety check for personal data.\n"
+        "- brain_archive(chunk_id): archive a memory with timestamp. "
+        "Excluded from default search, accessible via direct lookup.\n"
         "Use brain_search at the start of tasks to retrieve past decisions and patterns.\n"
         "Use brain_store when you make a decision, hit a bug, learn something, or finish a phase.\n"
         'project scoping: auto-inferred from cwd. Override with project="all" for cross-project search.\n'
@@ -503,6 +507,10 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                         "type": "integer",
                         "description": "Line number reference. Only for type=issue.",
                     },
+                    "supersedes": {
+                        "type": "string",
+                        "description": "Optional chunk_id to supersede. The old chunk is marked as superseded by this new one and removed from default search.",
+                    },
                 },
                 "required": ["content"],
             },
@@ -815,6 +823,73 @@ Returns: JSON with 'tags' (list of {tag, count}) and 'total' count.""",
                 "required": ["action"],
             },
         ),
+        Tool(
+            name="brain_supersede",
+            title="Supersede Memory",
+            description="""Mark an old memory as superseded by a newer one.
+
+The old chunk is removed from default search results and linked to its replacement.
+Use this when a fact, decision, or learning has been updated and the old version should
+no longer appear in searches (but remains accessible via include_history=true).
+
+Safety: auto-supersede works for technical content. Personal data (journals, notes,
+health/finance/relationship content) requires safety_check='confirm' + confirm=true.
+
+Returns: Structured JSON with action taken.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "old_chunk_id": {
+                        "type": "string",
+                        "description": "The chunk ID to mark as superseded.",
+                    },
+                    "new_chunk_id": {
+                        "type": "string",
+                        "description": "The chunk ID that replaces the old one.",
+                    },
+                    "safety_check": {
+                        "type": "string",
+                        "enum": ["auto", "confirm"],
+                        "default": "auto",
+                        "description": "Safety mode: 'auto' for technical facts (auto-supersedes), 'confirm' for personal data (requires confirm=true).",
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Set to true to confirm superseding personal data (when safety_check='confirm').",
+                    },
+                },
+                "required": ["old_chunk_id", "new_chunk_id"],
+            },
+        ),
+        Tool(
+            name="brain_archive",
+            title="Archive Memory",
+            description="""Archive a memory — soft-delete with timestamp.
+
+Archived chunks are excluded from default search results but remain in the database.
+They can be retrieved with include_history=true or by direct chunk_id lookup.
+
+Use this to clean up stale, outdated, or irrelevant memories without permanent deletion.
+
+Returns: Structured JSON with chunk_id and optional reason.""",
+            annotations=_WRITE,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "The chunk ID to archive.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional: reason for archiving (stored for audit trail).",
+                    },
+                },
+                "required": ["chunk_id"],
+            },
+        ),
     ]
 
 
@@ -933,6 +1008,21 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             file_path=arguments.get("file_path"),
             function_name=arguments.get("function_name"),
             line_number=max(1, ln) if ln is not None else None,
+            supersedes=arguments.get("supersedes"),
+        )
+
+    elif name == "brain_supersede":
+        return await _brain_supersede(
+            old_chunk_id=arguments["old_chunk_id"],
+            new_chunk_id=arguments["new_chunk_id"],
+            safety_check=arguments.get("safety_check", "auto"),
+            confirm=arguments.get("confirm", False),
+        )
+
+    elif name == "brain_archive":
+        return await _brain_archive(
+            chunk_id=arguments["chunk_id"],
+            reason=arguments.get("reason"),
         )
 
     elif name == "brain_get_person":

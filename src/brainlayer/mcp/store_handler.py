@@ -96,6 +96,7 @@ async def _store_new(
     file_path: str | None = None,
     function_name: str | None = None,
     line_number: int | None = None,
+    supersedes: str | None = None,
 ):
     """Wrapper for _store with auto-type detection and auto-importance."""
     resolved_type = memory_type or _detect_memory_type(content)
@@ -118,6 +119,7 @@ async def _store_new(
         file_path=file_path,
         function_name=function_name,
         line_number=line_number,
+        supersedes=supersedes,
     )
 
 
@@ -203,6 +205,126 @@ async def _brain_update(
                 continue
             logger.error("brain_update failed: %s", e)
             return _error_result(f"brain_update error: {e}")
+
+
+_PERSONAL_TYPES = frozenset({"journal", "note", "bookmark"})
+_PERSONAL_KEYWORDS = ("health", "family", "relationship", "finance", "personal", "therapy", "medical")
+
+
+def _is_personal_content(chunk: dict) -> bool:
+    """Heuristic: return True if chunk likely contains personal data."""
+    content_type = chunk.get("content_type", "")
+    if content_type in _PERSONAL_TYPES:
+        return True
+    content_lower = (chunk.get("content") or "").lower()
+    return any(kw in content_lower for kw in _PERSONAL_KEYWORDS)
+
+
+async def _brain_supersede(
+    old_chunk_id: str,
+    new_chunk_id: str,
+    safety_check: str = "auto",
+    confirm: bool = False,
+):
+    """Mark old chunk as superseded by new chunk. Retries on BusyError."""
+    if safety_check not in ("auto", "confirm"):
+        return _error_result("safety_check must be 'auto' or 'confirm'")
+
+    last_err = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            store = _get_vector_store()
+
+            old_chunk = store.get_chunk(old_chunk_id)
+            if not old_chunk:
+                return _error_result(f"Old chunk not found: {old_chunk_id}")
+            new_chunk = store.get_chunk(new_chunk_id)
+            if not new_chunk:
+                return _error_result(f"New chunk not found: {new_chunk_id}")
+
+            # Safety gate: personal content requires explicit confirmation
+            if safety_check == "auto" and _is_personal_content(old_chunk):
+                return [TextContent(type="text", text=json.dumps({
+                    "action": "confirm_required",
+                    "reason": "Old chunk contains personal data — requires safety_check='confirm' and confirm=true",
+                    "old_chunk_id": old_chunk_id,
+                    "old_preview": (old_chunk.get("content") or "")[:200],
+                    "new_chunk_id": new_chunk_id,
+                }))]
+
+            if safety_check == "confirm" and not confirm:
+                return [TextContent(type="text", text=json.dumps({
+                    "action": "confirm_required",
+                    "old_chunk_id": old_chunk_id,
+                    "old_preview": (old_chunk.get("content") or "")[:200],
+                    "new_chunk_id": new_chunk_id,
+                    "new_preview": (new_chunk.get("content") or "")[:200],
+                    "instruction": "Re-call with confirm=true to proceed",
+                }))]
+
+            ok = store.supersede_chunk(old_chunk_id, new_chunk_id)
+            if not ok:
+                return _error_result(f"Supersede failed for: {old_chunk_id}")
+
+            return [TextContent(type="text", text=json.dumps({
+                "action": "superseded",
+                "old_chunk_id": old_chunk_id,
+                "new_chunk_id": new_chunk_id,
+            }))]
+
+        except Exception as e:
+            is_lock_error = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
+            if is_lock_error and attempt < _RETRY_MAX_ATTEMPTS - 1:
+                delay = _retry_delay * (2**attempt)
+                logger.warning(
+                    "brain_supersede BusyError (attempt %d/%d), retrying in %.2fs",
+                    attempt + 1, _RETRY_MAX_ATTEMPTS, delay,
+                )
+                await asyncio.sleep(delay)
+                last_err = e
+                continue
+            logger.error("brain_supersede failed: %s", e)
+            return _error_result(f"brain_supersede error: {e}")
+    return _error_result(f"brain_supersede failed after {_RETRY_MAX_ATTEMPTS} retries: {last_err}")
+
+
+async def _brain_archive(
+    chunk_id: str,
+    reason: str | None = None,
+):
+    """Archive a chunk (soft-delete with timestamp). Retries on BusyError."""
+    last_err = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            store = _get_vector_store()
+
+            chunk = store.get_chunk(chunk_id)
+            if not chunk:
+                return _error_result(f"Chunk not found: {chunk_id}")
+
+            ok = store.archive_chunk(chunk_id)
+            if not ok:
+                return _error_result(f"Archive failed for: {chunk_id}")
+
+            result = {"action": "archived", "chunk_id": chunk_id}
+            if reason:
+                result["reason"] = reason
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        except Exception as e:
+            is_lock_error = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
+            if is_lock_error and attempt < _RETRY_MAX_ATTEMPTS - 1:
+                delay = _retry_delay * (2**attempt)
+                logger.warning(
+                    "brain_archive BusyError (attempt %d/%d), retrying in %.2fs",
+                    attempt + 1, _RETRY_MAX_ATTEMPTS, delay,
+                )
+                await asyncio.sleep(delay)
+                last_err = e
+                continue
+            logger.error("brain_archive failed: %s", e)
+            return _error_result(f"brain_archive error: {e}")
+    return _error_result(f"brain_archive failed after {_RETRY_MAX_ATTEMPTS} retries: {last_err}")
 
 
 def _get_pending_store_path():
@@ -313,6 +435,7 @@ async def _store(
     file_path: str | None = None,
     function_name: str | None = None,
     line_number: int | None = None,
+    supersedes: str | None = None,
 ):
     """Store a memory into BrainLayer with deferred embedding.
 
@@ -348,6 +471,11 @@ async def _store(
 
         chunk_id = result["id"]
 
+        # If supersedes is set, mark the old chunk as superseded by the new one
+        superseded_ok = None
+        if supersedes:
+            superseded_ok = store.supersede_chunk(supersedes, chunk_id)
+
         # Schedule background embedding + flush in a single daemon thread.
         # CRITICAL: must use a separate VectorStore connection — APSW enforces
         # same-thread usage. The main thread's `store.conn` cannot be shared.
@@ -382,7 +510,13 @@ async def _store(
         t.start()
 
         parts = [f"Stored memory `{chunk_id}`"]
+        if supersedes and superseded_ok:
+            parts.append(f"Superseded `{supersedes}`")
+        elif supersedes and not superseded_ok:
+            parts.append(f"Warning: could not supersede `{supersedes}` (not found)")
         structured = {"chunk_id": chunk_id, "related": result["related"]}
+        if supersedes:
+            structured["superseded"] = supersedes if superseded_ok else None
         return ([TextContent(type="text", text="\n".join(parts))], structured)
 
     except ValueError as e:
