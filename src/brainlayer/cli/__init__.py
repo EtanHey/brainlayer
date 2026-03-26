@@ -1432,6 +1432,64 @@ def export_obsidian(
         store.close()
 
 
+@app.command()
+def watch(
+    source: Path = typer.Option(
+        Path.home() / ".claude" / "projects",
+        "--source",
+        "-s",
+        help="Directory to watch for .jsonl files",
+    ),
+    poll_interval: float = typer.Option(1.0, "--poll", help="Poll interval in seconds"),
+    batch_size: int = typer.Option(10, "--batch-size", help="Flush after this many lines"),
+    flush_interval: int = typer.Option(500, "--flush-ms", help="Flush interval in milliseconds"),
+) -> None:
+    """Watch for new JSONL conversations and index in real-time.
+
+    Tail-follows .jsonl files under ~/.claude/projects/, processes new lines
+    through the classification/chunking pipeline, and inserts into BrainLayer
+    with deferred embedding. Chunks are immediately searchable via FTS5.
+
+    This is a persistent process — run it as a LaunchAgent or in a terminal.
+    """
+    import signal
+
+    from ..paths import get_db_path
+    from ..watcher import JSONLWatcher
+    from ..watcher_bridge import create_flush_callback
+
+    db_path = get_db_path()
+    offsets_path = db_path.parent / "offsets.json"
+
+    rprint("[bold blue]זיכרון[/] Real-time JSONL watcher")
+    rprint(f"  Watching: [bold]{source}[/]")
+    rprint(f"  Database: [bold]{db_path}[/]")
+    rprint(f"  Offsets:  [bold]{offsets_path}[/]")
+    rprint(f"  Poll: {poll_interval}s | Batch: {batch_size} | Flush: {flush_interval}ms")
+    rprint()
+
+    on_flush = create_flush_callback(db_path)
+
+    watcher = JSONLWatcher(
+        watch_dir=source,
+        registry_path=offsets_path,
+        on_flush=on_flush,
+        poll_interval_s=poll_interval,
+        batch_size=batch_size,
+        flush_interval_ms=flush_interval,
+    )
+
+    def handle_signal(signum, frame):
+        rprint("\n[bold yellow]Stopping watcher...[/]")
+        watcher.stop()
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    watcher.start()
+    rprint(f"[bold green]Done.[/] Total flushed: {watcher.indexer.total_flushed}")
+
+
 @app.command("index-fast", hidden=True)
 def index_fast(
     source: Path = typer.Argument(

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brainlayer.watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.13/bin/brainlayer</string>
+        <string>watch</string>
+        <string>--poll</string>
+        <string>1.0</string>
+        <string>--batch-size</string>
+        <string>10</string>
+        <string>--flush-ms</string>
+        <string>500</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/etanheyman/.local/share/brainlayer/logs/watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/etanheyman/.local/share/brainlayer/logs/watch.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Users/etanheyman/.local/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
