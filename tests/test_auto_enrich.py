@@ -322,7 +322,11 @@ class TestAutoEnrichEnvVar:
     ])
     def test_auto_enrich_flag_parsing(self, value, expected, monkeypatch):
         """AUTO_ENRICH_ENABLED respects environment variable values."""
-        monkeypatch.setenv("BRAINLAYER_AUTO_ENRICH", value)
+        import importlib
 
-        result = value.lower() not in ("0", "false", "no")
-        assert result == expected
+        from brainlayer import enrichment_controller as ctrl
+
+        monkeypatch.setenv("BRAINLAYER_AUTO_ENRICH", value)
+        importlib.reload(ctrl)
+
+        assert ctrl.AUTO_ENRICH_ENABLED == expected

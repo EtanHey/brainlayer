@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .pipeline.enrichment import (
     build_external_prompt,
@@ -119,29 +122,25 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 
     Returns the parsed enrichment dict on success, None on failure.
     """
-    import logging
-
-    _logger = logging.getLogger(__name__)
-
     if not AUTO_ENRICH_ENABLED:
         return None
 
     chunk = store.get_chunk(chunk_id)
     if not chunk:
-        _logger.warning("enrich_single: chunk not found: %s", chunk_id)
+        logger.warning("enrich_single: chunk not found: %s", chunk_id)
         return None
 
     try:
         client = _get_gemini_client()
     except RuntimeError:
-        _logger.debug("enrich_single: no Gemini API key, skipping enrichment for %s", chunk_id)
+        logger.debug("enrich_single: no Gemini API key, skipping enrichment for %s", chunk_id)
         return None
 
     sanitizer = Sanitizer.from_env()
     try:
         prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
     except Exception as exc:
-        _logger.warning("enrich_single: prompt build failed for %s: %s", chunk_id, exc)
+        logger.warning("enrich_single: prompt build failed for %s: %s", chunk_id, exc)
         return None
 
     config = _build_gemini_config()
@@ -162,21 +161,21 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             max_delay=5.0,
         )
     except Exception as exc:
-        _logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
+        logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
         return None
 
     enrichment = parse_enrichment(raw_response)
     if not enrichment:
-        _logger.warning("enrich_single: invalid enrichment response for %s", chunk_id)
+        logger.warning("enrich_single: invalid enrichment response for %s", chunk_id)
         return None
 
     try:
         _apply_enrichment(store, chunk, enrichment)
     except Exception as exc:
-        _logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
+        logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
         return None
 
-    _logger.info("enrich_single: enriched %s with %d tags", chunk_id, len(enrichment.get("tags", [])))
+    logger.info("enrich_single: enriched %s with %d tags", chunk_id, len(enrichment.get("tags", [])))
     return enrichment
 
 
