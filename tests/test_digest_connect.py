@@ -391,7 +391,7 @@ class TestDigestModeRouting:
         from brainlayer.mcp.store_handler import _brain_digest
 
         # mode='connect' with no content should give a clear error
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             _brain_digest(content=None, mode="connect")
         )
         # Should get "content is required" error, NOT "Unknown mode" error
@@ -405,7 +405,7 @@ class TestDigestModeRouting:
 
         from brainlayer.mcp.store_handler import _brain_digest
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             _brain_digest(content="test", mode="invalid_mode")
         )
         error_text = result.content[0].text
