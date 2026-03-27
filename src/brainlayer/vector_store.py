@@ -435,6 +435,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             cursor.execute("ALTER TABLE chunks ADD COLUMN source_project_id TEXT")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_project ON chunks(source_project_id)")
 
+        # ── Chunk events audit table ──────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                by_whom TEXT,
+                reason TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_events_chunk ON chunk_events(chunk_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_events_action ON chunk_events(action)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_events_timestamp ON chunk_events(timestamp)")
+
         # ── Knowledge Graph tables ──────────────────────────────────────
 
         cursor.execute("""
@@ -780,6 +795,49 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "aggregated_into": r[12],
             "archived_at": r[13],
         }
+
+    # ── Chunk events audit ─────────────────────────────────────────────
+
+    def record_event(
+        self,
+        chunk_id: str,
+        action: str,
+        by_whom: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> int:
+        """Record an audit event for a chunk. Returns the event row ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT INTO chunk_events (chunk_id, action, by_whom, reason) VALUES (?, ?, ?, ?)",
+            (chunk_id, action, by_whom, reason),
+        )
+        return cursor.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_chunk_events(
+        self,
+        chunk_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Get audit events for a chunk, newest first."""
+        cursor = self.conn.cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT id, chunk_id, action, timestamp, by_whom, reason "
+                "FROM chunk_events WHERE chunk_id = ? ORDER BY id DESC LIMIT ?",
+                (chunk_id, limit),
+            )
+        )
+        return [
+            {
+                "id": r[0],
+                "chunk_id": r[1],
+                "action": r[2],
+                "timestamp": r[3],
+                "by_whom": r[4],
+                "reason": r[5],
+            }
+            for r in rows
+        ]
 
     # ── Context manager ─────────────────────────────────────────────────
 
