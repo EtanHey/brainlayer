@@ -23,6 +23,27 @@ DEADLINE_MS = 450
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
 
+
+def should_activate(hook_input):
+    """Conditional activation gate — skip hook when not needed.
+
+    Checks (in order, cheapest first):
+    1. BRAINLAYER_HOOKS_DISABLED=1 env var → skip all BrainLayer hooks
+    2. Non-interactive mode (--print) → skip memory search
+    3. BRAINLAYER_HOOKS_LIGHT=1 → reduce to 2 results (overnight workers)
+
+    Returns (activate: bool, light_mode: bool).
+    """
+    if os.environ.get("BRAINLAYER_HOOKS_DISABLED") == "1":
+        return False, False
+
+    if os.environ.get("CLAUDE_NON_INTERACTIVE") == "1":
+        return False, False
+
+    light = os.environ.get("BRAINLAYER_HOOKS_LIGHT") == "1"
+
+    return True, light
+
 # Trigger words that activate deep mode (more results)
 DEEP_TRIGGERS = {
     "remember",
@@ -211,6 +232,10 @@ def main():
     except (json.JSONDecodeError, EOFError):
         sys.exit(0)
 
+    activate, light_mode = should_activate(hook_input)
+    if not activate:
+        sys.exit(0)
+
     prompt = hook_input.get("prompt", "")
     if not prompt or len(prompt) < MIN_PROMPT_LENGTH:
         sys.exit(0)
@@ -261,7 +286,11 @@ def main():
         sys.exit(0)
 
     # Over-fetch to compensate for dedup removals
-    base_limit = 8 if deep else 3
+    # Light mode: cap at 2 results to reduce token cost for workers
+    if light_mode:
+        base_limit = 2
+    else:
+        base_limit = 8 if deep else 3
     limit = base_limit + len(already_injected) if already_injected else base_limit
 
     # Build FTS5 query: join keywords with OR for broader matching

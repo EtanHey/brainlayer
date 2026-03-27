@@ -34,7 +34,19 @@ def get_db_path() -> str:
     return str(Path.home() / ".local" / "share" / "brainlayer" / "brainlayer.db")
 
 
+def should_activate():
+    """Conditional activation gate — skip hook when not needed."""
+    if os.environ.get("BRAINLAYER_HOOKS_DISABLED") == "1":
+        return False
+    if os.environ.get("CLAUDE_NON_INTERACTIVE") == "1":
+        return False
+    return True
+
+
 def main():
+    if not should_activate():
+        return
+
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
