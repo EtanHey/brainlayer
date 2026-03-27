@@ -19,6 +19,9 @@ from .pipeline.sanitize import Sanitizer
 
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
 
+# Auto-enrichment on brain_store: set to "0" or "false" to disable
+AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
+
 
 @dataclass
 class EnrichmentResult:
@@ -102,6 +105,79 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         debt_impact=enrichment.get("debt_impact"),
         external_deps=enrichment.get("external_deps"),
     )
+
+
+def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] | None:
+    """Enrich a single chunk by ID via Gemini 2.5 Flash Lite.
+
+    Designed for post-store auto-enrichment (R47 two-pass pattern):
+    Pass 1 = sync embedding (immediate, searchable)
+    Pass 2 = this function (async Gemini tagging, ~600ms target)
+
+    Bypasses get_enrichment_candidates — works on any chunk regardless
+    of enriched_at status. Overwrites stub enrichment with Gemini output.
+
+    Returns the parsed enrichment dict on success, None on failure.
+    """
+    import logging
+
+    _logger = logging.getLogger(__name__)
+
+    if not AUTO_ENRICH_ENABLED:
+        return None
+
+    chunk = store.get_chunk(chunk_id)
+    if not chunk:
+        _logger.warning("enrich_single: chunk not found: %s", chunk_id)
+        return None
+
+    try:
+        client = _get_gemini_client()
+    except RuntimeError:
+        _logger.debug("enrich_single: no Gemini API key, skipping enrichment for %s", chunk_id)
+        return None
+
+    sanitizer = Sanitizer.from_env()
+    try:
+        prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+    except Exception as exc:
+        _logger.warning("enrich_single: prompt build failed for %s: %s", chunk_id, exc)
+        return None
+
+    config = _build_gemini_config()
+
+    def _call():
+        response = client.models.generate_content(
+            model=GEMINI_REALTIME_MODEL,
+            contents=prompt,
+            config=config,
+        )
+        return getattr(response, "text", None)
+
+    try:
+        raw_response = _retry_with_backoff(
+            _call,
+            max_retries=max_retries,
+            base_delay=0.3,
+            max_delay=5.0,
+        )
+    except Exception as exc:
+        _logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
+        return None
+
+    enrichment = parse_enrichment(raw_response)
+    if not enrichment:
+        _logger.warning("enrich_single: invalid enrichment response for %s", chunk_id)
+        return None
+
+    try:
+        _apply_enrichment(store, chunk, enrichment)
+    except Exception as exc:
+        _logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
+        return None
+
+    _logger.info("enrich_single: enriched %s with %d tags", chunk_id, len(enrichment.get("tags", [])))
+    return enrichment
 
 
 def _call_local_backend(prompt: str, backend: str = "mlx") -> str | None:

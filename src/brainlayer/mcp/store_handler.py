@@ -531,6 +531,15 @@ async def _store(
                 if count > 0:
                     logger.info("Embedded %d pending chunks", count)
                 _flush_pending_stores(bg_store, embed_fn)
+
+                # Pass 2: async Gemini enrichment (R47 two-pass pattern)
+                # Fire-and-forget — failure here never affects the store result
+                try:
+                    from ..enrichment_controller import enrich_single
+
+                    enrich_single(bg_store, chunk_id)
+                except Exception as enrich_err:
+                    logger.debug("Auto-enrichment skipped for %s: %s", chunk_id, enrich_err)
             except Exception as e:
                 logger.warning("Background embedding failed: %s", e)
                 # Model loading failed — still try to flush queued stores
