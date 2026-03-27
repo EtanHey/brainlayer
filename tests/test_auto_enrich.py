@@ -46,24 +46,22 @@ def _fake_gemini_response(summary="Auto-enriched summary", tags=None):
     """Build a fake Gemini JSON response string."""
     if tags is None:
         tags = ["architecture", "decision", "real-time"]
-    return json.dumps({
-        "summary": summary,
-        "tags": tags,
-        "importance": 8,
-        "intent": "deciding",
-        "primary_symbols": [],
-        "resolved_query": "What extraction pattern was chosen?",
-        "epistemic_level": "substantiated",
-        "debt_impact": "none",
-    })
+    return json.dumps(
+        {
+            "summary": summary,
+            "tags": tags,
+            "importance": 8,
+            "intent": "deciding",
+            "primary_symbols": [],
+            "resolved_query": "What extraction pattern was chosen?",
+            "epistemic_level": "substantiated",
+            "debt_impact": "none",
+        }
+    )
 
 
 class _FakeGeminiClient:
     """Mock Gemini client that returns a valid enrichment response."""
-
-    def __init__(self, response_text=None):
-        self._response_text = response_text or _fake_gemini_response()
-        self.call_count = 0
 
     class _Models:
         def __init__(self, parent):
@@ -73,12 +71,10 @@ class _FakeGeminiClient:
             self._parent.call_count += 1
             return SimpleNamespace(text=self._parent._response_text)
 
-    def __new__(cls, response_text=None):
-        instance = super().__new__(cls)
-        instance._response_text = response_text or _fake_gemini_response()
-        instance.call_count = 0
-        instance.models = cls._Models(instance)
-        return instance
+    def __init__(self, response_text=None):
+        self._response_text = response_text or _fake_gemini_response()
+        self.call_count = 0
+        self.models = self._Models(self)
 
 
 # ── enrich_single unit tests ────────────────────────────────────
@@ -182,10 +178,12 @@ class TestEnrichSingle:
         ctrl.enrich_single(store, stored_chunk)
 
         cursor = store.conn.cursor()
-        rows = list(cursor.execute(
-            "SELECT summary, tags FROM chunks WHERE id = ?",
-            (stored_chunk,),
-        ))
+        rows = list(
+            cursor.execute(
+                "SELECT summary, tags FROM chunks WHERE id = ?",
+                (stored_chunk,),
+            )
+        )
         assert len(rows) == 1
         assert rows[0][0] == "Auto-enriched summary"
         db_tags = json.loads(rows[0][1])
@@ -214,6 +212,37 @@ class TestEnrichSingle:
 
         assert len(call_log) == 1
         assert call_log[0]["max_retries"] == 2
+
+    def test_returns_none_on_prompt_build_failure(self, store, stored_chunk, monkeypatch):
+        """enrich_single returns None if build_external_prompt raises."""
+        from brainlayer import enrichment_controller as ctrl
+
+        monkeypatch.setattr(ctrl, "AUTO_ENRICH_ENABLED", True)
+        monkeypatch.setattr(ctrl, "_get_gemini_client", lambda: _FakeGeminiClient())
+        monkeypatch.setattr(
+            ctrl,
+            "Sanitizer",
+            SimpleNamespace(from_env=lambda: SimpleNamespace(sanitize=MagicMock(side_effect=Exception("bad")))),
+        )
+
+        result = ctrl.enrich_single(store, stored_chunk)
+        assert result is None
+
+    def test_returns_none_on_apply_failure(self, store, stored_chunk, monkeypatch):
+        """enrich_single returns None if _apply_enrichment raises."""
+        from brainlayer import enrichment_controller as ctrl
+
+        client = _FakeGeminiClient()
+        monkeypatch.setattr(ctrl, "_get_gemini_client", lambda: client)
+        monkeypatch.setattr(ctrl, "AUTO_ENRICH_ENABLED", True)
+        _mock_sanitizer = SimpleNamespace(
+            sanitize=lambda text, metadata=None: SimpleNamespace(sanitized=text, replacements=[], pii_detected=False),
+        )
+        monkeypatch.setattr(ctrl, "Sanitizer", SimpleNamespace(from_env=lambda: _mock_sanitizer))
+        monkeypatch.setattr(ctrl, "_apply_enrichment", MagicMock(side_effect=Exception("DB write failed")))
+
+        result = ctrl.enrich_single(store, stored_chunk)
+        assert result is None
 
 
 # ── Integration: _store triggers auto-enrichment ────────────────
@@ -309,17 +338,20 @@ class TestStoreAutoEnrich:
 class TestAutoEnrichEnvVar:
     """Test the BRAINLAYER_AUTO_ENRICH environment variable."""
 
-    @pytest.mark.parametrize("value,expected", [
-        ("0", False),
-        ("false", False),
-        ("False", False),
-        ("no", False),
-        ("NO", False),
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("", True),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("0", False),
+            ("false", False),
+            ("False", False),
+            ("no", False),
+            ("NO", False),
+            ("1", True),
+            ("true", True),
+            ("yes", True),
+            ("", True),
+        ],
+    )
     def test_auto_enrich_flag_parsing(self, value, expected, monkeypatch):
         """AUTO_ENRICH_ENABLED respects environment variable values."""
         import importlib
