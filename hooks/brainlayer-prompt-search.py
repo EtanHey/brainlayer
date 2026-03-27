@@ -3,9 +3,10 @@
 BrainLayer UserPromptSubmit Hook — auto-searches memories relevant to the user's prompt.
 
 Extracts keywords from the prompt, runs FTS5 search against BrainLayer.
-Two modes:
-  - Light (default): top 3 results, ~300 tokens
+Three modes:
+  - Normal (default): top 3 results, ~300 tokens
   - Deep (triggered by memory words): top 8 results, ~800 tokens
+  - Light (BRAINLAYER_HOOKS_LIGHT=1): top 2 results, reduced token cost for workers
 
 Output: plain text to stdout (injected as Claude context).
 Target: <500ms total.
