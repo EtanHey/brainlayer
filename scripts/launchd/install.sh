@@ -70,23 +70,31 @@ case "${1:-all}" in
         install_plist index
         ;;
     enrich)
+        # Legacy — install old enrich plist
         install_plist enrich
+        ;;
+    enrichment)
+        # New unified enrichment plist (replaces enrich)
+        install_plist enrichment
         ;;
     checkpoint)
         install_plist wal-checkpoint
         ;;
     all)
         install_plist index
-        install_plist enrich
+        install_plist enrichment
         install_plist wal-checkpoint
+        # Remove old enrich plist if present
+        remove_plist enrich 2>/dev/null || true
         ;;
     remove)
         remove_plist index
-        remove_plist enrich
+        remove_plist enrich 2>/dev/null || true
+        remove_plist enrichment 2>/dev/null || true
         remove_plist wal-checkpoint
         ;;
     *)
-        echo "Usage: $0 [index|enrich|checkpoint|all|remove]"
+        echo "Usage: $0 [index|enrich|enrichment|checkpoint|all|remove]"
         exit 1
         ;;
 esac

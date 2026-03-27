@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brainlayer.enrichment</string>
+
+    <!-- Unified enrichment daemon — replaces com.brainlayer.enrich
+         Runs realtime enrichment hourly on recent chunks.
+         For batch/local modes, use the CLI or brain_enrich MCP tool. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BRAINLAYER_BIN__</string>
+        <string>enrich</string>
+        <string>--mode</string>
+        <string>realtime</string>
+        <string>--since-hours</string>
+        <string>24</string>
+        <string>--limit</string>
+        <string>50</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/share/brainlayer/logs/enrichment.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/share/brainlayer/logs/enrichment.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:__HOME__/.local/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>BRAINLAYER_STALL_TIMEOUT</key>
+        <string>300</string>
+        <key>GOOGLE_API_KEY</key>
+        <string>__GOOGLE_API_KEY__</string>
+        <!-- Optional: set regional endpoint for lower latency -->
+        <!-- <key>GOOGLE_CLOUD_REGION</key>
+        <string>us-central1</string> -->
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>15</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

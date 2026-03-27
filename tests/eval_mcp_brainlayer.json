@@ -1,0 +1,1335 @@
+{
+  "schema_version": "1.0",
+  "eval_type": "mcp",
+  "server_name": "brainlayer-mcp",
+  "target_tools": [
+    "brain_search",
+    "brain_store",
+    "brain_recall",
+    "brain_expand",
+    "brain_digest"
+  ],
+  "runner": "mcp_call",
+  "source_of_truth": "/Users/etanheyman/Gits/orchestrator/docs.local/plans/ecosystem-execution/phase-1-eval-foundation/findings.md",
+  "notes": [
+    "Synthetic fixture projects keep this runnable without polluting live project namespaces.",
+    "Lock-path cases are included because a live brain_search attempt timed out under DB contention during Phase 1A research.",
+    "brain_recall dispatcher cases use mocked subhandler returns so mode routing can be tested without a large session fixture database.",
+    "brain_digest exclusivity is modeled as a runner/orchestrator policy check because the MCP handler itself does not serialize parallel tool calls."
+  ],
+  "budgets": {
+    "timeout_ms": 15000,
+    "warm_p50_ms": 500,
+    "warm_p95_ms": 1500,
+    "lock_recovery_p95_ms": 5000,
+    "store_return_p95_ms": 500,
+    "recall_context_p95_ms": 800,
+    "recall_stats_p95_ms": 500,
+    "expand_p95_ms": 500
+  },
+  "fixtures": [
+    {
+      "id": "seed-basic-search",
+      "type": "seed_chunks",
+      "project": "eval-mcp-brainlayer",
+      "chunks": [
+        {
+          "content": "Authentication uses JWT tokens with RS256 signing and short-lived access tokens.",
+          "memory_type": "decision",
+          "tags": [
+            "auth",
+            "jwt",
+            "decision"
+          ],
+          "importance": 8
+        },
+        {
+          "content": "Search quality measurement baseline tracks evals before improvements and compares top-N retrieval quality.",
+          "memory_type": "note",
+          "tags": [
+            "evals",
+            "measurement",
+            "baseline"
+          ],
+          "importance": 7
+        },
+        {
+          "content": "The dashboard hero should use layered gradients and staggered reveals instead of a flat background.",
+          "memory_type": "note",
+          "tags": [
+            "frontend",
+            "design"
+          ],
+          "importance": 3
+        }
+      ]
+    },
+    {
+      "id": "seed-filtered-search",
+      "type": "seed_chunks",
+      "project": "eval-mcp-voicelayer",
+      "chunks": [
+        {
+          "content": "Voice pipeline architecture decision: wait for current playback to finish before recording the next answer.",
+          "memory_type": "decision",
+          "tags": [
+            "decision",
+            "voice",
+            "pipeline"
+          ],
+          "importance": 8
+        },
+        {
+          "content": "Voice session booking must reject concurrent microphone access with a clear busy message.",
+          "memory_type": "decision",
+          "tags": [
+            "decision",
+            "voice",
+            "booking"
+          ],
+          "importance": 8
+        },
+        {
+          "content": "Railway deployment retry policy can back off after transient container failures.",
+          "memory_type": "note",
+          "tags": [
+            "deployment",
+            "ops"
+          ],
+          "importance": 4
+        }
+      ]
+    },
+    {
+      "id": "simulate-lock-timeout",
+      "type": "fault_injection",
+      "fault": "BusyError",
+      "mode": "exhaust_retries",
+      "attempts": 3
+    },
+    {
+      "id": "simulate-transient-lock",
+      "type": "fault_injection",
+      "fault": "BusyError",
+      "mode": "transient",
+      "attempts": 1
+    },
+    {
+      "id": "simulate-store-busy",
+      "type": "fault_injection",
+      "target": "brainlayer.store.store_memory",
+      "fault": "BusyError",
+      "mode": "once",
+      "attempts": 1
+    },
+    {
+      "id": "slow-embedding-model",
+      "type": "mock_embedding_model",
+      "delay_ms": 2000
+    },
+    {
+      "id": "mock-recall-context",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._current_context",
+      "return_kind": "tuple",
+      "text": [
+        "## Current Context\n\n- Active projects: brainlayer\n- Active branches: main"
+      ],
+      "structured": {
+        "active_projects": [
+          "brainlayer"
+        ],
+        "active_branches": [
+          "main"
+        ],
+        "active_plan": "phase-1a",
+        "recent_files": [
+          "src/brainlayer/mcp/search_handler.py"
+        ],
+        "recent_sessions": [
+          {
+            "session_id": "sess-ctx-001",
+            "project": "brainlayer",
+            "branch": "main",
+            "started_at": "2026-03-13T20:00:00",
+            "plan_name": "phase-1a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mock-recall-sessions",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._sessions",
+      "return_kind": "text_list",
+      "text": [
+        "## Recent Sessions (7 days)\n\n- sess-ctx-001 | brainlayer | main | 2026-03-13T20:00:00\n- sess-ctx-002 | brainlayer | feature/evals | 2026-03-12T18:00:00"
+      ]
+    },
+    {
+      "id": "mock-recall-operations",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._operations",
+      "return_kind": "text_list",
+      "text": [
+        "## Operations: sess-ops...\n\nFound 2 operations:\n\n1. **index** -- indexed pending chunks [success] at 2026-03-13T19:00:00\n2. **search** -- searched for auth notes [success] at 2026-03-13T19:05:00"
+      ]
+    },
+    {
+      "id": "mock-recall-plan",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._plan_links",
+      "return_kind": "text_list",
+      "text": [
+        "## Sessions: phase-1-eval-foundation\n\n- sess-plan | phase-1-eval-foundation/1A | feature/phase-1a | 2026-03-13T20:00:00"
+      ]
+    },
+    {
+      "id": "mock-recall-summary",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._session_summary",
+      "return_kind": "text_list",
+      "text": [
+        "## Session Summary: sess-sum...\n\n**Summary:** Added MCP eval schemas.\n**Outcome:** success\n**Messages:** 14"
+      ]
+    },
+    {
+      "id": "mock-recall-stats",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._stats",
+      "return_kind": "tuple",
+      "text": [
+        "## BrainLayer Knowledge Base Stats\n\n- **Total Chunks:** 42\n- **Projects:** brainlayer, golems\n- **Content Types:** note, decision"
+      ],
+      "structured": {
+        "total_chunks": 42,
+        "projects": [
+          "brainlayer",
+          "golems"
+        ],
+        "content_types": [
+          "note",
+          "decision"
+        ]
+      }
+    },
+    {
+      "id": "mock-list-projects",
+      "type": "mock_async_return",
+      "target": "brainlayer.mcp.search_handler._list_projects",
+      "return_kind": "text_list",
+      "text": [
+        "## Indexed Projects\n\n- brainlayer\n- golems"
+      ]
+    },
+    {
+      "id": "seed-expand-context",
+      "type": "seed_raw_chunks",
+      "project": "eval-mcp-expand",
+      "chunks": [
+        {
+          "id": "expand-chunk-001",
+          "content": "User asked whether the auth migration should move from sessions to JWT.",
+          "metadata": {
+            "session_id": "expand-conv-1"
+          },
+          "source_file": "expand-fixture.jsonl",
+          "project": "eval-mcp-expand",
+          "content_type": "user_message",
+          "source": "claude_code",
+          "conversation_id": "expand-conv-1",
+          "position": 1
+        },
+        {
+          "id": "expand-chunk-002",
+          "content": "We decided to switch to JWT with RS256 and rotate refresh tokens every 30 days.",
+          "metadata": {
+            "session_id": "expand-conv-1"
+          },
+          "source_file": "expand-fixture.jsonl",
+          "project": "eval-mcp-expand",
+          "content_type": "assistant_text",
+          "source": "claude_code",
+          "conversation_id": "expand-conv-1",
+          "position": 2
+        },
+        {
+          "id": "expand-chunk-003",
+          "content": "Added tests for refresh token expiry and token rotation edge cases.",
+          "metadata": {
+            "session_id": "expand-conv-1"
+          },
+          "source_file": "expand-fixture.jsonl",
+          "project": "eval-mcp-expand",
+          "content_type": "ai_code",
+          "source": "claude_code",
+          "conversation_id": "expand-conv-1",
+          "position": 3
+        }
+      ]
+    },
+    {
+      "id": "digest-exclusive-policy",
+      "type": "runner_policy",
+      "tool_name": "brain_digest",
+      "parallel_allowed": false,
+      "reason": "brain_digest is write-heavy and should not run in parallel with any other MCP operation."
+    },
+    {
+      "id": "active-parallel-brain-search",
+      "type": "active_tool_call",
+      "tool_name": "brain_search",
+      "input": {
+        "query": "parallel activity marker",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 1
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "search-basic-relevance",
+      "tool_name": "brain_search",
+      "path": "happy_path",
+      "description": "Semantic query returns the auth chunk in the top 3 with compact result metadata.",
+      "input": {
+        "query": "JWT authentication RS256 signing",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 5,
+        "detail": "compact"
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-basic-search"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-brainlayer"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "result_count",
+          "op": ">=",
+          "value": 1
+        },
+        {
+          "type": "top_n_contains",
+          "top_n": 3,
+          "expected": [
+            "JWT",
+            "RS256",
+            "authentication"
+          ]
+        },
+        {
+          "type": "field_present",
+          "field": "results[0].chunk_id"
+        },
+        {
+          "type": "field_present",
+          "field": "results[0].score"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "search-filtered-relevance",
+      "tool_name": "brain_search",
+      "path": "happy_path",
+      "description": "Project and tag filters keep results in the intended scope.",
+      "input": {
+        "query": "voice pipeline architecture decision",
+        "project": "eval-mcp-voicelayer",
+        "tag": "decision",
+        "num_results": 5,
+        "detail": "compact"
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-filtered-search"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-voicelayer"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "result_count",
+          "op": ">=",
+          "value": 1
+        },
+        {
+          "type": "top_n_contains",
+          "top_n": 3,
+          "expected": [
+            "voice",
+            "pipeline",
+            "decision"
+          ]
+        },
+        {
+          "type": "field_equals",
+          "field": "results[*].project",
+          "value": "eval-mcp-voicelayer"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "search-missing-query-rejected",
+      "tool_name": "brain_search",
+      "path": "error_path",
+      "description": "Missing required query is rejected by the MCP contract.",
+      "input": {},
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "schema_error",
+          "field": "query"
+        },
+        {
+          "type": "is_error",
+          "value": true
+        }
+      ]
+    },
+    {
+      "id": "search-invalid-filter-rejected",
+      "tool_name": "brain_search",
+      "path": "error_path",
+      "description": "Out-of-schema fields fail validation before the server does undefined work.",
+      "input": {
+        "query": "auth",
+        "detail": "verbose",
+        "num_results": 101
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "schema_error",
+          "field": "detail"
+        },
+        {
+          "type": "schema_error",
+          "field": "num_results"
+        },
+        {
+          "type": "is_error",
+          "value": true
+        }
+      ]
+    },
+    {
+      "id": "search-empty-results-clean",
+      "tool_name": "brain_search",
+      "path": "error_path",
+      "description": "No-match queries return an empty result contract instead of an error.",
+      "input": {
+        "query": "zzzxqv nonexistent retrieval sentinel",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 5,
+        "detail": "compact"
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-basic-search"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-brainlayer"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "result_count",
+          "op": "==",
+          "value": 0
+        },
+        {
+          "type": "text_contains",
+          "expected": "No results found."
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "search-timeout-diagnostic-under-lock",
+      "tool_name": "brain_search",
+      "path": "error_path",
+      "description": "Lock contention surfaces as a diagnosable timeout/error instead of a silent hang.",
+      "input": {
+        "query": "search under lock contention",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 5
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-basic-search"
+        },
+        {
+          "action": "inject_fault",
+          "fixture": "simulate-lock-timeout"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-brainlayer"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains_any",
+          "expected": [
+            "busy",
+            "locked",
+            "timeout"
+          ]
+        },
+        {
+          "type": "deadline_ms",
+          "op": "<=",
+          "value": 15000
+        }
+      ]
+    },
+    {
+      "id": "search-warm-latency",
+      "tool_name": "brain_search",
+      "path": "latency_path",
+      "description": "Warm semantic search stays fast enough for interactive agent use.",
+      "input": {
+        "query": "measurement baseline evals",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 5,
+        "detail": "compact"
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-basic-search"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-brainlayer"
+        }
+      ],
+      "sample_size": 20,
+      "warmup_runs": 2,
+      "assertions": [
+        {
+          "type": "p50_ms",
+          "op": "<=",
+          "value": 500
+        },
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 1500
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.95
+        }
+      ]
+    },
+    {
+      "id": "search-contention-latency",
+      "tool_name": "brain_search",
+      "path": "latency_path",
+      "description": "Read retries remain bounded when a transient writer competes for the DB.",
+      "input": {
+        "query": "parallel search resilience",
+        "project": "eval-mcp-brainlayer",
+        "num_results": 5
+      },
+      "setup": [
+        {
+          "action": "seed_project",
+          "fixture": "seed-basic-search"
+        },
+        {
+          "action": "inject_fault",
+          "fixture": "simulate-transient-lock"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-brainlayer"
+        }
+      ],
+      "sample_size": 10,
+      "assertions": [
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 5000
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.9
+        }
+      ]
+    },
+    {
+      "id": "store-then-search-roundtrip",
+      "tool_name": "brain_store",
+      "path": "happy_path",
+      "description": "Stored memory is persisted quickly and becomes searchable shortly after background embedding runs.",
+      "input": {
+        "content": "Authentication uses JWT tokens with RS256 signing for stateless auth.",
+        "type": "decision",
+        "project": "eval-mcp-store",
+        "tags": [
+          "auth",
+          "jwt"
+        ],
+        "importance": 8
+      },
+      "setup": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-store"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-store"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "Stored memory"
+        },
+        {
+          "type": "field_present",
+          "field": "chunk_id"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ],
+      "followup_calls": [
+        {
+          "tool_name": "brain_search",
+          "input": {
+            "query": "JWT RS256 stateless auth",
+            "project": "eval-mcp-store",
+            "num_results": 5,
+            "detail": "compact"
+          },
+          "retry_until_ms": 5000,
+          "assertions": [
+            {
+              "type": "result_count",
+              "op": ">=",
+              "value": 1
+            },
+            {
+              "type": "top_n_contains",
+              "top_n": 3,
+              "expected": [
+                "JWT",
+                "RS256",
+                "stateless"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "store-empty-content-rejected",
+      "tool_name": "brain_store",
+      "path": "error_path",
+      "description": "Empty content is rejected by the handler validation path.",
+      "input": {
+        "content": "",
+        "type": "note",
+        "project": "eval-mcp-store"
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "Validation error"
+        }
+      ]
+    },
+    {
+      "id": "store-concurrent-write-queued",
+      "tool_name": "brain_store",
+      "path": "error_path",
+      "description": "When the DB is busy, the write is not treated as a normal success and is queued safely instead.",
+      "input": {
+        "content": "Queue this if the DB is locked.",
+        "type": "note",
+        "project": "eval-mcp-store"
+      },
+      "setup": [
+        {
+          "action": "inject_fault",
+          "fixture": "simulate-store-busy"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-store"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "field_equals",
+          "field": "chunk_id",
+          "value": "queued"
+        },
+        {
+          "type": "text_contains",
+          "expected": "Memory queued (DB busy)"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "store-return-latency",
+      "tool_name": "brain_store",
+      "path": "latency_path",
+      "description": "brain_store stays responsive because embedding happens in the background.",
+      "input": {
+        "content": "Latency test for deferred embedding.",
+        "type": "note",
+        "project": "eval-mcp-store"
+      },
+      "setup": [
+        {
+          "action": "mock_model",
+          "fixture": "slow-embedding-model"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-store"
+        }
+      ],
+      "sample_size": 10,
+      "assertions": [
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 500
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.95
+        }
+      ]
+    },
+    {
+      "id": "recall-context-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "context mode routes to current context and preserves structured fields.",
+      "input": {
+        "mode": "context",
+        "hours": 24
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-context"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Current Context"
+        },
+        {
+          "type": "field_present",
+          "field": "active_projects"
+        },
+        {
+          "type": "field_equals",
+          "field": "recent_sessions[0].session_id",
+          "value": "sess-ctx-001"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-sessions-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "sessions mode routes to the recent-session listing path.",
+      "input": {
+        "mode": "sessions",
+        "days": 7,
+        "limit": 5
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-sessions"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Recent Sessions"
+        },
+        {
+          "type": "text_contains",
+          "expected": "sess-ctx-001"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-operations-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "operations mode routes to session operation summaries when session_id is provided.",
+      "input": {
+        "mode": "operations",
+        "session_id": "sess-ops-001"
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-operations"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Operations"
+        },
+        {
+          "type": "text_contains",
+          "expected": "indexed pending chunks"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-plan-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "plan mode routes to plan/session linkage output.",
+      "input": {
+        "mode": "plan",
+        "plan_name": "phase-1-eval-foundation"
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-plan"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Sessions: phase-1-eval-foundation"
+        },
+        {
+          "type": "text_contains",
+          "expected": "phase-1-eval-foundation/1A"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-summary-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "summary mode routes to the enriched session summary path.",
+      "input": {
+        "mode": "summary",
+        "session_id": "sess-sum-001"
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-summary"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Session Summary"
+        },
+        {
+          "type": "text_contains",
+          "expected": "**Outcome:** success"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-stats-mode",
+      "tool_name": "brain_recall",
+      "path": "happy_path",
+      "description": "stats mode merges knowledge-base stats with the indexed project list.",
+      "input": {
+        "mode": "stats"
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-stats"
+        },
+        {
+          "action": "mock_async",
+          "fixture": "mock-list-projects"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## BrainLayer Knowledge Base Stats"
+        },
+        {
+          "type": "text_contains",
+          "expected": "## Indexed Projects"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "recall-operations-missing-session-id",
+      "tool_name": "brain_recall",
+      "path": "error_path",
+      "description": "operations mode requires session_id.",
+      "input": {
+        "mode": "operations"
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "session_id required for mode=operations"
+        }
+      ]
+    },
+    {
+      "id": "recall-summary-missing-session-id",
+      "tool_name": "brain_recall",
+      "path": "error_path",
+      "description": "summary mode requires session_id.",
+      "input": {
+        "mode": "summary"
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "session_id required for mode=summary"
+        }
+      ]
+    },
+    {
+      "id": "recall-unknown-mode",
+      "tool_name": "brain_recall",
+      "path": "error_path",
+      "description": "Unknown recall modes fail clearly instead of silently defaulting.",
+      "input": {
+        "mode": "unknown-mode"
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "Unknown recall mode"
+        }
+      ]
+    },
+    {
+      "id": "recall-context-latency",
+      "tool_name": "brain_recall",
+      "path": "latency_path",
+      "description": "Current-context recall remains fast enough for startup/task handoff.",
+      "input": {
+        "mode": "context",
+        "hours": 24
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-context"
+        }
+      ],
+      "sample_size": 20,
+      "assertions": [
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 800
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.95
+        }
+      ]
+    },
+    {
+      "id": "recall-stats-latency",
+      "tool_name": "brain_recall",
+      "path": "latency_path",
+      "description": "Stats recall stays cheap enough to use as a quick diagnostic path.",
+      "input": {
+        "mode": "stats"
+      },
+      "setup": [
+        {
+          "action": "mock_async",
+          "fixture": "mock-recall-stats"
+        },
+        {
+          "action": "mock_async",
+          "fixture": "mock-list-projects"
+        }
+      ],
+      "sample_size": 20,
+      "assertions": [
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 500
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.95
+        }
+      ]
+    },
+    {
+      "id": "expand-with-context",
+      "tool_name": "brain_expand",
+      "path": "happy_path",
+      "description": "Expanding a chunk returns the target plus surrounding context from the same conversation.",
+      "input": {
+        "chunk_id": "expand-chunk-002",
+        "context": 1
+      },
+      "setup": [
+        {
+          "action": "seed_raw_chunks",
+          "fixture": "seed-expand-context"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-expand"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "## Conversation Context"
+        },
+        {
+          "type": "text_contains",
+          "expected": "User asked whether the auth migration should move from sessions to JWT."
+        },
+        {
+          "type": "text_contains",
+          "expected": "We decided to switch to JWT with RS256"
+        },
+        {
+          "type": "text_contains",
+          "expected": "**[TARGET]**"
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "expand-invalid-chunk-id",
+      "tool_name": "brain_expand",
+      "path": "error_path",
+      "description": "Invalid chunk_id fails clearly instead of returning empty success output.",
+      "input": {
+        "chunk_id": "missing-chunk-999",
+        "context": 1
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "Unknown chunk_id"
+        }
+      ]
+    },
+    {
+      "id": "expand-latency",
+      "tool_name": "brain_expand",
+      "path": "latency_path",
+      "description": "Chunk expansion stays fast enough for drill-down after compact search.",
+      "input": {
+        "chunk_id": "expand-chunk-002",
+        "context": 1
+      },
+      "setup": [
+        {
+          "action": "seed_raw_chunks",
+          "fixture": "seed-expand-context"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-expand"
+        }
+      ],
+      "sample_size": 20,
+      "assertions": [
+        {
+          "type": "p95_ms",
+          "op": "<=",
+          "value": 500
+        },
+        {
+          "type": "success_rate",
+          "op": ">=",
+          "value": 0.95
+        }
+      ]
+    },
+    {
+      "id": "digest-ingest-and-entity-extract",
+      "tool_name": "brain_digest",
+      "path": "happy_path",
+      "description": "Digest ingests meeting notes, stores a digest chunk, and returns extracted entities and sentiment metadata.",
+      "input": {
+        "content": "Etan Heyman met with Dor Zohar to discuss the Domica project. They decided to use React Native. Action: write the architecture summary. What is the delivery timeline?",
+        "title": "Domica meeting notes",
+        "project": "eval-mcp-digest",
+        "participants": [
+          "Etan Heyman",
+          "Dor Zohar"
+        ]
+      },
+      "setup": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-digest"
+        }
+      ],
+      "teardown": [
+        {
+          "action": "delete_project",
+          "project": "eval-mcp-digest"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "text_contains",
+          "expected": "\"digest_id\""
+        },
+        {
+          "type": "text_contains",
+          "expected": "\"entities\""
+        },
+        {
+          "type": "text_contains",
+          "expected": "\"sentiment\""
+        },
+        {
+          "type": "text_contains_any",
+          "expected": [
+            "Etan Heyman",
+            "Dor Zohar",
+            "Domica"
+          ]
+        },
+        {
+          "type": "is_error",
+          "value": false
+        }
+      ],
+      "followup_calls": [
+        {
+          "tool_name": "brain_search",
+          "input": {
+            "query": "Domica React Native architecture summary",
+            "project": "eval-mcp-digest",
+            "num_results": 5,
+            "detail": "compact"
+          },
+          "retry_until_ms": 3000,
+          "assertions": [
+            {
+              "type": "result_count",
+              "op": ">=",
+              "value": 1
+            },
+            {
+              "type": "top_n_contains",
+              "top_n": 3,
+              "expected": [
+                "Domica",
+                "React Native",
+                "architecture"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "digest-empty-content-rejected",
+      "tool_name": "brain_digest",
+      "path": "error_path",
+      "description": "Empty digest content fails validation.",
+      "input": {
+        "content": "",
+        "project": "eval-mcp-digest"
+      },
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "is_error",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "content must be non-empty"
+        }
+      ]
+    },
+    {
+      "id": "digest-rejects-parallel-execution",
+      "tool_name": "brain_digest",
+      "path": "error_path",
+      "category": "concurrency",
+      "runner": "mcp_scheduler",
+      "description": "brain_digest must run exclusively; the scheduler should reject launching it while any other MCP call is active.",
+      "input": {
+        "content": "Parallel digest attempt while another tool is active.",
+        "project": "eval-mcp-digest"
+      },
+      "setup": [
+        {
+          "action": "enforce_runner_policy",
+          "fixture": "digest-exclusive-policy"
+        },
+        {
+          "action": "start_active_call",
+          "fixture": "active-parallel-brain-search"
+        }
+      ],
+      "sample_size": 1,
+      "assertions": [
+        {
+          "type": "runner_policy_enforced",
+          "policy": "exclusive_tool",
+          "value": true
+        },
+        {
+          "type": "text_contains",
+          "expected": "brain_digest must run exclusively"
+        },
+        {
+          "type": "is_error",
+          "value": true
+        }
+      ]
+    }
+  ]
+}
