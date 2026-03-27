@@ -25,7 +25,7 @@ DEADLINE_MS = 450
 MIN_PROMPT_LENGTH = 15
 
 
-def should_activate(hook_input):
+def should_activate():
     """Conditional activation gate — skip hook when not needed.
 
     Checks (in order, cheapest first):
@@ -233,7 +233,7 @@ def main():
     except (json.JSONDecodeError, EOFError):
         sys.exit(0)
 
-    activate, light_mode = should_activate(hook_input)
+    activate, light_mode = should_activate()
     if not activate:
         sys.exit(0)
 

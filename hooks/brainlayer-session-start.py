@@ -38,6 +38,7 @@ def should_activate(hook_input):
 
     session_id = hook_input.get("session_id", "")
     if not session_id:
+        # Sessions without IDs are rare/manual — give full context
         return True, False
 
     light = os.environ.get("BRAINLAYER_HOOKS_LIGHT") == "1"

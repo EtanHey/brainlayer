@@ -13,9 +13,7 @@ Env vars tested:
 
 import importlib.util
 import os
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -106,27 +104,23 @@ class TestSessionStartConditional:
 
 class TestPromptSearchConditional:
     def test_default_activates(self, prompt_search):
-        hook_input = {"prompt": "test prompt", "session_id": "abc123"}
-        activate, light = prompt_search.should_activate(hook_input)
+        activate, light = prompt_search.should_activate()
         assert activate is True
         assert light is False
 
     def test_disabled_env_var(self, prompt_search):
         os.environ["BRAINLAYER_HOOKS_DISABLED"] = "1"
-        hook_input = {"prompt": "test"}
-        activate, light = prompt_search.should_activate(hook_input)
+        activate, light = prompt_search.should_activate()
         assert activate is False
 
     def test_non_interactive_skips(self, prompt_search):
         os.environ["CLAUDE_NON_INTERACTIVE"] = "1"
-        hook_input = {"prompt": "test"}
-        activate, light = prompt_search.should_activate(hook_input)
+        activate, light = prompt_search.should_activate()
         assert activate is False
 
     def test_light_mode_reduces_results(self, prompt_search):
         os.environ["BRAINLAYER_HOOKS_LIGHT"] = "1"
-        hook_input = {"prompt": "test", "session_id": "abc123"}
-        activate, light = prompt_search.should_activate(hook_input)
+        activate, light = prompt_search.should_activate()
         assert activate is True
         assert light is True
 
@@ -152,23 +146,3 @@ class TestStopIndexConditional:
         assert stop_index.should_activate() is True
 
 
-class TestLightModeResultLimits:
-    """Verify that light mode actually reduces the result limit in queries."""
-
-    def test_session_start_light_limit(self, session_start):
-        """In light mode, result_limit should be 2 instead of 5."""
-        os.environ["BRAINLAYER_HOOKS_LIGHT"] = "1"
-        hook_input = {"session_id": "abc123"}
-        _, light = session_start.should_activate(hook_input)
-        assert light is True
-        result_limit = 2 if light else 5
-        assert result_limit == 2
-
-    def test_prompt_search_light_limit(self, prompt_search):
-        """In light mode, base_limit should be 2 instead of 3/8."""
-        os.environ["BRAINLAYER_HOOKS_LIGHT"] = "1"
-        hook_input = {"session_id": "abc123"}
-        _, light = prompt_search.should_activate(hook_input)
-        assert light is True
-        base_limit = 2 if light else 3
-        assert base_limit == 2
