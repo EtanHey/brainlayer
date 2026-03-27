@@ -819,7 +819,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get audit events for a chunk, newest first."""
-        cursor = self.conn.cursor()
+        cursor = self._read_cursor()
         rows = list(
             cursor.execute(
                 "SELECT id, chunk_id, action, timestamp, by_whom, reason "

@@ -71,11 +71,16 @@ def find_duplicates(
     store: "VectorStore",
     project: Optional[str] = None,
     n_candidates: int = 5,
+    exclude_ids: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """Find near-duplicate chunks using length-tiered cosine thresholds.
 
+    Args:
+        exclude_ids: Set of chunk IDs to exclude from results (e.g., the just-created chunk).
+
     Returns list of duplicate candidates with chunk_id, score, threshold, content_preview.
     """
+    exclude_ids = exclude_ids or set()
     token_count = _estimate_tokens(content)
     threshold = _get_dedup_threshold(token_count)
 
@@ -96,6 +101,8 @@ def find_duplicates(
 
     duplicates = []
     for cid, doc, dist in zip(ids, docs, dists):
+        if cid in exclude_ids:
+            continue
         score = 1 - dist if dist is not None else 0
         if score >= threshold:
             duplicates.append({
@@ -512,6 +519,7 @@ def digest_content(
             embedding=embedding,
             store=store,
             project=project,
+            exclude_ids={chunk_id},
         )
         store.record_event(
             chunk_id=chunk_id,

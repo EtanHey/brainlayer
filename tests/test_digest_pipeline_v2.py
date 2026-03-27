@@ -733,7 +733,8 @@ class TestIntegration:
         )
 
         assert result1["digest_id"] != result2["digest_id"]
-        if result2.get("duplicates"):
+        assert "duplicates" in result2, "V2 should include duplicates key"
+        if result2["duplicates"]:
             dup_ids = [d["chunk_id"] for d in result2["duplicates"]]
             assert result1["digest_id"] in dup_ids, (
                 f"Expected first digest {result1['digest_id']} in duplicates {dup_ids}"
@@ -819,3 +820,24 @@ class TestEdgeCases:
         from brainlayer.pipeline.digest import _get_dedup_threshold
 
         assert _get_dedup_threshold(201) == 0.88
+
+    def test_find_duplicates_excludes_self(self, mock_store_with_results):
+        """find_duplicates excludes chunk IDs in exclude_ids."""
+        from brainlayer.pipeline.digest import find_duplicates
+
+        chunks = [
+            {"id": "self-chunk", "content": "exact same", "score": 0.99},
+            {"id": "other-chunk", "content": "also similar", "score": 0.97},
+        ]
+        store = mock_store_with_results(chunks)
+
+        result = find_duplicates(
+            content="tiny",
+            embedding=[0.1] * 1024,
+            store=store,
+            exclude_ids={"self-chunk"},
+        )
+
+        dup_ids = [d["chunk_id"] for d in result]
+        assert "self-chunk" not in dup_ids
+        assert "other-chunk" in dup_ids
