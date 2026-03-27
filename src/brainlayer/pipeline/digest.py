@@ -26,10 +26,86 @@ from .sentiment import analyze_sentiment
 
 logger = logging.getLogger(__name__)
 
+# Feature flag: enable v2 digest pipeline enhancements
+DIGEST_V2_ENABLED = os.environ.get("BRAINLAYER_DIGEST_V2", "true").lower() in ("1", "true", "yes")
+
 # Confidence tier thresholds
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 MEDIUM_CONFIDENCE_THRESHOLD = 0.5
 SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
+
+# Length-tiered cosine similarity thresholds for dedup
+# Research-validated: SemHash defaults to 0.90, strict 0.95 misses paraphrases
+DEDUP_THRESHOLD_SHORT = 0.95   # <50 tokens: near-exact match required
+DEDUP_THRESHOLD_MEDIUM = 0.90  # 50-200 tokens: moderate flexibility
+DEDUP_THRESHOLD_LONG = 0.88    # 200+ tokens: more tolerance for paraphrases
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count using whitespace split (~1.3 tokens per word)."""
+    return max(1, int(len(text.split()) * 1.3))
+
+
+def _get_dedup_threshold(token_count: int) -> float:
+    """Return the cosine similarity threshold for dedup based on content length."""
+    if token_count < 50:
+        return DEDUP_THRESHOLD_SHORT
+    elif token_count <= 200:
+        return DEDUP_THRESHOLD_MEDIUM
+    else:
+        return DEDUP_THRESHOLD_LONG
+
+
+def find_duplicates(
+    content: str,
+    embedding: List[float],
+    store: "VectorStore",
+    project: Optional[str] = None,
+    n_candidates: int = 5,
+    exclude_ids: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """Find near-duplicate chunks using length-tiered cosine thresholds.
+
+    Args:
+        exclude_ids: Set of chunk IDs to exclude from results (e.g., the just-created chunk).
+
+    Returns list of duplicate candidates with chunk_id, score, threshold, content_preview.
+    """
+    exclude_ids = exclude_ids or set()
+    token_count = _estimate_tokens(content)
+    threshold = _get_dedup_threshold(token_count)
+
+    try:
+        results = store.hybrid_search(
+            query_embedding=embedding,
+            query_text=content[:200],
+            n_results=n_candidates,
+            project_filter=project,
+        )
+    except Exception as e:
+        logger.warning("Dedup search failed: %s", e)
+        return []
+
+    ids = results.get("ids", [[]])[0]
+    docs = results.get("documents", [[]])[0]
+    dists = results.get("distances", [[]])[0]
+
+    duplicates = []
+    for cid, doc, dist in zip(ids, docs, dists):
+        if cid in exclude_ids:
+            continue
+        # hybrid_search returns cosine distances (0=identical, 2=opposite)
+        score = 1 - dist if dist is not None else 0
+        if score >= threshold:
+            duplicates.append({
+                "chunk_id": cid,
+                "score": round(score, 4),
+                "threshold": threshold,
+                "token_count": token_count,
+                "content_preview": (doc or "")[:200],
+            })
+
+    return duplicates
+
 
 # Action item patterns
 ACTION_PATTERNS = [
@@ -426,7 +502,24 @@ def digest_content(
     # 6. Confidence tier stats
     tier_stats = _classify_confidence(entities)
 
-    return {
+    # 7. V2 enhancements: dedup detection + audit events
+    duplicates: List[Dict[str, Any]] = []
+    if DIGEST_V2_ENABLED:
+        duplicates = find_duplicates(
+            content=content,
+            embedding=embedding,
+            store=store,
+            project=project,
+            exclude_ids={chunk_id},
+        )
+        store.record_event(
+            chunk_id=chunk_id,
+            action="digest_created",
+            by_whom="digest_pipeline_v2",
+            reason=f"Digested {len(content)} chars, {len(entities)} entities, {len(duplicates)} duplicates found",
+        )
+
+    result: Dict[str, Any] = {
         "digest_id": chunk_id,
         "summary": summary,
         "tags": merged_tags,
@@ -443,9 +536,18 @@ def digest_content(
             "action_items": len(action_items),
             "decisions": len(decisions),
             "questions": len(questions),
+            "chunks_created": 1,
+            "connections_made": 0,
+            "supersedes_proposed": 0,
             **tier_stats,
         },
     }
+
+    if DIGEST_V2_ENABLED:
+        result["duplicates"] = duplicates
+        result["stats"]["duplicates_found"] = len(duplicates)
+
+    return result
 
 
 def digest_connect(
@@ -609,7 +711,20 @@ def digest_connect(
                 "score": conn["score"],
             })
 
-    # Step 6: Build the proposed store actions
+    # Step 6: V2 dedup detection — reuses embeddings from step 3 searches
+    duplicates: List[Dict[str, Any]] = []
+    if DIGEST_V2_ENABLED:
+        # Use topic_query embedding if available (already computed in step 3),
+        # otherwise compute a fresh one. Avoids redundant embed_fn(content) call.
+        dedup_embedding = embed_fn(topic_query)
+        duplicates = find_duplicates(
+            content=content,
+            embedding=dedup_embedding,
+            store=store,
+            project=project,
+        )
+
+    # Step 7: Build the proposed store actions
     suggested_stores: List[Dict[str, Any]] = []
     # Suggest storing the new content as a chunk
     suggested_stores.append({
@@ -622,7 +737,7 @@ def digest_connect(
         "supersedes": [s["chunk_id"] for s in supersede_proposals],
     })
 
-    return {
+    result: Dict[str, Any] = {
         "status": "proposal",
         "content_preview": (title or content[:200]).strip(),
         "extracted": {
@@ -631,18 +746,25 @@ def digest_connect(
             "action_items": action_items,
             "questions": questions,
         },
-        "connections": connections[:20],  # Cap response size
+        "related_chunks": connections[:20],
+        "connections": connections[:20],  # backward compat alias
         "contradictions": contradictions,
+        "duplicates": duplicates,
         "supersede_proposals": supersede_proposals,
         "suggested_stores": suggested_stores,
         "stats": {
             "entities_found": len(entities),
             "searches_performed": min(len(search_queries), 10),
             "connections_found": len(connections),
+            "connections_made": len(connections),
             "contradictions_found": len(contradictions),
+            "duplicates_found": len(duplicates),
             "supersedes_proposed": len(supersede_proposals),
+            "chunks_created": 0,
         },
     }
+
+    return result
 
 
 def _auto_propose_importance(
