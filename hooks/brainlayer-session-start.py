@@ -19,6 +19,32 @@ import time
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
 
+
+def should_activate(hook_input):
+    """Conditional activation gate — skip hook when not needed.
+
+    Checks (in order, cheapest first):
+    1. BRAINLAYER_HOOKS_DISABLED=1 env var → skip all BrainLayer hooks
+    2. Non-interactive mode (--print) → skip context injection
+    3. BRAINLAYER_HOOKS_LIGHT=1 → reduce to 2 results (overnight workers)
+
+    Returns (activate: bool, light_mode: bool).
+    """
+    if os.environ.get("BRAINLAYER_HOOKS_DISABLED") == "1":
+        return False, False
+
+    if os.environ.get("CLAUDE_NON_INTERACTIVE") == "1":
+        return False, False
+
+    session_id = hook_input.get("session_id", "")
+    if not session_id:
+        # Sessions without IDs are rare/manual — give full context
+        return True, False
+
+    light = os.environ.get("BRAINLAYER_HOOKS_LIGHT") == "1"
+
+    return True, light
+
 # Map cwd basenames to BrainLayer project names where they differ
 PROJECT_ALIASES = {
     "etanheyman.com": "etanheyman-com",
@@ -184,6 +210,10 @@ def main():
     except (json.JSONDecodeError, EOFError):
         hook_input = {}
 
+    activate, light_mode = should_activate(hook_input)
+    if not activate:
+        sys.exit(0)
+
     cwd = hook_input.get("cwd", os.getcwd())
     project, search_term = get_project_info(cwd)
 
@@ -206,6 +236,8 @@ def main():
     basename = os.path.basename(cwd)
     scope_project = load_scoped_projects().get(basename)
 
+    result_limit = 2 if light_mode else 5
+
     try:
         # Single combined query: decisions + milestones for this project
         # Uses both tags: prefix (catches brain_store'd tagged chunks)
@@ -224,9 +256,9 @@ def main():
                     JOIN chunks c ON c.id = f.chunk_id
                     WHERE chunks_fts MATCH ? AND c.project = ?
                     ORDER BY rank
-                    LIMIT 5
+                    LIMIT ?
                     """,
-                    (fts_query, scope_project),
+                    (fts_query, scope_project, result_limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -236,9 +268,9 @@ def main():
                     JOIN chunks c ON c.id = f.chunk_id
                     WHERE chunks_fts MATCH ?
                     ORDER BY rank
-                    LIMIT 5
+                    LIMIT ?
                     """,
-                    (fts_query,),
+                    (fts_query, result_limit),
                 ).fetchall()
 
             if rows:
