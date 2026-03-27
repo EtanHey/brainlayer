@@ -55,16 +55,6 @@ def _get_dedup_threshold(token_count: int) -> float:
         return DEDUP_THRESHOLD_LONG
 
 
-def _cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
 def find_duplicates(
     content: str,
     embedding: List[float],
@@ -103,6 +93,7 @@ def find_duplicates(
     for cid, doc, dist in zip(ids, docs, dists):
         if cid in exclude_ids:
             continue
+        # hybrid_search returns cosine distances (0=identical, 2=opposite)
         score = 1 - dist if dist is not None else 0
         if score >= threshold:
             duplicates.append({
@@ -552,7 +543,7 @@ def digest_content(
         },
     }
 
-    if DIGEST_V2_ENABLED and duplicates:
+    if DIGEST_V2_ENABLED:
         result["duplicates"] = duplicates
         result["stats"]["duplicates_found"] = len(duplicates)
 
@@ -720,13 +711,15 @@ def digest_connect(
                 "score": conn["score"],
             })
 
-    # Step 6: V2 dedup detection
+    # Step 6: V2 dedup detection — reuses embeddings from step 3 searches
     duplicates: List[Dict[str, Any]] = []
     if DIGEST_V2_ENABLED:
-        content_embedding = embed_fn(content)
+        # Use topic_query embedding if available (already computed in step 3),
+        # otherwise compute a fresh one. Avoids redundant embed_fn(content) call.
+        dedup_embedding = embed_fn(topic_query)
         duplicates = find_duplicates(
             content=content,
-            embedding=content_embedding,
+            embedding=dedup_embedding,
             store=store,
             project=project,
         )

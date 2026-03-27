@@ -811,7 +811,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "INSERT INTO chunk_events (chunk_id, action, by_whom, reason) VALUES (?, ?, ?, ?)",
             (chunk_id, action, by_whom, reason),
         )
-        return cursor.execute("SELECT last_insert_rowid()").fetchone()[0]
+        return self.conn.last_insert_rowid()
 
     def get_chunk_events(
         self,

@@ -264,27 +264,6 @@ class TestLengthTieredDedup:
         assert _get_dedup_threshold(201) == 0.88
         assert _get_dedup_threshold(1000) == 0.88
 
-    def test_cosine_similarity_identical(self):
-        """Cosine similarity of identical vectors is 1.0."""
-        from brainlayer.pipeline.digest import _cosine_similarity
-
-        v = [1.0, 2.0, 3.0]
-        assert abs(_cosine_similarity(v, v) - 1.0) < 1e-9
-
-    def test_cosine_similarity_orthogonal(self):
-        """Cosine similarity of orthogonal vectors is 0.0."""
-        from brainlayer.pipeline.digest import _cosine_similarity
-
-        a = [1.0, 0.0]
-        b = [0.0, 1.0]
-        assert abs(_cosine_similarity(a, b)) < 1e-9
-
-    def test_cosine_similarity_zero_vector(self):
-        """Cosine similarity with zero vector returns 0.0."""
-        from brainlayer.pipeline.digest import _cosine_similarity
-
-        assert _cosine_similarity([0, 0, 0], [1, 2, 3]) == 0.0
-
     def test_find_duplicates_returns_matches(self, mock_store_with_results, mock_embed):
         """find_duplicates returns chunks above the threshold."""
         from brainlayer.pipeline.digest import find_duplicates
