@@ -6,13 +6,13 @@
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-11%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1%2C204%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
+[![MCP](https://img.shields.io/badge/MCP-12%20tools-green.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-1%2C454%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
 
 ---
 
-**281,000+ chunks indexed** · **1,204 Python + 54 Swift tests** · **Real-time JSONL watcher** · **11 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
+**284,000+ chunks indexed** · **1,454 Python + 54 Swift tests** · **Real-time JSONL watcher** · **12 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -122,9 +122,10 @@ graph LR
 | MCP Server | stdio-based, MCP SDK v1.26+, compatible with any MCP client |
 | Telemetry | Axiom (`brainlayer-watcher` dataset) — flush metrics, errors, heartbeat, rewind detection |
 | Session dedup | Hook coordination file prevents duplicate chunk injection across session lifecycle |
+| Entity contracts | Typed entity schemas with health scoring, type hierarchy, and validation |
 | BrainBar | Native macOS daemon (209KB Swift binary) — always-on MCP over Unix socket |
 
-## MCP Tools (11)
+## MCP Tools (12)
 
 ### Core (4)
 
@@ -144,6 +145,12 @@ graph LR
 | `brain_expand` | Expand a chunk_id with N surrounding chunks for full context. |
 | `brain_update` | Update, archive, or merge existing memories. |
 | `brain_get_person` | Person lookup — entity details, interactions, preferences (~200-500ms). |
+
+### Enrichment (1)
+
+| Tool | Description |
+|------|-------------|
+| `brain_enrich` | Run LLM enrichment on chunks — unified controller with Gemini, Groq, and MLX backends. Auto-enriches on store, or batch-enrich existing chunks. |
 
 ### Lifecycle (2)
 
@@ -173,13 +180,14 @@ BrainLayer enriches each chunk with 10 structured metadata fields using a local 
 | `debt_impact` | `introduction`, `resolution`, `none` |
 | `external_deps` | "grammy, Supabase, Railway" |
 
-Three enrichment backends (override via `BRAINLAYER_ENRICH_BACKEND`):
+Four enrichment backends (override via `BRAINLAYER_ENRICH_BACKEND`):
 
 | Backend | Best for | Speed |
 |---------|----------|-------|
-| **Groq** (cloud) | Primary — fast, reliable | ~1-2s/chunk |
+| **MLX** (local) | Default — runs on Apple Silicon, no API key | ~0.5-1s/chunk |
+| **Groq** (cloud) | Fast cloud fallback | ~1-2s/chunk |
 | **Gemini** (cloud) | Batch enrichment via `enrichment_controller.py` | ~0.6s/chunk |
-| **Ollama** (local) | Offline fallback | ~1-13s/chunk |
+| **Ollama** (local) | Alternative local backend | ~1-13s/chunk |
 
 ```bash
 brainlayer enrich                              # Default backend
@@ -190,7 +198,7 @@ brainlayer watch                               # Real-time JSONL watcher (persis
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta | LangChain Memory |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **MCP native** | 11 tools | 1 server | 1 server | No | No |
+| **MCP native** | 12 tools | 1 server | 1 server | No | No |
 | **Think / Recall** | Yes | No | No | No | No |
 | **Chunk lifecycle** | Supersede/archive | Auto-dedup | No | No | No |
 | **Real-time watcher** | ~1s JSONL polling | No | No | No | No |
@@ -205,8 +213,9 @@ BrainLayer is the only memory layer that:
 1. **Indexes in real-time** — JSONL watcher ingests conversations within seconds, not hours
 2. **Manages knowledge lifecycle** — supersede stale facts, archive old decisions, search only current knowledge
 3. **Runs on a single file** — no database servers, no Docker, no cloud accounts
-4. **Works with every MCP client** — 11 tools, instant integration, zero SDK
+4. **Works with every MCP client** — 12 tools, instant integration, zero SDK
 5. **Knowledge graph** — entities, relations, and person lookup across all indexed data
+6. **Entity contracts** — typed entity schemas with health scoring and type hierarchy for structured knowledge
 
 ## CLI Reference
 
@@ -277,7 +286,7 @@ BrainLayer can index conversations from multiple sources:
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (1,204 Python tests)
+pytest tests/                           # Full suite (1,454 Python tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
 # BrainBar (Swift): 54 tests via Xcode

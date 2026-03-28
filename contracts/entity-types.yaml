@@ -1,0 +1,162 @@
+# R49 Entity Type Contracts — defines required/expected fields per entity type
+# Used by score_entity_health.py to evaluate entity completeness.
+#
+# Three requirement levels:
+#   required  — must be present for entity to be useful
+#   expected  — should be present for a well-maintained entity
+#   optional  — nice to have, not penalized if absent
+#
+# Health criteria define minimum viable thresholds for each type.
+
+version: "1.0"
+
+defaults:
+  memory_categories:
+    - identity
+    - relationships
+    - observations
+    - context
+    - actions
+    - meta
+
+entity_types:
+  agent:
+    required:
+      - name
+      - type
+      - description
+      - capabilities
+      - memory_domains
+    expected:
+      - status
+      - personality_traits
+      - tools_used
+      - scheduling_patterns
+    optional:
+      - version_history
+      - error_patterns
+      - performance_metrics
+    relationships:
+      min_required: 2
+      expected_types:
+        - USES
+        - MANAGES
+        - CREATED_BY
+        - PART_OF
+    memory_categories:
+      required:
+        - identity
+        - observations
+        - actions
+      expected:
+        - relationships
+        - context
+    health_criteria:
+      min_chunks: 10
+      max_stale_days: 30
+      min_relationships: 2
+
+  person:
+    required:
+      - name
+      - type
+      - description
+      - role
+    expected:
+      - affiliation
+      - domain
+      - first_seen_date
+      - key_interactions
+    optional:
+      - contact_info
+      - hard_constraints
+      - preferences
+    relationships:
+      min_required: 1
+      expected_types:
+        - CREATED_BY
+        - WORKS_ON
+        - OWNS
+    health_criteria:
+      min_chunks: 3
+      max_stale_days: 90
+      min_relationships: 1
+
+  tool:
+    required:
+      - name
+      - type
+      - description
+      - purpose
+    expected:
+      - status
+      - integration_status
+      - documentation_url
+      - known_issues
+    optional:
+      - version
+      - alternatives
+      - performance_notes
+    relationships:
+      min_required: 1
+      expected_types:
+        - USES
+        - PART_OF
+        - DEPENDS_ON
+    health_criteria:
+      min_chunks: 5
+      max_stale_days: 60
+      min_relationships: 1
+
+  project:
+    required:
+      - name
+      - type
+      - description
+      - status
+      - goals
+    expected:
+      - start_date
+      - stakeholders
+      - repository_url
+      - tech_stack
+    optional:
+      - end_date
+      - milestones
+      - budget
+    relationships:
+      min_required: 2
+      expected_types:
+        - PART_OF
+        - OWNED_BY
+        - USES
+        - DEPENDS_ON
+    health_criteria:
+      min_chunks: 10
+      max_stale_days: 14
+      min_relationships: 2
+
+  concept:
+    required:
+      - name
+      - type
+      - description
+      - domain
+    expected:
+      - definition
+      - related_concepts
+      - applications
+    optional:
+      - examples
+      - references
+      - history
+    relationships:
+      min_required: 1
+      expected_types:
+        - RELATED_TO
+        - PART_OF
+        - INFLUENCES
+    health_criteria:
+      min_chunks: 2
+      max_stale_days: 180
+      min_relationships: 1

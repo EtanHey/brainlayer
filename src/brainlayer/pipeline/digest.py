@@ -844,6 +844,22 @@ def entity_lookup(
         for e in evidence_raw
     ]
 
+    # R49: Include health data if available
+    completeness_score = None
+    health_level = None
+    try:
+        health_rows = list(
+            store._read_cursor().execute(
+                "SELECT completeness_score, health_level FROM entity_health WHERE entity_name = ?",
+                (entity["name"],),
+            )
+        )
+        if health_rows:
+            completeness_score = health_rows[0][0]
+            health_level = health_rows[0][1]
+    except Exception:
+        pass  # Table may not exist yet or entity not scored
+
     return {
         "id": entity_id,
         "name": entity["name"],
@@ -851,4 +867,6 @@ def entity_lookup(
         "metadata": entity.get("metadata", {}),
         "relations": relations,
         "evidence": evidence,
+        "completeness_score": completeness_score,
+        "health_level": health_level,
     }
