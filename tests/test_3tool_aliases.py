@@ -12,13 +12,9 @@ Covers:
 """
 
 import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from brainlayer.mcp.search_handler import _brain_recall, _smart_detect_mode
-
 
 # ── Smart Mode Detection ─────────────────────────────────────────────────────
 

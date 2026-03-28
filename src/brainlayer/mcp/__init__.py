@@ -35,7 +35,8 @@ from ._shared import (
     _normalize_project_name as _normalize_project_name,
 )
 from .enrich_handler import _brain_enrich
-from .entity_handler import _brain_entity, _brain_get_person
+from .entity_handler import _brain_entity as _brain_entity
+from .entity_handler import _brain_get_person
 from .search_handler import (
     _brain_recall,
     _brain_search,
@@ -52,8 +53,9 @@ from .search_handler import (
     _stats,
     _think,
 )
-from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _brain_update, _store, _store_new
-from .tags_handler import _brain_tags_mcp
+from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _store, _store_new
+from .store_handler import _brain_update as _brain_update
+from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
 
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
 MCP_QUERY_TIMEOUT = 15  # seconds — fail fast, return error instead of hanging
