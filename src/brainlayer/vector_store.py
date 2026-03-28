@@ -583,6 +583,83 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if "mention_type" not in ec_cols:
             cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN mention_type TEXT")
 
+        # ── R49: Entity Contracts Schema ───────────────────────────────
+
+        # R49: entity_contracts table — defines required/expected fields per entity type
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entity_contracts (
+                entity_type TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                field_type TEXT NOT NULL DEFAULT 'text',
+                requirement TEXT NOT NULL DEFAULT 'optional',
+                description TEXT,
+                PRIMARY KEY (entity_type, field_name)
+            )
+        """)
+
+        # R49: entity_health table — completeness scores per entity
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entity_health (
+                entity_name TEXT PRIMARY KEY,
+                completeness_score REAL NOT NULL DEFAULT 0.0,
+                health_level INTEGER NOT NULL DEFAULT 1,
+                missing_required TEXT DEFAULT '[]',
+                missing_expected TEXT DEFAULT '[]',
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                relationship_count INTEGER NOT NULL DEFAULT 0,
+                last_scored_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+
+        # R49: entity_type_hierarchy — type taxonomy stored as data
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entity_type_hierarchy (
+                child_type TEXT PRIMARY KEY,
+                parent_type TEXT,
+                description TEXT
+            )
+        """)
+
+        # R49: Seed type hierarchy with core types + subtypes
+        _type_hierarchy_seed = [
+            ("agent", "entity", "Autonomous AI agent or golem"),
+            ("person", "entity", "Human individual"),
+            ("tool", "entity", "Software tool or service"),
+            ("project", "entity", "Software project or initiative"),
+            ("concept", "entity", "Abstract concept, pattern, or domain idea"),
+            ("event", "entity", "Temporal event or occurrence"),
+            ("organization", "entity", "Company or group"),
+            ("golem", "agent", "Specialized AI agent in the golems ecosystem"),
+            ("platform", "tool", "Software platform or framework"),
+            ("skill", "concept", "Reusable AI skill or capability"),
+            ("decision", "concept", "Architectural or design decision"),
+        ]
+        for child, parent, desc in _type_hierarchy_seed:
+            cursor.execute(
+                "INSERT OR IGNORE INTO entity_type_hierarchy (child_type, parent_type, description) VALUES (?, ?, ?)",
+                (child, parent, desc),
+            )
+
+        # R49: ALTER kg_entities — add entity_subtype, status
+        if "entity_subtype" not in kg_entity_cols:
+            cursor.execute("ALTER TABLE kg_entities ADD COLUMN entity_subtype TEXT")
+        if "status" not in kg_entity_cols:
+            cursor.execute("ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'")
+
+        # R49: ALTER kg_entity_chunks — add relation_tier, weight
+        if "relation_tier" not in ec_cols:
+            cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN relation_tier INTEGER DEFAULT 4")
+        if "weight" not in ec_cols:
+            cursor.execute("ALTER TABLE kg_entity_chunks ADD COLUMN weight REAL DEFAULT 0.25")
+
+        # R49: Upgrade kg_entity_aliases — add valid_from, valid_to if missing
+        alias_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_aliases)")}
+        if "valid_to" not in alias_cols:
+            cursor.execute("ALTER TABLE kg_entity_aliases ADD COLUMN valid_to TEXT")
+        # valid_from may already exist from original schema (as created_at) — ensure both names exist
+        if "valid_from" not in alias_cols:
+            cursor.execute("ALTER TABLE kg_entity_aliases ADD COLUMN valid_from TEXT")
+
         # kg_current_facts view
         cursor.execute("DROP VIEW IF EXISTS kg_current_facts")
         cursor.execute("""

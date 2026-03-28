@@ -89,6 +89,8 @@ class TestKGTableCreation:
             "valid_from",
             "valid_until",
             "group_id",
+            "entity_subtype",
+            "status",
         }
         assert cols == expected
 
@@ -116,7 +118,7 @@ class TestKGTableCreation:
     def test_kg_entity_chunks_columns(self, store):
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
-        assert cols == {"entity_id", "chunk_id", "relevance", "context", "mention_type"}
+        assert cols == {"entity_id", "chunk_id", "relevance", "context", "mention_type", "relation_tier", "weight"}
 
     def test_source_project_id_column_on_chunks(self, store):
         cursor = store._read_cursor()
