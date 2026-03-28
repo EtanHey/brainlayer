@@ -12,7 +12,8 @@
 # - App: /Users/YOURUSERNAME/Applications/BrainBar.app
 
 ## Enrichment Config
-# - Backend: mlx (default), gemini, ollama
+# - BRAINLAYER_ENRICH_BACKEND: mlx (default on Apple Silicon) or ollama
+# - Auto-enrich on brain_store uses Gemini Flash Lite (separate from backend)
 # - Gemini API key location: 1Password vault "development"
 
 ## Dev Flags
