@@ -1,0 +1,20 @@
+# .claude.local.md — Machine-Specific Config
+# Copy to .claude.local.md and customize for your machine.
+# This file is gitignored — safe for local paths, ports, and overrides.
+
+## Local Paths
+# - Repo: /Users/YOURUSERNAME/Gits/brainlayer
+# - Python venv: /Users/YOURUSERNAME/Gits/brainlayer/.venv
+# - BrainLayer DB: /Users/YOURUSERNAME/Library/Application Support/BrainBar/brainlayer.db
+
+## BrainBar Daemon
+# - Socket: /tmp/brainbar.sock
+# - App: /Users/YOURUSERNAME/Applications/BrainBar.app
+
+## Enrichment Config
+# - Backend: mlx (default), gemini, ollama
+# - Gemini API key location: 1Password vault "development"
+
+## Dev Flags
+# - debug_mode: false
+# - test_db_path: /tmp/brainlayer-test.db
