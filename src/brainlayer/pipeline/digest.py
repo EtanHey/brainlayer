@@ -36,9 +36,10 @@ SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
 
 # Length-tiered cosine similarity thresholds for dedup
 # Research-validated: SemHash defaults to 0.90, strict 0.95 misses paraphrases
-DEDUP_THRESHOLD_SHORT = 0.95   # <50 tokens: near-exact match required
+DEDUP_THRESHOLD_SHORT = 0.95  # <50 tokens: near-exact match required
 DEDUP_THRESHOLD_MEDIUM = 0.90  # 50-200 tokens: moderate flexibility
-DEDUP_THRESHOLD_LONG = 0.88    # 200+ tokens: more tolerance for paraphrases
+DEDUP_THRESHOLD_LONG = 0.88  # 200+ tokens: more tolerance for paraphrases
+
 
 def _estimate_tokens(text: str) -> int:
     """Estimate token count using whitespace split (~1.3 tokens per word)."""
@@ -96,13 +97,15 @@ def find_duplicates(
         # hybrid_search returns cosine distances (0=identical, 2=opposite)
         score = 1 - dist if dist is not None else 0
         if score >= threshold:
-            duplicates.append({
-                "chunk_id": cid,
-                "score": round(score, 4),
-                "threshold": threshold,
-                "token_count": token_count,
-                "content_preview": (doc or "")[:200],
-            })
+            duplicates.append(
+                {
+                    "chunk_id": cid,
+                    "score": round(score, 4),
+                    "threshold": threshold,
+                    "token_count": token_count,
+                    "content_preview": (doc or "")[:200],
+                }
+            )
 
     return duplicates
 
@@ -652,17 +655,19 @@ def digest_connect(
                         tags = json.loads(tags)
                     except (json.JSONDecodeError, TypeError):
                         tags = []
-                connections.append({
-                    "chunk_id": cid,
-                    "content_preview": (doc or "")[:300],
-                    "score": score,
-                    "matched_query": query,
-                    "project": meta.get("project"),
-                    "content_type": meta.get("content_type"),
-                    "date": meta.get("created_at"),
-                    "tags": tags,
-                    "importance": meta.get("importance"),
-                })
+                connections.append(
+                    {
+                        "chunk_id": cid,
+                        "content_preview": (doc or "")[:300],
+                        "score": score,
+                        "matched_query": query,
+                        "project": meta.get("project"),
+                        "content_type": meta.get("content_type"),
+                        "date": meta.get("created_at"),
+                        "tags": tags,
+                        "importance": meta.get("importance"),
+                    }
+                )
         except Exception as e:
             logger.warning("digest_connect search failed for query '%s': %s", query, e)
 
@@ -672,10 +677,7 @@ def digest_connect(
     seen_contradiction_chunks: set = set()
     for conn in connections:
         preview = conn["content_preview"].lower()
-        if not any(
-            word in preview
-            for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]
-        ):
+        if not any(word in preview for word in ["instead", "replaced", "deprecated", "switched from", "no longer"]):
             continue
         # Find which decision(s) relate to this chunk by keyword overlap
         for decision in decisions:
@@ -685,12 +687,14 @@ def digest_connect(
             overlap = sum(1 for w in decision_words if w in preview)
             if overlap >= 2 and conn["chunk_id"] not in seen_contradiction_chunks:
                 seen_contradiction_chunks.add(conn["chunk_id"])
-                contradictions.append({
-                    "new_decision": decision,
-                    "existing_chunk_id": conn["chunk_id"],
-                    "existing_preview": conn["content_preview"],
-                    "reason": "Existing chunk contains replacement/deprecation language with keyword overlap",
-                })
+                contradictions.append(
+                    {
+                        "new_decision": decision,
+                        "existing_chunk_id": conn["chunk_id"],
+                        "existing_preview": conn["content_preview"],
+                        "reason": "Existing chunk contains replacement/deprecation language with keyword overlap",
+                    }
+                )
 
     # Step 5: Propose supersedes — chunks that this new content should replace
     supersede_proposals: List[Dict[str, Any]] = []
@@ -700,16 +704,16 @@ def digest_connect(
         # If the connected chunk discusses the same topic with lower importance
         # or is older content about the same decision, propose supersede
         is_same_topic = conn["score"] > SUPERSEDE_SIMILARITY_THRESHOLD
-        is_old_decision = conn["content_type"] == "decision" and any(
-            d.lower() in preview_lower for d in decisions
-        )
+        is_old_decision = conn["content_type"] == "decision" and any(d.lower() in preview_lower for d in decisions)
         if is_same_topic or is_old_decision:
-            supersede_proposals.append({
-                "chunk_id": conn["chunk_id"],
-                "content_preview": conn["content_preview"],
-                "reason": "high_similarity" if is_same_topic else "updated_decision",
-                "score": conn["score"],
-            })
+            supersede_proposals.append(
+                {
+                    "chunk_id": conn["chunk_id"],
+                    "content_preview": conn["content_preview"],
+                    "reason": "high_similarity" if is_same_topic else "updated_decision",
+                    "score": conn["score"],
+                }
+            )
 
     # Step 6: V2 dedup detection — reuses embeddings from step 3 searches
     duplicates: List[Dict[str, Any]] = []
@@ -727,15 +731,17 @@ def digest_connect(
     # Step 7: Build the proposed store actions
     suggested_stores: List[Dict[str, Any]] = []
     # Suggest storing the new content as a chunk
-    suggested_stores.append({
-        "action": "store",
-        "content": content,
-        "title": title,
-        "project": project,
-        "tags": [e["name"].lower().replace(" ", "-") for e in entities[:5]],
-        "importance": _auto_propose_importance(entities, decisions, action_items),
-        "supersedes": [s["chunk_id"] for s in supersede_proposals],
-    })
+    suggested_stores.append(
+        {
+            "action": "store",
+            "content": content,
+            "title": title,
+            "project": project,
+            "tags": [e["name"].lower().replace(" ", "-") for e in entities[:5]],
+            "importance": _auto_propose_importance(entities, decisions, action_items),
+            "supersedes": [s["chunk_id"] for s in supersede_proposals],
+        }
+    )
 
     result: Dict[str, Any] = {
         "status": "proposal",

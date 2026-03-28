@@ -93,11 +93,14 @@ class TestMockBrainLayerInfra:
     async def test_store_captures_content(self):
         brain = MockBrainLayer()
         async with brain.connect() as client:
-            await client.call_tool("brain_store", {
-                "content": "Auth uses JWT tokens",
-                "tags": ["auth", "decision"],
-                "importance": 8,
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "Auth uses JWT tokens",
+                    "tags": ["auth", "decision"],
+                    "importance": 8,
+                },
+            )
 
         assert len(brain.stored_items) == 1
         assert brain.stored_items[0]["content"] == "Auth uses JWT tokens"
@@ -216,10 +219,13 @@ class TestPrLoopBehavior:
         github = MockGitHub()
         async with github.connect() as client:
             # Step 1: Create PR
-            result = await client.call_tool("gh_pr_create", {
-                "title": "feat: add mock MCP harness",
-                "body": "Behavioral testing infrastructure",
-            })
+            result = await client.call_tool(
+                "gh_pr_create",
+                {
+                    "title": "feat: add mock MCP harness",
+                    "body": "Behavioral testing infrastructure",
+                },
+            )
             pr = json.loads(result.content[0].text)
             pr_number = pr["number"]
 
@@ -353,10 +359,13 @@ class TestMultiServerBehavior:
             await bl_client.call_tool("brain_search", {"query": "mock MCP harness"})
 
             # Step 2: Create PR
-            await gh_client.call_tool("gh_pr_create", {
-                "title": "feat: mock MCP harness",
-                "body": "Behavioral testing infra",
-            })
+            await gh_client.call_tool(
+                "gh_pr_create",
+                {
+                    "title": "feat: mock MCP harness",
+                    "body": "Behavioral testing infra",
+                },
+            )
 
             # Step 3: Check CI
             await gh_client.call_tool("gh_pr_checks", {"pr_number": 42})
@@ -365,11 +374,14 @@ class TestMultiServerBehavior:
             await gh_client.call_tool("gh_pr_reviews", {"pr_number": 42})
 
             # Step 5: Store checkpoint in brain
-            await bl_client.call_tool("brain_store", {
-                "content": "PR #42 created for mock MCP harness. CI passed, review approved.",
-                "tags": ["pr-merged", "brainlayer", "mock-mcp"],
-                "importance": 7,
-            })
+            await bl_client.call_tool(
+                "brain_store",
+                {
+                    "content": "PR #42 created for mock MCP harness. CI passed, review approved.",
+                    "tags": ["pr-merged", "brainlayer", "mock-mcp"],
+                    "importance": 7,
+                },
+            )
 
             # Step 6: Merge
             await gh_client.call_tool("gh_pr_merge", {"pr_number": 42})
@@ -398,9 +410,12 @@ class TestMultiServerBehavior:
             await gh_client.call_tool("gh_pr_merge", {"pr_number": 42})
 
             # Notify via voice
-            await v_client.call_tool("voice_speak", {
-                "text": "PR 42 merged successfully",
-            })
+            await v_client.call_tool(
+                "voice_speak",
+                {
+                    "text": "PR 42 merged successfully",
+                },
+            )
 
         assert_called_before(github, "gh_pr_create", "gh_pr_merge")
         assert voice.spoken_messages == ["PR 42 merged successfully"]

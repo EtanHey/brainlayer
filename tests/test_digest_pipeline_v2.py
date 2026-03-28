@@ -131,12 +131,7 @@ class TestChunkEventsTable:
     def test_table_exists(self, tmp_store):
         """chunk_events table is created during _init_db."""
         cursor = tmp_store.conn.cursor()
-        tables = {
-            row[0]
-            for row in cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "chunk_events" in tables
 
     def test_table_schema(self, tmp_store):
@@ -215,12 +210,7 @@ class TestChunkEventsTable:
     def test_indexes_exist(self, tmp_store):
         """Required indexes are created."""
         cursor = tmp_store.conn.cursor()
-        indexes = {
-            row[0]
-            for row in cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
-        }
+        indexes = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert "idx_chunk_events_chunk" in indexes
         assert "idx_chunk_events_action" in indexes
         assert "idx_chunk_events_timestamp" in indexes
@@ -620,6 +610,7 @@ class TestIntegration:
         from brainlayer.pipeline.digest import digest_content
 
         mock_embed = MagicMock(return_value=[0.05] * 1024)
+
         def mock_faceted(**kw):
             return {
                 "status": "enriched",

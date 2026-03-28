@@ -26,12 +26,15 @@ def _candidate(chunk_id: str = "c1", content: str = "x" * 120) -> dict:
 
 def _fake_gemini_client(response_text='{"summary":"sum","tags":["python"]}'):
     """Create a fake Gemini client that returns the given response text."""
+
     class FakeClient:
         class _Models:
             def generate_content(self, **kwargs):
                 return SimpleNamespace(text=response_text)
+
         def __init__(self):
             self.models = self._Models()
+
     return FakeClient()
 
 
@@ -41,7 +44,11 @@ def _patch_realtime_deps(monkeypatch, controller, store, response_text=None):
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
     monkeypatch.setattr(controller.time, "sleep", lambda _: None)
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client(response_text or '{"summary":"sum","tags":["python"]}'))
+    monkeypatch.setattr(
+        controller,
+        "_get_gemini_client",
+        lambda: _fake_gemini_client(response_text or '{"summary":"sum","tags":["python"]}'),
+    )
 
 
 # ── Existing realtime tests ──────────────────────────────────────────────────
@@ -364,10 +371,7 @@ def test_realtime_skips_duplicate_content(monkeypatch):
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
     _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.setattr(
-        controller, "_is_duplicate_content",
-        lambda s, c: c == "dup"
-    )
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
 
     result = controller.enrich_realtime(store, limit=2)
     assert result.skipped == 1
@@ -383,10 +387,7 @@ def test_local_skips_duplicate_content(monkeypatch):
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "s", "tags": ["t"]}))
     monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kw: '{"summary":"s"}')
     monkeypatch.setattr(controller, "_call_local_backend", lambda *a, **kw: '{"summary":"s"}')
-    monkeypatch.setattr(
-        controller, "_is_duplicate_content",
-        lambda s, c: c == "dup"
-    )
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
 
     result = controller.enrich_local(store, limit=2)
     assert result.skipped == 1
@@ -730,6 +731,7 @@ def test_telemetry_enrichment_helpers_exist():
         emit_enrichment_error,
         emit_enrichment_start,
     )
+
     assert callable(emit_enrichment_start)
     assert callable(emit_enrichment_complete)
     assert callable(emit_enrichment_error)
@@ -833,9 +835,7 @@ def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
 
     controller.enrich_realtime(store, chunk_ids=["a", "b"])
 
-    store.get_enrichment_candidates.assert_called_once_with(
-        limit=25, since_hours=24, chunk_ids=["a", "b"]
-    )
+    store.get_enrichment_candidates.assert_called_once_with(limit=25, since_hours=24, chunk_ids=["a", "b"])
 
 
 # ── LaunchAgent plist validation ──────────────────────────────────────────────

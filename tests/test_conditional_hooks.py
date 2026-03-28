@@ -144,5 +144,3 @@ class TestStopIndexConditional:
     def test_disabled_value_true_not_recognized(self, stop_index):
         os.environ["BRAINLAYER_HOOKS_DISABLED"] = "true"
         assert stop_index.should_activate() is True
-
-

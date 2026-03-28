@@ -363,10 +363,25 @@ def _smart_detect_mode(query: str | None, mode: str | None) -> str:
     words = query.strip().split()
     if 1 <= len(words) <= 3 and all(w[0].isupper() for w in words if len(w) > 0):
         # Single-word common English words that aren't entities
-        _COMMON_WORDS = frozenset({
-            "The", "How", "What", "When", "Where", "Why", "Who", "Which",
-            "Find", "Search", "Get", "Show", "List", "Tell", "Give",
-        })
+        _COMMON_WORDS = frozenset(
+            {
+                "The",
+                "How",
+                "What",
+                "When",
+                "Where",
+                "Why",
+                "Who",
+                "Which",
+                "Find",
+                "Search",
+                "Get",
+                "Show",
+                "List",
+                "Tell",
+                "Give",
+            }
+        )
         if len(words) == 1 and words[0] in _COMMON_WORDS:
             return "search"
         return "entity"

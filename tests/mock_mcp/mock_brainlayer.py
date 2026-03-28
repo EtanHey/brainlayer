@@ -127,18 +127,18 @@ class MockBrainLayer(MockMcpServer):
     def _handle_search(self, args: dict[str, Any]) -> str:
         query = args.get("query", "")
         # Filter fixtures by query keyword match (simple substring)
-        results = [
-            r for r in self._search_fixture if query.lower() in r.get("content", "").lower()
-        ]
+        results = [r for r in self._search_fixture if query.lower() in r.get("content", "").lower()]
         # If no match, return all fixtures (behavioral testing cares about call sequence, not results)
         if not results:
             results = self._search_fixture
 
-        return json.dumps({
-            "query": query,
-            "total": len(results),
-            "results": results,
-        })
+        return json.dumps(
+            {
+                "query": query,
+                "total": len(results),
+                "results": results,
+            }
+        )
 
     def _handle_store(self, args: dict[str, Any]) -> str:
         chunk_id = f"mock_{uuid.uuid4().hex[:8]}"
@@ -159,16 +159,18 @@ class MockBrainLayer(MockMcpServer):
 
     def add_search_fixture(self, content: str, **kwargs: Any) -> None:
         """Add a search result to the fixture pool."""
-        self._search_fixture.append({
-            "chunk_id": f"fixture_{uuid.uuid4().hex[:8]}",
-            "content": content,
-            "score": kwargs.get("score", 0.80),
-            "project": kwargs.get("project", "test"),
-            "content_type": kwargs.get("content_type", "note"),
-            "tags": kwargs.get("tags", []),
-            "importance": kwargs.get("importance", 5),
-            "date": kwargs.get("date", "2026-03-26"),
-        })
+        self._search_fixture.append(
+            {
+                "chunk_id": f"fixture_{uuid.uuid4().hex[:8]}",
+                "content": content,
+                "score": kwargs.get("score", 0.80),
+                "project": kwargs.get("project", "test"),
+                "content_type": kwargs.get("content_type", "note"),
+                "tags": kwargs.get("tags", []),
+                "importance": kwargs.get("importance", 5),
+                "date": kwargs.get("date", "2026-03-26"),
+            }
+        )
 
     def clear_fixtures(self) -> None:
         """Clear search fixtures and stored items (does not clear call log)."""

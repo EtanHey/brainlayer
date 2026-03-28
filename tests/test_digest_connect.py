@@ -39,13 +39,7 @@ class TestDigestConnectUnit:
         # Convert to the real hybrid_search return format
         ids = [c.get("id", "") for c in chunks]
         docs = [c.get("content", "") for c in chunks]
-        metas = [
-            {
-                k: v for k, v in c.items()
-                if k not in ("id", "content", "score")
-            }
-            for c in chunks
-        ]
+        metas = [{k: v for k, v in c.items() if k not in ("id", "content", "score")} for c in chunks]
         # Convert score to distance (distance = 1 - score)
         dists = [1 - c.get("score", 0) for c in chunks]
         store.hybrid_search.return_value = {
@@ -285,16 +279,22 @@ class TestDigestConnectBehavioral:
         brain = MockBrainLayer()
         async with brain.connect() as client:
             # Step 1: Connect — search for related knowledge (returns proposal)
-            result = await client.call_tool("brain_search", {
-                "query": "authentication JWT tokens",
-            })
+            result = await client.call_tool(
+                "brain_search",
+                {
+                    "query": "authentication JWT tokens",
+                },
+            )
 
             # Step 2: Store — accept the proposal
-            await client.call_tool("brain_store", {
-                "content": "Decided to use JWT tokens for auth with 24h expiry.",
-                "tags": ["decision", "auth"],
-                "importance": 8,
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "Decided to use JWT tokens for auth with 24h expiry.",
+                    "tags": ["decision", "auth"],
+                    "importance": 8,
+                },
+            )
 
         assert_called_before(brain, "brain_search", "brain_store")
         assert brain.was_called("brain_search")
@@ -320,10 +320,13 @@ class TestDigestConnectBehavioral:
         brain = MockBrainLayer()
         async with brain.connect() as client:
             # BAD pattern: store without searching first
-            await client.call_tool("brain_store", {
-                "content": "Some decision",
-                "importance": 5,
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "Some decision",
+                    "importance": 5,
+                },
+            )
 
         # This should fail the behavioral contract
         with pytest.raises(AssertionError):
@@ -340,11 +343,14 @@ class TestDigestConnectBehavioral:
             await client.call_tool("brain_search", {"query": "session management"})
 
             # Then store the integrated result
-            await client.call_tool("brain_store", {
-                "content": "Auth uses JWT with 24h expiry, replacing session cookies.",
-                "tags": ["decision", "auth", "jwt"],
-                "importance": 8,
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "Auth uses JWT with 24h expiry, replacing session cookies.",
+                    "tags": ["decision", "auth", "jwt"],
+                    "importance": 8,
+                },
+            )
 
         assert_call_count(brain, "brain_search", 3)
         assert_call_count(brain, "brain_store", 1)
@@ -357,17 +363,23 @@ class TestDigestConnectBehavioral:
         async with brain.connect() as client:
             # Topic 1: Auth
             await client.call_tool("brain_search", {"query": "auth"})
-            await client.call_tool("brain_store", {
-                "content": "Auth decision: JWT",
-                "tags": ["auth"],
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "Auth decision: JWT",
+                    "tags": ["auth"],
+                },
+            )
 
             # Topic 2: Database
             await client.call_tool("brain_search", {"query": "database"})
-            await client.call_tool("brain_store", {
-                "content": "DB decision: SQLite",
-                "tags": ["database"],
-            })
+            await client.call_tool(
+                "brain_store",
+                {
+                    "content": "DB decision: SQLite",
+                    "tags": ["database"],
+                },
+            )
 
         assert_call_count(brain, "brain_search", 2)
         assert_call_count(brain, "brain_store", 2)
@@ -391,9 +403,7 @@ class TestDigestModeRouting:
         from brainlayer.mcp.store_handler import _brain_digest
 
         # mode='connect' with no content should give a clear error
-        result = asyncio.run(
-            _brain_digest(content=None, mode="connect")
-        )
+        result = asyncio.run(_brain_digest(content=None, mode="connect"))
         # Should get "content is required" error, NOT "Unknown mode" error
         error_text = result.content[0].text
         assert "content is required" in error_text
@@ -405,8 +415,6 @@ class TestDigestModeRouting:
 
         from brainlayer.mcp.store_handler import _brain_digest
 
-        result = asyncio.run(
-            _brain_digest(content="test", mode="invalid_mode")
-        )
+        result = asyncio.run(_brain_digest(content="test", mode="invalid_mode"))
         error_text = result.content[0].text
         assert "Unknown" in error_text

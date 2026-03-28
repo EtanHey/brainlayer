@@ -85,9 +85,7 @@ async def _brain_enrich(
         if result.errors:
             output["errors"] = result.errors[:10]  # Cap error list
 
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(output, indent=2))]
-        )
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(output, indent=2))])
 
     except Exception as e:
         logger.error("brain_enrich failed: %s", e)
@@ -103,9 +101,7 @@ async def _enrich_stats(store) -> CallToolResult:
         total = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
         # Enriched
-        enriched = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"
-        ).fetchone()[0]
+        enriched = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL").fetchone()[0]
 
         # Unenriched (eligible — char_count >= 50)
         unenriched = cursor.execute(
@@ -130,8 +126,6 @@ async def _enrich_stats(store) -> CallToolResult:
             "enriched_pct": round(enriched / total * 100, 1) if total > 0 else 0,
             "enriched_last_24h": recent,
         }
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result, indent=2))]
-        )
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
     except Exception as e:
         return _error_result(f"Stats query failed: {e}")

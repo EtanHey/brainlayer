@@ -208,9 +208,7 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
     if content:
         try:
             h = _content_hash(content)
-            store.conn.cursor().execute(
-                "UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"])
-            )
+            store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
         except Exception:
             pass  # Non-critical — dedup still works on next index
 
@@ -306,35 +304,41 @@ def _emit_enrichment_event(event: dict[str, Any]) -> bool:
 
 
 def _emit_enrichment_start(mode: str, limit: int) -> bool:
-    return _emit_enrichment_event({
-        "_type": "start",
-        "mode": mode,
-        "limit": limit,
-        "pid": os.getpid(),
-        "hostname": os.uname().nodename,
-    })
+    return _emit_enrichment_event(
+        {
+            "_type": "start",
+            "mode": mode,
+            "limit": limit,
+            "pid": os.getpid(),
+            "hostname": os.uname().nodename,
+        }
+    )
 
 
 def _emit_enrichment_complete(result: EnrichmentResult, duration_ms: float) -> bool:
-    return _emit_enrichment_event({
-        "_type": "complete",
-        "mode": result.mode,
-        "attempted": result.attempted,
-        "enriched": result.enriched,
-        "skipped": result.skipped,
-        "failed": result.failed,
-        "duration_ms": round(duration_ms, 1),
-        "error_count": len(result.errors),
-    })
+    return _emit_enrichment_event(
+        {
+            "_type": "complete",
+            "mode": result.mode,
+            "attempted": result.attempted,
+            "enriched": result.enriched,
+            "skipped": result.skipped,
+            "failed": result.failed,
+            "duration_ms": round(duration_ms, 1),
+            "error_count": len(result.errors),
+        }
+    )
 
 
 def _emit_enrichment_error(mode: str, chunk_id: str, error: str) -> bool:
-    return _emit_enrichment_event({
-        "_type": "error",
-        "mode": mode,
-        "chunk_id": chunk_id,
-        "error": error[:300],
-    })
+    return _emit_enrichment_event(
+        {
+            "_type": "error",
+            "mode": mode,
+            "chunk_id": chunk_id,
+            "error": error[:300],
+        }
+    )
 
 
 # ── Enrichment modes ───────────────────────────────────────────────────────────

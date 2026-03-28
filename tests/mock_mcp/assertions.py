@@ -35,14 +35,11 @@ def assert_called_before(source: MockMcpServer | list[str], first: str, second: 
         raise AssertionError(f"'{second}' was never called. Call log: {names}")
     if first_idx >= second_idx:
         raise AssertionError(
-            f"Expected '{first}' (index {first_idx}) before '{second}' (index {second_idx}). "
-            f"Call log: {names}"
+            f"Expected '{first}' (index {first_idx}) before '{second}' (index {second_idx}). Call log: {names}"
         )
 
 
-def assert_called_between(
-    source: MockMcpServer | list[str], before: str, middle: str, after: str
-) -> None:
+def assert_called_between(source: MockMcpServer | list[str], before: str, middle: str, after: str) -> None:
     """Assert middle tool was called between before and after.
 
     >>> assert_called_between(["create", "check", "merge"], "create", "check", "merge")  # passes
@@ -68,9 +65,7 @@ def assert_call_count(source: MockMcpServer | list[str], tool_name: str, expecte
     names = _get_names(source)
     actual = names.count(tool_name)
     if actual != expected:
-        raise AssertionError(
-            f"Expected '{tool_name}' called {expected} times, got {actual}. Call log: {names}"
-        )
+        raise AssertionError(f"Expected '{tool_name}' called {expected} times, got {actual}. Call log: {names}")
 
 
 def assert_call_sequence(source: MockMcpServer | list[str], expected_sequence: list[str]) -> None:
