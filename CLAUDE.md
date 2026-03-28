@@ -1,3 +1,4 @@
+<!-- IDENTITY: brainlayer, owner=EtanHey, purpose=local private knowledge pipeline for Claude Code sessions (index, search, enrich, visualize) -->
 # BrainLayer (זיכרון) - Local Knowledge Pipeline
 
 > Memory for Claude Code conversations: index, search, enrich, and visualize sessions.
@@ -8,6 +9,7 @@
 
 ---
 
+<!-- ANTI-PATTERNS: brain_update, brain_expand, brain_tags are STUB tools — BROKEN, return fake success, save nothing; do not use -->
 ## BrainBar Stub Warnings
 
 BrainBar Swift daemon has 3 STUB tools returning fake success:
@@ -16,6 +18,7 @@ BrainBar Swift daemon has 3 STUB tools returning fake success:
 
 ---
 
+<!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, FastAPI daemon, MCP server, Textual TUI + Next.js dashboard -->
 ## Stack (WHAT)
 - Python package + Typer CLI in `src/brainlayer/`
 - sqlite-vec storage via APSW (`vector_store.py`)
@@ -24,6 +27,7 @@ BrainBar Swift daemon has 3 STUB tools returning fake success:
 - Textual TUI (`dashboard/`) and Next.js dashboard
 - Source data: JSONL in `~/.claude/projects/`
 
+<!-- COMMANDS: `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` | test: `pytest` | lint: `ruff check src/ && ruff format src/` | run: `brainlayer index && brainlayer serve` -->
 ## Workflow (HOW)
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -44,11 +48,13 @@ brainlayer enrich
 - All scripts and CLI use `paths.py` for DB path resolution
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
 
+<!-- ARCHITECTURE: classification preserves ai_code/stack_trace/user_message verbatim; skips noise; AST-aware chunking via tree-sitter; never split stack traces -->
 ## Classification & Chunking Rules
 - Preserve verbatim: `ai_code`, `stack_trace`, `user_message`
 - Skip/summarize: `noise` (skip), `build_log` (summarize), `dir_listing` (structure only)
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
+<!-- ARCHITECTURE: primary enrichment backend=Groq (cloud); fallback=Gemini via enrichment_controller.py; override via BRAINLAYER_ENRICH_BACKEND env var -->
 ## Enrichment
 - Primary backend: **Groq** (cloud, configured in launchd plist)
 - Fallback: Gemini via `enrichment_controller.py`, Ollama as offline last-resort
@@ -56,6 +62,7 @@ brainlayer enrich
 - Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 0.2 = 12 RPM)
 - Adds metadata (summary, tags, importance, intent); session enrichment captures decisions/corrections
 
+<!-- MCP-SERVERS: add new MCP tool entries to mcp/ dir; entrypoint is `brainlayer-mcp`; 11 tools: brain_search, brain_store, brain_recall, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_tags, brain_supersede, brain_archive -->
 ## Interfaces
 - Daemon API (core): `/health`, `/stats`, `/search`, `/context/{chunk_id}`, `/session/{session_id}`
 - Brain graph API: `/brain/graph`, `/brain/node/{node_id}`
@@ -63,10 +70,12 @@ brainlayer enrich
 - MCP tools (11): `brain_search`, `brain_store`, `brain_recall`, `brain_entity`, `brain_expand`, `brain_update`, `brain_digest`, `brain_get_person`, `brain_tags`, `brain_supersede`, `brain_archive` (legacy `brainlayer_*` aliases still work)
 - MCP server entrypoint: `brainlayer-mcp`
 
+<!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
 ## Exports
 - `brainlayer brain-export` -> graph JSON for dashboard
 - `brainlayer export-obsidian` -> Markdown vault (backlinks + tags)
 
+<!-- ARCHITECTURE: real-time watcher via LaunchAgent (com.brainlayer.watch.plist), 4-layer content filters, offset persistence, rewind detection, Axiom telemetry -->
 ## Real-time JSONL Watcher
 - `brainlayer watch` — persistent watcher for `~/.claude/projects/*.jsonl`
 - LaunchAgent: `com.brainlayer.watch.plist` (KeepAlive, Nice=10)
@@ -76,6 +85,7 @@ brainlayer enrich
 - Axiom telemetry: startup, flush, error, heartbeat (60s) to `brainlayer-watcher` dataset
 - Source: `watcher.py` (tailer + indexer), `watcher_bridge.py` (pipeline integration)
 
+<!-- ARCHITECTURE: chunk lifecycle columns superseded_by/aggregated_into/archived_at; brain_supersede has safety gate for personal data; brain_archive is soft-delete -->
 ## Chunk Lifecycle
 - Columns: `superseded_by`, `aggregated_into`, `archived_at` on chunks table
 - Default search excludes lifecycle-managed chunks; `include_archived=True` shows history
@@ -83,12 +93,14 @@ brainlayer enrich
 - `brain_archive`: soft-delete with timestamp
 - `brain_store` gains `supersedes` param for atomic store-and-replace
 
+<!-- HOOKS: SessionStart writes injected chunk_ids to /tmp/brainlayer_session_{id}.json; UserPromptSubmit skips already-injected; module: hooks/dedup_coordination.py -->
 ## Session Dedup Coordination
 - `/tmp/brainlayer_session_{id}.json` — shared between SessionStart and UserPromptSubmit hooks
 - SessionStart writes injected chunk_ids; UserPromptSubmit skips already-injected
 - Handoff detection: prompts with "handoff", "session-handoff" skip auto-search
 - Module: `hooks/dedup_coordination.py`
 
+<!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/.local/share/brainlayer/logs/watch.{log,err} | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - DB: `~/.local/share/brainlayer/brainlayer.db`
 - Watcher offsets: `~/.local/share/brainlayer/offsets.json`
@@ -98,6 +110,7 @@ brainlayer enrich
 - Enrichment lock: `/tmp/brainlayer-enrichment.lock`
 - Session dedup: `/tmp/brainlayer_session_*.json`
 
+<!-- ANTI-PATTERNS: never run bulk ops while enrichment is writing; never delete from chunks while FTS trigger active on large datasets; always stop workers + checkpoint WAL first -->
 ## Bulk DB Operations (SAFETY)
 1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)
 2. **Checkpoint WAL** before and after: `PRAGMA wal_checkpoint(FULL)`
