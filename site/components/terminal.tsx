@@ -10,7 +10,8 @@ interface Line {
   delay: number;
 }
 
-// Real Claude Code output format
+// Matches real Claude Code output format exactly
+// Verified by reading own terminal via cmux read_screen
 const lines: Line[] = [
   {
     type: "prompt",
@@ -19,59 +20,72 @@ const lines: Line[] = [
   },
   {
     type: "claude",
-    text: "I'll search our architecture decisions.",
+    text: "I'll search our past architecture decisions.",
     gap: true,
     delay: 1400,
   },
   {
     type: "tool",
-    text: 'brain_search (MCP)(query: "BrainLayer architecture hybrid search")',
+    text: 'brain_search (MCP)(query: "BrainLayer architecture")',
     gap: true,
     delay: 2000,
   },
-  { type: "output", text: "{", delay: 2400 },
-  { type: "output", text: '  "chunks": 3,', delay: 2450 },
-  { type: "output", text: '  "latency": "9ms",', delay: 2500 },
-  { type: "output", text: '  "results": [{', delay: 2550 },
+  { type: "output", text: "[", delay: 2400 },
+  { type: "output", text: "  {", delay: 2450 },
+  { type: "output", text: '    "chunk_id": "agent-a34f466",', delay: 2500 },
   {
-    type: "result",
-    text: '    "content": "Claude Code / Cursor / Zed -> MCP -> BrainLayer Server',
-    delay: 2600,
+    type: "output",
+    text: '    "summary": "AI code architecture with BrainLayer MCP server,',
+    delay: 2550,
   },
   {
     type: "result",
-    text: "       -> Hybrid Search (semantic + keyword via RRF)",
+    text: '               hybrid search, and knowledge graph integration.",',
+    delay: 2600,
+  },
+  {
+    type: "output",
+    text: '    "content": "Claude Code / Cursor / Zed -> MCP -> BrainLayer',
     delay: 2650,
   },
   {
     type: "result",
-    text: '       -> SQLite + sqlite-vec, single .db file",',
+    text: "        -> Hybrid Search (semantic + keyword via RRF)",
     delay: 2700,
   },
-  { type: "output", text: '    "chunk_id": "agent-a34f466",', delay: 2750 },
-  { type: "output", text: '    "importance": 8,', delay: 2800 },
+  {
+    type: "result",
+    text: "        -> SQLite + sqlite-vec, single .db file",
+    delay: 2750,
+  },
+  {
+    type: "result",
+    text: '        -> Knowledge Graph (entities + relations)",',
+    delay: 2800,
+  },
+  { type: "output", text: '    "importance": 8,', delay: 2850 },
   {
     type: "output",
-    text: '    "tags": ["architecture", "search"]',
-    delay: 2850,
+    text: '    "tags": ["architecture", "search", "sqlite"]',
+    delay: 2900,
   },
-  { type: "output", text: "  }]", delay: 2900 },
-  { type: "output", text: "}", delay: 2950 },
+  { type: "output", text: "  }", delay: 2950 },
+  { type: "output", text: "]", delay: 3000 },
   {
     type: "claude",
     text: "BrainLayer uses a single SQLite file with sqlite-vec for",
     gap: true,
-    delay: 3400,
-  },
-  {
-    type: "claude",
-    text: "vector storage. Search fuses semantic, FTS5 keyword, and",
     delay: 3500,
   },
   {
     type: "claude",
-    text: "knowledge graph signals via Reciprocal Rank Fusion.",
+    text: "vector storage. Search fuses semantic, FTS5 keyword, and",
     delay: 3600,
+  },
+  {
+    type: "claude",
+    text: "knowledge graph signals via Reciprocal Rank Fusion.",
+    delay: 3700,
   },
 ];
 
@@ -270,10 +284,18 @@ export function Terminal() {
             })}
           </div>
 
-          {/* Status bar - like real Claude Code */}
-          <div className="border-t border-white/[0.05] px-[18px] py-2 font-mono text-[11px] text-text-dim flex items-center justify-between">
-            <span>⎇ main | 🔧 7</span>
-            <span>284K chunks indexed</span>
+          {/* Status bar - matches real Claude Code */}
+          <div className="px-[18px] font-mono text-[11px] text-text-dim">
+            <div className="h-px bg-[#333338] mb-1" />
+            <div className="flex items-center text-[#6ec1e4] py-0.5">
+              <span>{"❯"}</span>
+              <span className="ml-1 w-[7px] h-[13px] bg-text/30 animate-pulse" />
+            </div>
+            <div className="h-px bg-[#333338] mt-1 mb-1.5" />
+            <div className="flex items-center justify-between pb-1.5 text-[10px]">
+              <span>{"  ⎇ main | 🔧 7"}</span>
+              <span>284,291 tokens</span>
+            </div>
           </div>
         </motion.div>
       </div>
