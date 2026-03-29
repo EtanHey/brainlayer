@@ -117,7 +117,7 @@ function useTyping(text: string, active: boolean, speed = 30) {
 }
 
 function PromptLine({ text, active }: { text: string; active: boolean }) {
-  const typed = useTyping(text, active, 28);
+  const typed = useTyping(text, active, 22);
   const showCursor = active && typed.length < text.length;
   return (
     <span className="block">
