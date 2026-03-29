@@ -1101,6 +1101,7 @@ final class BrainDatabase: @unchecked Sendable {
             """
             var relStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, relSQL, -1, &relStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(relStmt) }
                 bindText(entityId, to: relStmt, index: 1)
                 bindText(entityId, to: relStmt, index: 2)
                 var relations: [[String: Any]] = []
@@ -1113,7 +1114,6 @@ final class BrainDatabase: @unchecked Sendable {
                         "target": ["name": targetName] as [String: Any]
                     ])
                 }
-                sqlite3_finalize(relStmt)
                 result?["relations"] = relations
             }
         }
