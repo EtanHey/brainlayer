@@ -39,11 +39,11 @@ async def _brain_entity(
 
     if result is None:
         return CallToolResult(content=[TextContent(type="text", text=f"No entity found matching '{query}'.")])
-    
+
     # Map 'evidence' to 'chunks' for format_entity_simple
     if "evidence" in result and "chunks" not in result:
         result["chunks"] = result["evidence"]
-    
+
     formatted = format_entity_simple(result)
     return CallToolResult(content=[TextContent(type="text", text=formatted)])
 
