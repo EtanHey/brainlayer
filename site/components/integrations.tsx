@@ -31,7 +31,7 @@ export function Integrations() {
         <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-accent">
           Works with
         </div>
-        <h2 className="mb-12 font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight">
+        <h2 className="mb-12 font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
           Any MCP client
         </h2>
 
@@ -66,7 +66,7 @@ export function Integrations() {
         <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-accent">
           Getting started
         </div>
-        <h2 className="mb-12 font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight">
+        <h2 className="mb-12 font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
           Three steps
         </h2>
 

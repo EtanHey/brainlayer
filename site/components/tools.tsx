@@ -54,7 +54,7 @@ export function Tools() {
         <div className="mb-3 text-center text-[11px] font-medium uppercase tracking-[0.12em] text-accent">
           MCP tools
         </div>
-        <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight">
+        <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
           Seven tools. One protocol.
         </h2>
 

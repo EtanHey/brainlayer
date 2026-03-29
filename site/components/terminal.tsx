@@ -104,6 +104,13 @@ function useTyping(text: string, active: boolean, speed = 30) {
       setOut("");
       return;
     }
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      setOut(text);
+      return;
+    }
     setOut("");
     let i = 0;
     const iv = setInterval(() => {
@@ -246,6 +253,16 @@ export function Terminal() {
 
   useEffect(() => {
     if (!isInView) return;
+
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (prefersReducedMotion) {
+      setVisibleCount(lines.length);
+      return;
+    }
+
     timeoutsRef.current.forEach(clearTimeout);
     timeoutsRef.current = [];
     setVisibleCount(1);
@@ -270,6 +287,7 @@ export function Terminal() {
       <div className="mx-auto max-w-[1200px] px-6">
         <motion.div
           ref={ref}
+          aria-label="Demo terminal showing BrainLayer search results"
           className="relative mx-auto max-w-[820px] overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0c0c0e] shadow-[0_0_80px_rgba(212,149,106,0.04)]"
           initial={{ opacity: 1, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -278,9 +296,18 @@ export function Terminal() {
         >
           {/* Title bar */}
           <div className="flex items-center gap-[7px] border-b border-white/[0.05] bg-white/[0.03] px-[18px] py-3.5">
-            <div className="h-[11px] w-[11px] rounded-full bg-[#ff5f57]" />
-            <div className="h-[11px] w-[11px] rounded-full bg-[#febc2e]" />
-            <div className="h-[11px] w-[11px] rounded-full bg-[#28c840]" />
+            <div
+              className="h-[11px] w-[11px] rounded-full bg-[#ff5f57]"
+              aria-hidden="true"
+            />
+            <div
+              className="h-[11px] w-[11px] rounded-full bg-[#febc2e]"
+              aria-hidden="true"
+            />
+            <div
+              className="h-[11px] w-[11px] rounded-full bg-[#28c840]"
+              aria-hidden="true"
+            />
             <span className="ml-2.5 font-mono text-xs text-text-dim">
               claude ~ myproject
             </span>
