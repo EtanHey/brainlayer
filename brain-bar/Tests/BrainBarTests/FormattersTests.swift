@@ -294,4 +294,46 @@ final class FormattersTests: XCTestCase {
         XCTAssertTrue(entityOut.contains("\u{250c}"))
         XCTAssertTrue(entityOut.contains("\u{2514}"))
     }
+
+    // MARK: - Layout: No trailing empty │ lines
+
+    func testSearchResultsNoTrailingEmptyLine() {
+        let result: [String: Any] = [
+            "chunk_id": "x1", "score": 0.5, "project": "test",
+            "created_at": "2026-01-01", "summary": "Some result", "importance": 5
+        ]
+        let out = Formatters.formatSearchResults(query: "q", results: [result], total: 1, useColor: false)
+        let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // The line before └─ should NOT be a bare │
+        let closerIdx = lines.lastIndex(where: { $0.hasPrefix("\u{2514}") })!
+        let beforeCloser = lines[closerIdx - 1]
+        XCTAssertNotEqual(beforeCloser, "\u{2502}", "Should not have a trailing empty │ line before └─")
+    }
+
+    func testSearchResultsMultipleNoTrailingGap() {
+        let results: [[String: Any]] = [
+            ["chunk_id": "a", "score": 0.9, "project": "p", "created_at": "d", "summary": "First", "importance": 7],
+            ["chunk_id": "b", "score": 0.5, "project": "p", "created_at": "d", "summary": "Second", "importance": 3],
+        ]
+        let out = Formatters.formatSearchResults(query: "q", results: results, total: 2, useColor: false)
+        let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let closerIdx = lines.lastIndex(where: { $0.hasPrefix("\u{2514}") })!
+        let beforeCloser = lines[closerIdx - 1]
+        XCTAssertNotEqual(beforeCloser, "\u{2502}", "Last result should not have trailing │ gap")
+    }
+
+    // MARK: - Content truncation: 150 chars
+
+    func testSearchResultsSummaryTruncatesAt150() {
+        let longSummary = String(repeating: "x", count: 200)
+        let result: [String: Any] = [
+            "chunk_id": "t1", "score": 0.5, "project": "test",
+            "created_at": "2026-01-01", "summary": longSummary, "importance": 5
+        ]
+        let out = Formatters.formatSearchResults(query: "q", results: [result], total: 1, useColor: false)
+        // Exact truncation: 149 chars + ellipsis = 150 total
+        let expected = String(repeating: "x", count: 149) + "\u{2026}"
+        XCTAssertTrue(out.contains(expected), "Summary should truncate to 149 chars + ellipsis (150 total)")
+        XCTAssertFalse(out.contains(longSummary), "200-char summary should be truncated")
+    }
 }

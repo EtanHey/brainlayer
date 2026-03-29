@@ -228,13 +228,16 @@ final class BrainDatabase: @unchecked Sendable {
         if importanceMin != nil { conditions.append("c.importance >= ?") }
         if unreadOnly { conditions.append("c.rowid > ?") }
 
+        // Unread mode needs contiguous rowid ordering for watermark semantics.
+        // Normal search uses FTS5 BM25 rank for relevance ordering.
+        let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
             SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.conversation_id
+                   c.created_at, c.summary, c.tags, c.conversation_id, f.rank
             FROM chunks_fts f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY c.rowid ASC
+            ORDER BY \(orderByClause)
             LIMIT ?
         """
 
@@ -274,6 +277,9 @@ final class BrainDatabase: @unchecked Sendable {
         while sqlite3_step(stmt) == SQLITE_ROW {
             let rowID = sqlite3_column_int64(stmt, 0)
             maxRowID = max(maxRowID, rowID)
+            // FTS5 rank is negative (lower = better match). Negate for a positive score.
+            let rawRank = sqlite3_column_double(stmt, 10)
+            let score = max(0, -rawRank)
             results.append([
                 "rowid": Int(rowID),
                 "chunk_id": columnText(stmt, 1) as Any,
@@ -284,7 +290,8 @@ final class BrainDatabase: @unchecked Sendable {
                 "created_at": columnText(stmt, 6) as Any,
                 "summary": columnText(stmt, 7) as Any,
                 "tags": columnText(stmt, 8) as Any,
-                "session_id": columnText(stmt, 9) as Any
+                "session_id": columnText(stmt, 9) as Any,
+                "score": score
             ])
         }
 

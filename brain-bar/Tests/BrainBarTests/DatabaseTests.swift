@@ -312,4 +312,27 @@ final class DatabaseTests: XCTestCase {
 
         wait(for: [expectation], timeout: 5.0)
     }
+
+    // MARK: - Search Ranking (FTS5 BM25)
+
+    func testSearchResultsHaveNonZeroScore() throws {
+        try db.insertChunk(id: "score-1", content: "BrainBar Swift daemon formatting", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+
+        let results = try db.search(query: "BrainBar daemon", limit: 5)
+        XCTAssertFalse(results.isEmpty)
+        let score = results.first?["score"] as? Double ?? 0
+        XCTAssertGreaterThan(score, 0, "Search results should have a non-zero relevance score")
+    }
+
+    func testSearchResultsOrderedByRelevance() throws {
+        // "sprint" appears in content of both, but the first has it more prominently
+        try db.insertChunk(id: "rel-1", content: "The overnight hardening sprint was a success. Sprint results show improvements.", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "rel-2", content: "We discussed various topics including weather and sprint planning briefly.", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5)
+
+        let results = try db.search(query: "sprint", limit: 5)
+        XCTAssertEqual(results.count, 2)
+        let score1 = results[0]["score"] as? Double ?? 0
+        let score2 = results[1]["score"] as? Double ?? 0
+        XCTAssertGreaterThanOrEqual(score1, score2, "Results should be ordered by relevance (highest score first)")
+    }
 }
