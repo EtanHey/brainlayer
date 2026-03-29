@@ -487,22 +487,16 @@ final class BrainBarServer: @unchecked Sendable {
     private func toolErrorResponse(id: Any?, message: String) -> [String: Any] {
         var response: [String: Any] = [
             "jsonrpc": "2.0",
-            "content": [
-                ["type": "text", "text": "Error: \(message)"]
-            ],
-            "isError": true
+            "result": [
+                "content": [
+                    ["type": "text", "text": "Error: \(message)"]
+                ],
+                "isError": true
+            ] as [String: Any]
         ]
         if let id {
             response["id"] = id
         }
-        response["result"] = [
-            "content": [
-                ["type": "text", "text": "Error: \(message)"]
-            ],
-            "isError": true
-        ] as [String: Any]
-        response.removeValue(forKey: "content")
-        response.removeValue(forKey: "isError")
         return response
     }
 
