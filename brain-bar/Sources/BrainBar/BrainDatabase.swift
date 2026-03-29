@@ -783,7 +783,10 @@ final class BrainDatabase: @unchecked Sendable {
             return "\"\(cleaned)\""
         }
         guard !tokens.isEmpty else { return "\"\"" }
-        return tokens.joined(separator: " OR ")
+        // Implicit AND (space-separated) — matches Python _escape_fts5_query default.
+        // FTS5 treats space as AND. Semantic recall comes from vector search (future);
+        // FTS5 should maximize precision.
+        return tokens.joined(separator: " ")
     }
 
     private static func timestamp() -> String {
