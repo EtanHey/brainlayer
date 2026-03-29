@@ -34,7 +34,7 @@ function ToolItem({ name, desc }: { name: string; desc: string }) {
   return (
     <motion.div
       className="flex items-baseline gap-5 rounded-lg px-4 py-3 transition-colors hover:bg-bg-elevated"
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 1, y: 8 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ duration: 0.4 }}

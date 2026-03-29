@@ -16,7 +16,7 @@ export function Cta() {
       <div className="mx-auto max-w-[960px] px-6">
         <motion.h2
           className="mb-3 font-display text-[clamp(26px,4vw,42px)] font-semibold tracking-tight"
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
@@ -25,7 +25,7 @@ export function Cta() {
         </motion.h2>
         <motion.p
           className="mb-9 text-[15px] font-light text-text-secondary"
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.1 }}
@@ -33,7 +33,7 @@ export function Cta() {
           Three commands. Persistent memory. Your data stays yours.
         </motion.p>
         <motion.div
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.2 }}

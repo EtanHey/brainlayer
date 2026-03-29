@@ -8,7 +8,7 @@ export function ProblemSolution() {
       <div className="mx-auto grid max-w-[960px] grid-cols-1 gap-6 px-6 md:grid-cols-2">
         <motion.div
           className="flex flex-col rounded-xl border border-border border-t-2 border-t-red bg-bg-card p-8 transition-colors hover:border-border-hover"
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 1, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
@@ -33,7 +33,7 @@ export function ProblemSolution() {
 
         <motion.div
           className="flex flex-col rounded-xl border border-border border-t-2 border-t-teal bg-bg-card p-8 transition-colors hover:border-border-hover"
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 1, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.1 }}
