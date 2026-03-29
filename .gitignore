@@ -12,7 +12,10 @@ dist/
 build/
 *.egg-info/
 *.egg
-site/
+# MkDocs build output (not our Next.js site/ directory)
+docs/site/
+site/node_modules/
+site/.next/
 
 # Testing
 .pytest_cache/
