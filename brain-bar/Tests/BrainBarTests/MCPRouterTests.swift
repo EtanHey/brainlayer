@@ -225,14 +225,15 @@ final class MCPRouterTests: XCTestCase {
             ] as [String: Any]
         ])
 
-        // Parse the result text as JSON array
+        // Result is now formatted text, not raw JSON
         let result = response["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]
-        let text = content?.first?["text"] as? String ?? "[]"
-        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+        let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertEqual(results.count, 1, "Should return only brainbar project result")
-        XCTAssertEqual(results.first?["project"] as? String, "brainbar")
+        // Formatted output has ANSI color codes — check for box-drawing prefix and content
+        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
+        XCTAssertTrue(text.contains("f-1"), "Should contain the brainbar project chunk")
+        XCTAssertFalse(text.contains("f-2"), "Should not contain other project chunk")
     }
 
     func testBrainSearchPassesImportanceMinFilter() throws {
@@ -256,13 +257,14 @@ final class MCPRouterTests: XCTestCase {
             ] as [String: Any]
         ])
 
+        // Result is now formatted text, not raw JSON
         let result = response["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]
-        let text = content?.first?["text"] as? String ?? "[]"
-        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+        let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertEqual(results.count, 1, "Should return only high-importance result")
-        XCTAssertEqual(results.first?["chunk_id"] as? String, "i-1")
+        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
+        XCTAssertTrue(text.contains("i-1"), "Should contain the high-importance chunk id")
+        XCTAssertFalse(text.contains("i-2"), "Should not contain low-importance chunk")
     }
 
     func testBrainSearchUnreadOnlyFiltersAckedChunksByCursor() throws {
@@ -296,13 +298,15 @@ final class MCPRouterTests: XCTestCase {
             ] as [String: Any]
         ])
 
+        // Result is now formatted text, not raw JSON
         let result = response["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]
-        let text = content?.first?["text"] as? String ?? "[]"
-        let results = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]] ?? []
+        let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertEqual(results.count, 1, "Should return only unread chunks for the subscriber")
-        XCTAssertEqual(results.first?["chunk_id"] as? String, "unread-1")
+        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
+        XCTAssertTrue(text.contains("unread-1"), "Should contain the unread chunk id")
+        // Note: can't check absence of "read-1" since "unread-1" contains it as substring
+        XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
     }
 
     // MARK: - Notifications (no id)

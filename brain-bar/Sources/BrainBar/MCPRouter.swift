@@ -230,8 +230,7 @@ final class MCPRouter: @unchecked Sendable {
             subscriberID: subscriberID,
             unreadOnly: unreadOnly
         )
-        let data = try JSONSerialization.data(withJSONObject: results)
-        return String(data: data, encoding: .utf8) ?? "[]"
+        return Formatters.formatSearchResults(query: query, results: results, total: results.count)
     }
 
     private func handleBrainStore(_ args: [String: Any]) throws -> String {
@@ -244,7 +243,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
         let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return jsonEncode(StoreResultPayload(chunkID: stored.chunkID, rowID: stored.rowID, status: "stored"))
+        return Formatters.formatStoreResult(chunkId: stored.chunkID)
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
