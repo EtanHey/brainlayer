@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrainLayer — Give Your AI a Memory</title>
+  <meta name="description" content="Local-first AI memory layer. 284K chunks of knowledge. Hybrid search. MCP interface. Privacy-first, zero cloud.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0a0b;
+      --bg-elevated: #111113;
+      --bg-card: #16161a;
+      --border: #222228;
+      --border-hover: #3a3a48;
+      --text: #ededef;
+      --text-muted: #8b8b97;
+      --text-dim: #5c5c66;
+      --accent: #7c6aef;
+      --accent-glow: rgba(124, 106, 239, 0.15);
+      --accent-bright: #9b8cff;
+      --accent-subtle: rgba(124, 106, 239, 0.06);
+      --orange: #f0a050;
+      --red-muted: #e06060;
+      --teal: #5eead4;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ─── Noise texture ─── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ─── Layout ─── */
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ─── Nav ─── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 16px 0;
+      background: rgba(10, 10, 11, 0.8);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.3s;
+    }
+
+    nav.scrolled { border-bottom-color: var(--border); }
+
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--text);
+      transition: opacity 0.2s;
+    }
+
+    .logo:hover { opacity: 0.85; }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+    }
+
+    .logo-icon svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .logo span {
+      font-weight: 600;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+      position: relative;
+    }
+
+    .nav-links a:not(.nav-cta):hover { color: var(--text); }
+
+    .nav-links a:not(.nav-cta)::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 0;
+      width: 0;
+      height: 1.5px;
+      background: var(--accent);
+      transition: width 0.25s ease;
+    }
+
+    .nav-links a:not(.nav-cta):hover::after { width: 100%; }
+
+    .nav-cta {
+      padding: 8px 18px !important;
+      background: var(--accent) !important;
+      color: white !important;
+      border-radius: 8px;
+      font-size: 13px !important;
+      transition: background 0.2s, box-shadow 0.2s, transform 0.15s !important;
+    }
+
+    .nav-cta:hover {
+      background: var(--accent-bright) !important;
+      box-shadow: 0 0 16px rgba(124, 106, 239, 0.3);
+      transform: translateY(-1px);
+    }
+
+    /* ─── Hero ─── */
+    .hero {
+      padding: 180px 0 120px;
+      text-align: center;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 32px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    .badge:hover {
+      border-color: var(--border-hover);
+      color: var(--text);
+    }
+
+    .badge-icon {
+      font-size: 14px;
+      font-family: var(--mono);
+      color: var(--accent-bright);
+      font-weight: 600;
+    }
+
+    h1 {
+      font-size: clamp(40px, 6vw, 72px);
+      font-weight: 700;
+      letter-spacing: -0.035em;
+      line-height: 1.05;
+      margin-bottom: 24px;
+    }
+
+    h1 .gradient {
+      background: linear-gradient(135deg, var(--accent-bright), var(--accent), #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 48px;
+      line-height: 1.6;
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+      font-family: var(--font);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      box-shadow: 0 0 0 1px rgba(124, 106, 239, 0.3), 0 4px 20px rgba(124, 106, 239, 0.2);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-bright);
+      box-shadow: 0 0 0 1px rgba(124, 106, 239, 0.5), 0 4px 30px rgba(124, 106, 239, 0.35);
+      transform: translateY(-2px);
+    }
+
+    .btn-primary:active {
+      transform: translateY(0);
+      box-shadow: 0 0 0 1px rgba(124, 106, 239, 0.3), 0 2px 10px rgba(124, 106, 239, 0.15);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      color: var(--text);
+      border-color: var(--border-hover);
+      background: var(--bg-elevated);
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost:active { transform: translateY(0); }
+
+    /* ─── Install block ─── */
+    .install-block {
+      margin: 56px auto 0;
+      max-width: 520px;
+    }
+
+    .install-cmd {
+      display: flex;
+      align-items: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 20px;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: border-color 0.25s, box-shadow 0.25s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .install-cmd::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(124, 106, 239, 0.04), transparent);
+      transform: translateX(-100%);
+      transition: transform 0.6s ease;
+    }
+
+    .install-cmd:hover::before { transform: translateX(100%); }
+
+    .install-cmd:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(124, 106, 239, 0.1);
+    }
+
+    .install-cmd code { color: var(--text); flex: 1; position: relative; }
+    .install-cmd code .dim { color: var(--text-dim); }
+    .install-cmd code .accent { color: var(--accent-bright); }
+
+    .copy-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 4px;
+      transition: color 0.2s, transform 0.15s;
+      font-size: 14px;
+      position: relative;
+    }
+
+    .copy-btn:hover {
+      color: var(--accent-bright);
+      transform: scale(1.1);
+    }
+
+    .install-note {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 10px;
+    }
+
+    /* ─── Stats bar ─── */
+    .stats {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      padding: 60px 0;
+      flex-wrap: wrap;
+    }
+
+    .stat {
+      text-align: center;
+      transition: transform 0.2s;
+    }
+
+    .stat:hover { transform: translateY(-2px); }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      font-family: var(--mono);
+      color: var(--text);
+    }
+
+    .stat-value .unit {
+      font-size: 18px;
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ─── Divider ─── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* ─── Problem / Solution ─── */
+    .problem-section {
+      padding: 100px 0;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 64px;
+      align-items: start;
+    }
+
+    .col-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .problem-col .col-label { color: var(--red-muted); }
+    .solution-col .col-label { color: var(--teal); }
+
+    .col-title {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+
+    .col-text {
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .col-text strong { color: var(--text); font-weight: 500; }
+
+    /* ─── Code demo ─── */
+    .demo-section {
+      padding: 80px 0;
+    }
+
+    .demo-window {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      max-width: 720px;
+      margin: 0 auto;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .demo-window:hover {
+      border-color: var(--border-hover);
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .demo-titlebar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .demo-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border-hover);
+    }
+
+    .demo-title {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-left: 8px;
+      font-family: var(--mono);
+    }
+
+    .demo-body {
+      padding: 24px;
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .demo-body .prompt { color: var(--teal); }
+    .demo-body .cmd { color: var(--text); }
+    .demo-body .comment { color: var(--text-dim); font-style: italic; }
+    .demo-body .output { color: var(--text-muted); }
+    .demo-body .highlight { color: var(--accent-bright); }
+    .demo-body .result { color: var(--orange); }
+
+    .demo-line {
+      display: block;
+      padding: 2px 0;
+    }
+
+    .demo-line + .demo-line-gap { margin-top: 16px; }
+
+    /* ─── Features grid ─── */
+    .features-section {
+      padding: 100px 0;
+    }
+
+    .section-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      margin-bottom: 12px;
+      text-align: center;
+    }
+
+    .section-title {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+    }
+
+    .feature-card:hover {
+      border-color: rgba(124, 106, 239, 0.3);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 30px rgba(124, 106, 239, 0.08);
+    }
+
+    .feature-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(124, 106, 239, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      margin-bottom: 16px;
+      transition: background 0.25s, border-color 0.25s;
+    }
+
+    .feature-card:hover .feature-icon {
+      background: rgba(124, 106, 239, 0.2);
+      border-color: rgba(124, 106, 239, 0.4);
+    }
+
+    .feature-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ─── Tools section ─── */
+    .tools-section {
+      padding: 100px 0;
+    }
+
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .tool-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      transition: border-color 0.2s, transform 0.2s, background 0.2s;
+      border-left: 3px solid transparent;
+    }
+
+    .tool-row:hover {
+      border-color: var(--border-hover);
+      border-left-color: var(--accent);
+      transform: translateX(4px);
+      background: var(--bg-elevated);
+    }
+
+    .tool-name {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent-bright);
+      white-space: nowrap;
+    }
+
+    .tool-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* ─── Architecture section ─── */
+    .arch-section {
+      padding: 80px 0;
+    }
+
+    .arch-diagram {
+      max-width: 780px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      transition: border-color 0.3s;
+    }
+
+    .arch-diagram:hover { border-color: var(--border-hover); }
+
+    .arch-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .arch-row:last-child { margin-bottom: 0; }
+
+    .arch-node {
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      min-width: 140px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+
+    .arch-node:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .arch-node.primary {
+      border-color: rgba(124, 106, 239, 0.4);
+      background: rgba(124, 106, 239, 0.08);
+      color: var(--accent-bright);
+    }
+
+    .arch-node.primary:hover {
+      border-color: rgba(124, 106, 239, 0.7);
+      box-shadow: 0 4px 20px rgba(124, 106, 239, 0.15);
+    }
+
+    .arch-node.storage {
+      border-color: rgba(94, 234, 212, 0.3);
+      background: rgba(94, 234, 212, 0.06);
+      color: var(--teal);
+    }
+
+    .arch-node.storage:hover {
+      border-color: rgba(94, 234, 212, 0.6);
+      box-shadow: 0 4px 20px rgba(94, 234, 212, 0.1);
+    }
+
+    .arch-arrow {
+      color: var(--text-dim);
+      font-size: 18px;
+    }
+
+    .arch-label {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+
+    /* ─── Compat section ─── */
+    .compat-section {
+      padding: 80px 0;
+      text-align: center;
+    }
+
+    .compat-grid {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      flex-wrap: wrap;
+      margin-top: 40px;
+    }
+
+    .compat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      transition: transform 0.2s;
+    }
+
+    .compat-item:hover { transform: translateY(-4px); }
+
+    .compat-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+    }
+
+    .compat-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .compat-item:hover .compat-icon {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(124, 106, 239, 0.15);
+      background: var(--bg-elevated);
+    }
+
+    .compat-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      transition: color 0.2s;
+    }
+
+    .compat-item:hover .compat-label { color: var(--text); }
+
+    /* ─── Setup steps ─── */
+    .setup-steps {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      margin-top: 48px;
+      flex-wrap: wrap;
+    }
+
+    .setup-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      max-width: 240px;
+    }
+
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(124, 106, 239, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-bright);
+      flex-shrink: 0;
+      font-family: var(--mono);
+    }
+
+    .step-text {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .step-text code {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent-bright);
+      background: var(--accent-subtle);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    /* ─── CTA ─── */
+    .cta-section {
+      padding: 120px 0 100px;
+      text-align: center;
+      position: relative;
+    }
+
+    .cta-section::before {
+      content: '';
+      position: absolute;
+      bottom: 40%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 500px;
+      height: 300px;
+      background: radial-gradient(ellipse, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+    }
+
+    .cta-title {
+      font-size: clamp(28px, 4vw, 44px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+    }
+
+    .cta-sub {
+      color: var(--text-muted);
+      font-size: 16px;
+      margin-bottom: 40px;
+    }
+
+    /* ─── Footer ─── */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+    }
+
+    footer .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .footer-left {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    .footer-left a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-left a:hover { color: var(--accent-bright); }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--accent-bright); }
+
+    /* ─── Mobile ─── */
+    @media (max-width: 768px) {
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { padding: 140px 0 80px; }
+      .two-col { grid-template-columns: 1fr; gap: 48px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .tools-grid { grid-template-columns: 1fr; }
+      .stats { gap: 32px; }
+      .stat-value { font-size: 26px; }
+      footer .container { flex-direction: column; gap: 16px; }
+      .arch-diagram { padding: 24px 16px; }
+      .arch-row { gap: 8px; }
+      .arch-node { min-width: 100px; font-size: 12px; padding: 10px 14px; }
+      .setup-steps { gap: 32px; }
+      .compat-grid { gap: 20px; }
+    }
+
+    @media (max-width: 480px) {
+      .hero-actions { flex-direction: column; }
+      .btn { width: 100%; justify-content: center; }
+      .install-cmd { font-size: 12px; }
+    }
+
+    /* ─── Animations ─── */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .fade-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav id="nav">
+    <div class="container">
+      <a href="#" class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <linearGradient id="core" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#A78BFA"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+            </defs>
+            <g stroke="#8B5CF6" stroke-width="1.2" stroke-opacity="0.22" fill="none" stroke-linecap="round">
+              <path d="M24 13Q32 16 40 13"/><path d="M24 13L15 25"/><path d="M24 13L32 24"/><path d="M40 13L49 25"/><path d="M40 13L32 24"/>
+              <path d="M15 25L32 24"/><path d="M49 25L32 24"/><path d="M15 25L12 38"/><path d="M15 25L24 38"/><path d="M49 25L52 38"/><path d="M49 25L40 38"/><path d="M32 24L24 38"/><path d="M32 24L40 38"/>
+              <path d="M12 38L24 38"/><path d="M40 38L52 38"/><path d="M24 38L40 38"/><path d="M12 38L22 50"/><path d="M24 38L22 50"/><path d="M24 38L32 52"/><path d="M40 38L42 50"/><path d="M40 38L32 52"/><path d="M52 38L42 50"/>
+              <path d="M22 50L32 52"/><path d="M42 50L32 52"/><path d="M22 50L42 50"/>
+            </g>
+            <circle cx="32" cy="24" r="10" fill="#8B5CF6" opacity="0.08"/>
+            <circle cx="24" cy="13" r="3.2" fill="#8B5CF6" opacity="0.6"/><circle cx="40" cy="13" r="3.2" fill="#8B5CF6" opacity="0.6"/>
+            <circle cx="15" cy="25" r="2.8" fill="#8B5CF6" opacity="0.5"/><circle cx="32" cy="24" r="5.5" fill="url(#core)" filter="url(#glow)"/><circle cx="49" cy="25" r="2.8" fill="#8B5CF6" opacity="0.5"/>
+            <circle cx="12" cy="38" r="2.5" fill="#8B5CF6" opacity="0.45"/><circle cx="24" cy="38" r="3" fill="#8B5CF6" opacity="0.6"/><circle cx="40" cy="38" r="3" fill="#8B5CF6" opacity="0.6"/><circle cx="52" cy="38" r="2.5" fill="#8B5CF6" opacity="0.45"/>
+            <circle cx="22" cy="50" r="2.5" fill="#8B5CF6" opacity="0.5"/><circle cx="42" cy="50" r="2.5" fill="#8B5CF6" opacity="0.5"/><circle cx="32" cy="52" r="3.5" fill="#8B5CF6" opacity="0.75"/>
+            <circle cx="32" cy="24" r="2" fill="white" opacity="0.35"/><circle cx="32" cy="52" r="1.5" fill="white" opacity="0.2"/>
+          </svg>
+        </div>
+        <span>BrainLayer</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#tools">Tools</a>
+        <a href="https://etanhey.github.io/brainlayer">Docs</a>
+        <a href="https://github.com/EtanHey/brainlayer" class="nav-cta">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="badge">
+        <span class="badge-icon">v1.0</span>
+        1,204 tests passing
+      </div>
+      <h1>Give your AI<br><span class="gradient">a memory</span></h1>
+      <p class="hero-sub">
+        Local-first memory layer for any MCP-compatible AI agent.
+        Every decision, every preference, every debugging session — remembered.
+      </p>
+      <div class="hero-actions">
+        <a href="#install" class="btn btn-primary">Get started</a>
+        <a href="https://github.com/EtanHey/brainlayer" class="btn btn-ghost">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View source
+        </a>
+      </div>
+
+      <div class="install-block" id="install">
+        <div class="install-cmd" onclick="copyInstall(this)">
+          <code><span class="dim">$</span> pip install brainlayer <span class="dim">&&</span> brainlayer <span class="accent">init</span></code>
+          <button class="copy-btn" aria-label="Copy">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </button>
+        </div>
+        <p class="install-note">Then add to your MCP config and run <code style="font-family:var(--mono);color:var(--accent-bright);font-size:12px">brainlayer index</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <div class="container">
+    <div class="stats fade-in">
+      <div class="stat">
+        <div class="stat-value" data-target="284" data-suffix="K">0</div>
+        <div class="stat-label">Chunks indexed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" data-target="119">0</div>
+        <div class="stat-label">Entities tracked</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" data-target="93.9" data-suffix="%" data-decimal="true">0</div>
+        <div class="stat-label">Enriched</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" data-target="11">0</div>
+        <div class="stat-label">MCP tools</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" data-target="209" data-suffix="KB">0</div>
+        <div class="stat-label">BrainBar daemon</div>
+      </div>
+    </div>
+    <div class="divider"></div>
+  </div>
+
+  <!-- Problem / Solution -->
+  <section class="problem-section">
+    <div class="container">
+      <div class="two-col fade-in">
+        <div class="problem-col">
+          <div class="col-label">The problem</div>
+          <h2 class="col-title">Your AI has amnesia</h2>
+          <p class="col-text">
+            Every session starts from zero. Your AI doesn't remember
+            the architecture decisions from last week, the debugging approach
+            that worked, or that you prefer tabs over spaces.<br><br>
+            You've explained the same context <strong>dozens of times</strong>.
+            Your agent asks the same questions. Makes the same mistakes.
+            Suggests patterns you've already rejected.
+          </p>
+        </div>
+        <div class="solution-col">
+          <div class="col-label">The fix</div>
+          <h2 class="col-title">Install. Index. Remember.</h2>
+          <p class="col-text">
+            Install BrainLayer, add it to your MCP config, and index your
+            conversations. Your agent now searches <strong>284K chunks</strong>
+            of knowledge before responding — past decisions, file histories,
+            entity relationships, your corrections.<br><br>
+            Hybrid search (semantic + keyword + knowledge graph) finds
+            the right memory in <strong>&lt;50ms</strong>. Zero cloud.
+            Everything stays on your machine.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Demo -->
+  <section class="demo-section">
+    <div class="container fade-in">
+      <div class="demo-window">
+        <div class="demo-titlebar">
+          <div class="demo-dot"></div>
+          <div class="demo-dot"></div>
+          <div class="demo-dot"></div>
+          <div class="demo-title">claude code</div>
+        </div>
+        <div class="demo-body">
+          <span class="demo-line"><span class="comment"># Your agent now remembers everything</span></span>
+          <span class="demo-line demo-line-gap"><span class="prompt">you:</span> <span class="cmd">What approach did we use for auth?</span></span>
+          <span class="demo-line demo-line-gap"><span class="highlight">brain_search</span><span class="output">("auth approach architecture")</span></span>
+          <span class="demo-line"><span class="output">  Found 3 chunks (12ms)</span></span>
+          <span class="demo-line"><span class="result">  &rarr; "Chose JWT with refresh tokens over session cookies.</span></span>
+          <span class="demo-line"><span class="result">     Reason: stateless API, mobile client support.</span></span>
+          <span class="demo-line"><span class="result">     Decision date: 2026-02-14. Confidence: high."</span></span>
+          <span class="demo-line demo-line-gap"><span class="prompt">claude:</span> <span class="cmd">You chose JWT with refresh tokens on Feb 14.</span></span>
+          <span class="demo-line"><span class="cmd">The rationale was stateless APIs and mobile support.</span></span>
+          <span class="demo-line"><span class="cmd">Want me to continue with that pattern?</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- Features -->
+  <section class="features-section" id="features">
+    <div class="container">
+      <div class="section-label">How it works</div>
+      <h2 class="section-title">Memory that actually works</h2>
+      <div class="features-grid">
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F50D;</div>
+          <h3>Hybrid search</h3>
+          <p>Semantic vectors, FTS5 keywords, and knowledge graph — merged with Reciprocal Rank Fusion. The right memory in &lt;50ms.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x26A1;</div>
+          <h3>Real-time indexing</h3>
+          <p>JSONL watcher indexes your conversations within seconds. 4-layer content filters keep noise out and signal in.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F3F7;&#xFE0F;</div>
+          <h3>10-field enrichment</h3>
+          <p>Every chunk gets summary, tags, importance, intent, symbols, epistemic level, and more. Via Groq or local LLM.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F578;&#xFE0F;</div>
+          <h3>Knowledge graph</h3>
+          <p>Entities, relations, evidence chains. Ask "what do we know about this person?" and get a structured answer, not a keyword match.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x267B;&#xFE0F;</div>
+          <h3>Chunk lifecycle</h3>
+          <p>Supersede, archive, filter. Stale knowledge is managed, not lost. Entity contracts with health scoring keep your graph clean.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F5A5;&#xFE0F;</div>
+          <h3>BrainBar daemon</h3>
+          <p>209KB native macOS Swift binary. Always-on MCP access over Unix socket. Starts on login, invisible until needed.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tools -->
+  <section class="tools-section" id="tools">
+    <div class="container">
+      <div class="section-label">MCP Interface</div>
+      <h2 class="section-title">11 tools. One protocol.</h2>
+      <div class="tools-grid">
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_search</span>
+          <span class="tool-desc">Semantic search across all memory</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_store</span>
+          <span class="tool-desc">Persist decisions and learnings</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_recall</span>
+          <span class="tool-desc">Proactive session context</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_digest</span>
+          <span class="tool-desc">Ingest &amp; extract entities</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_entity</span>
+          <span class="tool-desc">Knowledge graph lookup</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_expand</span>
+          <span class="tool-desc">Surrounding context retrieval</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_get_person</span>
+          <span class="tool-desc">Person entity deep lookup</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_tags</span>
+          <span class="tool-desc">Browse &amp; filter by tag</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_update</span>
+          <span class="tool-desc">Modify existing memories</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_supersede</span>
+          <span class="tool-desc">Replace outdated knowledge</span>
+        </div>
+        <div class="tool-row fade-in">
+          <span class="tool-name">brain_archive</span>
+          <span class="tool-desc">Soft-delete with timestamp</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="arch-section">
+    <div class="container fade-in">
+      <div class="section-label">Architecture</div>
+      <h2 class="section-title">Everything runs locally</h2>
+      <div class="arch-diagram">
+        <div class="arch-label">AI Editors</div>
+        <div class="arch-row">
+          <div class="arch-node">Claude Code</div>
+          <div class="arch-node">Cursor</div>
+          <div class="arch-node">Zed</div>
+          <div class="arch-node">Codex</div>
+        </div>
+        <div class="arch-row">
+          <span class="arch-arrow">&darr; MCP &darr;</span>
+        </div>
+        <div class="arch-row">
+          <div class="arch-node primary">BrainLayer MCP Server<br><small style="color:var(--text-dim)">11 tools &middot; stdio</small></div>
+        </div>
+        <div class="arch-row">
+          <span class="arch-arrow">&darr;</span>
+        </div>
+        <div class="arch-row">
+          <div class="arch-node primary">Hybrid Search<br><small style="color:var(--text-dim)">semantic + FTS5 + KG</small></div>
+          <div class="arch-node">JSONL Watcher<br><small style="color:var(--text-dim)">~1s polling</small></div>
+          <div class="arch-node">Groq / Local LLM<br><small style="color:var(--text-dim)">enrichment</small></div>
+        </div>
+        <div class="arch-row">
+          <span class="arch-arrow">&darr;</span>
+        </div>
+        <div class="arch-row">
+          <div class="arch-node storage">SQLite + sqlite-vec<br><small style="color:var(--text-dim)">single .db file &middot; WAL mode</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compatibility -->
+  <section class="compat-section">
+    <div class="container fade-in">
+      <div class="section-label">Works everywhere</div>
+      <h2 class="section-title">Any MCP client. Three steps to set up.</h2>
+      <div class="compat-grid">
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Claude Code: Anthropic asterisk -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07" stroke="#D4A574" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="compat-label">Claude Code</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Cursor: cursor arrow -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5 3l14 9-6 1.5L10.5 20z" fill="#ededef" stroke="#ededef" stroke-width="1" stroke-linejoin="round"/>
+              <path d="M13 13.5l4 6" stroke="#ededef" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="compat-label">Cursor</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Zed: Z letterform -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M6 6h12L6 18h12" stroke="#4FC1E9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="compat-label">Zed</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- VS Code: brackets -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M16 3l4 2v14l-4 2-10-7V10l10-7z" fill="none" stroke="#3B9AE1" stroke-width="1.5" stroke-linejoin="round"/>
+              <path d="M6 10l-3 2 3 2" stroke="#3B9AE1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M16 3L6 10l10 7" stroke="#3B9AE1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="compat-label">VS Code</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Codex: hexagon -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" stroke="#10A37F" stroke-width="1.5" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="3" stroke="#10A37F" stroke-width="1.5"/>
+            </svg>
+          </div>
+          <div class="compat-label">Codex</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Kiro: K letterform -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M7 5v14M7 12l8-7M7 12l8 7" stroke="#FF9900" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="compat-label">Kiro</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Gemini: sparkle -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2C12 2 13.5 8.5 15.5 10.5S22 12 22 12s-6.5 1.5-8.5 3.5S12 22 12 22s-1.5-6.5-3.5-8.5S2 12 2 12s6.5-1.5 8.5-3.5S12 2 12 2z" fill="#4285F4"/>
+            </svg>
+          </div>
+          <div class="compat-label">Gemini</div>
+        </div>
+        <div class="compat-item">
+          <div class="compat-icon">
+            <!-- Claude Desktop: Anthropic A -->
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 4L4 20h4l1.5-3h5L16 20h4L12 4zm0 6l2 4h-4l2-4z" fill="#D4A574"/>
+            </svg>
+          </div>
+          <div class="compat-label">Claude Desktop</div>
+        </div>
+      </div>
+
+      <div class="setup-steps fade-in">
+        <div class="setup-step">
+          <div class="step-num">1</div>
+          <div class="step-text">Install and configure with <code>brainlayer init</code></div>
+        </div>
+        <div class="setup-step">
+          <div class="step-num">2</div>
+          <div class="step-text">Add <code>brainlayer-mcp</code> to your editor's MCP config</div>
+        </div>
+        <div class="setup-step">
+          <div class="step-num">3</div>
+          <div class="step-text">Index conversations with <code>brainlayer index</code></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="container">
+      <h2 class="cta-title fade-in">Stop repeating yourself.</h2>
+      <p class="cta-sub fade-in">Three commands. Persistent memory. Forever.</p>
+      <div class="install-block" style="margin-top: 0;">
+        <div class="install-cmd" onclick="copyInstall(this)">
+          <code><span class="dim">$</span> pip install brainlayer <span class="dim">&&</span> brainlayer <span class="accent">init</span></code>
+          <button class="copy-btn" aria-label="Copy">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-left">BrainLayer &mdash; by <a href="https://etanheyman.com">Etan Heyman</a></div>
+      <div class="footer-links">
+        <a href="https://github.com/EtanHey/brainlayer">GitHub</a>
+        <a href="https://etanhey.github.io/brainlayer">Docs</a>
+        <a href="https://pypi.org/project/brainlayer/">PyPI</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Nav scroll effect
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 20);
+    });
+
+    // Intersection observer for fade-in
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+    // Animated counters
+    function animateCounters() {
+      document.querySelectorAll('.stat-value[data-target]').forEach(el => {
+        const target = parseFloat(el.dataset.target);
+        const suffix = el.dataset.suffix || '';
+        const isDecimal = el.dataset.decimal === 'true';
+        const duration = 1800;
+        const start = performance.now();
+
+        function tick(now) {
+          const elapsed = now - start;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const current = target * eased;
+
+          if (isDecimal) {
+            el.textContent = current.toFixed(1) + suffix;
+          } else {
+            el.textContent = Math.round(current).toLocaleString() + suffix;
+          }
+
+          if (progress < 1) requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+      });
+    }
+
+    // Trigger counters when stats section is visible
+    const statsObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          animateCounters();
+          statsObserver.disconnect();
+        }
+      });
+    }, { threshold: 0.3 });
+
+    const statsEl = document.querySelector('.stats');
+    if (statsEl) statsObserver.observe(statsEl);
+
+    // Copy install command
+    function copyInstall(el) {
+      const text = 'pip install brainlayer && brainlayer init';
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = el.querySelector('.copy-btn');
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent-bright)" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>';
+        setTimeout(() => {
+          btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>';
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>

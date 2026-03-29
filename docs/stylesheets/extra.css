@@ -1,37 +1,102 @@
-/* BrainLayer docs — dark navy theme matching etanheyman.com */
+/* BrainLayer docs — dark theme matching landing page */
 
 :root {
-  --md-primary-fg-color: #6366F1;
-  --md-primary-fg-color--light: #818CF8;
-  --md-primary-fg-color--dark: #4F46E5;
-  --md-accent-fg-color: #818CF8;
+  --md-primary-fg-color: #7c6aef;
+  --md-primary-fg-color--light: #9b8cff;
+  --md-primary-fg-color--dark: #5a4ed0;
+  --md-accent-fg-color: #9b8cff;
 }
 
 [data-md-color-scheme="slate"] {
-  --md-default-bg-color: #0A0F1C;
-  --md-default-bg-color--light: #111827;
-  --md-code-bg-color: #111827;
-  --md-code-hl-color: rgba(99, 102, 241, 0.15);
-  --md-typeset-a-color: #818CF8;
+  --md-default-bg-color: #0a0a0b;
+  --md-default-bg-color--light: #111113;
+  --md-code-bg-color: #16161a;
+  --md-code-hl-color: rgba(124, 106, 239, 0.15);
+  --md-typeset-a-color: #9b8cff;
 }
 
 [data-md-color-scheme="slate"] .md-header {
-  background-color: #080C18;
+  background-color: rgba(10, 10, 11, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 [data-md-color-scheme="slate"] .md-sidebar {
-  background-color: #080C18;
+  background-color: #0a0a0b;
 }
 
 [data-md-color-scheme="slate"] .md-typeset code {
-  background-color: #111827;
+  background-color: #16161a;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .admonition,
 [data-md-color-scheme="slate"] .md-typeset details {
-  border-color: #6366F1;
+  border-color: #7c6aef;
 }
 
 [data-md-color-scheme="slate"] .md-footer {
-  background-color: #080C18;
+  background-color: #0a0a0b;
+}
+
+/* Links get accent color hover */
+[data-md-color-scheme="slate"] .md-typeset a {
+  transition: color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: #c4b5fd;
+}
+
+/* Nav items hover */
+[data-md-color-scheme="slate"] .md-nav__link {
+  transition: color 0.2s, opacity 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link:hover {
+  color: #9b8cff;
+}
+
+/* Search bar styling */
+[data-md-color-scheme="slate"] .md-search__input {
+  background-color: #16161a;
+  border: 1px solid #222228;
+  transition: border-color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-search__input:hover,
+[data-md-color-scheme="slate"] .md-search__input:focus {
+  border-color: #7c6aef;
+}
+
+/* Code copy button hover */
+[data-md-color-scheme="slate"] .md-clipboard {
+  transition: color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-clipboard:hover {
+  color: #9b8cff;
+}
+
+/* Tab hover states */
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label {
+  transition: color 0.2s, border-color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label:hover {
+  color: #9b8cff;
+}
+
+/* Table of contents hover */
+[data-md-color-scheme="slate"] .md-sidebar .md-nav__link:hover {
+  color: #9b8cff;
+}
+
+/* Card-like styling for content sections */
+[data-md-color-scheme="slate"] .md-typeset .admonition {
+  background-color: #111113;
+  transition: border-color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition:hover {
+  border-color: #9b8cff;
 }
