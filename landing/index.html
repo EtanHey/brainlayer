@@ -101,6 +101,7 @@
     .logo-icon img {
       width: 100%;
       height: 100%;
+      filter: hue-rotate(120deg) saturate(0.65) brightness(1.1);
     }
 
     .logo-text {
@@ -178,6 +179,8 @@
 
     .hero-content {
       max-width: 720px;
+      margin: 0 auto;
+      text-align: center;
     }
 
     .hero-tag {
@@ -222,14 +225,15 @@
       font-size: 18px;
       color: var(--text-muted);
       max-width: 540px;
+      margin: 0 auto 48px;
       line-height: 1.7;
-      margin-bottom: 48px;
       font-weight: 300;
     }
 
     .hero-actions {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 16px;
       flex-wrap: wrap;
     }
@@ -281,7 +285,7 @@
 
     /* ─── Install ─── */
     .install-block {
-      margin: 56px 0 0;
+      margin: 56px auto 0;
       max-width: 540px;
     }
 
@@ -359,7 +363,7 @@
 
     .stats {
       display: flex;
-      justify-content: flex-start;
+      justify-content: center;
       gap: 56px;
       flex-wrap: wrap;
     }
@@ -408,7 +412,7 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 48px;
-      align-items: start;
+      align-items: stretch;
     }
 
     .ps-card {
@@ -416,27 +420,34 @@
       border-radius: 12px;
       border: 1px solid var(--border);
       background: var(--bg-card);
-      transition: border-color 0.3s, transform 0.3s;
+      transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
+      display: flex;
+      flex-direction: column;
     }
 
+    .ps-card .ps-text { flex: 1; }
+
     .ps-card:hover {
-      transform: translateY(-3px);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
     }
 
     .ps-card.problem {
-      border-left: 3px solid var(--red-muted);
+      border-top: 2px solid var(--red-muted);
     }
 
     .ps-card.problem:hover {
-      border-color: var(--red-muted);
+      border-color: rgba(207, 96, 96, 0.4);
+      border-top-color: var(--red-muted);
     }
 
     .ps-card.solution {
-      border-left: 3px solid var(--teal);
+      border-top: 2px solid var(--teal);
     }
 
     .ps-card.solution:hover {
-      border-color: var(--teal);
+      border-color: rgba(94, 234, 212, 0.3);
+      border-top-color: var(--teal);
     }
 
     .ps-label {
@@ -451,8 +462,8 @@
     .solution .ps-label { color: var(--teal); }
 
     .ps-title {
-      font-family: var(--display);
-      font-size: 24px;
+      font-family: var(--body);
+      font-size: 22px;
       font-weight: 600;
       letter-spacing: -0.02em;
       margin-bottom: 16px;
@@ -478,6 +489,7 @@
       border-radius: 10px;
       overflow: hidden;
       max-width: 760px;
+      margin: 0 auto;
       transition: border-color 0.3s, box-shadow 0.4s;
     }
 
@@ -520,13 +532,17 @@
       overflow-x: auto;
     }
 
-    .terminal-body .prompt { color: var(--teal); }
+    .terminal-body .prompt { color: #6ec1e4; font-weight: 500; }
     .terminal-body .cmd { color: var(--text); }
-    .terminal-body .comment { color: var(--text-dim); font-style: italic; }
-    .terminal-body .out { color: var(--text-muted); }
-    .terminal-body .fn { color: var(--accent); }
-    .terminal-body .result { color: #e8b090; }
+    .terminal-body .dim { color: var(--text-dim); }
+    .terminal-body .tool-call { color: var(--accent); font-weight: 500; }
+    .terminal-body .arg { color: #a8d8a8; }
+    .terminal-body .result-key { color: #9c9890; }
+    .terminal-body .result-val { color: var(--text); }
+    .terminal-body .result-str { color: #e8b090; }
     .terminal-body .num { color: var(--teal); }
+    .terminal-body .border-char { color: #3a3a42; }
+    .terminal-body .system { color: #9c9890; font-style: italic; }
 
     .t-line {
       display: block;
@@ -547,6 +563,7 @@
       color: var(--accent);
       margin-bottom: 12px;
       font-weight: 500;
+      text-align: center;
     }
 
     .section-title {
@@ -555,6 +572,7 @@
       font-weight: 600;
       letter-spacing: -0.03em;
       margin-bottom: 56px;
+      text-align: center;
     }
 
     .features-grid {
@@ -578,8 +596,8 @@
     }
 
     .feature-card h3 {
-      font-family: var(--display);
-      font-size: 17px;
+      font-family: var(--body);
+      font-size: 16px;
       font-weight: 600;
       margin-bottom: 8px;
       letter-spacing: -0.01em;
@@ -610,6 +628,7 @@
       grid-template-columns: repeat(2, 1fr);
       gap: 10px;
       max-width: 720px;
+      margin: 0 auto;
     }
 
     .tool-row {
@@ -627,7 +646,6 @@
     .tool-row:hover {
       border-color: var(--border-hover);
       border-left-color: var(--accent);
-      transform: translateX(3px);
       background: var(--bg-elevated);
     }
 
@@ -653,6 +671,7 @@
 
     .arch-diagram {
       max-width: 800px;
+      margin: 0 auto;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -740,10 +759,12 @@
     /* ─── Compatibility ─── */
     .compat-section {
       padding: 100px 0;
+      text-align: center;
     }
 
     .compat-grid {
       display: flex;
+      justify-content: center;
       gap: 36px;
       flex-wrap: wrap;
       margin-top: 48px;
@@ -796,10 +817,12 @@
     /* ─── Setup ─── */
     .setup-section {
       padding: 60px 0 100px;
+      text-align: center;
     }
 
     .setup-steps {
       display: flex;
+      justify-content: center;
       gap: 40px;
       flex-wrap: wrap;
     }
@@ -809,6 +832,7 @@
       align-items: flex-start;
       gap: 16px;
       max-width: 280px;
+      text-align: left;
     }
 
     .step-num {
@@ -873,6 +897,7 @@
       font-weight: 600;
       letter-spacing: -0.03em;
       margin-bottom: 16px;
+      text-align: center;
     }
 
     .cta-sub {
@@ -880,6 +905,7 @@
       font-size: 16px;
       margin-bottom: 40px;
       font-weight: 300;
+      text-align: center;
     }
 
     /* ─── Footer ─── */
@@ -1033,7 +1059,7 @@
           <div class="stat-label">Entities tracked</div>
         </div>
         <div class="stat">
-          <div class="stat-value" data-target="11">0</div>
+          <div class="stat-value" data-target="7">0</div>
           <div class="stat-label">MCP tools</div>
         </div>
         <div class="stat">
@@ -1086,18 +1112,20 @@
           <div class="terminal-title">claude code ~ brainlayer</div>
         </div>
         <div class="terminal-body">
-          <span class="t-line"><span class="comment"># BrainLayer hooks inject context automatically</span></span>
-          <span class="t-line t-gap"><span class="prompt">you:</span> <span class="cmd">What approach did we use for auth?</span></span>
-          <span class="t-line t-gap"><span class="out">[SessionStart hook] brain_search("auth approach")</span></span>
-          <span class="t-line"><span class="out">  Found <span class="num">3</span> chunks (<span class="num">12ms</span>)</span></span>
-          <span class="t-line t-gap"><span class="fn">brain_search</span><span class="out">("auth approach architecture")</span></span>
-          <span class="t-line"><span class="result">  chunk_id: rt-a4f82c19</span></span>
-          <span class="t-line"><span class="result">  "Chose JWT with refresh tokens over session cookies.</span></span>
-          <span class="t-line"><span class="result">   Reason: stateless API, mobile client support.</span></span>
-          <span class="t-line"><span class="result">   Decision: 2026-02-14. Confidence: high."</span></span>
-          <span class="t-line t-gap"><span class="prompt">claude:</span> <span class="cmd">You chose JWT with refresh tokens on Feb 14.</span></span>
-          <span class="t-line"><span class="cmd">The rationale was stateless APIs and mobile support.</span></span>
-          <span class="t-line"><span class="cmd">Continuing with that pattern.</span></span>
+          <span class="t-line"><span class="prompt">&gt;</span> <span class="cmd">What approach did we use for auth?</span></span>
+          <span class="t-line t-gap"><span class="system">  [BrainLayer] SessionStart hook injected 3 chunks (12ms)</span></span>
+          <span class="t-line t-gap"><span class="border-char">╭─</span> <span class="tool-call">brain_search</span>(<span class="arg">query=</span><span class="result-str">"auth approach architecture"</span>)</span>
+          <span class="t-line"><span class="border-char">│</span></span>
+          <span class="t-line"><span class="border-char">│</span>  <span class="result-key">chunks:</span> <span class="num">3</span>  <span class="result-key">latency:</span> <span class="num">12ms</span>  <span class="result-key">top score:</span> <span class="num">0.94</span></span>
+          <span class="t-line"><span class="border-char">│</span></span>
+          <span class="t-line"><span class="border-char">│</span>  <span class="result-str">"Chose JWT with refresh tokens over session cookies.</span></span>
+          <span class="t-line"><span class="border-char">│</span>  <span class="result-str"> Reason: stateless API, mobile client support.</span></span>
+          <span class="t-line"><span class="border-char">│</span>  <span class="result-str"> Decision: 2026-02-14. Confidence: high."</span></span>
+          <span class="t-line"><span class="border-char">│</span></span>
+          <span class="t-line"><span class="border-char">╰─</span> <span class="dim">chunk_id: rt-a4f82c19 &middot; importance: 9</span></span>
+          <span class="t-line t-gap"><span class="cmd">You chose JWT with refresh tokens on Feb 14th.</span></span>
+          <span class="t-line"><span class="cmd">The rationale was stateless APIs and mobile client</span></span>
+          <span class="t-line"><span class="cmd">support. Continuing with that pattern.</span></span>
         </div>
       </div>
     </div>
@@ -1149,7 +1177,7 @@
   <section class="tools-section" id="tools">
     <div class="container">
       <div class="section-eyebrow">MCP interface</div>
-      <h2 class="section-title">11 tools, one protocol</h2>
+      <h2 class="section-title">7 tools, one protocol</h2>
       <div class="tools-grid">
         <div class="tool-row reveal">
           <span class="tool-name">brain_search</span>
@@ -1172,28 +1200,12 @@
           <span class="tool-desc">Knowledge graph entity lookup</span>
         </div>
         <div class="tool-row reveal">
-          <span class="tool-name">brain_expand</span>
-          <span class="tool-desc">Retrieve surrounding context for a chunk</span>
+          <span class="tool-name">brain_subscribe</span>
+          <span class="tool-desc">Watch for new matching memories</span>
         </div>
         <div class="tool-row reveal">
-          <span class="tool-name">brain_get_person</span>
-          <span class="tool-desc">Deep person entity lookup</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_tags</span>
-          <span class="tool-desc">Browse and filter by tag taxonomy</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_update</span>
-          <span class="tool-desc">Modify existing chunk metadata</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_supersede</span>
-          <span class="tool-desc">Replace outdated knowledge safely</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_archive</span>
-          <span class="tool-desc">Soft-delete with timestamp</span>
+          <span class="tool-name">brain_unsubscribe</span>
+          <span class="tool-desc">Stop watching a subscription</span>
         </div>
       </div>
     </div>
@@ -1217,7 +1229,7 @@
           <span class="arch-arrow">&darr; MCP protocol &darr;</span>
         </div>
         <div class="arch-row">
-          <div class="arch-node primary">BrainLayer MCP Server<small>11 tools &middot; stdio / socket</small></div>
+          <div class="arch-node primary">BrainLayer MCP Server<small>7 tools &middot; stdio / socket</small></div>
         </div>
         <div class="arch-row">
           <span class="arch-arrow">&darr;</span>
@@ -1316,7 +1328,7 @@
     <div class="container">
       <h2 class="cta-title reveal">Stop repeating yourself.</h2>
       <p class="cta-sub reveal reveal-delay-1">Three commands. Persistent memory. Your data stays yours.</p>
-      <div class="install-block reveal reveal-delay-2" style="margin-top: 0;">
+      <div class="install-block reveal reveal-delay-2" style="margin: 0 auto;">
         <div class="install-cmd" onclick="copyInstall(this)">
           <code><span class="dim">$</span> pip install brainlayer</code>
           <button class="copy-btn" aria-label="Copy">
