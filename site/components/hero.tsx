@@ -1,13 +1,4 @@
-"use client";
-
-import { motion } from "framer-motion";
 import { CopyBlock } from "./copy-block";
-
-const fade = (delay: number) => ({
-  initial: { opacity: 0, y: 16 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.7, ease: "easeOut" as const, delay },
-});
 
 export function Hero() {
   return (
@@ -23,28 +14,19 @@ export function Hero() {
       />
 
       <div className="relative mx-auto max-w-[960px] px-6">
-        <motion.h1
-          className="mx-auto mb-6 max-w-[700px] font-display text-[clamp(40px,6vw,68px)] leading-[1.08] font-bold tracking-[-0.035em]"
-          {...fade(0)}
-        >
+        <h1 className="hero-fade mx-auto mb-6 max-w-[700px] font-display text-[clamp(40px,6vw,68px)] leading-[1.08] font-bold tracking-[-0.035em]">
           Your AI forgets
           <br />
           everything. <em className="italic text-accent">Fix that.</em>
-        </motion.h1>
+        </h1>
 
-        <motion.p
-          className="mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary"
-          {...fade(0.12)}
-        >
+        <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary">
           Local-first memory for MCP agents. Every decision, correction, and
           preference — indexed and searchable in &lt;50ms. Nothing leaves your
           machine.
-        </motion.p>
+        </p>
 
-        <motion.div
-          className="mb-12 flex flex-wrap items-center justify-center gap-3"
-          {...fade(0.24)}
-        >
+        <div className="hero-fade hero-fade-d2 mb-12 flex flex-wrap items-center justify-center gap-3">
           <a
             href="#setup"
             className="inline-flex items-center gap-2 rounded-full bg-text px-6 py-3 text-sm font-medium text-bg transition-transform hover:scale-[1.03] hover:shadow-[0_0_24px_rgba(250,250,249,0.15)] active:scale-[0.98]"
@@ -60,11 +42,11 @@ export function Hero() {
             </svg>
             View source
           </a>
-        </motion.div>
+        </div>
 
-        <motion.div {...fade(0.36)}>
+        <div className="hero-fade hero-fade-d3">
           <CopyBlock text="pip install brainlayer" showDollar />
-        </motion.div>
+        </div>
       </div>
     </section>
   );
