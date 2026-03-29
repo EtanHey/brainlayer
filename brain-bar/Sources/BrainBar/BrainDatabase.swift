@@ -7,6 +7,15 @@ import Foundation
 import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
+    struct DashboardStats: Sendable, Equatable {
+        let chunkCount: Int
+        let enrichedChunkCount: Int
+        let pendingEnrichmentCount: Int
+        let enrichmentPercent: Double
+        let databaseSizeBytes: Int64
+        let recentActivityBuckets: [Int]
+    }
+
     struct SubscriberRecord: Sendable {
         let agentID: String
         let generation: Int
@@ -624,6 +633,39 @@ final class BrainDatabase: @unchecked Sendable {
         return rows
     }
 
+    func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
+        guard bucketCount > 0 else {
+            return DashboardStats(
+                chunkCount: 0,
+                enrichedChunkCount: 0,
+                pendingEnrichmentCount: 0,
+                enrichmentPercent: 0,
+                databaseSizeBytes: databaseSizeBytes(),
+                recentActivityBuckets: []
+            )
+        }
+
+        let chunkCount = try scalarInt("SELECT COUNT(*) FROM chunks")
+        let enrichedChunkCount = try scalarInt(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND TRIM(enriched_at) != ''"
+        )
+        let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
+        let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
+        let recentActivityBuckets = try recentActivityBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount
+        )
+
+        return DashboardStats(
+            chunkCount: chunkCount,
+            enrichedChunkCount: enrichedChunkCount,
+            pendingEnrichmentCount: pendingEnrichmentCount,
+            enrichmentPercent: enrichmentPercent,
+            databaseSizeBytes: databaseSizeBytes(),
+            recentActivityBuckets: recentActivityBuckets
+        )
+    }
+
     static func tag(fromResourceURI uri: String) -> String? {
         let prefix = "brain://tag/"
         guard uri.hasPrefix(prefix) else { return nil }
@@ -651,6 +693,58 @@ final class BrainDatabase: @unchecked Sendable {
             """,
             binds: { stmt in bindText(agentID, to: stmt, index: 1) }
         )
+    }
+
+    private func scalarInt(_ sql: String) throws -> Int {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
+    private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
+        guard let db else { throw DBError.notOpen }
+
+        let bucketWidthSeconds = max(1, Double(activityWindowMinutes * 60) / Double(bucketCount))
+        let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT created_at FROM chunks WHERE created_at >= datetime('now', ?) ORDER BY created_at ASC"
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText("-\(activityWindowMinutes) minutes", to: stmt, index: 1)
+
+        var buckets = Array(repeating: 0, count: bucketCount)
+        let formatter = Self.sqliteDateFormatter
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let createdAtText = columnText(stmt, 0),
+                  let createdAt = formatter.date(from: createdAtText) else {
+                continue
+            }
+
+            let offset = createdAt.timeIntervalSince(windowStart)
+            if offset < 0 { continue }
+
+            let rawIndex = Int(offset / bucketWidthSeconds)
+            let clampedIndex = min(max(rawIndex, 0), bucketCount - 1)
+            buckets[clampedIndex] += 1
+        }
+
+        return buckets
+    }
+
+    private func databaseSizeBytes() -> Int64 {
+        let candidates = [path, "\(path)-wal", "\(path)-shm"]
+        return candidates.reduce(into: Int64(0)) { total, candidate in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: candidate)
+            total += (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        }
     }
 
     private func subscriptionTags(agentID: String) throws -> [String] {
@@ -1188,6 +1282,14 @@ final class BrainDatabase: @unchecked Sendable {
             "summary": digestSummary
         ]
     }
+
+    private static let sqliteDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 
     enum DBError: LocalizedError {
         case notOpen
