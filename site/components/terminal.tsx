@@ -4,7 +4,15 @@ import { useEffect, useState, useRef } from "react";
 import { motion, useInView } from "framer-motion";
 
 interface Line {
-  type: "prompt" | "claude" | "tool" | "output" | "result" | "hr" | "status";
+  type:
+    | "prompt"
+    | "claude"
+    | "tool"
+    | "output"
+    | "output-first"
+    | "result"
+    | "hr"
+    | "status";
   text: string;
   gap?: boolean;
   delay: number;
@@ -30,7 +38,7 @@ const lines: Line[] = [
     gap: true,
     delay: 2000,
   },
-  { type: "output", text: "[", delay: 2400 },
+  { type: "output-first", text: "[", delay: 2400 },
   { type: "output", text: "     {", delay: 2450 },
   { type: "output", text: '       "chunk_id": "agent-a34f466",', delay: 2500 },
   {
@@ -160,7 +168,7 @@ function RenderLine({ line }: { line: Line }) {
     );
   }
 
-  if (line.type === "output") {
+  if (line.type === "output-first") {
     return (
       <span className={`block ${g} text-text-dim`}>
         {"  ⎿  "}
@@ -169,10 +177,19 @@ function RenderLine({ line }: { line: Line }) {
     );
   }
 
+  if (line.type === "output") {
+    return (
+      <span className={`block ${g} text-text-dim`}>
+        {"     "}
+        {colorizeJson(line.text)}
+      </span>
+    );
+  }
+
   if (line.type === "result") {
     return (
-      <span className={`block text-accent-bright`}>
-        {"  ⎿  "}
+      <span className="block text-accent-bright">
+        {"     "}
         {line.text}
       </span>
     );
