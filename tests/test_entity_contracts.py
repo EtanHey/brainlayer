@@ -11,13 +11,7 @@ Tests cover:
 8. Entity lookup includes completeness_score and health_level
 """
 
-import json
-import math
-import os
-import subprocess
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import yaml
@@ -325,7 +319,6 @@ class TestHealthScoring:
 
     def test_score_module_importable(self):
         """The scoring module should be importable."""
-        from scripts.score_entity_health import score_entity, load_contracts
 
     def test_load_contracts(self, contracts_path):
         from scripts.score_entity_health import load_contracts
@@ -334,7 +327,7 @@ class TestHealthScoring:
         assert "person" in contracts
 
     def test_score_returns_required_fields(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -347,7 +340,7 @@ class TestHealthScoring:
         assert "relationship_count" in result
 
     def test_score_range_0_to_1(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -355,7 +348,7 @@ class TestHealthScoring:
         assert 0.0 <= result["completeness_score"] <= 1.0
 
     def test_health_level_1_to_5(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -377,7 +370,7 @@ class TestHealthScoring:
         assert classify_health_level(0.0) == 1   # Stub
 
     def test_chunk_count_accurate(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -385,7 +378,7 @@ class TestHealthScoring:
         assert result["chunk_count"] == 5
 
     def test_relationship_count_accurate(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -394,7 +387,7 @@ class TestHealthScoring:
 
     def test_missing_required_detected(self, populated_store, contracts_path):
         """coachClaude doesn't have all required fields populated — detect gaps."""
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-coach", "agent", contracts["agent"]
@@ -404,7 +397,7 @@ class TestHealthScoring:
 
     def test_tool_entity_scoring(self, populated_store, contracts_path):
         """BrainLayer (tool) should also get scored."""
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         result = score_entity(
             populated_store, "ent-brain", "tool", contracts["tool"]
@@ -414,7 +407,7 @@ class TestHealthScoring:
 
     def test_stub_entity_low_score(self, store, mock_embedding, contracts_path):
         """An entity with no chunks, no relations = very low score (Stub)."""
-        from scripts.score_entity_health import score_entity, load_contracts
+        from scripts.score_entity_health import load_contracts, score_entity
         contracts = load_contracts(str(contracts_path))
         store.upsert_entity(
             entity_id="ent-stub",
@@ -437,7 +430,7 @@ class TestHealthPersistence:
     """Test that scores are written to entity_health table."""
 
     def test_populate_entity_health(self, populated_store, contracts_path):
-        from scripts.score_entity_health import score_all_entities, load_contracts
+        from scripts.score_entity_health import load_contracts, score_all_entities
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
 
@@ -451,7 +444,7 @@ class TestHealthPersistence:
 
     def test_health_score_updates_on_rerun(self, populated_store, contracts_path):
         """Running score_all_entities twice should upsert, not duplicate."""
-        from scripts.score_entity_health import score_all_entities, load_contracts
+        from scripts.score_entity_health import load_contracts, score_all_entities
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
         score_all_entities(populated_store, contracts)
@@ -471,7 +464,7 @@ class TestEntityLookupEnhanced:
 
     def test_entity_lookup_includes_health(self, populated_store, mock_embedding, contracts_path):
         """After scoring, entity_lookup should include health data."""
-        from scripts.score_entity_health import score_all_entities, load_contracts
+        from scripts.score_entity_health import load_contracts, score_all_entities
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
 
