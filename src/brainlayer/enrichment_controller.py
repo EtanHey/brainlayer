@@ -415,19 +415,75 @@ def enrich_batch(
     store,
     phase: str = "run",
     limit: int = 5000,
-    max_retries: int = 12,  # noqa: ARG001
+    max_retries: int = 3,
 ) -> EnrichmentResult:
-    """Process backlog via Gemini Batch API (50% cost discount)."""
+    """Process backlog via realtime Gemini enrichment (one chunk at a time).
+
+    Falls back to per-chunk realtime enrichment since the Gemini Batch API
+    submit/poll/import workflow is not yet wired. This ensures unenriched
+    chunks actually get processed instead of returning enriched=0.
+    """
     start_time = time.monotonic()
     _emit_enrichment_start("batch", limit)
 
-    ensure_checkpoint_table(store)
-    pending = get_pending_jobs(store) if phase in {"poll", "run"} else []
-    export_files = (
-        get_unsubmitted_export_files(db_path=getattr(store, "db_path", None)) if phase in {"submit", "run"} else []
-    )
-    attempted = len(pending) + len(export_files)
-    result = EnrichmentResult(mode="batch", attempted=attempted, enriched=0, skipped=0, failed=0, errors=[])
+    candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
+    result = EnrichmentResult(mode="batch", attempted=len(candidates), enriched=0, skipped=0, failed=0, errors=[])
+
+    if not candidates:
+        duration_ms = (time.monotonic() - start_time) * 1000
+        _emit_enrichment_complete(result, duration_ms)
+        return result
+
+    _ensure_content_hash_column(store)
+
+    try:
+        client = _get_gemini_client()
+    except RuntimeError as exc:
+        result.errors.append(f"No Gemini client: {exc}")
+        duration_ms = (time.monotonic() - start_time) * 1000
+        _emit_enrichment_complete(result, duration_ms)
+        return result
+
+    sanitizer = Sanitizer.from_env()
+    config = _build_gemini_config()
+    rate_limit = RATE_LIMITS.get("realtime", 0.2)
+
+    for chunk in candidates:
+        if _is_duplicate_content(store, chunk.get("content", "")):
+            result.skipped += 1
+            continue
+
+        try:
+            prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+        except Exception as exc:
+            result.failed += 1
+            result.errors.append(f"{chunk['id']}: prompt_build_error: {exc}")
+            continue
+
+        try:
+            response = _retry_with_backoff(
+                lambda: client.models.generate_content(
+                    model=GEMINI_REALTIME_MODEL,
+                    contents=prompt,
+                    config=config,
+                ),
+                max_retries=max_retries,
+            )
+            enrichment = parse_enrichment(response.text)
+            if not enrichment:
+                result.failed += 1
+                result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
+                continue
+            _apply_enrichment(store, chunk, enrichment)
+            result.enriched += 1
+        except Exception as exc:
+            result.failed += 1
+            result.errors.append(f"{chunk['id']}: {exc}")
+            _emit_enrichment_error("batch", chunk["id"], str(exc))
+
+        if rate_limit > 0:
+            time.sleep(1.0 / rate_limit)
 
     duration_ms = (time.monotonic() - start_time) * 1000
     _emit_enrichment_complete(result, duration_ms)
