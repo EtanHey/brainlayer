@@ -56,16 +56,6 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
-    private struct ResourceUpdatedNotification: Encodable {
-        let jsonrpc = "2.0"
-        let method = "notifications/resources/updated"
-        let params: Params
-
-        struct Params: Encodable {
-            let uri: String
-        }
-    }
-
     private struct StoreResultPayload: Decodable {
         let chunkID: String
         let rowID: Int64
@@ -115,7 +105,6 @@ final class BrainBarServer: @unchecked Sendable {
         var usesContentLengthFraming: Bool = true
         var agentID: String?
         var subscribedTags: Set<String> = []
-        var subscribedResourceURIs: Set<String> = []
     }
 
     init(socketPath: String? = nil, dbPath: String? = nil) {
@@ -325,10 +314,6 @@ final class BrainBarServer: @unchecked Sendable {
         }
         if let method = request["method"] as? String {
             switch method {
-            case "resources/subscribe":
-                return handleResourceSubscribe(fd: fd, id: request["id"], params: request["params"] as? [String: Any] ?? [:])
-            case "resources/unsubscribe":
-                return handleResourceUnsubscribe(fd: fd, id: request["id"], params: request["params"] as? [String: Any] ?? [:])
             default:
                 break
             }
@@ -487,28 +472,6 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
-    private func handleResourceSubscribe(fd: Int32, id: Any?, params: [String: Any]) -> [String: Any] {
-        guard let uri = params["uri"] as? String, BrainDatabase.tag(fromResourceURI: uri) != nil else {
-            return jsonRPCError(id: id, code: -32602, message: "Invalid resource uri")
-        }
-        if var client = clients[fd] {
-            client.subscribedResourceURIs.insert(uri)
-            clients[fd] = client
-        }
-        return jsonRPCResult(id: id, result: [:])
-    }
-
-    private func handleResourceUnsubscribe(fd: Int32, id: Any?, params: [String: Any]) -> [String: Any] {
-        guard let uri = params["uri"] as? String else {
-            return jsonRPCError(id: id, code: -32602, message: "Missing resource uri")
-        }
-        if var client = clients[fd] {
-            client.subscribedResourceURIs.remove(uri)
-            clients[fd] = client
-        }
-        return jsonRPCResult(id: id, result: [:])
-    }
-
     private func prepareAgentTakeover(fd: Int32, agentID: String, recordExists: Bool) -> Bool {
         var incrementGeneration = recordExists
         for (otherFD, otherClient) in Array(clients) where otherFD != fd && otherClient.agentID == agentID {
@@ -608,21 +571,7 @@ final class BrainBarServer: @unchecked Sendable {
 
         let importance = arguments["importance"] as? Int ?? 5
         let tagSet = Set(tags)
-        let resourceURIs = Set(tags.map { "brain://tag/\($0)" })
         for (clientFD, client) in Array(clients) {
-            if !client.subscribedResourceURIs.isDisjoint(with: resourceURIs) {
-                for uri in resourceURIs where client.subscribedResourceURIs.contains(uri) {
-                    let notification = ResourceUpdatedNotification(params: .init(uri: uri))
-                    if let object = jsonObject(notification) {
-                        _ = sendResponse(
-                            fd: clientFD,
-                            response: object,
-                            useContentLength: client.usesContentLengthFraming
-                        )
-                    }
-                }
-            }
-
             if let agentID = client.agentID,
                !client.subscribedTags.isDisjoint(with: tagSet) {
                 let notification = ChannelNotification(
@@ -654,8 +603,22 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func extractStoredChunk(from response: [String: Any]) -> StoreResultPayload? {
-        guard let result = response["result"] as? [String: Any],
-              let content = result["content"] as? [[String: Any]],
+        guard let result = response["result"] as? [String: Any] else {
+            return nil
+        }
+        if let stored = result["_brainbarStoredChunk"] as? [String: Any],
+           let chunkID = stored["chunk_id"] as? String {
+            let rowID: Int64
+            if let intRowID = stored["rowid"] as? Int64 {
+                rowID = intRowID
+            } else if let intRowID = stored["rowid"] as? Int {
+                rowID = Int64(intRowID)
+            } else {
+                return nil
+            }
+            return StoreResultPayload(chunkID: chunkID, rowID: rowID)
+        }
+        guard let content = result["content"] as? [[String: Any]],
               let text = content.first?["text"] as? String,
               let data = text.data(using: .utf8),
               let payload = try? JSONDecoder().decode(StoreResultPayload.self, from: data) else {

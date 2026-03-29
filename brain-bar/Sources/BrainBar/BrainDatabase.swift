@@ -575,69 +575,6 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    func resourceList(limit: Int = 200) throws -> [[String: Any]] {
-        guard let db else { throw DBError.notOpen }
-        let sql = """
-            SELECT DISTINCT tag FROM (
-                SELECT tag FROM brainbar_subscriptions
-                UNION
-                SELECT json_each.value AS tag
-                FROM chunks, json_each(chunks.tags)
-                WHERE json_each.type = 'text'
-            )
-            ORDER BY tag
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-
-        var resources: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let tag = columnText(stmt, 0), !tag.isEmpty else { continue }
-            resources.append([
-                "uri": "brain://tag/\(tag)",
-                "name": "Tag: \(tag)",
-                "description": "BrainBar tagged stream for \(tag)",
-                "mimeType": "application/json"
-            ])
-        }
-        return resources
-    }
-
-    func resourceRead(uri: String, limit: Int = 50) throws -> [[String: Any]] {
-        guard let tag = Self.tag(fromResourceURI: uri) else { return [] }
-        guard let db else { throw DBError.notOpen }
-        let sql = """
-            SELECT rowid, id, content, tags, created_at, importance
-            FROM chunks
-            WHERE tags LIKE ?
-            ORDER BY rowid DESC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-        bindText("%\"\(tag)\"%", to: stmt, index: 1)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-
-        var rows: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append([
-                "rowid": Int(sqlite3_column_int64(stmt, 0)),
-                "chunk_id": columnText(stmt, 1) as Any,
-                "content": columnText(stmt, 2) as Any,
-                "tags": columnText(stmt, 3) as Any,
-                "created_at": columnText(stmt, 4) as Any,
-                "importance": sqlite3_column_double(stmt, 5)
-            ])
-        }
-        return rows
-    }
-
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
         guard bucketCount > 0 else {
             return DashboardStats(
@@ -669,13 +606,6 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: databaseSizeBytes(),
             recentActivityBuckets: recentActivityBuckets
         )
-    }
-
-    static func tag(fromResourceURI uri: String) -> String? {
-        let prefix = "brain://tag/"
-        guard uri.hasPrefix(prefix) else { return nil }
-        let tag = String(uri.dropFirst(prefix.count))
-        return tag.isEmpty ? nil : tag
     }
 
     func exec(_ sql: String) {

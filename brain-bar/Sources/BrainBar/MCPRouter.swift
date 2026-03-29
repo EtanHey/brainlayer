@@ -10,6 +10,16 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private struct ToolOutput {
+        let text: String
+        let metadata: [String: Any]
+
+        init(text: String, metadata: [String: Any] = [:]) {
+            self.text = text
+            self.metadata = metadata
+        }
+    }
+
     private var database: BrainDatabase?
 
     /// Inject database for tool handlers.
@@ -45,8 +55,6 @@ final class MCPRouter: @unchecked Sendable {
             return handleToolsCall(id: id, params: request["params"] as? [String: Any] ?? [:])
         case "resources/list":
             return handleResourcesList(id: id)
-        case "resources/read":
-            return handleResourcesRead(id: id, params: request["params"] as? [String: Any] ?? [:])
         case "prompts/list":
             return jsonRPCResult(id: id, result: ["prompts": [Any]()])
         case "ping":
@@ -66,10 +74,6 @@ final class MCPRouter: @unchecked Sendable {
                 "protocolVersion": "2024-11-05",
                 "capabilities": [
                     "tools": ["listChanged": false],
-                    "resources": [
-                        "subscribe": true,
-                        "listChanged": false
-                    ],
                     "experimental": [
                         "claude/channel": [:] as [String: Any]
                     ]
@@ -95,28 +99,8 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleResourcesList(id: Any) -> [String: Any] {
-        let resources = (try? database?.resourceList()) ?? []
-        return jsonRPCResult(id: id, result: ["resources": resources])
-    }
-
-    private func handleResourcesRead(id: Any, params: [String: Any]) -> [String: Any] {
-        guard let uri = params["uri"] as? String else {
-            return jsonRPCError(id: id, code: -32602, message: "Missing resource uri")
-        }
-
-        do {
-            let rows = try database?.resourceRead(uri: uri) ?? []
-            let text = String(data: try JSONSerialization.data(withJSONObject: rows), encoding: .utf8) ?? "[]"
-            return jsonRPCResult(id: id, result: [
-                "contents": [[
-                    "uri": uri,
-                    "mimeType": "application/json",
-                    "text": text
-                ]]
-            ])
-        } catch {
-            return jsonRPCError(id: id, code: -32000, message: error.localizedDescription)
-        }
+        // Tags are available on-demand via brain_tags; do not preload them into session context.
+        return jsonRPCResult(id: id, result: ["resources": [Any]()])
     }
 
     // MARK: - tools/call
@@ -135,15 +119,19 @@ final class MCPRouter: @unchecked Sendable {
 
         // Dispatch to handler
         do {
-            let result = try dispatchTool(name: toolName, arguments: arguments)
+            let output = try dispatchTool(name: toolName, arguments: arguments)
+            var result: [String: Any] = [
+                "content": [
+                    ["type": "text", "text": output.text]
+                ]
+            ]
+            for (key, value) in output.metadata {
+                result[key] = value
+            }
             return [
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": [
-                    "content": [
-                        ["type": "text", "text": result]
-                    ]
-                ] as [String: Any]
+                "result": result
             ]
         } catch {
             return [
@@ -159,7 +147,7 @@ final class MCPRouter: @unchecked Sendable {
         }
     }
 
-    private func dispatchTool(name: String, arguments: [String: Any]) throws -> String {
+    private func dispatchTool(name: String, arguments: [String: Any]) throws -> ToolOutput {
         switch name {
         case "brain_search":
             return try handleBrainSearch(arguments)
@@ -190,7 +178,7 @@ final class MCPRouter: @unchecked Sendable {
 
     // MARK: - Tool Handlers
 
-    private func handleBrainSearch(_ args: [String: Any]) throws -> String {
+    private func handleBrainSearch(_ args: [String: Any]) throws -> ToolOutput {
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
@@ -218,10 +206,10 @@ final class MCPRouter: @unchecked Sendable {
             subscriberID: subscriberID,
             unreadOnly: unreadOnly
         )
-        return Formatters.formatSearchResults(query: query, results: results, total: results.count)
+        return ToolOutput(text: Formatters.formatSearchResults(query: query, results: results, total: results.count))
     }
 
-    private func handleBrainStore(_ args: [String: Any]) throws -> String {
+    private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
@@ -231,46 +219,54 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
         let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return Formatters.formatStoreResult(chunkId: stored.chunkID)
+        return ToolOutput(
+            text: Formatters.formatStoreResult(chunkId: stored.chunkID),
+            metadata: [
+                "_brainbarStoredChunk": [
+                    "chunk_id": stored.chunkID,
+                    "rowid": stored.rowID
+                ]
+            ]
+        )
     }
 
-    private func handleBrainRecall(_ args: [String: Any]) throws -> String {
+    private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
         guard let db = database else { throw ToolError.noDatabase }
         let mode = args["mode"] as? String ?? "stats"
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
             if sessionId.isEmpty {
                 let stats = try db.recallStats()
-                return Formatters.formatStats(stats: stats)
+                return ToolOutput(text: Formatters.formatStats(stats: stats))
             }
             let results = try db.recallSession(sessionId: sessionId, limit: 20)
-            return Formatters.formatSearchResults(query: "session:\(sessionId)", results: results, total: results.count)
+            return ToolOutput(text: Formatters.formatSearchResults(query: "session:\(sessionId)", results: results, total: results.count))
         }
         let stats = try db.recallStats()
-        return Formatters.formatStats(stats: stats)
+        return ToolOutput(text: Formatters.formatStats(stats: stats))
     }
 
-    private func handleBrainEntity(_ args: [String: Any]) throws -> String {
+    private func handleBrainEntity(_ args: [String: Any]) throws -> ToolOutput {
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
         guard let db = database else { throw ToolError.noDatabase }
         guard let entity = try db.lookupEntity(query: query) else {
-            return "\u{2502} No entity found for \"\(query)\""
+            return ToolOutput(text: "\u{2502} No entity found for \"\(query)\"")
         }
-        return Formatters.formatEntityCard(entity: entity)
+        return ToolOutput(text: Formatters.formatEntityCard(entity: entity))
     }
 
-    private func handleBrainDigest(_ args: [String: Any]) throws -> String {
+    private func handleBrainDigest(_ args: [String: Any]) throws -> ToolOutput {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
         guard let db = database else { throw ToolError.noDatabase }
         let result = try db.digest(content: content)
-        return Formatters.formatDigestResult(result: result)
+        return ToolOutput(text: Formatters.formatDigestResult(result: result))
     }
 
-    private func handleBrainUpdate(_ args: [String: Any]) throws -> String {
+    private func handleBrainUpdate(_ args: [String: Any]) throws -> ToolOutput {
         guard let db = database else { throw ToolError.noDatabase }
         let chunkId = args["chunk_id"] as? String ?? ""
         if chunkId.isEmpty {
@@ -282,10 +278,10 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("importance or tags")
         }
         try db.updateChunk(id: chunkId, importance: importance, tags: tags)
-        return "\u{2714} Updated \(chunkId)" + (importance != nil ? " imp:\(importance!)" : "") + (tags != nil ? " tags:\(tags!.joined(separator: ","))" : "")
+        return ToolOutput(text: "\u{2714} Updated \(chunkId)" + (importance != nil ? " imp:\(importance!)" : "") + (tags != nil ? " tags:\(tags!.joined(separator: ","))" : ""))
     }
 
-    private func handleBrainExpand(_ args: [String: Any]) throws -> String {
+    private func handleBrainExpand(_ args: [String: Any]) throws -> ToolOutput {
         guard let chunkId = args["chunk_id"] as? String else {
             throw ToolError.missingParameter("chunk_id")
         }
@@ -311,16 +307,16 @@ final class MCPRouter: @unchecked Sendable {
             }
         }
         lines.append("\u{2514}\u{2500}")
-        return lines.joined(separator: "\n")
+        return ToolOutput(text: lines.joined(separator: "\n"))
     }
 
-    private func handleBrainTags(_ args: [String: Any]) throws -> String {
+    private func handleBrainTags(_ args: [String: Any]) throws -> ToolOutput {
         guard let db = database else { throw ToolError.noDatabase }
         let query = args["query"] as? String
         let limit = args["limit"] as? Int ?? 50
         let tags = try db.listTags(query: query, limit: limit)
         if tags.isEmpty {
-            return "\u{2502} No tags found" + (query != nil ? " matching \"\(query!)\"" : "")
+            return ToolOutput(text: "\u{2502} No tags found" + (query != nil ? " matching \"\(query!)\"" : ""))
         }
         var lines: [String] = []
         lines.append("\u{250c}\u{2500} brain_tags (\(tags.count) tags)")
@@ -330,10 +326,10 @@ final class MCPRouter: @unchecked Sendable {
             lines.append("\u{2502}  \(name) (\(count))")
         }
         lines.append("\u{2514}\u{2500}")
-        return lines.joined(separator: "\n")
+        return ToolOutput(text: lines.joined(separator: "\n"))
     }
 
-    private func handleBrainSubscribe(_ args: [String: Any]) throws -> String {
+    private func handleBrainSubscribe(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
         }
@@ -343,14 +339,14 @@ final class MCPRouter: @unchecked Sendable {
         throw ToolError.notImplemented("brain_subscribe")
     }
 
-    private func handleBrainUnsubscribe(_ args: [String: Any]) throws -> String {
+    private func handleBrainUnsubscribe(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
         }
         throw ToolError.notImplemented("brain_unsubscribe")
     }
 
-    private func handleBrainAck(_ args: [String: Any]) throws -> String {
+    private func handleBrainAck(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
         }
