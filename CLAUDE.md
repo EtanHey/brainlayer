@@ -9,12 +9,17 @@
 
 ---
 
-<!-- ANTI-PATTERNS: brain_update, brain_expand, brain_tags are STUB tools — BROKEN, return fake success, save nothing; do not use -->
-## BrainBar Stub Warnings
+## BrainBar Tool Status
 
-BrainBar Swift daemon has 3 STUB tools returning fake success:
-- brain_update, brain_expand, brain_tags — BROKEN (return success, save nothing)
-- Working: brain_search, brain_store, brain_recall, brain_entity, brain_digest, brain_get_person
+All BrainBar tools are now implemented natively in Swift (PR #135, 2026-03-30):
+- **brain_search** — FTS5 hybrid search with BM25 ranking, AND matching, ANSI formatted output
+- **brain_store** — Store chunks with tags and importance
+- **brain_recall** — Stats mode (counts, enrichment %) or context mode (session lookup by conversation_id)
+- **brain_entity** — Entity lookup (exact/LIKE) with relations from kg_relations
+- **brain_digest** — Rule-based entity extraction (capitalized names, PascalCase, URLs, code paths)
+- **brain_update** — Update chunk importance and/or tags by chunk_id
+- **brain_expand** — Get chunk + surrounding session context (before/after)
+- **brain_tags** — List unique tags with counts, filter by query prefix
 
 ---
 
