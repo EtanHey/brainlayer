@@ -284,7 +284,7 @@ export function Terminal() {
           </div>
 
           {/* Body */}
-          <div className="px-[22px] pt-5 pb-4 font-mono text-[13px] leading-[1.85] min-h-[380px]">
+          <div className="px-[22px] pt-5 pb-4 font-mono text-[13px] leading-[1.85] min-h-[380px] whitespace-pre-wrap">
             {visibleCount >= 1 && (
               <PromptLine text={lines[0].text} active={isInView} />
             )}
