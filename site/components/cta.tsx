@@ -15,7 +15,7 @@ export function Cta() {
       />
       <div className="mx-auto max-w-[960px] px-6">
         <motion.h2
-          className="mb-3 font-display text-[clamp(26px,4vw,42px)] font-semibold tracking-tight"
+          className="mb-3 font-display text-[clamp(26px,4vw,42px)] font-semibold tracking-tight text-balance"
           initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}

@@ -14,6 +14,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
       </svg>
@@ -31,6 +32,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <circle cx="12" cy="12" r="3" />
         <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
@@ -49,6 +51,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
       </svg>
@@ -66,6 +69,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <rect x="3" y="3" width="7" height="7" rx="1" />
         <rect x="14" y="3" width="7" height="7" rx="1" />
@@ -86,6 +90,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <path d="M12 2L2 7l10 5 10-5-10-5z" />
         <path d="M2 17l10 5 10-5" />
@@ -105,6 +110,7 @@ const sections = [
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        aria-hidden="true"
       >
         <circle cx="12" cy="5" r="3" />
         <circle cx="5" cy="19" r="3" />
@@ -143,11 +149,11 @@ export default function DocsPage() {
         <div className="mx-auto flex max-w-[960px] items-center justify-between px-6">
           <Link
             href="/"
-            className="flex items-center gap-2.5 text-text opacity-90 transition-opacity hover:opacity-100"
+            className="flex items-center gap-2.5 text-text opacity-90 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             <Image
               src="/logos/brainlayer.svg"
-              alt=""
+              alt="BrainLayer home"
               width={24}
               height={24}
               className="hue-rotate-[120deg] saturate-[0.65] brightness-110"
@@ -159,14 +165,14 @@ export default function DocsPage() {
           <div className="flex items-center gap-6">
             <Link
               href="/"
-              className="text-sm text-text-secondary transition-colors hover:text-text"
+              className="text-sm text-text-secondary transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
             >
               Home
             </Link>
             <span className="text-sm text-text font-medium">Docs</span>
             <a
               href="https://github.com/EtanHey/brainlayer"
-              className="flex items-center gap-1.5 text-sm text-text-secondary transition-colors hover:text-text"
+              className="flex items-center gap-1.5 text-sm text-text-secondary transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
             >
               GitHub
               <svg
@@ -177,6 +183,7 @@ export default function DocsPage() {
                 stroke="currentColor"
                 strokeWidth="1.5"
                 className="ml-0.5 opacity-50"
+                aria-hidden="true"
               >
                 <path d="M3 9L9 3M9 3H4.5M9 3v4.5" />
               </svg>
@@ -192,7 +199,7 @@ export default function DocsPage() {
             <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-accent">
               Documentation
             </div>
-            <h1 className="font-display text-[clamp(32px,5vw,48px)] font-bold tracking-[-0.03em] leading-[1.1] mb-4">
+            <h1 className="font-display text-[clamp(32px,5vw,48px)] font-bold tracking-[-0.03em] leading-[1.1] mb-4 text-balance">
               Learn BrainLayer
             </h1>
             <p className="text-lg text-text-secondary font-light max-w-[560px]">
@@ -202,10 +209,7 @@ export default function DocsPage() {
           </div>
 
           {/* Main sections grid */}
-          <div
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-16"
-           
-          >
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-16">
             {sections.map((section) => (
               <a
                 key={section.title}
@@ -214,9 +218,9 @@ export default function DocsPage() {
               >
                 <div className="flex items-center gap-3">
                   <div className="text-accent">{section.icon}</div>
-                  <h3 className="font-sans text-base font-semibold tracking-tight group-hover:text-accent transition-colors">
+                  <h2 className="font-sans text-base font-semibold tracking-tight group-hover:text-accent transition-colors">
                     {section.title}
-                  </h3>
+                  </h2>
                 </div>
                 <p className="text-sm text-text-secondary font-light leading-relaxed">
                   {section.desc}
@@ -245,6 +249,7 @@ export default function DocsPage() {
                     stroke="currentColor"
                     strokeWidth="1.5"
                     className="text-text-dim group-hover:text-accent transition-colors shrink-0"
+                    aria-hidden="true"
                   >
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                     <path d="M14 2v6h6" />
@@ -261,7 +266,8 @@ export default function DocsPage() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
-                    className="ml-auto text-text-dim group-hover:text-accent transition-all group-hover:translate-x-0.5"
+                    className="ml-auto text-text-dim group-hover:text-accent transition-transform group-hover:translate-x-0.5"
+                    aria-hidden="true"
                   >
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
@@ -315,6 +321,7 @@ export default function DocsPage() {
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
+                aria-hidden="true"
               >
                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
               </svg>
@@ -330,7 +337,7 @@ export default function DocsPage() {
             Built by{" "}
             <a
               href="https://etanheyman.com"
-              className="text-text-secondary transition-colors hover:text-accent"
+              className="text-text-secondary transition-colors hover:text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
             >
               Etan Heyman
             </a>
@@ -338,13 +345,13 @@ export default function DocsPage() {
           <div className="flex gap-5">
             <a
               href="https://github.com/EtanHey/brainlayer"
-              className="text-[13px] text-text-dim transition-colors hover:text-text-secondary"
+              className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
             >
               GitHub
             </a>
             <a
               href="https://pypi.org/project/brainlayer/"
-              className="text-[13px] text-text-dim transition-colors hover:text-text-secondary"
+              className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
             >
               PyPI
             </a>

@@ -6,7 +6,7 @@ export function Footer() {
           Built by{" "}
           <a
             href="https://etanheyman.com"
-            className="text-text-secondary transition-colors hover:text-accent"
+            className="text-text-secondary transition-colors hover:text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             Etan Heyman
           </a>
@@ -14,19 +14,19 @@ export function Footer() {
         <div className="flex gap-5">
           <a
             href="https://github.com/EtanHey/brainlayer"
-            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary"
+            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             GitHub
           </a>
           <a
             href="https://etanhey.github.io/brainlayer"
-            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary"
+            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             Docs
           </a>
           <a
             href="https://pypi.org/project/brainlayer/"
-            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary"
+            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             PyPI
           </a>

@@ -16,7 +16,7 @@ export function ProblemSolution() {
           <div className="mb-3.5 text-[11px] font-medium uppercase tracking-[0.1em] text-red">
             The problem
           </div>
-          <h2 className="mb-3.5 font-sans text-xl font-semibold tracking-tight">
+          <h2 className="mb-3.5 font-sans text-xl font-semibold tracking-tight text-balance">
             Your AI has amnesia
           </h2>
           <p className="flex-1 text-[15px] leading-relaxed font-light text-text-secondary">
@@ -41,7 +41,7 @@ export function ProblemSolution() {
           <div className="mb-3.5 text-[11px] font-medium uppercase tracking-[0.1em] text-teal">
             The fix
           </div>
-          <h2 className="mb-3.5 font-sans text-xl font-semibold tracking-tight">
+          <h2 className="mb-3.5 font-sans text-xl font-semibold tracking-tight text-balance">
             Install. Index. Search.
           </h2>
           <p className="flex-1 text-[15px] leading-relaxed font-light text-text-secondary">
