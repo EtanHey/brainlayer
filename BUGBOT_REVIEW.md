@@ -1,624 +1,696 @@
-# BugBot Re-Review: BrainBar Dashboard Popover
+# BugBot Review: BrainBar Quick Capture Foundation
 
-**PR:** feat: add BrainBar dashboard popover  
-**Branch:** `feat/brainbar-dashboard`  
-**Review Date:** 2026-03-29 (Re-review)  
-**Reviewer:** @bugbot  
-**Commit:** 9fb3522
-
----
+**PR:** feat/brainbar-quick-capture
+**Reviewed:** 2026-03-29
+**Reviewer:** @bugbot
 
 ## Executive Summary
 
-✅ **APPROVED** - The PR author has addressed the three critical performance issues from the initial review. Two new issues have been identified by other reviewers that should be addressed.
-
-**Risk Level:** LOW (down from MEDIUM)  
-**Confidence:** HIGH
+This PR introduces the foundation for BrainBar's quick capture feature with hotkey support, single-instance enforcement, and basic capture/search flows. The implementation is generally solid, but I've identified **8 bugs** (2 critical, 3 high, 3 medium) that should be addressed before merging.
 
 ---
 
-## Changes Since Last Review (commit 9fb3522)
+## Critical Issues 🔴
 
-### ✅ FIXED: Critical Issue #1 - Double Async Wrapping
+### 1. Race Condition in Single-Instance Check
 
-**Location:** `BrainBarApp.swift` lines 73-83
+**File:** `BrainBarApp.swift:16-25`
+**Severity:** Critical
+**Impact:** Multiple instances can start simultaneously
 
-**Before:**
 ```swift
-.sink { [weak self] stats, state in
-    Task { @MainActor [weak self] in  // ← Unnecessary wrapper
-        self?.statusItem?.button?.image = ...
-    }
+let runningInstances = NSRunningApplication.runningApplications(
+    withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brainlayer.BrainBar"
+)
+let otherInstances = runningInstances.filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+if !otherInstances.isEmpty {
+    NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", otherInstances.first!.processIdentifier)
+    NSApp.terminate(nil)
+    return
 }
 ```
 
-**After:**
-```swift
-.sink { [weak self] stats, state in
-    self?.statusItem?.button?.image = SparklineRenderer.render(
-        state: state,
-        values: stats.recentActivityBuckets
-    )
-    self?.statusItem?.button?.contentTintColor = state.color
-}
+**Problem:**
+- Time-of-check to time-of-use (TOCTOU) race condition
+- If two instances start within ~100ms of each other, both can pass the check
+- `NSRunningApplication.runningApplications()` may not immediately reflect newly launched processes
+
+**Reproduction:**
+```bash
+# Launch two instances simultaneously
+open -n /Applications/BrainBar.app & open -n /Applications/BrainBar.app
 ```
 
-✅ **Verified:** Removed unnecessary `Task { @MainActor }` wrapper. UI updates now execute directly on main thread without extra async hop.
+**Fix:**
+Use a file-based lock or named semaphore for atomic single-instance enforcement:
 
-**Performance Impact:** Eliminated 1-2ms latency per UI update.
-
----
-
-### ✅ FIXED: Critical Issue #3 - O(n) File Descriptor Iteration
-
-**Location:** `DaemonHealthMonitor.swift` lines 46-65
-
-**Before:**
 ```swift
-private func countOpenSocketDescriptors() -> Int {
-    let maxDescriptors = Int(getdtablesize())  // 10,240
-    guard maxDescriptors > 0 else { return 0 }
+private var lockFileHandle: FileHandle?
+
+func applicationDidFinishLaunching(_ notification: Notification) {
+    // Atomic lock file approach
+    let lockPath = "/tmp/brainbar.lock"
+    let fd = open(lockPath, O_CREAT | O_EXCL | O_WRONLY, 0o644)
     
-    var socketCount = 0
-    for fd in 0..<maxDescriptors {  // ← Iterates all FDs
-        if fcntl(Int32(fd), F_GETFD) == -1 { continue }
-        var socketType: Int32 = 0
-        var length = socklen_t(MemoryLayout<Int32>.size)
-        let result = withUnsafeMutablePointer(to: &socketType) { pointer in
-            getsockopt(Int32(fd), SOL_SOCKET, SO_TYPE, pointer, &length)
+    if fd == -1 {
+        if errno == EEXIST {
+            NSLog("[BrainBar] Another instance is already running (lock file exists). Exiting.")
+            NSApp.terminate(nil)
+            return
         }
-        if result == 0 { socketCount += 1 }
+    } else {
+        lockFileHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        // Write PID to lock file
+        let pid = "\(ProcessInfo.processInfo.processIdentifier)\n"
+        lockFileHandle?.write(pid.data(using: .utf8)!)
     }
-    return socketCount
+    
+    // ... rest of initialization
+}
+
+func applicationWillTerminate(_ notification: Notification) {
+    lockFileHandle?.closeFile()
+    try? FileManager.default.removeItem(atPath: "/tmp/brainbar.lock")
+    server?.stop()
 }
 ```
 
-**After:**
+---
+
+### 2. Memory Leak in GestureStateMachine Timers
+
+**File:** `HotkeyManager.swift:26-27, 45-54, 65-74`
+**Severity:** Critical
+**Impact:** Memory leak on every hotkey press, eventual crash
+
 ```swift
-private func countOpenSocketDescriptors() -> Int {
-    var fdInfos = Array(repeating: proc_fdinfo(), count: 256)
-    let bytesRead = fdInfos.withUnsafeMutableBytes { rawBuffer in
-        proc_pidinfo(
-            targetPID,
-            PROC_PIDLISTFDS,
-            0,
-            rawBuffer.baseAddress,
-            Int32(rawBuffer.count)
+private var holdTimer: DispatchWorkItem?
+private var doubleTapTimer: DispatchWorkItem?
+
+func handleKeyDown() {
+    switch state {
+    case .waitingForDoubleTap:
+        doubleTapTimer?.cancel()  // ⚠️ Cancels but doesn't nil out
+        state = .idle
+        onDoubleTap()
+    case .idle:
+        state = .waitingForHoldThreshold
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self, state == .waitingForHoldThreshold else { return }
+            state = .holding
+            onHoldStart()
+        }
+        holdTimer = timer  // ⚠️ Overwrites previous timer without canceling
+```
+
+**Problem:**
+1. Timers are canceled but not set to `nil`, causing retain cycles
+2. New timers overwrite old ones without canceling them first
+3. `DispatchWorkItem` captures `self` weakly, but the timer itself is retained
+
+**Memory Impact:**
+- ~200 bytes leaked per hotkey press
+- After 1000 presses: ~200KB leaked
+- Can cause app slowdown and eventual crash
+
+**Fix:**
+```swift
+func handleKeyDown() {
+    switch state {
+    case .waitingForDoubleTap:
+        doubleTapTimer?.cancel()
+        doubleTapTimer = nil  // ✅ Explicitly nil out
+        state = .idle
+        onDoubleTap()
+    case .idle:
+        // Cancel existing timer before creating new one
+        holdTimer?.cancel()
+        holdTimer = nil
+        
+        state = .waitingForHoldThreshold
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self, state == .waitingForHoldThreshold else { return }
+            state = .holding
+            onHoldStart()
+        }
+        holdTimer = timer
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(Self.holdThresholdMs),
+            execute: timer
         )
-    }
-    
-    guard bytesRead > 0 else { return 0 }
-    let infoCount = Int(bytesRead) / MemoryLayout<proc_fdinfo>.stride
-    return fdInfos.prefix(infoCount).reduce(into: 0) { count, info in
-        if Int32(info.proc_fdtype) == PROX_FDTYPE_SOCKET {
-            count += 1
-        }
+    default:
+        break
     }
 }
+
+// Same fix needed in handleKeyUp()
 ```
-
-✅ **Verified:** Now uses `proc_pidinfo(PROC_PIDLISTFDS)` to directly query open file descriptors.
-
-**Performance Impact:** Reduced from 10-20ms to <1ms per call.
-
-**Code Quality:** ✅ Correct implementation
-- Properly uses `withUnsafeMutableBytes` for buffer access
-- Correctly calculates `infoCount` using `stride` instead of `size`
-- Uses `reduce(into:)` for efficient counting
-- Handles error case (`bytesRead <= 0`)
 
 ---
 
-### ✅ FIXED: Medium Priority Issue #5 - Missing Database Index
+## High Severity Issues 🟠
 
-**Location:** `BrainDatabase.swift` lines 111-114
+### 3. Unchecked Force Unwrap in Single-Instance Check
 
-**Added:**
-```swift
-try execute("""
-    CREATE INDEX IF NOT EXISTS idx_chunks_created_at
-    ON chunks(created_at)
-""")
-```
-
-✅ **Verified:** Index created in `ensureSchema()` method, will apply to all new and existing databases.
-
-**Performance Impact:** Activity bucketing query now uses index instead of full table scan.
-
----
-
-## Remaining Issues from Initial Review
-
-### 🟡 ISSUE #4: Monitors Wrong Process (STILL PRESENT)
-
-**Location:** `BrainBarApp.swift` line 29
+**File:** `BrainBarApp.swift:22`
+**Severity:** High
+**Impact:** Crash if `otherInstances` is empty (should never happen, but defensive coding)
 
 ```swift
-let collector = StatsCollector(
-    dbPath: BrainBarServer.defaultDBPath(),
-    daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-)
+NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", otherInstances.first!.processIdentifier)
 ```
 
-**Problem:** Still monitors BrainBar's own PID instead of Python daemon
-
-**Impact:** Health metrics (RSS, uptime, socket count) report BrainBar stats, not daemon stats
-
-**Severity:** MEDIUM (functional issue, but doesn't break core functionality)
-
-**Recommendation:** See Appendix for implementation
-
----
-
-### 🔴 ISSUE #2: Unsafe Sendable Conformance (STILL PRESENT)
-
-**Location:** `StatsCollector.swift` line 76
-
-```swift
-private final class DatabaseChangeObserver: @unchecked Sendable {
-    private var db: OpaquePointer?
-    private var token: Int32 = 0
-    private var lastDataVersion: Int32 = -1
-    private var timer: DispatchSourceTimer?
-    private var onChange: (@Sendable () -> Void)?
-```
-
-**Problem:** `@unchecked Sendable` with mutable state not explicitly synchronized
-
-**Current Safety:** Accidentally safe because:
-- `stop()` uses `queue.sync` to serialize access
-- All handlers run on `queue`
-- No external access to mutable state
-
-**Why Still an Issue:** Thread safety relies on implementation details, not type system guarantees
-
-**Severity:** LOW (currently safe, but fragile to refactoring)
-
-**Recommendation:** Document thread safety contract or remove `@unchecked Sendable`
-
----
-
-## New Issues Identified by Other Reviewers
-
-### 🔴 NEW ISSUE #1: Race Condition in onChange Assignment (Macroscope)
-
-**Location:** `StatsCollector.swift` lines 92-97
-
-```swift
-func start(onChange: @escaping @Sendable () -> Void) {
-    self.onChange = onChange  // ← Written on caller's thread
-    queue.async { [weak self] in
-        self?.startOnQueue()
-    }
-}
-```
-
-**Problem:** `onChange` is written on caller's thread (line 93) but read on `queue` (line 148)
-
-**Race Condition Scenario:**
-```swift
-// Thread A (main)
-observer.start { ... }  // Writes onChange
-
-// Thread B (queue)
-timer.setEventHandler {
-    self?.emitIfChanged()  // Reads onChange
-}
-```
-
-**If `start()` called twice:**
-1. First call: Thread A writes `onChange`, Thread B starts timer
-2. Second call: Thread A writes new `onChange` (race with Thread B reading)
-
-**Severity:** HIGH (data race, undefined behavior)
+**Problem:**
+- Force unwrap `!` on `otherInstances.first`
+- If the check logic changes or has a bug, this will crash
 
 **Fix:**
 ```swift
-func start(onChange: @escaping @Sendable () -> Void) {
-    queue.async { [weak self] in
-        self?.onChange = onChange  // ← Move assignment into queue
-        self?.startOnQueue()
-    }
+if let firstInstance = otherInstances.first {
+    NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", firstInstance.processIdentifier)
+    NSApp.terminate(nil)
+    return
 }
 ```
 
-✅ **Simple, safe fix** - Move assignment into `queue.async` block
-
 ---
 
-### 🔴 NEW ISSUE #2: ISO Timestamp Format Not Supported (Codex)
+### 4. CGEventTap Can Fail Silently After System Sleep
 
-**Location:** `BrainDatabase.swift` lines 706-709
+**File:** `HotkeyManager.swift:116-122`
+**Severity:** High
+**Impact:** Hotkey stops working after system sleep/wake
 
 ```swift
-let formatter = Self.sqliteDateFormatter  // "yyyy-MM-dd HH:mm:ss"
-
-while sqlite3_step(stmt) == SQLITE_ROW {
-    guard let createdAtText = columnText(stmt, 0),
-          let createdAt = formatter.date(from: createdAtText) else {
-        continue  // ← Silently drops ISO-8601 timestamps
+if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+    if let tap = ctx.tap {
+        CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("[BrainBar.Hotkey] Re-enabled event tap after system disable")
     }
-```
-
-**Problem:** Python code writes ISO-8601 timestamps (`2026-03-29T12:34:56.789Z`), but Swift parser only accepts SQLite format (`2026-03-29 12:34:56`)
-
-**Evidence from codebase:**
-```python
-# src/brainlayer/store.py
-datetime.now(timezone.utc).isoformat()  # Returns ISO-8601
-```
-
-**Impact:** Recent writes from Python are silently excluded from activity buckets, causing:
-- `PipelineState.derive` to misreport active indexing as idle/enriching
-- Sparkline to show zero activity despite recent writes
-
-**Severity:** HIGH (functional correctness issue)
-
-**Fix Option 1 - Normalize in SQL:**
-```swift
-let sql = """
-    SELECT datetime(created_at) as normalized_created_at 
-    FROM chunks 
-    WHERE created_at >= datetime('now', ?)
-    ORDER BY created_at ASC
-"""
-```
-
-**Fix Option 2 - Parse both formats in Swift:**
-```swift
-private static let isoDateFormatter: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter
-}()
-
-// In recentActivityBuckets:
-guard let createdAtText = columnText(stmt, 0) else { continue }
-let createdAt = Self.sqliteDateFormatter.date(from: createdAtText) 
-    ?? Self.isoDateFormatter.date(from: createdAtText)
-guard let createdAt else { continue }
-```
-
-✅ **Recommended:** Fix Option 1 (SQL normalization) - simpler and more robust
-
----
-
-### 🟡 NEW ISSUE #3: Main Actor Blocking on Database Queries (Codex)
-
-**Location:** `StatsCollector.swift` lines 60-66
-
-```swift
-@MainActor
-final class StatsCollector: ObservableObject {
-    func refresh(force: Bool = false) {
-        do {
-            let nextStats = try database.dashboardStats(...)  // ← Blocks main actor
-            let nextDaemon = daemonMonitor.sample()
-            stats = nextStats
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: nextStats)
-        } catch { ... }
-    }
+    return Unmanaged.passUnretained(event)
 }
 ```
 
-**Problem:** `refresh()` executes synchronous SQLite queries on `@MainActor`
+**Problem:**
+1. Re-enabling the tap doesn't guarantee it will work
+2. No verification that re-enable succeeded
+3. No notification to user if hotkey is permanently broken
+4. System sleep/wake can invalidate the tap entirely
 
-**Impact:** 
-- `dashboardStats()` runs full-table count queries + activity scan
-- On large databases (100K+ chunks), can take 50-100ms
-- Blocks menu bar UI responsiveness during refresh
-
-**Severity:** MEDIUM (performance issue, scales with database size)
+**Observed Behavior:**
+- After sleep/wake, F4 stops responding
+- No error logged
+- User has to restart BrainBar
 
 **Fix:**
 ```swift
-func refresh(force: Bool = false) {
-    Task.detached(priority: .utility) { [weak self] in
-        guard let self else { return }
+if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+    if let tap = ctx.tap {
+        CGEvent.tapEnable(tap: tap, enable: true)
         
-        do {
-            let nextStats = try self.database.dashboardStats(...)
-            let nextDaemon = self.daemonMonitor.sample()
-            let nextState = PipelineState.derive(daemon: nextDaemon, stats: nextStats)
+        // Verify tap is still valid
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            NSLog("[BrainBar.Hotkey] ERROR: Failed to re-enable event tap. Attempting full restart...")
             
-            await MainActor.run {
-                self.stats = nextStats
-                self.daemon = nextDaemon
-                self.state = nextState
+            // Post notification to restart hotkey manager
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("BrainBarHotkeyFailure"),
+                    object: nil
+                )
             }
-        } catch {
-            if force {
-                await MainActor.run {
-                    self.daemon = nil
-                    self.state = .offline
-                }
-            }
+        } else {
+            NSLog("[BrainBar.Hotkey] Re-enabled event tap after system disable")
         }
     }
+    return Unmanaged.passUnretained(event)
 }
 ```
 
-**Note:** `BrainDatabase` is `@unchecked Sendable` and uses WAL mode, so concurrent reads from background task are safe.
-
----
-
-## Updated Priority Summary
-
-### 🔴 Critical Issues (2 new)
-
-1. **Race condition in onChange assignment** - Data race between caller thread and queue
-2. **ISO timestamp format not supported** - Silently drops Python-written chunks from activity tracking
-
-### 🟡 Medium Priority (2 existing)
-
-3. **Main actor blocking on database queries** - UI responsiveness issue on large databases
-4. **Monitors wrong process** - Health metrics report BrainBar instead of daemon
-
-### 🟢 Low Priority (4 existing)
-
-5. **Unsafe Sendable conformance** - Thread safety relies on implementation details (currently safe)
-6. **No Retina support** - Sparkline blurry on high-DPI displays
-7. **Missing popover delegate** - No lifecycle tracking
-8. **State flapping** - Single write triggers indexing state
-
----
-
-## Test Coverage for New Issues
-
-### Issue #1 (onChange race):
-**Missing Test:**
+And in `HotkeyManager`, add observer:
 ```swift
-func testDatabaseChangeObserverHandlesConcurrentStartCalls() async throws {
-    let observer = DatabaseChangeObserver(dbPath: tempDBPath, notificationName: "test")
-    var callCount1 = 0
-    var callCount2 = 0
+init(gesture: GestureStateMachine) {
+    self.gesture = gesture
     
-    observer.start { callCount1 += 1 }
-    observer.start { callCount2 += 1 }  // Second call should not crash
-    
-    // Trigger change
-    try db.insertChunk(...)
-    
-    try await Task.sleep(for: .seconds(3))
-    
-    // One of the handlers should have been called
-    XCTAssertTrue(callCount1 > 0 || callCount2 > 0)
+    NotificationCenter.default.addObserver(
+        forName: NSNotification.Name("BrainBarHotkeyFailure"),
+        object: nil,
+        queue: .main
+    ) { [weak self] _ in
+        self?.restart()
+    }
 }
-```
 
-### Issue #2 (ISO timestamps):
-**Missing Test:**
-```swift
-func testActivityBucketsHandleISOTimestamps() throws {
-    // Insert chunk with ISO-8601 timestamp
-    try db.exec("""
-        INSERT INTO chunks (id, content, created_at)
-        VALUES ('iso-chunk', 'test', '\(ISO8601DateFormatter().string(from: Date()))')
-    """)
-    
-    let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 12)
-    
-    // Should include the ISO-timestamped chunk
-    XCTAssertGreaterThan(stats.recentActivityBuckets.reduce(0, +), 0)
+private func restart() {
+    NSLog("[BrainBar.Hotkey] Restarting hotkey manager...")
+    stop()
+    usleep(100_000) // 100ms delay
+    _ = start()
 }
 ```
 
 ---
 
-## Security Analysis (Updated)
+### 5. Database Connection Not Initialized in AppDelegate
 
-✅ **No new security issues**
-
-- `proc_pidinfo` is safe (kernel validates PID)
-- Index creation is idempotent and safe
-- No SQL injection vectors introduced
-
----
-
-## Performance Analysis (Updated)
-
-### Before Fixes:
-- **UI Update Latency:** 3-5ms
-- **Stats Refresh:** 20-70ms
-- **Socket Counting:** 10-20ms (50% of refresh time)
-
-### After Fixes:
-- **UI Update Latency:** 1-3ms ✅ (33% improvement)
-- **Stats Refresh:** 5-55ms ✅ (60% improvement)
-- **Socket Counting:** <1ms ✅ (95% improvement)
-
-### Remaining Bottleneck:
-- **Main Actor Blocking:** 50-100ms on large databases (Issue #3)
-
----
-
-## Final Verdict
-
-### ✅ APPROVED (with 2 critical fixes recommended)
-
-**Summary:**
-- Original critical issues have been successfully addressed
-- Performance significantly improved (socket counting, UI updates, database queries)
-- Two new critical issues identified that should be fixed:
-  1. Race condition in `onChange` assignment (simple fix)
-  2. ISO timestamp format support (simple fix)
-
-**Required Fixes (Before Merge):**
-1. 🔴 Fix onChange race condition (move assignment into queue)
-2. 🔴 Support ISO-8601 timestamps in activity bucketing
-
-**Recommended Fixes (Before Production):**
-3. 🟡 Move database queries off main actor (performance)
-4. 🟡 Monitor actual daemon PID instead of self
-
-**Optional Improvements:**
-5. 🟢 Document thread safety contract for `DatabaseChangeObserver`
-6. 🟢 Add Retina support for sparkline
-7. 🟢 Add popover delegate
-
-**Confidence Level:** HIGH (90%)
-
----
-
-## Checklist
-
-- [x] Re-review completed
-- [x] Original critical issues verified fixed
-- [x] New issues from other reviewers analyzed
-- [x] Performance improvements validated
-- [x] Test coverage gaps identified
-- [x] 2 new critical issues identified
-- [x] 2 medium priority issues remain
-- [x] 4 low priority issues remain
-
----
-
-**Reviewed by:** @bugbot  
-**Status:** ✅ APPROVED (2 critical fixes recommended)  
-**Next Steps:** Fix onChange race and ISO timestamp support
-
----
-
-## Appendix: Recommended Fixes
-
-### Fix #1: onChange Race Condition
+**File:** `BrainBarApp.swift:13, 29-31`
+**Severity:** High
+**Impact:** QuickCaptureController will crash on first use
 
 ```swift
-// In StatsCollector.swift, DatabaseChangeObserver class:
+private var panelState = QuickCapturePanelState()
 
-func start(onChange: @escaping @Sendable () -> Void) {
-    queue.async { [weak self] in
-        self?.onChange = onChange  // ← Moved into queue
-        self?.startOnQueue()
+func applicationDidFinishLaunching(_ notification: Notification) {
+    // ...
+    let srv = BrainBarServer()
+    server = srv
+    srv.start()
+}
+```
+
+**Problem:**
+- `QuickCaptureController` requires a `BrainDatabase` instance
+- No database is created or passed to the panel state
+- First capture/search will crash with nil database
+
+**Missing Code:**
+```swift
+private var panelState = QuickCapturePanelState()
+private var database: BrainDatabase?  // ⚠️ Missing!
+private var hotkeyManager: HotkeyManager?  // ⚠️ Missing!
+
+func applicationDidFinishLaunching(_ notification: Notification) {
+    // ... single-instance check ...
+    
+    NSApp.setActivationPolicy(.accessory)
+    
+    // Initialize database
+    let dbPath = NSHomeDirectory() + "/.local/share/brainlayer/brainlayer.db"
+    database = BrainDatabase(path: dbPath)
+    
+    // Initialize hotkey manager
+    let gesture = GestureStateMachine()
+    gesture.onSingleTap = { [weak self] in
+        self?.panelState.toggle()
+    }
+    hotkeyManager = HotkeyManager(gesture: gesture)
+    _ = hotkeyManager?.start()
+    
+    let srv = BrainBarServer()
+    server = srv
+    srv.start()
+}
+```
+
+---
+
+## Medium Severity Issues 🟡
+
+### 6. Autorepeat Not Filtered in Modifier Mode
+
+**File:** `HotkeyManager.swift:126-134`
+**Severity:** Medium
+**Impact:** Rapid-fire gesture triggers in modifier mode
+
+```swift
+if ctx.useModifierMode {
+    guard ctx.targetKeycodes.contains(keycode) else {
+        return Unmanaged.passUnretained(event)
+    }
+    let isDown = event.flags.contains(.maskCommand)
+    DispatchQueue.main.async {
+        if isDown { ctx.gesture.handleKeyDown() }
+        else { ctx.gesture.handleKeyUp() }
     }
 }
 ```
 
-**Impact:** Eliminates data race, ensures thread safety
+**Problem:**
+- No autorepeat check in modifier mode (unlike normal mode at line 139)
+- Holding Cmd+F4 will trigger multiple keyDown events
+- Can cause gesture state machine to get confused
 
----
-
-### Fix #2: ISO Timestamp Support
-
-**Option A - SQL Normalization (Recommended):**
+**Fix:**
 ```swift
-// In BrainDatabase.swift, recentActivityBuckets method:
-
-let sql = """
-    SELECT datetime(created_at) as normalized_created_at
-    FROM chunks 
-    WHERE created_at >= datetime('now', ?)
-    ORDER BY created_at ASC
-"""
-```
-
-**Option B - Dual Parser:**
-```swift
-// In BrainDatabase.swift, add ISO formatter:
-
-private static let isoDateFormatter: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter
-}()
-
-// In recentActivityBuckets loop:
-guard let createdAtText = columnText(stmt, 0) else { continue }
-let createdAt = Self.sqliteDateFormatter.date(from: createdAtText) 
-    ?? Self.isoDateFormatter.date(from: createdAtText)
-guard let createdAt else { continue }
-```
-
-**Impact:** Correctly includes all chunks in activity tracking
-
----
-
-### Fix #3: Background Database Queries (Optional)
-
-```swift
-// In StatsCollector.swift:
-
-func refresh(force: Bool = false) {
-    Task.detached(priority: .utility) { [weak self] in
-        guard let self else { return }
-        
-        do {
-            let nextStats = try self.database.dashboardStats(
-                activityWindowMinutes: 30,
-                bucketCount: 12
-            )
-            let nextDaemon = self.daemonMonitor.sample()
-            let nextState = PipelineState.derive(
-                daemon: nextDaemon,
-                stats: nextStats
-            )
-            
-            await MainActor.run {
-                self.stats = nextStats
-                self.daemon = nextDaemon
-                self.state = nextState
-            }
-        } catch {
-            if force {
-                await MainActor.run {
-                    self.daemon = nil
-                    self.state = .offline
-                }
-            }
-        }
+if ctx.useModifierMode {
+    guard ctx.targetKeycodes.contains(keycode) else {
+        return Unmanaged.passUnretained(event)
+    }
+    
+    // Filter autorepeat in modifier mode too
+    let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
+    guard autorepeat == 0 else { return Unmanaged.passUnretained(event) }
+    
+    let isDown = event.flags.contains(.maskCommand)
+    DispatchQueue.main.async {
+        if isDown { ctx.gesture.handleKeyDown() }
+        else { ctx.gesture.handleKeyUp() }
     }
 }
 ```
 
-**Impact:** Eliminates main thread blocking, improves UI responsiveness
+---
+
+### 7. Empty Content Trimming Edge Case
+
+**File:** `QuickCaptureController.swift:38-39`
+**Severity:** Medium
+**Impact:** Whitespace-only content can bypass validation
+
+```swift
+let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+guard !trimmed.isEmpty else { throw CaptureError.emptyContent }
+```
+
+**Problem:**
+- Only trims whitespace and newlines
+- Other Unicode whitespace (zero-width spaces, non-breaking spaces) can bypass check
+- Content like `"\u{200B}\u{200B}\u{200B}"` (zero-width spaces) will be stored
+
+**Test Case:**
+```swift
+func testCaptureWithZeroWidthSpacesFails() throws {
+    let db = BrainDatabase(path: ":memory:")
+    defer { db.close() }
+    
+    // Should fail but currently passes
+    XCTAssertThrowsError(try QuickCaptureController.capture(
+        db: db,
+        content: "\u{200B}\u{200B}\u{200B}",  // Zero-width spaces
+        tags: [],
+        importance: 5
+    ))
+}
+```
+
+**Fix:**
+```swift
+let trimmed = content
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+    .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    .trimmingCharacters(in: CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{FEFF}"))  // Zero-width chars
+
+guard !trimmed.isEmpty else { throw CaptureError.emptyContent }
+```
 
 ---
 
-### Fix #4: Monitor Actual Daemon PID (Optional)
+### 8. Build Script Doesn't Handle Multiple Instances Gracefully
+
+**File:** `build-app.sh:16-21`
+**Severity:** Medium
+**Impact:** Build fails if BrainBar is stuck or zombie process exists
+
+```bash
+if pgrep -x BrainBar > /dev/null 2>&1; then
+    echo "[build-app] Stopping running BrainBar instances..."
+    killall BrainBar 2>/dev/null || true
+    sleep 1
+    rm -f /tmp/brainbar.sock
+fi
+```
+
+**Problem:**
+1. `killall` sends SIGTERM, but doesn't verify process actually died
+2. If process is stuck, build continues with stale binary
+3. No timeout or SIGKILL fallback
+4. Socket removal happens before process is confirmed dead
+
+**Fix:**
+```bash
+if pgrep -x BrainBar > /dev/null 2>&1; then
+    echo "[build-app] Stopping running BrainBar instances..."
+    
+    # Try graceful shutdown first
+    killall BrainBar 2>/dev/null || true
+    
+    # Wait up to 5 seconds for graceful shutdown
+    for i in {1..10}; do
+        if ! pgrep -x BrainBar > /dev/null 2>&1; then
+            break
+        fi
+        sleep 0.5
+    done
+    
+    # Force kill if still running
+    if pgrep -x BrainBar > /dev/null 2>&1; then
+        echo "[build-app] Force killing stuck BrainBar processes..."
+        killall -9 BrainBar 2>/dev/null || true
+        sleep 0.5
+    fi
+    
+    # Clean up socket and lock files
+    rm -f /tmp/brainbar.sock /tmp/brainbar.lock
+fi
+```
+
+---
+
+## Edge Cases & Potential Issues ⚠️
+
+### 9. No Validation of Tag Array Size
+
+**File:** `QuickCaptureController.swift:35`
 
 ```swift
-// In BrainBarApp.swift:
+static func capture(
+    db: BrainDatabase,
+    content: String,
+    tags: [String],
+    importance: Int = 5
+) throws -> CaptureResult
+```
 
-private func findBrainLayerDaemonPID() -> pid_t {
-    // Option 1: Read from socket metadata
-    let socketPath = "/tmp/brainbar.sock"
-    if let attrs = try? FileManager.default.attributesOfItem(atPath: socketPath),
-       let ownerPID = attrs[.ownerAccountID] as? NSNumber {
-        return pid_t(ownerPID.int32Value)
-    }
-    
-    // Option 2: Search process list for "brainlayer"
-    let task = Process()
-    task.launchPath = "/bin/ps"
-    task.arguments = ["-ax", "-o", "pid,command"]
-    
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    task.launch()
-    
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    if let output = String(data: data, encoding: .utf8) {
-        for line in output.split(separator: "\n") {
-            if line.contains("brainlayer") && line.contains("serve") {
-                let components = line.split(separator: " ", maxSplits: 1)
-                if let pidString = components.first,
-                   let pid = pid_t(pidString) {
-                    return pid
-                }
-            }
-        }
-    }
-    
-    return 0  // Fallback: no monitoring
+**Issue:** No limit on number of tags
+- Large tag arrays could cause JSON encoding issues
+- Database column has no size limit
+- Could impact search performance
+
+**Recommendation:**
+```swift
+guard tags.count <= 20 else {
+    throw CaptureError.tooManyTags(count: tags.count, max: 20)
 }
+```
 
-// In applicationDidFinishLaunching:
-let daemonPID = findBrainLayerDaemonPID()
-let collector = StatsCollector(
-    dbPath: BrainBarServer.defaultDBPath(),
-    daemonMonitor: DaemonHealthMonitor(targetPID: daemonPID)
+---
+
+### 10. Importance Value Not Validated
+
+**File:** `QuickCaptureController.swift:36`
+
+```swift
+importance: Int = 5
+```
+
+**Issue:** No range validation
+- Negative importance values accepted
+- Could break search ranking
+- Database expects 1-10 range (based on AGENTS.md)
+
+**Recommendation:**
+```swift
+let clampedImportance = max(1, min(10, importance))
+```
+
+---
+
+### 11. Search Returns Empty String for Empty Query
+
+**File:** `QuickCaptureController.swift:59-61`
+
+```swift
+guard !trimmed.isEmpty else {
+    return SearchResult(count: 0, formatted: "", results: [])
+}
+```
+
+**Issue:** Silent failure
+- User gets no feedback that query was empty
+- Could be confusing in UI
+
+**Recommendation:**
+```swift
+guard !trimmed.isEmpty else {
+    let formatted = Formatters.formatSearchResults(
+        query: "(empty query)",
+        results: [],
+        total: 0
+    )
+    return SearchResult(count: 0, formatted: formatted, results: [])
+}
+```
+
+---
+
+### 12. TapContext Marked @unchecked Sendable
+
+**File:** `HotkeyManager.swift:92`
+
+```swift
+private final class TapContext: @unchecked Sendable {
+    let gesture: GestureStateMachine
+    let targetKeycodes: Set<Int64>
+    let useModifierMode: Bool
+    var tap: CFMachPort?
+```
+
+**Issue:** Bypasses Swift 6 concurrency safety
+- `gesture` is mutable and accessed from C callback
+- `tap` is mutated without synchronization
+- Could cause race conditions in Swift 6
+
+**Recommendation:**
+- Add proper locking
+- Or make properties immutable where possible
+- Or use `@MainActor` isolation
+
+---
+
+## Test Coverage Gaps 🧪
+
+### Missing Test Cases:
+
+1. **Concurrent capture operations** - What happens if two captures happen simultaneously?
+2. **Database busy/locked scenarios** - How does retry logic work?
+3. **Very long content** - Is there a size limit? Should there be?
+4. **Special characters in tags** - JSON encoding edge cases
+5. **Gesture state machine race conditions** - Rapid key presses
+6. **Permission denial handling** - What if Input Monitoring is revoked while running?
+
+---
+
+## Performance Concerns 🐌
+
+### 1. Search Formatting on Main Thread
+
+**File:** `QuickCaptureController.swift:64-68`
+
+```swift
+let formatted = Formatters.formatSearchResults(
+    query: trimmed,
+    results: results,
+    total: results.count
 )
 ```
 
-**Impact:** Health metrics report actual daemon stats instead of BrainBar stats
+**Issue:** 
+- Formatting happens synchronously
+- For 100+ results, could block UI
+- String concatenation is expensive
+
+**Recommendation:**
+Move formatting to background queue or make it lazy.
+
+---
+
+### 2. No Connection Pooling
+
+**File:** `BrainDatabase.swift:26-27`
+
+```swift
+private var db: OpaquePointer?
+private let path: String
+```
+
+**Issue:**
+- Each `BrainDatabase` instance opens its own connection
+- No connection reuse
+- Could hit SQLite connection limits
+
+**Recommendation:**
+Use singleton pattern or connection pool for BrainBar.
+
+---
+
+## Security Considerations 🔒
+
+### 1. No Input Sanitization for Tags
+
+Tags are passed directly to JSON encoder and stored in database. While SQLite parameterized queries prevent SQL injection, malicious tags could:
+- Contain control characters
+- Break JSON parsing
+- Cause display issues
+
+**Recommendation:**
+```swift
+let sanitizedTags = tags.map { tag in
+    tag.replacingOccurrences(of: "[\\x00-\\x1F\\x7F]", with: "", options: .regularExpression)
+       .trimmingCharacters(in: .whitespacesAndNewlines)
+}.filter { !$0.isEmpty }
+```
+
+---
+
+### 2. No Rate Limiting
+
+No protection against:
+- Rapid-fire hotkey presses
+- Capture spam
+- Database write flooding
+
+**Recommendation:**
+Add debouncing to hotkey handler and rate limiting to capture operations.
+
+---
+
+## Documentation Issues 📝
+
+### 1. Missing Error Handling Documentation
+
+`QuickCaptureController` can throw errors, but callers don't know what to expect:
+- Database errors?
+- Validation errors?
+- Network errors?
+
+**Recommendation:**
+Add doc comments with `@throws` documentation.
+
+---
+
+### 2. Gesture State Machine Behavior Undocumented
+
+The state machine has complex timing behavior (250ms hold threshold, 400ms double-tap window) but no documentation on:
+- What happens if user releases at 249ms?
+- Can gestures overlap?
+- What's the recovery behavior if state gets corrupted?
+
+---
+
+## Priority Recommendations
+
+### Must Fix Before Merge:
+1. ✅ **Critical Issue #1**: Single-instance race condition
+2. ✅ **Critical Issue #2**: Memory leak in gesture timers
+3. ✅ **High Issue #3**: Force unwrap crash risk
+4. ✅ **High Issue #5**: Missing database initialization
+
+### Should Fix Before Merge:
+5. ✅ **High Issue #4**: CGEventTap failure after sleep
+6. ✅ **Medium Issue #6**: Autorepeat in modifier mode
+7. ✅ **Medium Issue #8**: Build script robustness
+
+### Can Fix in Follow-up PR:
+8. Edge cases #9-12
+9. Test coverage gaps
+10. Performance optimizations
+11. Documentation improvements
+
+---
+
+## Summary
+
+This PR provides a solid foundation for BrainBar quick capture, but has several critical bugs that must be addressed:
+
+- **2 Critical bugs** that can cause crashes or data corruption
+- **3 High severity bugs** that impact core functionality
+- **3 Medium severity bugs** that affect user experience
+
+The architecture is sound, but needs defensive programming improvements, better error handling, and more comprehensive testing.
+
+**Recommendation:** Request changes for critical and high severity issues before merge.
+
+---
+
+**Review completed:** 2026-03-29
+**Estimated fix time:** 2-3 hours for critical/high issues
