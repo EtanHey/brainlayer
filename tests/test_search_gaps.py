@@ -196,6 +196,17 @@ class TestAndSearchReturnsIntersection:
         result = _escape_fts5_query("Avi Simon", match_mode="or")
         assert "OR" in result
 
+    def test_empty_fts5_query_returns_no_match_expression(self):
+        """Blank input should skip FTS instead of expanding to a match-all wildcard."""
+        from brainlayer._helpers import _escape_fts5_query
+
+        assert _escape_fts5_query("   ") == ""
+
+    def test_search_entities_returns_empty_for_blank_query(self, tmp_path):
+        """Entity FTS search should short-circuit on blank input."""
+        store = _make_store(tmp_path)
+        assert store.search_entities("   ") == []
+
 
 # ── Gap I: backward-compat alias passes all params ──────────────────────────
 

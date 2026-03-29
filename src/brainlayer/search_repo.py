@@ -520,60 +520,62 @@ class SearchMixin:
         # '.', '*', '"', '(', ')' cause syntax errors if passed raw.
         # Wrap each term in double quotes to treat as literal strings.
         fts_query = _escape_fts5_query(query_text)
-        fts_params: list = [fts_query]
-        entity_join = ""
-        if entity_id:
-            entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
-            fts_extra.append("AND ec.entity_id = ?")
-            fts_params.append(entity_id)
-        if project_filter:
-            fts_extra.append("AND (c.project = ? OR c.project IS NULL)")
-            fts_params.append(project_filter)
-        if source_filter:
-            fts_extra.append("AND c.source = ?")
-            fts_params.append(source_filter)
-        if tag_filter:
-            fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
-            fts_params.append(tag_filter)
-        if intent_filter:
-            fts_extra.append("AND c.intent = ?")
-            fts_params.append(intent_filter)
-        if importance_min is not None:
-            fts_extra.append("AND c.importance >= ?")
-            fts_params.append(importance_min)
-        if date_from:
-            fts_extra.append("AND c.created_at >= ?")
-            fts_params.append(date_from)
-        if date_to:
-            fts_extra.append("AND c.created_at <= ?")
-            fts_params.append(date_to)
-        if sentiment_filter:
-            fts_extra.append("AND c.sentiment_label = ?")
-            fts_params.append(sentiment_filter)
-        if not include_archived:
-            fts_extra.append("AND c.superseded_by IS NULL")
-            fts_extra.append("AND c.aggregated_into IS NULL")
-            fts_extra.append("AND c.archived_at IS NULL")
-        fts_params.append(n_results * 3)
+        fts_results = []
+        if fts_query:
+            fts_params: list = [fts_query]
+            entity_join = ""
+            if entity_id:
+                entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
+                fts_extra.append("AND ec.entity_id = ?")
+                fts_params.append(entity_id)
+            if project_filter:
+                fts_extra.append("AND (c.project = ? OR c.project IS NULL)")
+                fts_params.append(project_filter)
+            if source_filter:
+                fts_extra.append("AND c.source = ?")
+                fts_params.append(source_filter)
+            if tag_filter:
+                fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
+                fts_params.append(tag_filter)
+            if intent_filter:
+                fts_extra.append("AND c.intent = ?")
+                fts_params.append(intent_filter)
+            if importance_min is not None:
+                fts_extra.append("AND c.importance >= ?")
+                fts_params.append(importance_min)
+            if date_from:
+                fts_extra.append("AND c.created_at >= ?")
+                fts_params.append(date_from)
+            if date_to:
+                fts_extra.append("AND c.created_at <= ?")
+                fts_params.append(date_to)
+            if sentiment_filter:
+                fts_extra.append("AND c.sentiment_label = ?")
+                fts_params.append(sentiment_filter)
+            if not include_archived:
+                fts_extra.append("AND c.superseded_by IS NULL")
+                fts_extra.append("AND c.aggregated_into IS NULL")
+                fts_extra.append("AND c.archived_at IS NULL")
+            fts_params.append(n_results * 3)
 
-        fts_results = list(
-            cursor.execute(
-                f"""
-            SELECT f.chunk_id, f.rank,
-                   c.content, c.metadata, c.source_file, c.project,
-                   c.content_type, c.value_type, c.char_count,
-                   c.summary, c.tags, c.importance, c.intent,
-                   c.created_at, c.source
-            FROM chunks_fts f
-            JOIN chunks c ON f.chunk_id = c.id
-            {entity_join}
-            WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
-            ORDER BY f.rank
-            LIMIT ?
-        """,
-                fts_params,
+            fts_results = list(
+                cursor.execute(
+                    f"""
+                SELECT f.chunk_id, f.rank,
+                       c.content, c.metadata, c.source_file, c.project,
+                       c.content_type, c.value_type, c.char_count,
+                       c.summary, c.tags, c.importance, c.intent,
+                       c.created_at, c.source
+                FROM chunks_fts f
+                JOIN chunks c ON f.chunk_id = c.id
+                {entity_join}
+                WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
+                ORDER BY f.rank
+                LIMIT ?
+            """,
+                    fts_params,
+                )
             )
-        )
 
         # Build FTS rank map
         fts_ranks = {}

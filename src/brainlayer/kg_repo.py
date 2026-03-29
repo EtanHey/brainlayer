@@ -347,6 +347,8 @@ class KGMixin:
         """Search entities using FTS5 full-text search."""
         cursor = self._read_cursor()
         fts_query = _escape_fts5_query(query, match_mode="or")
+        if not fts_query:
+            return []
 
         if entity_type:
             rows = list(
