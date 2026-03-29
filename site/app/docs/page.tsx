@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 const fade = (delay: number) => ({
-  initial: { opacity: 0, y: 12 },
+  initial: { opacity: 1, y: 12 },
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.5, ease: "easeOut" as const, delay },
 });
