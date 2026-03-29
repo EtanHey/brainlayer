@@ -10,18 +10,6 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
-    private struct StoreResultPayload: Encodable {
-        let chunkID: String
-        let rowID: Int64
-        let status: String
-
-        enum CodingKeys: String, CodingKey {
-            case chunkID = "chunk_id"
-            case rowID = "rowid"
-            case status
-        }
-    }
-
     private var database: BrainDatabase?
 
     /// Inject database for tool handlers.

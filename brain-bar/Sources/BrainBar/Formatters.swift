@@ -58,11 +58,15 @@ enum Formatters {
 
     private enum Alignment { case left, right, center }
 
-    private static func formatNumber(_ n: Int) -> String {
+    private static let decimalFormatter: NumberFormatter = {
         let fmt = NumberFormatter()
         fmt.numberStyle = .decimal
         fmt.groupingSeparator = ","
-        return fmt.string(from: NSNumber(value: n)) ?? "\(n)"
+        return fmt
+    }()
+
+    private static func formatNumber(_ n: Int) -> String {
+        return decimalFormatter.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
     private static func parseTags(_ raw: Any?) -> [String] {
@@ -103,8 +107,8 @@ enum Formatters {
             let date = String((r["created_at"] as? String ?? "").prefix(10))
             let importance = r["importance"]
             let summary = r["summary"] as? String ?? ""
-            let snippet = r["snippet"] as? String ?? ""
-            let displayText = truncate(summary.isEmpty ? snippet : summary, maxLen: 72)
+            let content = r["content"] as? String ?? ""
+            let displayText = truncate(summary.isEmpty ? content : summary, maxLen: 72)
 
             let impStr: String
             if let imp = importance as? Double {
