@@ -108,7 +108,7 @@ enum Formatters {
             let importance = r["importance"]
             let summary = r["summary"] as? String ?? ""
             let content = r["content"] as? String ?? ""
-            let displayText = truncate(summary.isEmpty ? content : summary, maxLen: 72)
+            let displayText = truncate(summary.isEmpty ? content : summary, maxLen: 150)
 
             let impStr: String
             if let imp = importance as? Double {
@@ -129,7 +129,10 @@ enum Formatters {
                 let tagStr = tags.prefix(4).joined(separator: ", ")
                 lines.append("\u{2502}  \(key("tags:", useColor)) \(tagStr)")
             }
-            lines.append("\u{2502}")
+            // Separator between results, but not after the last one
+            if i < results.count - 1 {
+                lines.append("\u{2502}")
+            }
         }
 
         lines.append("\u{2514}\u{2500}")
