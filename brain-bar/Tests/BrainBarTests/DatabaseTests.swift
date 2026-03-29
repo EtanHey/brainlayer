@@ -399,6 +399,17 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(tagsStr.contains("old-tag"))
     }
 
+    func testUpdateChunkThrowsOnNonExistentChunk() throws {
+        XCTAssertThrowsError(try db.updateChunk(id: "nonexistent-chunk-id", importance: 9)) { error in
+            XCTAssertTrue(error is BrainDatabase.DBError, "Should throw DBError")
+            if case BrainDatabase.DBError.noResult = error {
+                // Expected error type
+            } else {
+                XCTFail("Expected DBError.noResult, got \(error)")
+            }
+        }
+    }
+
     // MARK: - brain_expand (get chunk + surrounding context)
 
     func testExpandChunkReturnsSurroundingContext() throws {

@@ -575,69 +575,6 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    func resourceList(limit: Int = 200) throws -> [[String: Any]] {
-        guard let db else { throw DBError.notOpen }
-        let sql = """
-            SELECT DISTINCT tag FROM (
-                SELECT tag FROM brainbar_subscriptions
-                UNION
-                SELECT json_each.value AS tag
-                FROM chunks, json_each(chunks.tags)
-                WHERE json_each.type = 'text'
-            )
-            ORDER BY tag
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-
-        var resources: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let tag = columnText(stmt, 0), !tag.isEmpty else { continue }
-            resources.append([
-                "uri": "brain://tag/\(tag)",
-                "name": "Tag: \(tag)",
-                "description": "BrainBar tagged stream for \(tag)",
-                "mimeType": "application/json"
-            ])
-        }
-        return resources
-    }
-
-    func resourceRead(uri: String, limit: Int = 50) throws -> [[String: Any]] {
-        guard let tag = Self.tag(fromResourceURI: uri) else { return [] }
-        guard let db else { throw DBError.notOpen }
-        let sql = """
-            SELECT rowid, id, content, tags, created_at, importance
-            FROM chunks
-            WHERE tags LIKE ?
-            ORDER BY rowid DESC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-        bindText("%\"\(tag)\"%", to: stmt, index: 1)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-
-        var rows: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append([
-                "rowid": Int(sqlite3_column_int64(stmt, 0)),
-                "chunk_id": columnText(stmt, 1) as Any,
-                "content": columnText(stmt, 2) as Any,
-                "tags": columnText(stmt, 3) as Any,
-                "created_at": columnText(stmt, 4) as Any,
-                "importance": sqlite3_column_double(stmt, 5)
-            ])
-        }
-        return rows
-    }
-
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
         guard bucketCount > 0 else {
             return DashboardStats(
@@ -669,13 +606,6 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: databaseSizeBytes(),
             recentActivityBuckets: recentActivityBuckets
         )
-    }
-
-    static func tag(fromResourceURI uri: String) -> String? {
-        let prefix = "brain://tag/"
-        guard uri.hasPrefix(prefix) else { return nil }
-        let tag = String(uri.dropFirst(prefix.count))
-        return tag.isEmpty ? nil : tag
     }
 
     func exec(_ sql: String) {
@@ -740,6 +670,7 @@ final class BrainDatabase: @unchecked Sendable {
 
             let offset = createdAt.timeIntervalSince(windowStart)
             if offset < 0 { continue }
+            if offset > Double(activityWindowMinutes * 60) { continue }
 
             let rawIndex = Int(offset / bucketWidthSeconds)
             let clampedIndex = min(max(rawIndex, 0), bucketCount - 1)
@@ -926,36 +857,60 @@ final class BrainDatabase: @unchecked Sendable {
 
     func listTags(query: String? = nil, limit: Int = 50) throws -> [[String: Any]] {
         guard let db else { throw DBError.notOpen }
-        // Tags are stored as JSON arrays in the tags column. Parse and count.
-        let sql = "SELECT tags FROM chunks WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'"
+        
+        // Use SQL aggregation for better performance with large datasets.
+        // json_each extracts individual tags from the JSON array.
+        let sql: String
+        if let query {
+            sql = """
+                SELECT LOWER(TRIM(json_each.value)) AS tag, COUNT(*) AS count
+                FROM chunks, json_each(chunks.tags)
+                WHERE json_each.type = 'text'
+                  AND LOWER(TRIM(json_each.value)) LIKE ?
+                  AND TRIM(json_each.value) != ''
+                GROUP BY LOWER(TRIM(json_each.value))
+                ORDER BY count DESC
+                LIMIT ?
+            """
+        } else {
+            sql = """
+                SELECT LOWER(TRIM(json_each.value)) AS tag, COUNT(*) AS count
+                FROM chunks, json_each(chunks.tags)
+                WHERE json_each.type = 'text'
+                  AND TRIM(json_each.value) != ''
+                GROUP BY LOWER(TRIM(json_each.value))
+                ORDER BY count DESC
+                LIMIT ?
+            """
+        }
+        
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-
-        var tagCounts: [String: Int] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let raw = columnText(stmt, 0),
-                  let data = raw.data(using: .utf8),
-                  let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else { continue }
-            for tag in arr {
-                let t = tag.trimmingCharacters(in: .whitespaces).lowercased()
-                guard !t.isEmpty else { continue }
-                if let q = query?.lowercased(), !t.contains(q) { continue }
-                tagCounts[t, default: 0] += 1
-            }
+        
+        var paramIdx: Int32 = 1
+        if let query {
+            bindText("%\(query.lowercased())%", to: stmt, index: paramIdx)
+            paramIdx += 1
         }
+        sqlite3_bind_int(stmt, paramIdx, Int32(limit))
 
-        var results = tagCounts.map { ["tag": $0.key as Any, "count": $0.value as Any] }
-        results.sort { ($0["count"] as? Int ?? 0) > ($1["count"] as? Int ?? 0) }
-        return Array(results.prefix(limit))
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let tag = columnText(stmt, 0), !tag.isEmpty else { continue }
+            let count = Int(sqlite3_column_int(stmt, 1))
+            results.append(["tag": tag as Any, "count": count as Any])
+        }
+        return results
     }
 
     // MARK: - brain_update: update chunk importance/tags
 
     func updateChunk(id: String, importance: Int? = nil, tags: [String]? = nil) throws {
         guard let db else { throw DBError.notOpen }
+        var rowsChanged = 0
 
         if let importance {
             let sql = "UPDATE chunks SET importance = ? WHERE id = ?"
@@ -963,6 +918,7 @@ final class BrainDatabase: @unchecked Sendable {
                 sqlite3_bind_int(stmt, 1, Int32(importance))
                 bindText(id, to: stmt, index: 2)
             }
+            rowsChanged += Int(sqlite3_changes(db))
         }
 
         if let tags {
@@ -972,6 +928,11 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(tagsJSON, to: stmt, index: 1)
                 bindText(id, to: stmt, index: 2)
             }
+            rowsChanged += Int(sqlite3_changes(db))
+        }
+
+        if rowsChanged == 0 {
+            throw DBError.noResult
         }
     }
 
@@ -1003,7 +964,6 @@ final class BrainDatabase: @unchecked Sendable {
             "summary": columnText(stmt, 8) as Any,
             "tags": columnText(stmt, 9) as Any
         ]
-        // defer handles finalize for stmt — do NOT call sqlite3_finalize manually
 
         // Get surrounding chunks from same session using two separate queries
         var context: [[String: Any]] = []
@@ -1012,6 +972,7 @@ final class BrainDatabase: @unchecked Sendable {
         let beforeSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
         var beforeStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(beforeStmt) }
             bindText(sessionId, to: beforeStmt, index: 1)
             sqlite3_bind_int64(beforeStmt, 2, targetRowID)
             sqlite3_bind_int(beforeStmt, 3, Int32(before))
@@ -1026,7 +987,6 @@ final class BrainDatabase: @unchecked Sendable {
                     "summary": columnText(beforeStmt, 5) as Any
                 ])
             }
-            sqlite3_finalize(beforeStmt)
             context.append(contentsOf: beforeChunks.reversed())
         }
 
@@ -1034,6 +994,7 @@ final class BrainDatabase: @unchecked Sendable {
         let afterSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
         var afterStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(afterStmt) }
             bindText(sessionId, to: afterStmt, index: 1)
             sqlite3_bind_int64(afterStmt, 2, targetRowID)
             sqlite3_bind_int(afterStmt, 3, Int32(after))
@@ -1047,7 +1008,6 @@ final class BrainDatabase: @unchecked Sendable {
                     "summary": columnText(afterStmt, 5) as Any
                 ])
             }
-            sqlite3_finalize(afterStmt)
         }
 
         return ["target": target, "context": context]
@@ -1083,46 +1043,47 @@ final class BrainDatabase: @unchecked Sendable {
 
         // First try exact name match
         let exactSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name = ? LIMIT 1"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, exactSQL, -1, &stmt, nil) == SQLITE_OK else {
+        var exactStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, exactSQL, -1, &exactStmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
-        bindText(query, to: stmt, index: 1)
+        bindText(query, to: exactStmt, index: 1)
 
         var entityId: String?
         var result: [String: Any]?
 
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            entityId = columnText(stmt, 0)
+        if sqlite3_step(exactStmt) == SQLITE_ROW {
+            entityId = columnText(exactStmt, 0)
             result = [
                 "entity_id": entityId as Any,
-                "entity_type": columnText(stmt, 1) as Any,
-                "name": columnText(stmt, 2) as Any,
-                "metadata": columnText(stmt, 3) as Any,
-                "description": columnText(stmt, 4) as Any
+                "entity_type": columnText(exactStmt, 1) as Any,
+                "name": columnText(exactStmt, 2) as Any,
+                "metadata": columnText(exactStmt, 3) as Any,
+                "description": columnText(exactStmt, 4) as Any
             ]
         }
-        sqlite3_finalize(stmt)
+        sqlite3_finalize(exactStmt)
 
         // If no exact match, try LIKE
         if result == nil {
             let likeSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name LIKE ? LIMIT 1"
-            guard sqlite3_prepare_v2(db, likeSQL, -1, &stmt, nil) == SQLITE_OK else {
+            var likeStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, likeSQL, -1, &likeStmt, nil) == SQLITE_OK else {
                 throw DBError.prepare(sqlite3_errcode(db))
             }
-            bindText("%\(query)%", to: stmt, index: 1)
+            bindText("%\(query)%", to: likeStmt, index: 1)
 
-            if sqlite3_step(stmt) == SQLITE_ROW {
-                entityId = columnText(stmt, 0)
+            if sqlite3_step(likeStmt) == SQLITE_ROW {
+                entityId = columnText(likeStmt, 0)
                 result = [
                     "entity_id": entityId as Any,
-                    "entity_type": columnText(stmt, 1) as Any,
-                    "name": columnText(stmt, 2) as Any,
-                    "metadata": columnText(stmt, 3) as Any,
-                    "description": columnText(stmt, 4) as Any
+                    "entity_type": columnText(likeStmt, 1) as Any,
+                    "name": columnText(likeStmt, 2) as Any,
+                    "metadata": columnText(likeStmt, 3) as Any,
+                    "description": columnText(likeStmt, 4) as Any
                 ]
             }
-            sqlite3_finalize(stmt)
+            sqlite3_finalize(likeStmt)
         }
 
         // Get relations for found entity
@@ -1140,6 +1101,7 @@ final class BrainDatabase: @unchecked Sendable {
             """
             var relStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, relSQL, -1, &relStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(relStmt) }
                 bindText(entityId, to: relStmt, index: 1)
                 bindText(entityId, to: relStmt, index: 2)
                 var relations: [[String: Any]] = []
@@ -1152,7 +1114,6 @@ final class BrainDatabase: @unchecked Sendable {
                         "target": ["name": targetName] as [String: Any]
                     ])
                 }
-                sqlite3_finalize(relStmt)
                 result?["relations"] = relations
             }
         }
@@ -1273,24 +1234,39 @@ final class BrainDatabase: @unchecked Sendable {
 
         // Store the digest as a chunk
         let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
-        let stored = try store(
-            content: content.prefix(500) + (content.count > 500 ? "..." : ""),
-            tags: ["digest"] + entities.prefix(5).map { $0 },
-            importance: 5,
-            source: "digest"
-        )
-
-        return [
-            "mode": "digest",
-            "entities": entities,
-            "entities_created": entities.count,
-            "urls": urls,
-            "code_identifiers": codeIds,
-            "chunks_created": 1,
-            "relations_created": 0,
-            "chunk_id": stored.chunkID,
-            "summary": digestSummary
-        ]
+        
+        do {
+            let stored = try store(
+                content: content.prefix(500) + (content.count > 500 ? "..." : ""),
+                tags: ["digest"] + entities.prefix(5).map { $0 },
+                importance: 5,
+                source: "digest"
+            )
+            
+            return [
+                "mode": "digest",
+                "entities": entities,
+                "entities_created": entities.count,
+                "urls": urls,
+                "code_identifiers": codeIds,
+                "chunks_created": 1,
+                "relations_created": 0,
+                "chunk_id": stored.chunkID,
+                "summary": digestSummary
+            ]
+        } catch {
+            return [
+                "mode": "digest",
+                "entities": entities,
+                "entities_created": entities.count,
+                "urls": urls,
+                "code_identifiers": codeIds,
+                "chunks_created": 0,
+                "relations_created": 0,
+                "error": "Storage failed: \(error.localizedDescription)",
+                "summary": "\(digestSummary) (storage failed)"
+            ]
+        }
     }
 
     private static let sqliteDateFormatter: DateFormatter = {

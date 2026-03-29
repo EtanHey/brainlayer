@@ -35,10 +35,32 @@ final class MCPRouterTests: XCTestCase {
         // Must declare tool capabilities
         let capabilities = result?["capabilities"] as? [String: Any]
         XCTAssertNotNil(capabilities?["tools"])
-        let resources = capabilities?["resources"] as? [String: Any]
-        XCTAssertEqual(resources?["subscribe"] as? Bool, true)
+        XCTAssertNil(capabilities?["resources"], "Tag resources should not be advertised during initialize")
         let experimental = capabilities?["experimental"] as? [String: Any]
         XCTAssertEqual((experimental?["claude/channel"] as? [String: Any])?.isEmpty, true)
+    }
+
+    func testResourcesListReturnsNoPreloadedResources() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-resources-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "tagged-1", content: "Tagged chunk", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "resources/list",
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let resources = result?["resources"] as? [[String: Any]]
+
+        XCTAssertEqual(resources?.count, 0, "Tags should not be exposed as boot-time MCP resources")
     }
 
     // MARK: - Tools list

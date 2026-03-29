@@ -262,9 +262,8 @@ final class SocketIntegrationTests: XCTestCase {
 
         let unreadResult = unreadResponse["result"] as? [String: Any]
         let unreadContent = unreadResult?["content"] as? [[String: Any]]
-        let unreadText = unreadContent?.first?["text"] as? String ?? "[]"
-        let unreadMatches = (try? JSONSerialization.jsonObject(with: Data(unreadText.utf8))) as? [[String: Any]] ?? []
-        XCTAssertEqual(unreadMatches.count, 1, "Live-delivered chunk should stay unread until ack")
+        let unreadText = unreadContent?.first?["text"] as? String ?? ""
+        XCTAssertTrue(unreadText.contains("Live push message for agent live"), "Live-delivered chunk should stay unread until ack")
 
         let ackResponse = try sendMCPRequest([
             "jsonrpc": "2.0",
@@ -295,9 +294,8 @@ final class SocketIntegrationTests: XCTestCase {
         ])
         let clearedResult = clearedResponse["result"] as? [String: Any]
         let clearedContent = clearedResult?["content"] as? [[String: Any]]
-        let clearedText = clearedContent?.first?["text"] as? String ?? "[]"
-        let clearedMatches = (try? JSONSerialization.jsonObject(with: Data(clearedText.utf8))) as? [[String: Any]] ?? []
-        XCTAssertTrue(clearedMatches.isEmpty, "Acked chunk should no longer be unread")
+        let clearedText = clearedContent?.first?["text"] as? String ?? ""
+        XCTAssertFalse(clearedText.contains("Live push message for agent live"), "Acked chunk should no longer be unread")
     }
 
     func testDeadSubscriberDoesNotBlockLiveSubscriberNotification() throws {
