@@ -1234,24 +1234,39 @@ final class BrainDatabase: @unchecked Sendable {
 
         // Store the digest as a chunk
         let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
-        let stored = try store(
-            content: content.prefix(500) + (content.count > 500 ? "..." : ""),
-            tags: ["digest"] + entities.prefix(5).map { $0 },
-            importance: 5,
-            source: "digest"
-        )
-
-        return [
-            "mode": "digest",
-            "entities": entities,
-            "entities_created": entities.count,
-            "urls": urls,
-            "code_identifiers": codeIds,
-            "chunks_created": 1,
-            "relations_created": 0,
-            "chunk_id": stored.chunkID,
-            "summary": digestSummary
-        ]
+        
+        do {
+            let stored = try store(
+                content: content.prefix(500) + (content.count > 500 ? "..." : ""),
+                tags: ["digest"] + entities.prefix(5).map { $0 },
+                importance: 5,
+                source: "digest"
+            )
+            
+            return [
+                "mode": "digest",
+                "entities": entities,
+                "entities_created": entities.count,
+                "urls": urls,
+                "code_identifiers": codeIds,
+                "chunks_created": 1,
+                "relations_created": 0,
+                "chunk_id": stored.chunkID,
+                "summary": digestSummary
+            ]
+        } catch {
+            return [
+                "mode": "digest",
+                "entities": entities,
+                "entities_created": entities.count,
+                "urls": urls,
+                "code_identifiers": codeIds,
+                "chunks_created": 0,
+                "relations_created": 0,
+                "error": "Storage failed: \(error.localizedDescription)",
+                "summary": "\(digestSummary) (storage failed)"
+            ]
+        }
     }
 
     private static let sqliteDateFormatter: DateFormatter = {
