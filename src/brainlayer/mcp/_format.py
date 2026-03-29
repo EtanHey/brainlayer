@@ -137,7 +137,7 @@ def format_entity_card(entity: dict) -> str:
     if memories:
         lines.append(f"\u251c\u2500 Memories ({mem_count})")
         for mem in memories[:5]:
-            mtype = mem.get("type", "")
+            mtype = mem.get("type") or ""
             mdate = (mem.get("date") or "")[:10]
             mcontent = _truncate(mem.get("content") or mem.get("summary") or "", 60)
             lines.append(f"\u2502   [{mtype:8s}] {mdate} {mcontent}")
@@ -223,17 +223,20 @@ def format_digest_result(result: dict) -> str:
         return "\n".join(lines)
 
     # digest / connect mode
-    chunks = result.get("chunks_created", result.get("chunks", 0))
-    entities = result.get("entities_created", result.get("entities", 0))
-    relations = result.get("relations_created", result.get("relations", 0))
+    # For connect mode, stats are nested inside result["stats"]
+    stats = result.get("stats", {})
+    chunks = result.get("chunks_created", stats.get("chunks_created", result.get("chunks", 0)))
+    entities = result.get("entities_created", stats.get("entities_found", result.get("entities", 0)))
+    relations = result.get("relations_created", stats.get("relations_created", result.get("relations", 0)))
 
     lines = [
         f"\u250c\u2500 brain_digest ({mode})",
         f"\u2502 Chunks: {chunks}  Entities: {entities}  Relations: {relations}",
     ]
 
-    # Action items
-    actions = result.get("action_items", [])
+    # Action items - may be nested in "extracted" for connect mode
+    extracted = result.get("extracted", {})
+    actions = result.get("action_items", extracted.get("action_items", []))
     if actions:
         lines.append(f"\u251c\u2500 Action items ({len(actions)})")
         for a in actions[:5]:

@@ -11,7 +11,6 @@ Tests cover:
 8. Entity lookup includes completeness_score and health_level
 """
 
-import json
 import math
 import os
 import subprocess

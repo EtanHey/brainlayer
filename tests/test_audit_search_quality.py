@@ -5,16 +5,15 @@ Issue 2: MCP entity_type enum doesn't match canonical ENTITY_TYPES
 Issue 3: enrich_batch returns enriched=0 without processing
 """
 
-import pytest
-
 
 class TestKGSignalInHybridSearch:
     """hybrid_search should include a KG leg in RRF fusion."""
 
     def test_hybrid_search_accepts_kg_boost_param(self):
         """hybrid_search should accept a kg_boost parameter to enable KG-linked chunk boosting."""
-        from brainlayer.search_repo import SearchMixin
         import inspect
+
+        from brainlayer.search_repo import SearchMixin
 
         sig = inspect.signature(SearchMixin.hybrid_search)
         assert "kg_boost" in sig.parameters, (
@@ -23,9 +22,10 @@ class TestKGSignalInHybridSearch:
 
     def test_kg_linked_chunks_get_score_boost(self, tmp_path):
         """Chunks linked to entities via kg_entity_chunks should get a score boost in hybrid_search."""
-        from brainlayer.vector_store import VectorStore
-        from brainlayer._helpers import serialize_f32
         import random
+
+        from brainlayer._helpers import serialize_f32
+        from brainlayer.vector_store import VectorStore
 
         db_path = tmp_path / "test.db"
         store = VectorStore(db_path)
@@ -85,13 +85,12 @@ class TestKGSignalInHybridSearch:
 class TestEntityTypeEnumAlignment:
     """MCP entity_type enum must match canonical ENTITY_TYPES from kg/__init__.py."""
 
-    def test_mcp_recall_enum_matches_canonical(self):
+    async def test_mcp_recall_enum_matches_canonical(self):
         """brain_recall entity_type enum must match kg/__init__.py ENTITY_TYPES."""
         from brainlayer.kg import ENTITY_TYPES
-        import asyncio
         from brainlayer.mcp import list_tools
 
-        tools = asyncio.get_event_loop().run_until_complete(list_tools())
+        tools = await list_tools()
         recall_tool = next(t for t in tools if t.name == "brain_recall")
         schema = recall_tool.inputSchema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
@@ -101,13 +100,12 @@ class TestEntityTypeEnumAlignment:
             f"does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
         )
 
-    def test_mcp_entity_enum_matches_canonical(self):
+    async def test_mcp_entity_enum_matches_canonical(self):
         """brain_entity entity_type enum must match kg/__init__.py ENTITY_TYPES."""
         from brainlayer.kg import ENTITY_TYPES
-        import asyncio
         from brainlayer.mcp import list_tools
 
-        tools = asyncio.get_event_loop().run_until_complete(list_tools())
+        tools = await list_tools()
         entity_tool = next(t for t in tools if t.name == "brain_entity")
         schema = entity_tool.inputSchema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
@@ -123,8 +121,8 @@ class TestEnrichBatchNotStub:
 
     def test_enrich_batch_processes_candidates(self, tmp_path, monkeypatch):
         """enrich_batch should attempt to enrich unenriched chunks, not return enriched=0."""
-        from brainlayer.vector_store import VectorStore
         from brainlayer import enrichment_controller
+        from brainlayer.vector_store import VectorStore
 
         db_path = tmp_path / "test.db"
         store = VectorStore(db_path)
