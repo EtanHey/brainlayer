@@ -899,36 +899,51 @@ final class BrainDatabase: @unchecked Sendable {
             "summary": columnText(stmt, 8) as Any,
             "tags": columnText(stmt, 9) as Any
         ]
-        sqlite3_finalize(stmt)
+        // defer handles finalize for stmt — do NOT call sqlite3_finalize manually
 
-        // Get surrounding chunks from same session
-        let contextSQL = """
-            SELECT id, content, content_type, importance, created_at, summary
-            FROM chunks
-            WHERE conversation_id = ? AND rowid != ? AND rowid BETWEEN ? AND ?
-            ORDER BY rowid ASC
-        """
-        var ctxStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, contextSQL, -1, &ctxStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(ctxStmt) }
-
-        bindText(sessionId, to: ctxStmt, index: 1)
-        sqlite3_bind_int64(ctxStmt, 2, targetRowID)
-        sqlite3_bind_int64(ctxStmt, 3, targetRowID - Int64(before * 10))
-        sqlite3_bind_int64(ctxStmt, 4, targetRowID + Int64(after * 10))
-
+        // Get surrounding chunks from same session using two separate queries
         var context: [[String: Any]] = []
-        while sqlite3_step(ctxStmt) == SQLITE_ROW {
-            context.append([
-                "chunk_id": columnText(ctxStmt, 0) as Any,
-                "content": columnText(ctxStmt, 1) as Any,
-                "content_type": columnText(ctxStmt, 2) as Any,
-                "importance": sqlite3_column_double(ctxStmt, 3),
-                "created_at": columnText(ctxStmt, 4) as Any,
-                "summary": columnText(ctxStmt, 5) as Any
-            ])
+
+        // Before chunks (reverse order, then flip)
+        let beforeSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        var beforeStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
+            bindText(sessionId, to: beforeStmt, index: 1)
+            sqlite3_bind_int64(beforeStmt, 2, targetRowID)
+            sqlite3_bind_int(beforeStmt, 3, Int32(before))
+            var beforeChunks: [[String: Any]] = []
+            while sqlite3_step(beforeStmt) == SQLITE_ROW {
+                beforeChunks.append([
+                    "chunk_id": columnText(beforeStmt, 0) as Any,
+                    "content": columnText(beforeStmt, 1) as Any,
+                    "content_type": columnText(beforeStmt, 2) as Any,
+                    "importance": sqlite3_column_double(beforeStmt, 3),
+                    "created_at": columnText(beforeStmt, 4) as Any,
+                    "summary": columnText(beforeStmt, 5) as Any
+                ])
+            }
+            sqlite3_finalize(beforeStmt)
+            context.append(contentsOf: beforeChunks.reversed())
+        }
+
+        // After chunks
+        let afterSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        var afterStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
+            bindText(sessionId, to: afterStmt, index: 1)
+            sqlite3_bind_int64(afterStmt, 2, targetRowID)
+            sqlite3_bind_int(afterStmt, 3, Int32(after))
+            while sqlite3_step(afterStmt) == SQLITE_ROW {
+                context.append([
+                    "chunk_id": columnText(afterStmt, 0) as Any,
+                    "content": columnText(afterStmt, 1) as Any,
+                    "content_type": columnText(afterStmt, 2) as Any,
+                    "importance": sqlite3_column_double(afterStmt, 3),
+                    "created_at": columnText(afterStmt, 4) as Any,
+                    "summary": columnText(afterStmt, 5) as Any
+                ])
+            }
+            sqlite3_finalize(afterStmt)
         }
 
         return ["target": target, "context": context]
@@ -1025,10 +1040,12 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(entityId, to: relStmt, index: 2)
                 var relations: [[String: Any]] = []
                 while sqlite3_step(relStmt) == SQLITE_ROW {
+                    let targetName = columnText(relStmt, 2) ?? ""
                     relations.append([
                         "relation_type": columnText(relStmt, 0) as Any,
                         "target_id": columnText(relStmt, 1) as Any,
-                        "target_name": columnText(relStmt, 2) as Any
+                        "target_name": targetName as Any,
+                        "target": ["name": targetName] as [String: Any]
                     ])
                 }
                 sqlite3_finalize(relStmt)
@@ -1039,7 +1056,38 @@ final class BrainDatabase: @unchecked Sendable {
         return result
     }
 
-    // MARK: - brain_recall: stats mode
+    // MARK: - brain_recall
+
+    func recallSession(sessionId: String, limit: Int = 20) throws -> [[String: Any]] {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT id, content, project, content_type, importance, created_at, summary, tags
+            FROM chunks WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(sessionId, to: stmt, index: 1)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            results.append([
+                "chunk_id": columnText(stmt, 0) as Any,
+                "content": columnText(stmt, 1) as Any,
+                "project": columnText(stmt, 2) as Any,
+                "content_type": columnText(stmt, 3) as Any,
+                "importance": sqlite3_column_double(stmt, 4),
+                "created_at": columnText(stmt, 5) as Any,
+                "summary": columnText(stmt, 6) as Any,
+                "tags": columnText(stmt, 7) as Any,
+                "score": 1.0  // session recall has no relevance scoring
+            ])
+        }
+        return results
+    }
 
     func recallStats() throws -> [String: Any] {
         guard let db else { throw DBError.notOpen }
@@ -1131,9 +1179,11 @@ final class BrainDatabase: @unchecked Sendable {
         return [
             "mode": "digest",
             "entities": entities,
+            "entities_created": entities.count,
             "urls": urls,
             "code_identifiers": codeIds,
             "chunks_created": 1,
+            "relations_created": 0,
             "chunk_id": stored.chunkID,
             "summary": digestSummary
         ]

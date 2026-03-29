@@ -240,12 +240,10 @@ final class MCPRouter: @unchecked Sendable {
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
             if sessionId.isEmpty {
-                // Return stats as default context
                 let stats = try db.recallStats()
                 return Formatters.formatStats(stats: stats)
             }
-            // Search for chunks in the given session
-            let results = try db.search(query: sessionId, limit: 10)
+            let results = try db.recallSession(sessionId: sessionId, limit: 20)
             return Formatters.formatSearchResults(query: "session:\(sessionId)", results: results, total: results.count)
         }
         let stats = try db.recallStats()
