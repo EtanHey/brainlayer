@@ -40,12 +40,18 @@ struct QuickCaptureSearchRow: Identifiable, Equatable {
     let metadata: String
 }
 
+enum QuickCaptureMoveDirection {
+    case up
+    case down
+}
+
 @MainActor
 final class QuickCaptureViewModel: ObservableObject {
     @Published var inputText = ""
     @Published var mode: QuickCapturePanelState.Mode
     @Published private(set) var feedback: QuickCaptureFeedback = .idle
     @Published private(set) var results: [QuickCaptureSearchRow] = []
+    @Published private(set) var selectedResultIndex: Int?
     @Published private(set) var confirmationFlashCount = 0
     @Published private(set) var focusRequestCount = 0
 
@@ -63,14 +69,18 @@ final class QuickCaptureViewModel: ObservableObject {
         case .capture:
             return "Capture an idea. Press Return to store."
         case .search:
-            return "Search memory. Press Return to run."
+            return "Search memory. Press Return to run or select."
         }
     }
 
     var statusText: String {
+        if !feedback.isIdle {
+            return feedback.message
+        }
+
         switch mode {
         case .capture:
-            return feedback.message
+            return "Ready to store in BrainLayer"
         case .search:
             if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return "Type to search BrainLayer"
@@ -78,8 +88,17 @@ final class QuickCaptureViewModel: ObservableObject {
             if results.isEmpty {
                 return "No matches yet"
             }
-            return results.count == 1 ? "1 result" : "\(results.count) results"
+            let countLabel = results.count == 1 ? "1 result" : "\(results.count) results"
+            guard let selectedResultIndex else { return countLabel }
+            return "\(countLabel) • \(selectedResultIndex + 1) selected"
         }
+    }
+
+    var selectedResultID: String? {
+        guard let selectedResultIndex, results.indices.contains(selectedResultIndex) else {
+            return nil
+        }
+        return results[selectedResultIndex].id
     }
 
     func setMode(_ newMode: QuickCapturePanelState.Mode) {
@@ -89,16 +108,79 @@ final class QuickCaptureViewModel: ObservableObject {
         feedback = .idle
         if newMode == .capture {
             results = []
+            selectedResultIndex = nil
         }
+        focusRequestCount += 1
     }
 
-    func submit() {
+    func toggleMode() {
+        setMode(mode == .capture ? .search : .capture)
+    }
+
+    func submit(forceCapture: Bool = false) {
+        if forceCapture {
+            submitCapture()
+            return
+        }
+
         switch mode {
         case .capture:
             submitCapture()
         case .search:
-            submitSearch()
+            if selectedResultIndex != nil, !results.isEmpty {
+                applySelectedSearchResult()
+            } else {
+                submitSearch()
+            }
         }
+    }
+
+    func moveSelectionUp() {
+        moveSelection(.up)
+    }
+
+    func moveSelectionDown() {
+        moveSelection(.down)
+    }
+
+    func handleInputTab() {
+        toggleMode()
+    }
+
+    func handleInputReturn(modifiers: NSEvent.ModifierFlags) {
+        if modifiers.contains(.command) {
+            submit(forceCapture: true)
+        } else {
+            submit()
+        }
+    }
+
+    func handleInputMove(_ direction: QuickCaptureMoveDirection) {
+        guard mode == .search else { return }
+        switch direction {
+        case .up:
+            moveSelectionUp()
+        case .down:
+            moveSelectionDown()
+        }
+    }
+
+    func isSelected(_ row: QuickCaptureSearchRow) -> Bool {
+        selectedResultID == row.id
+    }
+
+    func selectResult(id: String) {
+        guard let index = results.firstIndex(where: { $0.id == id }) else { return }
+        selectedResultIndex = index
+    }
+
+    func activateResult(id: String) {
+        selectResult(id: id)
+        applySelectedSearchResult()
+    }
+
+    func clearResultsSelection() {
+        selectedResultIndex = nil
     }
 
     func dismiss() {
@@ -106,6 +188,7 @@ final class QuickCaptureViewModel: ObservableObject {
         mode = panelState.mode
         inputText = ""
         results = []
+        selectedResultIndex = nil
         feedback = .idle
     }
 
@@ -119,7 +202,7 @@ final class QuickCaptureViewModel: ObservableObject {
             feedback = .error("Content cannot be empty")
             return
         }
-        
+
         do {
             _ = try QuickCaptureController.capture(
                 db: db,
@@ -128,6 +211,7 @@ final class QuickCaptureViewModel: ObservableObject {
             )
             inputText = ""
             results = []
+            selectedResultIndex = nil
             feedback = .success("Stored in BrainLayer")
             confirmationFlashCount += 1
         } catch {
@@ -153,10 +237,127 @@ final class QuickCaptureViewModel: ObservableObject {
                     metadata: "\(importance) • \(createdAt)"
                 )
             }
+            selectedResultIndex = results.isEmpty ? nil : 0
             feedback = .idle
         } catch {
             results = []
+            selectedResultIndex = nil
             feedback = .error(error.localizedDescription)
+        }
+    }
+
+    private func moveSelection(_ direction: QuickCaptureMoveDirection) {
+        guard mode == .search, !results.isEmpty else { return }
+
+        let currentIndex = selectedResultIndex ?? 0
+        switch direction {
+        case .up:
+            selectedResultIndex = max(currentIndex - 1, 0)
+        case .down:
+            selectedResultIndex = min(currentIndex + 1, results.count - 1)
+        }
+        feedback = .idle
+    }
+
+    private func applySelectedSearchResult() {
+        guard let selectedResultIndex, results.indices.contains(selectedResultIndex) else {
+            submitSearch()
+            return
+        }
+
+        let row = results[selectedResultIndex]
+        inputText = row.title
+        setMode(.capture)
+        feedback = .idle
+    }
+}
+
+private final class KeyHandlingTextField: NSTextField {
+    var onTab: (() -> Void)?
+    var onMoveUp: (() -> Void)?
+    var onMoveDown: (() -> Void)?
+    var onReturn: ((NSEvent.ModifierFlags) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 48:
+            onTab?()
+            return
+        case 125:
+            onMoveDown?()
+            return
+        case 126:
+            onMoveUp?()
+            return
+        case 36, 76:
+            onReturn?(event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+            return
+        default:
+            super.keyDown(with: event)
+        }
+    }
+}
+
+private struct QuickCaptureInputField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let focusRequestCount: Int
+    let onTab: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onReturn: (NSEvent.ModifierFlags) -> Void
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: QuickCaptureInputField
+        var lastFocusRequestCount: Int = 0
+
+        init(parent: QuickCaptureInputField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else { return }
+            parent.text = textField.stringValue
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> KeyHandlingTextField {
+        let textField = KeyHandlingTextField(frame: .zero)
+        textField.delegate = context.coordinator
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.font = .systemFont(ofSize: 14, weight: .medium)
+        textField.placeholderString = placeholder
+        textField.stringValue = text
+        textField.onTab = onTab
+        textField.onMoveUp = onMoveUp
+        textField.onMoveDown = onMoveDown
+        textField.onReturn = onReturn
+        return textField
+    }
+
+    func updateNSView(_ nsView: KeyHandlingTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.placeholderString = placeholder
+        nsView.onTab = onTab
+        nsView.onMoveUp = onMoveUp
+        nsView.onMoveDown = onMoveDown
+        nsView.onReturn = onReturn
+
+        if context.coordinator.lastFocusRequestCount != focusRequestCount {
+            context.coordinator.lastFocusRequestCount = focusRequestCount
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
         }
     }
 }
@@ -278,7 +479,6 @@ final class QuickCapturePanelController {
 
 struct QuickCapturePanelView: View {
     @ObservedObject var viewModel: QuickCaptureViewModel
-    @FocusState private var isInputFocused: Bool
     @State private var flashOpacity = 0.0
 
     var body: some View {
@@ -324,8 +524,23 @@ struct QuickCapturePanelView: View {
                     }
                 }
 
-                TextField("", text: $viewModel.inputText, prompt: Text(viewModel.placeholderText))
-                    .textFieldStyle(.plain)
+                QuickCaptureInputField(
+                    text: $viewModel.inputText,
+                    placeholder: viewModel.placeholderText,
+                    focusRequestCount: viewModel.focusRequestCount,
+                    onTab: {
+                        viewModel.handleInputTab()
+                    },
+                    onMoveUp: {
+                        viewModel.handleInputMove(.up)
+                    },
+                    onMoveDown: {
+                        viewModel.handleInputMove(.down)
+                    },
+                    onReturn: { modifiers in
+                        viewModel.handleInputReturn(modifiers: modifiers)
+                    }
+                )
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
                     .background(
@@ -336,11 +551,6 @@ struct QuickCapturePanelView: View {
                         RoundedRectangle(cornerRadius: 14)
                             .strokeBorder(borderColor, lineWidth: 1)
                     )
-                    .font(.system(size: 14, weight: .medium))
-                    .focused($isInputFocused)
-                    .onSubmit {
-                        viewModel.submit()
-                    }
 
                 HStack(spacing: 8) {
                     Image(systemName: statusSymbol)
@@ -355,7 +565,16 @@ struct QuickCapturePanelView: View {
                 }
 
                 if viewModel.mode == .search {
-                    SearchResultsList(results: viewModel.results)
+                    SearchResultsList(
+                        results: viewModel.results,
+                        selectedResultID: viewModel.selectedResultID,
+                        onSelect: { id in
+                            viewModel.selectResult(id: id)
+                        },
+                        onActivate: { id in
+                            viewModel.activateResult(id: id)
+                        }
+                    )
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 } else {
                     captureHintCard
@@ -368,12 +587,6 @@ struct QuickCapturePanelView: View {
         }
         .frame(width: 540, height: 360)
         .padding(10)
-        .onAppear {
-            isInputFocused = true
-        }
-        .onChange(of: viewModel.focusRequestCount) { _, _ in
-            isInputFocused = true
-        }
         .onChange(of: viewModel.confirmationFlashCount) { _, _ in
             flashOpacity = 0.18
             withAnimation(.easeOut(duration: 0.45)) {
@@ -410,7 +623,7 @@ struct QuickCapturePanelView: View {
             Text("Use short, concrete notes. BrainBar stores them immediately in the main BrainLayer database.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text("Shortcuts: ⌘1 Capture, ⌘2 Search, Return Submit")
+            Text("Shortcuts: Tab Toggle, Return Submit, ⌘↩ Force store")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
@@ -448,6 +661,9 @@ private struct QuickCaptureModeButton: View {
 
 private struct SearchResultsList: View {
     let results: [QuickCaptureSearchRow]
+    let selectedResultID: String?
+    let onSelect: (String) -> Void
+    let onActivate: (String) -> Void
 
     var body: some View {
         ScrollView {
@@ -476,8 +692,22 @@ private struct SearchResultsList: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 16)
-                                .fill(Color(nsColor: .controlBackgroundColor))
+                                .fill(row.id == selectedResultID ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor))
                         )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .strokeBorder(
+                                    row.id == selectedResultID ? Color.accentColor.opacity(0.55) : Color.clear,
+                                    lineWidth: 1
+                                )
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 16))
+                        .onTapGesture {
+                            onSelect(row.id)
+                        }
+                        .onTapGesture(count: 2) {
+                            onActivate(row.id)
+                        }
                     }
                 }
             }

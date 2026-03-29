@@ -21,7 +21,7 @@ final class QuickCapturePanelTests: XCTestCase {
         panelState.switchMode(.search)
         let model = QuickCaptureViewModel(db: db, panelState: panelState)
 
-        XCTAssertEqual(model.placeholderText, "Search memory. Press Return to run.")
+        XCTAssertEqual(model.placeholderText, "Search memory. Press Return to run or select.")
     }
 
     func testSubmitCaptureStoresChunkAndShowsConfirmation() throws {
@@ -64,6 +64,109 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertTrue(model.feedback.isIdle)
         XCTAssertEqual(model.results.first?.title, "Quick capture panel should auto focus when shown")
         XCTAssertEqual(model.results.first?.id, "search-1", "Should use chunk_id from database, not generate random UUID")
+        XCTAssertEqual(model.selectedResultID, "search-1", "Search should preselect the first result for keyboard navigation")
+    }
+
+    func testTabTogglesBetweenCaptureAndSearchModes() throws {
+        let (db, path) = try makeDatabase(name: "tab-toggle")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(db: db, panelState: QuickCapturePanelState())
+        XCTAssertEqual(model.mode, .capture)
+
+        model.toggleMode()
+        XCTAssertEqual(model.mode, .search)
+
+        model.toggleMode()
+        XCTAssertEqual(model.mode, .capture)
+    }
+
+    func testArrowKeysMoveSelectedSearchResult() throws {
+        let (db, path) = try makeDatabase(name: "arrow-navigation")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "arrow-1",
+            content: "Alpha memory",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "arrow-2",
+            content: "Beta memory",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "memory"
+        model.submit()
+
+        XCTAssertEqual(model.selectedResultID, "arrow-1")
+
+        model.moveSelectionDown()
+        XCTAssertEqual(model.selectedResultID, "arrow-2")
+
+        model.moveSelectionUp()
+        XCTAssertEqual(model.selectedResultID, "arrow-1")
+    }
+
+    func testEnterSelectsHighlightedSearchResultIntoCaptureMode() throws {
+        let (db, path) = try makeDatabase(name: "enter-selects-result")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "enter-1",
+            content: "First matching memory",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "enter-2",
+            content: "Second matching memory",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "matching"
+        model.submit()
+        model.moveSelectionDown()
+
+        model.submit()
+
+        XCTAssertEqual(model.mode, .capture)
+        XCTAssertEqual(model.inputText, "Second matching memory")
+        XCTAssertEqual(model.results.count, 0)
+        XCTAssertNil(model.selectedResultID)
+    }
+
+    func testCommandEnterForceStoresWhileRemainingInSearchMode() throws {
+        let (db, path) = try makeDatabase(name: "force-store-search-mode")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "Ship the keyboard-first quick capture flow"
+
+        model.submit(forceCapture: true)
+
+        XCTAssertEqual(model.mode, .search)
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+        XCTAssertEqual(model.inputText, "")
+        let results = try db.search(query: "keyboard-first quick capture", limit: 5)
+        XCTAssertEqual(results.count, 1)
     }
 
     func testPanelAppearanceRequestsFieldFocus() throws {
@@ -141,6 +244,7 @@ final class QuickCapturePanelTests: XCTestCase {
         model.setMode(.capture)
 
         XCTAssertEqual(model.results.count, 0, "Should clear results when switching to capture mode")
+        XCTAssertNil(model.selectedResultID, "Should clear the selected result when switching to capture mode")
         XCTAssertTrue(model.feedback.isIdle, "Should reset feedback")
     }
 
