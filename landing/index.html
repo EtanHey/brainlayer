@@ -4,38 +4,36 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BrainLayer — Persistent Memory for AI Agents</title>
-  <meta name="description" content="Local-first memory layer for MCP-compatible AI agents. 284K chunks indexed. Hybrid search. Privacy-first.">
+  <meta name="description" content="Local-first memory layer for MCP-compatible AI agents. 284K chunks indexed. Hybrid search in <50ms. Privacy-first.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,700&family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
       --bg: #09090b;
       --bg-elevated: #111114;
-      --bg-card: #17171c;
-      --border: #25252b;
-      --border-hover: #3a3a42;
-      --text: #e8e4de;
-      --text-muted: #9c9890;
-      --text-dim: #6b6760;
+      --bg-card: #151519;
+      --border: #222228;
+      --border-hover: #38383f;
+      --text: #fafaf9;
+      --text-secondary: #a8a29e;
+      --text-dim: #6b6660;
       --accent: #d4956a;
-      --accent-glow: rgba(212, 149, 106, 0.12);
       --accent-bright: #e8b090;
-      --accent-subtle: rgba(212, 149, 106, 0.06);
+      --accent-subtle: rgba(212, 149, 106, 0.08);
       --teal: #5eead4;
-      --teal-dim: rgba(94, 234, 212, 0.08);
-      --red-muted: #cf6060;
-      --display: 'Newsreader', Georgia, 'Times New Roman', serif;
-      --body: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      --red: #cf6060;
+      --display: 'Newsreader', Georgia, serif;
+      --sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
       --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
     }
 
     html { scroll-behavior: smooth; }
 
     body {
-      font-family: var(--body);
+      font-family: var(--sans);
       background: var(--bg);
       color: var(--text);
       line-height: 1.6;
@@ -43,20 +41,26 @@
       overflow-x: hidden;
     }
 
-    /* Grain overlay */
+    /* Grain */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02'/%3E%3C/svg%3E");
       pointer-events: none;
       z-index: 9999;
     }
 
-    .container {
-      max-width: 1100px;
+    .wrap {
+      max-width: 960px;
       margin: 0 auto;
-      padding: 0 28px;
+      padding: 0 24px;
+    }
+
+    .wrap-wide {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
     }
 
     /* ─── Nav ─── */
@@ -66,17 +70,17 @@
       left: 0;
       right: 0;
       z-index: 100;
-      padding: 18px 0;
-      background: rgba(9, 9, 11, 0.75);
+      padding: 16px 0;
+      background: rgba(9, 9, 11, 0.8);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border-bottom: 1px solid transparent;
-      transition: border-color 0.4s;
+      transition: border-color 0.3s;
     }
 
     nav.scrolled { border-bottom-color: var(--border); }
 
-    nav .container {
+    nav .wrap {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -85,135 +89,70 @@
     .logo {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       text-decoration: none;
       color: var(--text);
-      transition: opacity 0.25s;
+      font-family: var(--sans);
+      font-weight: 600;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+      opacity: 0.9;
+      transition: opacity 0.2s;
     }
 
-    .logo:hover { opacity: 0.8; }
+    .logo:hover { opacity: 1; }
 
-    .logo-icon {
-      width: 26px;
-      height: 26px;
-    }
-
-    .logo-icon img {
-      width: 100%;
-      height: 100%;
+    .logo img {
+      width: 24px;
+      height: 24px;
       filter: hue-rotate(120deg) saturate(0.65) brightness(1.1);
     }
 
-    .logo-text {
-      font-family: var(--display);
-      font-weight: 600;
-      font-size: 18px;
-      letter-spacing: -0.01em;
-    }
-
-    .nav-links {
+    .nav-right {
       display: flex;
       align-items: center;
-      gap: 36px;
+      gap: 24px;
     }
 
-    .nav-links a {
-      color: var(--text-dim);
+    .nav-right a {
+      color: var(--text-secondary);
       text-decoration: none;
       font-size: 14px;
       font-weight: 400;
-      letter-spacing: 0.01em;
-      transition: color 0.25s;
-      position: relative;
+      transition: color 0.2s;
     }
 
-    .nav-links a:not(.nav-cta):hover { color: var(--text); }
+    .nav-right a:hover { color: var(--text); }
 
-    .nav-links a:not(.nav-cta)::after {
-      content: '';
-      position: absolute;
-      bottom: -6px;
-      left: 0;
-      width: 0;
-      height: 1px;
-      background: var(--accent);
-      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    .nav-gh {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
 
-    .nav-links a:not(.nav-cta):hover::after { width: 100%; }
-
-    .nav-cta {
-      padding: 8px 20px !important;
-      background: transparent !important;
-      color: var(--accent) !important;
-      border: 1px solid var(--accent);
-      border-radius: 6px;
-      font-size: 13px !important;
-      font-weight: 500 !important;
-      transition: all 0.25s !important;
+    .nav-gh .arrow {
+      display: inline-block;
+      transition: transform 0.2s;
     }
 
-    .nav-cta:hover {
-      background: var(--accent) !important;
-      color: var(--bg) !important;
-      box-shadow: 0 0 24px rgba(212, 149, 106, 0.2);
-    }
+    .nav-gh:hover .arrow { transform: translateX(2px); }
 
     /* ─── Hero ─── */
     .hero {
-      padding: 200px 0 100px;
-      position: relative;
-    }
-
-    .hero::before {
-      content: '';
-      position: absolute;
-      top: 60px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 800px;
-      height: 500px;
-      background: radial-gradient(ellipse at center, rgba(212, 149, 106, 0.06), transparent 65%);
-      pointer-events: none;
-    }
-
-    .hero-content {
-      max-width: 720px;
-      margin: 0 auto;
+      padding: 180px 0 80px;
       text-align: center;
     }
 
-    .hero-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 6px 16px;
-      border-radius: 100px;
-      border: 1px solid var(--border);
-      background: var(--bg-elevated);
-      font-size: 13px;
-      color: var(--text-dim);
-      margin-bottom: 40px;
-      font-family: var(--mono);
-      font-weight: 400;
-      transition: border-color 0.3s, color 0.3s;
-    }
-
-    .hero-tag:hover {
-      border-color: var(--border-hover);
-      color: var(--text-muted);
-    }
-
-    .hero-tag .v { color: var(--accent); font-weight: 500; }
-
     h1 {
       font-family: var(--display);
-      font-size: clamp(44px, 6.5vw, 76px);
+      font-size: clamp(40px, 6vw, 68px);
       font-weight: 700;
       letter-spacing: -0.035em;
-      line-height: 1.05;
-      margin-bottom: 28px;
-      color: var(--text);
+      line-height: 1.08;
+      margin-bottom: 24px;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
     }
 
     h1 em {
@@ -222,11 +161,11 @@
     }
 
     .hero-sub {
-      font-size: 18px;
-      color: var(--text-muted);
-      max-width: 540px;
-      margin: 0 auto 48px;
-      line-height: 1.7;
+      font-size: 17px;
+      color: var(--text-secondary);
+      max-width: 480px;
+      margin: 0 auto 40px;
+      line-height: 1.65;
       font-weight: 300;
     }
 
@@ -234,59 +173,52 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 16px;
-      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 48px;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 14px 28px;
-      border-radius: 8px;
-      font-size: 15px;
+      padding: 12px 24px;
+      border-radius: 999px;
+      font-size: 14px;
       font-weight: 500;
       text-decoration: none;
-      transition: all 0.25s;
       cursor: pointer;
       border: none;
-      font-family: var(--body);
+      font-family: var(--sans);
+      transition: transform 0.15s, box-shadow 0.2s, background 0.2s;
     }
 
+    .btn:hover { transform: scale(1.03); }
+    .btn:active { transform: scale(0.98); }
+
     .btn-primary {
-      background: var(--accent);
+      background: var(--text);
       color: var(--bg);
     }
 
     .btn-primary:hover {
-      background: var(--accent-bright);
-      box-shadow: 0 4px 24px rgba(212, 149, 106, 0.25);
-      transform: translateY(-2px);
-    }
-
-    .btn-primary:active {
-      transform: translateY(0);
+      box-shadow: 0 0 24px rgba(250, 250, 249, 0.15);
     }
 
     .btn-ghost {
       background: transparent;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       border: 1px solid var(--border);
     }
 
     .btn-ghost:hover {
       color: var(--text);
       border-color: var(--border-hover);
-      background: var(--bg-elevated);
-      transform: translateY(-1px);
     }
 
-    .btn-ghost:active { transform: translateY(0); }
-
-    /* ─── Install ─── */
+    /* Install */
     .install-block {
-      margin: 56px auto 0;
-      max-width: 540px;
+      max-width: 420px;
+      margin: 0 auto;
     }
 
     .install-cmd {
@@ -294,36 +226,22 @@
       align-items: center;
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px 20px;
+      border-radius: 10px;
+      padding: 12px 18px;
       font-family: var(--mono);
       font-size: 14px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       cursor: pointer;
-      transition: border-color 0.3s, box-shadow 0.3s;
+      transition: border-color 0.25s;
       position: relative;
-      overflow: hidden;
     }
-
-    .install-cmd::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(90deg, transparent, rgba(212, 149, 106, 0.04), transparent);
-      transform: translateX(-100%);
-      transition: transform 0.7s ease;
-    }
-
-    .install-cmd:hover::before { transform: translateX(100%); }
 
     .install-cmd:hover {
       border-color: var(--accent);
-      box-shadow: 0 0 24px rgba(212, 149, 106, 0.08);
     }
 
-    .install-cmd code { color: var(--text); flex: 1; position: relative; }
-    .install-cmd code .dim { color: var(--text-dim); }
-    .install-cmd code .hl { color: var(--accent); }
+    .install-cmd code { color: var(--text); flex: 1; }
+    .install-cmd .dim { color: var(--text-dim); }
 
     .copy-btn {
       background: none;
@@ -331,191 +249,50 @@
       color: var(--text-dim);
       cursor: pointer;
       padding: 4px;
-      transition: color 0.2s, transform 0.2s;
-      font-size: 14px;
-      position: relative;
+      transition: color 0.2s;
     }
 
-    .copy-btn:hover {
-      color: var(--accent);
-      transform: scale(1.1);
-    }
+    .copy-btn:hover { color: var(--accent); }
 
-    .install-note {
-      font-size: 13px;
-      color: var(--text-dim);
-      margin-top: 12px;
-    }
-
-    .install-note code {
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--accent);
-      background: var(--accent-subtle);
-      padding: 2px 7px;
-      border-radius: 4px;
-    }
-
-    /* ─── Stats ─── */
-    .stats-section {
-      padding: 40px 0 60px;
-    }
-
-    .stats {
-      display: flex;
-      justify-content: center;
-      gap: 56px;
-      flex-wrap: wrap;
-    }
-
-    .stat {
-      transition: transform 0.2s;
-    }
-
-    .stat:hover { transform: translateY(-2px); }
-
-    .stat-value {
-      font-size: 28px;
-      font-weight: 600;
-      letter-spacing: -0.03em;
-      font-family: var(--mono);
-      color: var(--text);
-    }
-
-    .stat-value .unit {
-      font-size: 16px;
-      color: var(--text-dim);
-      font-weight: 400;
-    }
-
-    .stat-label {
-      font-size: 12px;
-      color: var(--text-dim);
-      margin-top: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      font-weight: 400;
-    }
-
-    .divider {
-      height: 1px;
-      background: linear-gradient(90deg, transparent, var(--border), transparent);
-      margin: 0 auto;
-    }
-
-    /* ─── Problem / Solution ─── */
-    .ps-section {
-      padding: 100px 0;
-    }
-
-    .ps-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 48px;
-      align-items: stretch;
-    }
-
-    .ps-card {
-      padding: 36px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--bg-card);
-      transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .ps-card .ps-text { flex: 1; }
-
-    .ps-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-    }
-
-    .ps-card.problem {
-      border-top: 2px solid var(--red-muted);
-    }
-
-    .ps-card.problem:hover {
-      border-color: rgba(207, 96, 96, 0.4);
-      border-top-color: var(--red-muted);
-    }
-
-    .ps-card.solution {
-      border-top: 2px solid var(--teal);
-    }
-
-    .ps-card.solution:hover {
-      border-color: rgba(94, 234, 212, 0.3);
-      border-top-color: var(--teal);
-    }
-
-    .ps-label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      margin-bottom: 16px;
-      font-weight: 500;
-    }
-
-    .problem .ps-label { color: var(--red-muted); }
-    .solution .ps-label { color: var(--teal); }
-
-    .ps-title {
-      font-family: var(--body);
-      font-size: 22px;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin-bottom: 16px;
-    }
-
-    .ps-text {
-      color: var(--text-muted);
-      font-size: 15px;
-      line-height: 1.7;
-      font-weight: 300;
-    }
-
-    .ps-text strong { color: var(--text); font-weight: 500; }
-
-    /* ─── Terminal demo ─── */
-    .demo-section {
-      padding: 60px 0 80px;
+    /* ─── Terminal ─── */
+    .terminal-section {
+      padding: 0 0 100px;
     }
 
     .terminal {
-      background: #0d0d0f;
-      border: 1px solid var(--border);
-      border-radius: 10px;
+      background: #0c0c0e;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
       overflow: hidden;
-      max-width: 760px;
+      max-width: 820px;
       margin: 0 auto;
-      transition: border-color 0.3s, box-shadow 0.4s;
+      position: relative;
     }
 
-    .terminal:hover {
-      border-color: var(--border-hover);
-      box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
+    .terminal::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: linear-gradient(transparent, var(--bg));
+      pointer-events: none;
     }
 
     .terminal-bar {
       display: flex;
       align-items: center;
       gap: 7px;
-      padding: 13px 18px;
-      background: #111114;
-      border-bottom: 1px solid var(--border);
+      padding: 14px 18px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid rgba(255,255,255,0.05);
     }
 
-    .terminal-dot {
-      width: 11px;
-      height: 11px;
-      border-radius: 50%;
-    }
-
-    .terminal-dot.r { background: #ff5f57; }
-    .terminal-dot.y { background: #febc2e; }
-    .terminal-dot.g { background: #28c840; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .dot-r { background: #ff5f57; }
+    .dot-y { background: #febc2e; }
+    .dot-g { background: #28c840; }
 
     .terminal-title {
       font-size: 12px;
@@ -525,396 +302,307 @@
     }
 
     .terminal-body {
-      padding: 24px 24px 28px;
+      padding: 20px 22px 48px;
       font-family: var(--mono);
       font-size: 13px;
-      line-height: 1.9;
-      overflow-x: auto;
+      line-height: 1.85;
     }
 
-    .terminal-body .prompt { color: #6ec1e4; font-weight: 500; }
-    .terminal-body .cmd { color: var(--text); }
-    .terminal-body .dim { color: var(--text-dim); }
-    .terminal-body .tool-call { color: var(--accent); font-weight: 500; }
-    .terminal-body .arg { color: #a8d8a8; }
-    .terminal-body .result-key { color: #9c9890; }
-    .terminal-body .result-val { color: var(--text); }
-    .terminal-body .result-str { color: #e8b090; }
-    .terminal-body .num { color: var(--teal); }
-    .terminal-body .border-char { color: #3a3a42; }
-    .terminal-body .system { color: #9c9890; font-style: italic; }
+    .t { display: block; }
+    .t-gap { margin-top: 12px; }
 
-    .t-line {
-      display: block;
-      padding: 1px 0;
-    }
+    .t-prompt { color: #6ec1e4; }
+    .t-user { color: var(--text); }
+    .t-dim { color: #4a4a52; }
+    .t-sys { color: #78787f; font-style: italic; }
+    .t-tool { color: var(--accent); font-weight: 500; }
+    .t-arg { color: #a8d8a8; }
+    .t-str { color: #e8b090; }
+    .t-num { color: var(--teal); }
+    .t-border { color: #333338; }
+    .t-body { color: var(--text-secondary); }
 
-    .t-gap { margin-top: 14px; }
-
-    /* ─── Features ─── */
-    .features-section {
+    /* ─── Sections ─── */
+    .section {
       padding: 100px 0;
     }
 
-    .section-eyebrow {
+    .section-label {
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.12em;
       color: var(--accent);
       margin-bottom: 12px;
-      font-weight: 500;
       text-align: center;
+      font-weight: 500;
     }
 
-    .section-title {
+    .section-heading {
       font-family: var(--display);
-      font-size: clamp(28px, 4vw, 40px);
+      font-size: clamp(26px, 3.5vw, 36px);
       font-weight: 600;
-      letter-spacing: -0.03em;
-      margin-bottom: 56px;
+      letter-spacing: -0.025em;
       text-align: center;
+      margin-bottom: 56px;
+      line-height: 1.15;
     }
 
-    .features-grid {
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+    }
+
+    /* ─── Problem / Solution ─── */
+    .ps-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
     }
 
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 28px;
-      transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
-    }
-
-    .feature-card:hover {
-      border-color: rgba(212, 149, 106, 0.25);
-      transform: translateY(-3px);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-    }
-
-    .feature-card h3 {
-      font-family: var(--body);
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      letter-spacing: -0.01em;
-    }
-
-    .feature-card p {
-      font-size: 14px;
-      color: var(--text-muted);
-      line-height: 1.6;
-      font-weight: 300;
-    }
-
-    .feature-mono {
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--accent);
-      margin-bottom: 14px;
-      display: block;
-    }
-
-    /* ─── MCP Tools ─── */
-    .tools-section {
-      padding: 80px 0;
-    }
-
-    .tools-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-      max-width: 720px;
-      margin: 0 auto;
-    }
-
-    .tool-row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 14px 18px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      transition: all 0.25s;
-      border-left: 2px solid transparent;
-    }
-
-    .tool-row:hover {
-      border-color: var(--border-hover);
-      border-left-color: var(--accent);
-      background: var(--bg-elevated);
-    }
-
-    .tool-name {
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--accent);
-      white-space: nowrap;
-      min-width: 130px;
-    }
-
-    .tool-desc {
-      font-size: 13px;
-      color: var(--text-muted);
-      font-weight: 300;
-    }
-
-    /* ─── Architecture ─── */
-    .arch-section {
-      padding: 80px 0;
-    }
-
-    .arch-diagram {
-      max-width: 800px;
-      margin: 0 auto;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+    .ps-card {
+      padding: 32px;
       border-radius: 12px;
-      padding: 40px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      display: flex;
+      flex-direction: column;
       transition: border-color 0.3s;
     }
 
-    .arch-diagram:hover { border-color: var(--border-hover); }
-
-    .arch-row {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 14px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-
-    .arch-row:last-child { margin-bottom: 0; }
-
-    .arch-node {
-      padding: 12px 20px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 500;
-      text-align: center;
-      border: 1px solid var(--border);
-      background: var(--bg-elevated);
-      min-width: 130px;
-      transition: all 0.25s;
-      font-family: var(--body);
-    }
-
-    .arch-node:hover {
+    .ps-card:hover {
       border-color: var(--border-hover);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
     }
 
-    .arch-node.primary {
-      border-color: rgba(212, 149, 106, 0.35);
-      background: rgba(212, 149, 106, 0.06);
-      color: var(--accent-bright);
-    }
+    .ps-card.problem { border-top: 2px solid var(--red); }
+    .ps-card.solution { border-top: 2px solid var(--teal); }
 
-    .arch-node.primary:hover {
-      border-color: rgba(212, 149, 106, 0.6);
-      box-shadow: 0 4px 24px rgba(212, 149, 106, 0.1);
-    }
-
-    .arch-node.storage {
-      border-color: rgba(94, 234, 212, 0.25);
-      background: var(--teal-dim);
-      color: var(--teal);
-    }
-
-    .arch-node.storage:hover {
-      border-color: rgba(94, 234, 212, 0.5);
-      box-shadow: 0 4px 24px rgba(94, 234, 212, 0.08);
-    }
-
-    .arch-node small {
-      display: block;
-      color: var(--text-dim);
+    .ps-tag {
       font-size: 11px;
-      margin-top: 4px;
-      font-weight: 400;
-    }
-
-    .arch-arrow {
-      color: var(--text-dim);
-      font-size: 16px;
-    }
-
-    .arch-label {
-      font-size: 10px;
-      color: var(--text-dim);
       text-transform: uppercase;
       letter-spacing: 0.1em;
-      margin-bottom: 10px;
-      text-align: center;
+      margin-bottom: 14px;
       font-weight: 500;
     }
 
-    /* ─── Compatibility ─── */
-    .compat-section {
+    .problem .ps-tag { color: var(--red); }
+    .solution .ps-tag { color: var(--teal); }
+
+    .ps-title {
+      font-family: var(--sans);
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 14px;
+    }
+
+    .ps-body {
+      color: var(--text-secondary);
+      font-size: 15px;
+      line-height: 1.7;
+      font-weight: 300;
+      flex: 1;
+    }
+
+    .ps-body strong { color: var(--text); font-weight: 500; }
+
+    /* ─── Tools ─── */
+    .tools-section {
       padding: 100px 0;
+    }
+
+    .tools-group {
+      max-width: 640px;
+      margin: 0 auto 48px;
+    }
+
+    .tools-group:last-child { margin-bottom: 0; }
+
+    .tools-group-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+      padding-left: 2px;
+      font-weight: 500;
+    }
+
+    .tool-item {
+      display: flex;
+      align-items: baseline;
+      gap: 20px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+
+    .tool-item:hover {
+      background: var(--bg-elevated);
+    }
+
+    .tool-item .name {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      min-width: 150px;
+      flex-shrink: 0;
+    }
+
+    .tool-item .desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+      font-weight: 300;
+    }
+
+    .tool-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 8px 0;
+      max-width: 640px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* ─── Integrations ─── */
+    .integrations-section {
+      padding: 80px 0 100px;
       text-align: center;
     }
 
-    .compat-grid {
+    .logo-row {
       display: flex;
       justify-content: center;
-      gap: 36px;
+      gap: 40px;
       flex-wrap: wrap;
-      margin-top: 48px;
+      margin-bottom: 64px;
     }
 
-    .compat-item {
+    .logo-item {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 12px;
-      transition: transform 0.25s;
+      gap: 10px;
+      transition: transform 0.2s;
     }
 
-    .compat-item:hover { transform: translateY(-5px); }
+    .logo-item:hover { transform: translateY(-3px); }
 
-    .compat-icon {
-      width: 56px;
-      height: 56px;
-      border-radius: 14px;
+    .logo-box {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
       background: var(--bg-card);
       border: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s;
-      padding: 12px;
+      padding: 11px;
+      transition: border-color 0.25s;
     }
 
-    .compat-icon img {
+    .logo-box img {
       width: 100%;
       height: 100%;
       object-fit: contain;
     }
 
-    .compat-item:hover .compat-icon {
-      border-color: var(--accent);
-      box-shadow: 0 0 24px rgba(212, 149, 106, 0.12);
-      background: var(--bg-elevated);
+    .logo-item:hover .logo-box {
+      border-color: var(--border-hover);
     }
 
-    .compat-label {
-      font-size: 13px;
+    .logo-name {
+      font-size: 12px;
       color: var(--text-dim);
-      transition: color 0.25s;
-      font-weight: 400;
+      transition: color 0.2s;
     }
 
-    .compat-item:hover .compat-label { color: var(--text); }
+    .logo-item:hover .logo-name { color: var(--text-secondary); }
 
     /* ─── Setup ─── */
-    .setup-section {
-      padding: 60px 0 100px;
-      text-align: center;
+    .setup-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      max-width: 780px;
+      margin: 0 auto;
     }
 
-    .setup-steps {
-      display: flex;
-      justify-content: center;
-      gap: 40px;
-      flex-wrap: wrap;
-    }
-
-    .setup-step {
-      display: flex;
-      align-items: flex-start;
-      gap: 16px;
-      max-width: 280px;
+    .setup-card {
       text-align: left;
     }
 
-    .step-num {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: var(--accent-subtle);
-      border: 1px solid rgba(212, 149, 106, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--accent);
-      flex-shrink: 0;
+    .setup-num {
       font-family: var(--mono);
-      transition: all 0.25s;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      margin-bottom: 10px;
     }
 
-    .setup-step:hover .step-num {
-      background: rgba(212, 149, 106, 0.15);
-      border-color: var(--accent);
-    }
-
-    .step-text {
+    .setup-text {
       font-size: 14px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       line-height: 1.6;
       font-weight: 300;
+      margin-bottom: 10px;
     }
 
-    .step-text code {
+    .setup-code {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
       font-family: var(--mono);
       font-size: 12px;
-      color: var(--accent);
-      background: var(--accent-subtle);
-      padding: 2px 7px;
-      border-radius: 4px;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.2s;
     }
+
+    .setup-code:hover { border-color: var(--accent); }
+
+    .setup-code span { flex: 1; }
+
+    .setup-code .copy-icon {
+      color: var(--text-dim);
+      transition: color 0.2s;
+      flex-shrink: 0;
+    }
+
+    .setup-code:hover .copy-icon { color: var(--accent); }
 
     /* ─── CTA ─── */
     .cta-section {
-      padding: 120px 0 100px;
-      position: relative;
+      padding: 100px 0 80px;
+      text-align: center;
     }
 
-    .cta-section::before {
-      content: '';
-      position: absolute;
-      bottom: 30%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 600px;
-      height: 300px;
-      background: radial-gradient(ellipse, rgba(212, 149, 106, 0.06), transparent 70%);
-      pointer-events: none;
-    }
-
-    .cta-title {
+    .cta-heading {
       font-family: var(--display);
-      font-size: clamp(28px, 4vw, 48px);
+      font-size: clamp(26px, 4vw, 42px);
       font-weight: 600;
       letter-spacing: -0.03em;
-      margin-bottom: 16px;
-      text-align: center;
+      margin-bottom: 12px;
     }
 
     .cta-sub {
-      color: var(--text-muted);
-      font-size: 16px;
-      margin-bottom: 40px;
+      color: var(--text-secondary);
+      font-size: 15px;
+      margin-bottom: 36px;
       font-weight: 300;
-      text-align: center;
     }
 
     /* ─── Footer ─── */
     footer {
-      padding: 40px 0;
+      padding: 32px 0;
       border-top: 1px solid var(--border);
     }
 
-    footer .container {
+    footer .wrap {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -927,56 +615,47 @@
     }
 
     .footer-left a {
-      color: var(--text-muted);
+      color: var(--text-secondary);
       text-decoration: none;
-      transition: color 0.25s;
+      transition: color 0.2s;
     }
 
     .footer-left a:hover { color: var(--accent); }
 
-    .footer-links {
+    .footer-right {
       display: flex;
-      gap: 28px;
+      gap: 20px;
     }
 
-    .footer-links a {
+    .footer-right a {
       font-size: 13px;
       color: var(--text-dim);
       text-decoration: none;
-      transition: color 0.25s;
-      font-weight: 400;
+      transition: color 0.2s;
     }
 
-    .footer-links a:hover { color: var(--accent); }
+    .footer-right a:hover { color: var(--text-secondary); }
 
-    /* ─── Mobile ─── */
+    /* ─── Responsive ─── */
     @media (max-width: 768px) {
-      .nav-links a:not(.nav-cta) { display: none; }
-      .hero { padding: 150px 0 80px; }
-      .ps-grid { grid-template-columns: 1fr; gap: 20px; }
-      .features-grid { grid-template-columns: 1fr; }
-      .tools-grid { grid-template-columns: 1fr; }
-      .stats { gap: 32px; }
-      .stat-value { font-size: 24px; }
-      footer .container { flex-direction: column; gap: 16px; }
-      .arch-diagram { padding: 24px 16px; }
-      .arch-row { gap: 8px; }
-      .arch-node { min-width: 100px; font-size: 12px; padding: 10px 14px; }
-      .setup-steps { gap: 24px; }
-      .compat-grid { gap: 20px; }
+      .nav-right a:not(.nav-gh) { display: none; }
+      .hero { padding: 140px 0 60px; }
+      .ps-grid { grid-template-columns: 1fr; }
+      .setup-grid { grid-template-columns: 1fr; }
+      .logo-row { gap: 24px; }
+      footer .wrap { flex-direction: column; gap: 12px; }
     }
 
     @media (max-width: 480px) {
       .hero-actions { flex-direction: column; }
       .btn { width: 100%; justify-content: center; }
-      .install-cmd { font-size: 12px; }
     }
 
     /* ─── Animations ─── */
     .reveal {
       opacity: 0;
-      transform: translateY(24px);
-      transition: opacity 0.7s ease, transform 0.7s ease;
+      transform: translateY(16px);
+      transition: opacity 0.8s ease, transform 0.8s ease;
     }
 
     .reveal.visible {
@@ -984,352 +663,44 @@
       transform: translateY(0);
     }
 
-    .reveal-delay-1 { transition-delay: 0.1s; }
-    .reveal-delay-2 { transition-delay: 0.2s; }
-    .reveal-delay-3 { transition-delay: 0.3s; }
-    .reveal-delay-4 { transition-delay: 0.4s; }
-    .reveal-delay-5 { transition-delay: 0.5s; }
+    .reveal-d1 { transition-delay: 0.1s; }
+    .reveal-d2 { transition-delay: 0.2s; }
+    .reveal-d3 { transition-delay: 0.3s; }
   </style>
 </head>
 <body>
 
-  <!-- Nav -->
   <nav id="nav">
-    <div class="container">
+    <div class="wrap">
       <a href="#" class="logo">
-        <div class="logo-icon">
-          <img src="logos/brainlayer.svg" alt="BrainLayer" width="26" height="26">
-        </div>
-        <span class="logo-text">BrainLayer</span>
+        <img src="logos/brainlayer.svg" alt="" width="24" height="24">
+        BrainLayer
       </a>
-      <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#tools">MCP Tools</a>
-        <a href="#compat">Integrations</a>
-        <a href="https://github.com/EtanHey/brainlayer" class="nav-cta">Source</a>
+      <div class="nav-right">
+        <a href="#tools">Tools</a>
+        <a href="#setup">Setup</a>
+        <a href="https://github.com/EtanHey/brainlayer" class="nav-gh">GitHub <span class="arrow">&nearr;</span></a>
       </div>
     </div>
   </nav>
 
   <!-- Hero -->
   <section class="hero">
-    <div class="container">
-      <div class="hero-content">
-        <div class="hero-tag reveal">
-          <span class="v">v1.0</span>
-          <span>1,204 tests passing</span>
-        </div>
-        <h1 class="reveal reveal-delay-1">Your AI forgets<br>everything. <em>Fix that.</em></h1>
-        <p class="hero-sub reveal reveal-delay-2">
-          BrainLayer is a local-first memory layer for MCP-compatible AI agents.
-          Every decision, correction, and preference — indexed, searchable,
-          and private. Nothing leaves your machine.
-        </p>
-        <div class="hero-actions reveal reveal-delay-3">
-          <a href="#install" class="btn btn-primary">Get started</a>
-          <a href="https://github.com/EtanHey/brainlayer" class="btn btn-ghost">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-            View source
-          </a>
-        </div>
-
-        <div class="install-block reveal reveal-delay-4" id="install">
-          <div class="install-cmd" onclick="copyInstall(this)">
-            <code><span class="dim">$</span> pip install brainlayer</code>
-            <button class="copy-btn" aria-label="Copy">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
-            </button>
-          </div>
-          <p class="install-note">Then run <code>brainlayer init</code> to configure MCP and index your conversations.</p>
-        </div>
+    <div class="wrap">
+      <h1 class="reveal">Your AI forgets<br>everything. <em>Fix that.</em></h1>
+      <p class="hero-sub reveal reveal-d1">
+        Local-first memory for MCP agents. Every decision, correction,
+        and preference — indexed and searchable in &lt;50ms. Nothing leaves your machine.
+      </p>
+      <div class="hero-actions reveal reveal-d2">
+        <a href="#setup" class="btn btn-primary">Get started</a>
+        <a href="https://github.com/EtanHey/brainlayer" class="btn btn-ghost">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View source
+        </a>
       </div>
-    </div>
-  </section>
-
-  <!-- Stats -->
-  <section class="stats-section">
-    <div class="container">
-      <div class="stats reveal">
-        <div class="stat">
-          <div class="stat-value" data-target="284" data-suffix="K">0</div>
-          <div class="stat-label">Chunks indexed</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value" data-target="119">0</div>
-          <div class="stat-label">Entities tracked</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value" data-target="7">0</div>
-          <div class="stat-label">MCP tools</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value" data-target="50" data-suffix="ms" data-prefix="<">0</div>
-          <div class="stat-label">Search latency</div>
-        </div>
-      </div>
-      <div class="divider" style="margin-top:40px"></div>
-    </div>
-  </section>
-
-  <!-- Problem / Solution -->
-  <section class="ps-section">
-    <div class="container">
-      <div class="ps-grid">
-        <div class="ps-card problem reveal">
-          <div class="ps-label">The problem</div>
-          <h2 class="ps-title">Your AI has amnesia</h2>
-          <p class="ps-text">
-            Every session starts from zero. Your agent doesn't remember
-            the architecture decision from last week, the debugging approach
-            that worked, or that you prefer tabs over spaces.<br><br>
-            You explain the same context <strong>dozens of times</strong>.
-            It makes the same mistakes. Suggests patterns you've already rejected.
-          </p>
-        </div>
-        <div class="ps-card solution reveal reveal-delay-1">
-          <div class="ps-label">The fix</div>
-          <h2 class="ps-title">Install. Index. Remember.</h2>
-          <p class="ps-text">
-            BrainLayer indexes your AI conversations and makes them searchable.
-            Your agent searches <strong>284K chunks</strong> of past knowledge
-            before responding — decisions, preferences, corrections, file histories.<br><br>
-            Hybrid search (semantic + keyword + knowledge graph) finds
-            the right memory in <strong>&lt;50ms</strong>. Everything stays local.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Terminal Demo -->
-  <section class="demo-section">
-    <div class="container reveal">
-      <div class="terminal">
-        <div class="terminal-bar">
-          <div class="terminal-dot r"></div>
-          <div class="terminal-dot y"></div>
-          <div class="terminal-dot g"></div>
-          <div class="terminal-title">claude code ~ brainlayer</div>
-        </div>
-        <div class="terminal-body">
-          <span class="t-line"><span class="prompt">&gt;</span> <span class="cmd">What approach did we use for auth?</span></span>
-          <span class="t-line t-gap"><span class="system">  [BrainLayer] SessionStart hook injected 3 chunks (12ms)</span></span>
-          <span class="t-line t-gap"><span class="border-char">╭─</span> <span class="tool-call">brain_search</span>(<span class="arg">query=</span><span class="result-str">"auth approach architecture"</span>)</span>
-          <span class="t-line"><span class="border-char">│</span></span>
-          <span class="t-line"><span class="border-char">│</span>  <span class="result-key">chunks:</span> <span class="num">3</span>  <span class="result-key">latency:</span> <span class="num">12ms</span>  <span class="result-key">top score:</span> <span class="num">0.94</span></span>
-          <span class="t-line"><span class="border-char">│</span></span>
-          <span class="t-line"><span class="border-char">│</span>  <span class="result-str">"Chose JWT with refresh tokens over session cookies.</span></span>
-          <span class="t-line"><span class="border-char">│</span>  <span class="result-str"> Reason: stateless API, mobile client support.</span></span>
-          <span class="t-line"><span class="border-char">│</span>  <span class="result-str"> Decision: 2026-02-14. Confidence: high."</span></span>
-          <span class="t-line"><span class="border-char">│</span></span>
-          <span class="t-line"><span class="border-char">╰─</span> <span class="dim">chunk_id: rt-a4f82c19 &middot; importance: 9</span></span>
-          <span class="t-line t-gap"><span class="cmd">You chose JWT with refresh tokens on Feb 14th.</span></span>
-          <span class="t-line"><span class="cmd">The rationale was stateless APIs and mobile client</span></span>
-          <span class="t-line"><span class="cmd">support. Continuing with that pattern.</span></span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <div class="container"><div class="divider"></div></div>
-
-  <!-- Features -->
-  <section class="features-section" id="features">
-    <div class="container">
-      <div class="section-eyebrow">How it works</div>
-      <h2 class="section-title">Memory that actually works</h2>
-      <div class="features-grid">
-        <div class="feature-card reveal">
-          <span class="feature-mono">hybrid_search()</span>
-          <h3>Three-signal search</h3>
-          <p>Semantic vectors, FTS5 keywords, and knowledge graph — fused with Reciprocal Rank Fusion. The right memory in &lt;50ms.</p>
-        </div>
-        <div class="feature-card reveal reveal-delay-1">
-          <span class="feature-mono">watcher.py</span>
-          <h3>Real-time indexing</h3>
-          <p>JSONL watcher indexes conversations as they happen. 4-layer content filters keep noise out, signal in.</p>
-        </div>
-        <div class="feature-card reveal reveal-delay-2">
-          <span class="feature-mono">enrichment_controller.py</span>
-          <h3>10-field enrichment</h3>
-          <p>Every chunk gets summary, tags, importance, intent, symbols, epistemic level. Via Groq cloud or local LLM fallback.</p>
-        </div>
-        <div class="feature-card reveal reveal-delay-3">
-          <span class="feature-mono">kg/</span>
-          <h3>Knowledge graph</h3>
-          <p>Entities, relations, evidence chains. Ask "what do we know about this person?" and get structured answers backed by source chunks.</p>
-        </div>
-        <div class="feature-card reveal reveal-delay-4">
-          <span class="feature-mono">brain_supersede()</span>
-          <h3>Chunk lifecycle</h3>
-          <p>Supersede, archive, aggregate. Stale knowledge is managed with safety gates — personal data never auto-deleted.</p>
-        </div>
-        <div class="feature-card reveal reveal-delay-5">
-          <span class="feature-mono">BrainBar.swift</span>
-          <h3>Native macOS daemon</h3>
-          <p>209KB Swift binary. Always-on MCP access over Unix socket. Starts on login, invisible until needed.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Tools -->
-  <section class="tools-section" id="tools">
-    <div class="container">
-      <div class="section-eyebrow">MCP interface</div>
-      <h2 class="section-title">7 tools, one protocol</h2>
-      <div class="tools-grid">
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_search</span>
-          <span class="tool-desc">Hybrid semantic search across all memory</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_store</span>
-          <span class="tool-desc">Persist decisions, learnings, corrections</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_recall</span>
-          <span class="tool-desc">Proactive session context injection</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_digest</span>
-          <span class="tool-desc">Ingest large content, extract entities</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_entity</span>
-          <span class="tool-desc">Knowledge graph entity lookup</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_subscribe</span>
-          <span class="tool-desc">Watch for new matching memories</span>
-        </div>
-        <div class="tool-row reveal">
-          <span class="tool-name">brain_unsubscribe</span>
-          <span class="tool-desc">Stop watching a subscription</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Architecture -->
-  <section class="arch-section">
-    <div class="container reveal">
-      <div class="section-eyebrow">Architecture</div>
-      <h2 class="section-title">Everything runs locally</h2>
-      <div class="arch-diagram">
-        <div class="arch-label">AI Editors</div>
-        <div class="arch-row">
-          <div class="arch-node">Claude Code</div>
-          <div class="arch-node">Cursor</div>
-          <div class="arch-node">Zed</div>
-          <div class="arch-node">VS Code</div>
-          <div class="arch-node">Codex</div>
-        </div>
-        <div class="arch-row">
-          <span class="arch-arrow">&darr; MCP protocol &darr;</span>
-        </div>
-        <div class="arch-row">
-          <div class="arch-node primary">BrainLayer MCP Server<small>7 tools &middot; stdio / socket</small></div>
-        </div>
-        <div class="arch-row">
-          <span class="arch-arrow">&darr;</span>
-        </div>
-        <div class="arch-row">
-          <div class="arch-node primary">Hybrid Search Engine<small>bge-large-en + FTS5 + KG</small></div>
-          <div class="arch-node">JSONL Watcher<small>real-time indexing</small></div>
-          <div class="arch-node">Enrichment<small>Groq / Ollama</small></div>
-        </div>
-        <div class="arch-row">
-          <span class="arch-arrow">&darr;</span>
-        </div>
-        <div class="arch-row">
-          <div class="arch-node storage">SQLite + sqlite-vec<small>single file &middot; WAL mode &middot; ~8GB</small></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Compatibility -->
-  <section class="compat-section" id="compat">
-    <div class="container">
-      <div class="section-eyebrow">Integrations</div>
-      <h2 class="section-title">Works with any MCP client</h2>
-      <div class="compat-grid">
-        <div class="compat-item reveal">
-          <div class="compat-icon">
-            <img src="logos/claude.svg" alt="Claude Code">
-          </div>
-          <div class="compat-label">Claude Code</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-1">
-          <div class="compat-icon">
-            <img src="logos/cursor.svg" alt="Cursor">
-          </div>
-          <div class="compat-label">Cursor</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-1">
-          <div class="compat-icon">
-            <img src="logos/zed.svg" alt="Zed">
-          </div>
-          <div class="compat-label">Zed</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-2">
-          <div class="compat-icon">
-            <img src="logos/vscode.svg" alt="VS Code">
-          </div>
-          <div class="compat-label">VS Code</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-2">
-          <div class="compat-icon">
-            <img src="logos/openai.svg" alt="Codex">
-          </div>
-          <div class="compat-label">Codex</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-3">
-          <div class="compat-icon">
-            <img src="logos/kiro.svg" alt="Kiro">
-          </div>
-          <div class="compat-label">Kiro</div>
-        </div>
-        <div class="compat-item reveal reveal-delay-3">
-          <div class="compat-icon">
-            <img src="logos/gemini.svg" alt="Gemini">
-          </div>
-          <div class="compat-label">Gemini CLI</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Setup -->
-  <section class="setup-section">
-    <div class="container">
-      <div class="section-eyebrow">Getting started</div>
-      <h2 class="section-title">Three steps to persistent memory</h2>
-      <div class="setup-steps reveal">
-        <div class="setup-step">
-          <div class="step-num">1</div>
-          <div class="step-text">Install from PyPI:<br><code>pip install brainlayer</code></div>
-        </div>
-        <div class="setup-step">
-          <div class="step-num">2</div>
-          <div class="step-text">Configure MCP and index your conversations:<br><code>brainlayer init</code></div>
-        </div>
-        <div class="setup-step">
-          <div class="step-num">3</div>
-          <div class="step-text">Start the watcher for real-time indexing:<br><code>brainlayer watch</code></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA -->
-  <section class="cta-section">
-    <div class="container">
-      <h2 class="cta-title reveal">Stop repeating yourself.</h2>
-      <p class="cta-sub reveal reveal-delay-1">Three commands. Persistent memory. Your data stays yours.</p>
-      <div class="install-block reveal reveal-delay-2" style="margin: 0 auto;">
-        <div class="install-cmd" onclick="copyInstall(this)">
+      <div class="install-block reveal reveal-d3">
+        <div class="install-cmd" onclick="copyText(this, 'pip install brainlayer')">
           <code><span class="dim">$</span> pip install brainlayer</code>
           <button class="copy-btn" aria-label="Copy">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
@@ -1339,11 +710,208 @@
     </div>
   </section>
 
-  <!-- Footer -->
+  <!-- Terminal (the "product screenshot") -->
+  <section class="terminal-section">
+    <div class="wrap-wide">
+      <div class="terminal reveal">
+        <div class="terminal-bar">
+          <div class="dot dot-r"></div>
+          <div class="dot dot-y"></div>
+          <div class="dot dot-g"></div>
+          <span class="terminal-title">claude ~ myproject</span>
+        </div>
+        <div class="terminal-body">
+          <span class="t"><span class="t-prompt">&#10095;</span> <span class="t-user">What approach did we use for auth?</span></span>
+          <span class="t t-gap"><span class="t-sys">[BrainLayer] SessionStart hook &middot; 3 chunks injected (12ms)</span></span>
+          <span class="t t-gap"><span class="t-body">I'll check our past decisions on authentication.</span></span>
+          <span class="t t-gap"><span class="t-border">&#9484;&#9472;</span> <span class="t-tool">brain_search</span>(<span class="t-arg">query</span>=<span class="t-str">"auth approach architecture decision"</span>)</span>
+          <span class="t"><span class="t-border">&#9474;</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-dim">chunks:</span> <span class="t-num">3</span>  <span class="t-dim">latency:</span> <span class="t-num">12ms</span>  <span class="t-dim">top:</span> <span class="t-num">0.94</span></span>
+          <span class="t"><span class="t-border">&#9474;</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-str">"Chose JWT with refresh tokens over session cookies.</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">Reason: stateless API, mobile client support.</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">Decision: 2026-02-14. Confidence: high."</span></span>
+          <span class="t"><span class="t-border">&#9474;</span></span>
+          <span class="t"><span class="t-border">&#9492;&#9472;</span> <span class="t-dim">rt-a4f82c19 &middot; importance: 9</span></span>
+          <span class="t t-gap"><span class="t-body">You chose JWT with refresh tokens on Feb 14th. The rationale</span></span>
+          <span class="t"><span class="t-body">was stateless APIs and mobile client support. Continuing</span></span>
+          <span class="t"><span class="t-body">with that pattern.</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="divider"></div></div>
+
+  <!-- Problem / Solution -->
+  <section class="section">
+    <div class="wrap">
+      <div class="ps-grid">
+        <div class="ps-card problem reveal">
+          <div class="ps-tag">The problem</div>
+          <h2 class="ps-title">Your AI has amnesia</h2>
+          <p class="ps-body">
+            Every session starts from zero. Your agent doesn't remember
+            the architecture decision from last week, the debugging approach
+            that worked, or that you prefer tabs over spaces.<br><br>
+            You explain the same context <strong>dozens of times</strong>.
+            It suggests patterns you've already rejected.
+          </p>
+        </div>
+        <div class="ps-card solution reveal reveal-d1">
+          <div class="ps-tag">The fix</div>
+          <h2 class="ps-title">Install. Index. Search.</h2>
+          <p class="ps-body">
+            BrainLayer indexes your AI conversations into <strong>284K searchable chunks</strong>.
+            Hybrid search (semantic + keyword + knowledge graph) finds the right
+            memory in <strong>&lt;50ms</strong>.<br><br>
+            SessionStart hooks auto-inject relevant context before you even ask.
+            Everything stays on your machine. One SQLite file.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="divider"></div></div>
+
+  <!-- Tools -->
+  <section class="tools-section" id="tools">
+    <div class="wrap">
+      <div class="section-label">MCP tools</div>
+      <h2 class="section-heading">Seven tools. One protocol.</h2>
+
+      <div class="tools-group">
+        <div class="tools-group-label">Core &mdash; what you use daily</div>
+        <div class="tool-item reveal">
+          <span class="name">brain_search</span>
+          <span class="desc">Hybrid semantic + keyword + KG search across all memory</span>
+        </div>
+        <div class="tool-item reveal">
+          <span class="name">brain_store</span>
+          <span class="desc">Persist decisions, learnings, corrections with tags and importance</span>
+        </div>
+        <div class="tool-item reveal">
+          <span class="name">brain_recall</span>
+          <span class="desc">Proactive context injection at session start</span>
+        </div>
+      </div>
+
+      <div class="tool-divider"></div>
+
+      <div class="tools-group">
+        <div class="tools-group-label">Advanced</div>
+        <div class="tool-item reveal">
+          <span class="name">brain_entity</span>
+          <span class="desc">Knowledge graph entity lookup</span>
+        </div>
+        <div class="tool-item reveal">
+          <span class="name">brain_digest</span>
+          <span class="desc">Ingest large content, auto-extract entities and relations</span>
+        </div>
+        <div class="tool-item reveal">
+          <span class="name">brain_subscribe</span>
+          <span class="desc">Watch for new matching memories in real time</span>
+        </div>
+        <div class="tool-item reveal">
+          <span class="name">brain_unsubscribe</span>
+          <span class="desc">Stop watching a subscription</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="divider"></div></div>
+
+  <!-- Integrations + Setup -->
+  <section class="integrations-section" id="setup">
+    <div class="wrap">
+      <div class="section-label">Works with</div>
+      <h2 class="section-heading">Any MCP client</h2>
+
+      <div class="logo-row reveal">
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/claude.svg" alt="Claude Code"></div>
+          <span class="logo-name">Claude Code</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/cursor.svg" alt="Cursor"></div>
+          <span class="logo-name">Cursor</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/zed.svg" alt="Zed"></div>
+          <span class="logo-name">Zed</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/vscode.svg" alt="VS Code"></div>
+          <span class="logo-name">VS Code</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/openai.svg" alt="Codex"></div>
+          <span class="logo-name">Codex</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/kiro.svg" alt="Kiro"></div>
+          <span class="logo-name">Kiro</span>
+        </div>
+        <div class="logo-item">
+          <div class="logo-box"><img src="logos/gemini.svg" alt="Gemini CLI"></div>
+          <span class="logo-name">Gemini CLI</span>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top:16px">Getting started</div>
+      <h2 class="section-heading">Three steps</h2>
+
+      <div class="setup-grid reveal">
+        <div class="setup-card">
+          <div class="setup-num">01</div>
+          <p class="setup-text">Install from PyPI</p>
+          <div class="setup-code" onclick="copyText(this, 'pip install brainlayer')">
+            <span>pip install brainlayer</span>
+            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </div>
+        </div>
+        <div class="setup-card">
+          <div class="setup-num">02</div>
+          <p class="setup-text">Configure MCP and index conversations</p>
+          <div class="setup-code" onclick="copyText(this, 'brainlayer init')">
+            <span>brainlayer init</span>
+            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </div>
+        </div>
+        <div class="setup-card">
+          <div class="setup-num">03</div>
+          <p class="setup-text">Start real-time indexing</p>
+          <div class="setup-code" onclick="copyText(this, 'brainlayer watch')">
+            <span>brainlayer watch</span>
+            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="wrap">
+      <h2 class="cta-heading reveal">Stop repeating yourself.</h2>
+      <p class="cta-sub reveal reveal-d1">Three commands. Persistent memory. Your data stays yours.</p>
+      <div class="install-block reveal reveal-d2">
+        <div class="install-cmd" onclick="copyText(this, 'pip install brainlayer')">
+          <code><span class="dim">$</span> pip install brainlayer</code>
+          <button class="copy-btn" aria-label="Copy">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <footer>
-    <div class="container">
+    <div class="wrap">
       <div class="footer-left">Built by <a href="https://etanheyman.com">Etan Heyman</a></div>
-      <div class="footer-links">
+      <div class="footer-right">
         <a href="https://github.com/EtanHey/brainlayer">GitHub</a>
         <a href="https://etanhey.github.io/brainlayer">Docs</a>
         <a href="https://pypi.org/project/brainlayer/">PyPI</a>
@@ -1358,59 +926,33 @@
       nav.classList.toggle('scrolled', window.scrollY > 20);
     });
 
-    // Intersection observer for reveals
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('visible');
+    // Reveal on scroll
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+    }, { threshold: 0.1, rootMargin: '0px 0px -30px 0px' });
+
+    document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+    // Copy to clipboard
+    function copyText(el, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        const icon = el.querySelector('.copy-btn, .copy-icon');
+        if (!icon) return;
+        const original = icon.innerHTML || '';
+        const isSvg = icon.tagName === 'svg';
+
+        if (isSvg) {
+          // For SVG elements in setup cards
+          const parent = icon.parentElement;
+          const check = document.createElement('span');
+          check.textContent = 'copied';
+          check.style.cssText = 'font-size:11px;color:var(--accent);font-family:var(--mono);';
+          parent.replaceChild(check, icon);
+          setTimeout(() => parent.replaceChild(icon, check), 1500);
+        } else {
+          icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>';
+          setTimeout(() => { icon.innerHTML = original; }, 1500);
         }
-      });
-    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
-
-    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
-
-    // Animated counters
-    function animateCounters() {
-      document.querySelectorAll('.stat-value[data-target]').forEach(el => {
-        const target = parseFloat(el.dataset.target);
-        const suffix = el.dataset.suffix || '';
-        const prefix = el.dataset.prefix || '';
-        const duration = 1600;
-        const start = performance.now();
-
-        function tick(now) {
-          const elapsed = now - start;
-          const progress = Math.min(elapsed / duration, 1);
-          const eased = 1 - Math.pow(1 - progress, 3);
-          const current = target * eased;
-          el.textContent = prefix + Math.round(current).toLocaleString() + suffix;
-          if (progress < 1) requestAnimationFrame(tick);
-        }
-
-        requestAnimationFrame(tick);
-      });
-    }
-
-    const statsObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          animateCounters();
-          statsObserver.disconnect();
-        }
-      });
-    }, { threshold: 0.3 });
-
-    const statsEl = document.querySelector('.stats');
-    if (statsEl) statsObserver.observe(statsEl);
-
-    // Copy install
-    function copyInstall(el) {
-      navigator.clipboard.writeText('pip install brainlayer').then(() => {
-        const btn = el.querySelector('.copy-btn');
-        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>';
-        setTimeout(() => {
-          btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>';
-        }, 2000);
       });
     }
   </script>
