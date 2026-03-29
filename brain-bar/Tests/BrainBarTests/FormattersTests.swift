@@ -331,11 +331,9 @@ final class FormattersTests: XCTestCase {
             "created_at": "2026-01-01", "summary": longSummary, "importance": 5
         ]
         let out = Formatters.formatSearchResults(query: "q", results: [result], total: 1, useColor: false)
-        // The display text line should be truncated to 150 chars (149 + ellipsis)
-        // Find the line with the project pad
-        let contentLine = out.split(separator: "\n").first(where: { $0.contains("test") && $0.contains("\u{2502}") && $0.contains("xxx") })
-        XCTAssertNotNil(contentLine, "Should have a content line with the summary")
-        // The full 200-char string should NOT appear
+        // Exact truncation: 149 chars + ellipsis = 150 total
+        let expected = String(repeating: "x", count: 149) + "\u{2026}"
+        XCTAssertTrue(out.contains(expected), "Summary should truncate to 149 chars + ellipsis (150 total)")
         XCTAssertFalse(out.contains(longSummary), "200-char summary should be truncated")
     }
 }

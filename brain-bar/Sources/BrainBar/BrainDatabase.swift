@@ -228,13 +228,16 @@ final class BrainDatabase: @unchecked Sendable {
         if importanceMin != nil { conditions.append("c.importance >= ?") }
         if unreadOnly { conditions.append("c.rowid > ?") }
 
+        // Unread mode needs contiguous rowid ordering for watermark semantics.
+        // Normal search uses FTS5 BM25 rank for relevance ordering.
+        let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
             SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id, f.rank
             FROM chunks_fts f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY f.rank
+            ORDER BY \(orderByClause)
             LIMIT ?
         """
 
