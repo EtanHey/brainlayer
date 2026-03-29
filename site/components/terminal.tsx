@@ -200,11 +200,14 @@ function RenderLine({ line }: { line: Line }) {
 
 function colorizeJson(text: string) {
   // Split on quoted strings, colorize keys vs values
-  return text.split(/("(?:[^"\\]|\\.)*")/).map((part, i) => {
+  const parts = text.split(/("(?:[^"\\]|\\.)*")/);
+  let consumed = 0;
+  return parts.map((part, i) => {
     if (i % 2 === 1) {
-      // Check if this quoted string is followed by a colon (it's a key)
-      const afterQuote = text.indexOf(part) + part.length;
-      const isKey = text[afterQuote] === ":";
+      // Track position to handle duplicate strings correctly
+      const pos = text.indexOf(part, consumed);
+      consumed = pos + part.length;
+      const isKey = text[consumed] === ":";
       if (isKey) {
         return (
           <span key={i} className="text-[#8b9eb0]">
