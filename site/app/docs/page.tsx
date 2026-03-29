@@ -1,14 +1,5 @@
-"use client";
-
-import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
-
-const fade = (delay: number) => ({
-  initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.5, ease: "easeOut" as const, delay },
-});
 
 const sections = [
   {
@@ -177,7 +168,18 @@ export default function DocsPage() {
               href="https://github.com/EtanHey/brainlayer"
               className="flex items-center gap-1.5 text-sm text-text-secondary transition-colors hover:text-text"
             >
-              GitHub <span>&#8599;</span>
+              GitHub
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                className="ml-0.5 opacity-50"
+              >
+                <path d="M3 9L9 3M9 3H4.5M9 3v4.5" />
+              </svg>
             </a>
           </div>
         </div>
@@ -186,7 +188,7 @@ export default function DocsPage() {
       <main className="pt-32 pb-24">
         <div className="mx-auto max-w-[960px] px-6">
           {/* Header */}
-          <motion.div className="mb-16" {...fade(0)}>
+          <div className="mb-16">
             <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-accent">
               Documentation
             </div>
@@ -197,12 +199,12 @@ export default function DocsPage() {
               Everything you need to set up persistent memory for your AI
               agents. From installation to advanced knowledge graph features.
             </p>
-          </motion.div>
+          </div>
 
           {/* Main sections grid */}
-          <motion.div
+          <div
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-16"
-            {...fade(0.15)}
+           
           >
             {sections.map((section) => (
               <a
@@ -221,10 +223,10 @@ export default function DocsPage() {
                 </p>
               </a>
             ))}
-          </motion.div>
+          </div>
 
           {/* Guides */}
-          <motion.div {...fade(0.3)}>
+          <div>
             <h2 className="font-display text-xl font-semibold tracking-tight mb-6">
               Guides
             </h2>
@@ -266,10 +268,10 @@ export default function DocsPage() {
                 </a>
               ))}
             </div>
-          </motion.div>
+          </div>
 
           {/* ADRs */}
-          <motion.div className="mt-12" {...fade(0.4)}>
+          <div className="mt-12">
             <h2 className="font-display text-xl font-semibold tracking-tight mb-6">
               Architecture Decisions
             </h2>
@@ -297,10 +299,10 @@ export default function DocsPage() {
                 </span>
               </a>
             </div>
-          </motion.div>
+          </div>
 
           {/* Full docs link */}
-          <motion.div className="mt-16 text-center" {...fade(0.5)}>
+          <div className="mt-16 text-center">
             <a
               href="https://etanhey.github.io/brainlayer"
               className="inline-flex items-center gap-2 rounded-full border border-border px-6 py-3 text-sm font-medium text-text-secondary transition-all hover:scale-[1.03] hover:border-border-hover hover:text-text active:scale-[0.98]"
@@ -317,7 +319,7 @@ export default function DocsPage() {
                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
               </svg>
             </a>
-          </motion.div>
+          </div>
         </div>
       </main>
 

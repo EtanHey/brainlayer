@@ -37,7 +37,7 @@ export function Integrations() {
 
         <motion.div
           className="mb-16 flex flex-wrap justify-center gap-10"
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
@@ -72,7 +72,7 @@ export function Integrations() {
 
         <motion.div
           className="mx-auto grid max-w-[780px] grid-cols-1 gap-6 md:grid-cols-3"
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 1, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}

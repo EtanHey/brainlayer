@@ -4,7 +4,15 @@ import { useEffect, useState, useRef } from "react";
 import { motion, useInView } from "framer-motion";
 
 interface Line {
-  type: "prompt" | "claude" | "tool" | "output" | "result" | "hr" | "status";
+  type:
+    | "prompt"
+    | "claude"
+    | "tool"
+    | "output"
+    | "output-first"
+    | "result"
+    | "hr"
+    | "status";
   text: string;
   gap?: boolean;
   delay: number;
@@ -22,70 +30,70 @@ const lines: Line[] = [
     type: "claude",
     text: "I'll search our past architecture decisions.",
     gap: true,
-    delay: 1400,
+    delay: 800,
   },
   {
     type: "tool",
     text: 'brain_search (MCP)(query: "BrainLayer architecture")',
     gap: true,
-    delay: 2000,
+    delay: 1200,
   },
-  { type: "output", text: "[", delay: 2400 },
-  { type: "output", text: "  {", delay: 2450 },
-  { type: "output", text: '    "chunk_id": "agent-a34f466",', delay: 2500 },
+  { type: "output-first", text: "[", delay: 1500 },
+  { type: "output", text: "     {", delay: 1530 },
+  { type: "output", text: '       "chunk_id": "agent-a34f466",', delay: 1560 },
   {
     type: "output",
-    text: '    "summary": "AI code architecture with BrainLayer MCP server,',
-    delay: 2550,
+    text: '       "summary": "BrainLayer MCP server architecture with',
+    delay: 1590,
   },
   {
     type: "result",
-    text: '               hybrid search, and knowledge graph integration.",',
-    delay: 2600,
+    text: '                   hybrid search and knowledge graph.",',
+    delay: 1620,
   },
   {
     type: "output",
-    text: '    "content": "Claude Code / Cursor / Zed -> MCP -> BrainLayer',
-    delay: 2650,
+    text: '       "content": "Claude Code / Cursor / Zed -> MCP ->',
+    delay: 1650,
   },
   {
     type: "result",
-    text: "        -> Hybrid Search (semantic + keyword via RRF)",
-    delay: 2700,
+    text: "                   Hybrid Search (semantic + keyword RRF)",
+    delay: 1680,
   },
   {
     type: "result",
-    text: "        -> SQLite + sqlite-vec, single .db file",
-    delay: 2750,
+    text: "                   -> SQLite + sqlite-vec, single .db file",
+    delay: 1710,
   },
   {
     type: "result",
-    text: '        -> Knowledge Graph (entities + relations)",',
-    delay: 2800,
+    text: '                   -> Knowledge Graph (entities + relations)",',
+    delay: 1740,
   },
-  { type: "output", text: '    "importance": 8,', delay: 2850 },
+  { type: "output", text: '       "importance": 8,', delay: 1770 },
   {
     type: "output",
-    text: '    "tags": ["architecture", "search", "sqlite"]',
-    delay: 2900,
+    text: '       "tags": ["architecture", "search", "sqlite"]',
+    delay: 1800,
   },
-  { type: "output", text: "  }", delay: 2950 },
-  { type: "output", text: "]", delay: 3000 },
+  { type: "output", text: "     }", delay: 1830 },
+  { type: "output", text: "   ]", delay: 1860 },
   {
     type: "claude",
     text: "BrainLayer uses a single SQLite file with sqlite-vec for",
     gap: true,
-    delay: 3500,
+    delay: 2300,
   },
   {
     type: "claude",
     text: "vector storage. Search fuses semantic, FTS5 keyword, and",
-    delay: 3600,
+    delay: 2400,
   },
   {
     type: "claude",
     text: "knowledge graph signals via Reciprocal Rank Fusion.",
-    delay: 3700,
+    delay: 2500,
   },
 ];
 
@@ -109,7 +117,7 @@ function useTyping(text: string, active: boolean, speed = 30) {
 }
 
 function PromptLine({ text, active }: { text: string; active: boolean }) {
-  const typed = useTyping(text, active, 28);
+  const typed = useTyping(text, active, 22);
   const showCursor = active && typed.length < text.length;
   return (
     <span className="block">
@@ -160,7 +168,7 @@ function RenderLine({ line }: { line: Line }) {
     );
   }
 
-  if (line.type === "output") {
+  if (line.type === "output-first") {
     return (
       <span className={`block ${g} text-text-dim`}>
         {"  ⎿  "}
@@ -169,10 +177,19 @@ function RenderLine({ line }: { line: Line }) {
     );
   }
 
+  if (line.type === "output") {
+    return (
+      <span className={`block ${g} text-text-dim`}>
+        {"     "}
+        {colorizeJson(line.text)}
+      </span>
+    );
+  }
+
   if (line.type === "result") {
     return (
-      <span className={`block text-accent-bright`}>
-        {"  ⎿  "}
+      <span className="block text-accent-bright">
+        {"     "}
         {line.text}
       </span>
     );
@@ -182,13 +199,18 @@ function RenderLine({ line }: { line: Line }) {
 }
 
 function colorizeJson(text: string) {
-  // Color JSON keys and values
-  return text.split(/("(?:[^"\\]|\\.)*")/).map((part, i) => {
+  // Split on quoted strings, colorize keys vs values
+  const parts = text.split(/("(?:[^"\\]|\\.)*")/);
+  let consumed = 0;
+  return parts.map((part, i) => {
     if (i % 2 === 1) {
-      // It's a quoted string
-      if (part.endsWith('":') || text.includes(part + ":")) {
+      // Track position to handle duplicate strings correctly
+      const pos = text.indexOf(part, consumed);
+      consumed = pos + part.length;
+      const isKey = text[consumed] === ":";
+      if (isKey) {
         return (
-          <span key={i} className="text-text-secondary">
+          <span key={i} className="text-[#8b9eb0]">
             {part}
           </span>
         );
@@ -249,7 +271,7 @@ export function Terminal() {
         <motion.div
           ref={ref}
           className="relative mx-auto max-w-[820px] overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0c0c0e] shadow-[0_0_80px_rgba(212,149,106,0.04)]"
-          initial={{ opacity: 0, y: 24 }}
+          initial={{ opacity: 1, y: 24 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.8, ease: "easeOut" }}
@@ -265,7 +287,7 @@ export function Terminal() {
           </div>
 
           {/* Body */}
-          <div className="px-[22px] pt-5 pb-4 font-mono text-[13px] leading-[1.85] min-h-[380px]">
+          <div className="px-[22px] pt-5 pb-4 font-mono text-[13px] leading-[1.85] min-h-[380px] whitespace-pre-wrap">
             {visibleCount >= 1 && (
               <PromptLine text={lines[0].text} active={isInView} />
             )}
@@ -274,7 +296,7 @@ export function Terminal() {
               return (
                 <motion.div
                   key={i}
-                  initial={{ opacity: 0 }}
+                  initial={{ opacity: 1 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.12 }}
                 >
@@ -285,16 +307,19 @@ export function Terminal() {
           </div>
 
           {/* Status bar - matches real Claude Code */}
-          <div className="px-[18px] font-mono text-[11px] text-text-dim">
+          <div className="px-[18px] font-mono text-text-dim">
             <div className="h-px bg-[#333338] mb-1" />
             <div className="flex items-center text-[#6ec1e4] py-0.5">
               <span>{"❯"}</span>
               <span className="ml-1 w-[7px] h-[13px] bg-text/30 animate-pulse" />
             </div>
-            <div className="h-px bg-[#333338] mt-1 mb-1.5" />
-            <div className="flex items-center justify-between pb-1.5 text-[10px]">
+            <div className="h-px bg-[#333338] mt-1 mb-1" />
+            <div className="flex items-center justify-between pb-0.5 text-[10px]">
               <span>{"  ⎇ main | 🔧 7"}</span>
               <span>284,291 tokens</span>
+            </div>
+            <div className="flex items-center justify-between pb-2 text-[10px] opacity-60">
+              <span>{"  🤖 Opus 4.6 (1M context)"}</span>
             </div>
           </div>
         </motion.div>
