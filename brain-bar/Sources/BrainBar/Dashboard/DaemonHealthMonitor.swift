@@ -44,26 +44,23 @@ final class DaemonHealthMonitor: @unchecked Sendable {
     }
 
     private func countOpenSocketDescriptors() -> Int {
-        let maxDescriptors = Int(getdtablesize())
-        guard maxDescriptors > 0 else { return 0 }
-
-        var socketCount = 0
-        for fd in 0..<maxDescriptors {
-            if fcntl(Int32(fd), F_GETFD) == -1 {
-                continue
-            }
-
-            var socketType: Int32 = 0
-            var length = socklen_t(MemoryLayout<Int32>.size)
-            let result = withUnsafeMutablePointer(to: &socketType) { pointer in
-                getsockopt(Int32(fd), SOL_SOCKET, SO_TYPE, pointer, &length)
-            }
-
-            if result == 0 {
-                socketCount += 1
-            }
+        var fdInfos = Array(repeating: proc_fdinfo(), count: 256)
+        let bytesRead = fdInfos.withUnsafeMutableBytes { rawBuffer in
+            proc_pidinfo(
+                targetPID,
+                PROC_PIDLISTFDS,
+                0,
+                rawBuffer.baseAddress,
+                Int32(rawBuffer.count)
+            )
         }
 
-        return socketCount
+        guard bytesRead > 0 else { return 0 }
+        let infoCount = Int(bytesRead) / MemoryLayout<proc_fdinfo>.stride
+        return fdInfos.prefix(infoCount).reduce(into: 0) { count, info in
+            if Int32(info.proc_fdtype) == PROX_FDTYPE_SOCKET {
+                count += 1
+            }
+        }
     }
 }

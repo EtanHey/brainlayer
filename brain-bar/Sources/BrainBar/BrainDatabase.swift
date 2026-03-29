@@ -108,6 +108,11 @@ final class BrainDatabase: @unchecked Sendable {
             """)
         }
 
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_created_at
+            ON chunks(created_at)
+        """)
+
         try ensureAuxiliarySchema()
     }
 

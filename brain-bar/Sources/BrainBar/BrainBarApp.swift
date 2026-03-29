@@ -73,13 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)
             .sink { [weak self] stats, state in
-                Task { @MainActor [weak self] in
-                    self?.statusItem?.button?.image = SparklineRenderer.render(
-                        state: state,
-                        values: stats.recentActivityBuckets
-                    )
-                    self?.statusItem?.button?.contentTintColor = state.color
-                }
+                self?.statusItem?.button?.image = SparklineRenderer.render(
+                    state: state,
+                    values: stats.recentActivityBuckets
+                )
+                self?.statusItem?.button?.contentTintColor = state.color
             }
             .store(in: &cancellables)
 
