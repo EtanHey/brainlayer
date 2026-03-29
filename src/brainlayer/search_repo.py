@@ -444,6 +444,7 @@ class SearchMixin:
         entity_id: Optional[str] = None,
         k: int = 60,
         include_archived: bool = False,
+        kg_boost: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -477,7 +478,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
-        )
+        ) + (kg_boost,)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -695,6 +696,36 @@ class SearchMixin:
                     pass
 
             scored[i] = (score * boost, cid, doc, meta, dist)
+
+        # KG boost: chunks linked to entities detected in the query get a score bump
+        if kg_boost and query_text:
+            try:
+                cursor = self._read_cursor()
+                # Find entity IDs that match words in the query
+                kg_linked_ids: set = set()
+                words = query_text.split()
+                for w in words:
+                    if len(w) < 3:
+                        continue
+                    rows = list(cursor.execute(
+                        "SELECT id FROM kg_entities WHERE LOWER(name) LIKE ?",
+                        (f"%{w.lower()}%",),
+                    ))
+                    for row in rows:
+                        linked = list(cursor.execute(
+                            "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
+                            (row[0],),
+                        ))
+                        for lrow in linked:
+                            kg_linked_ids.add(lrow[0])
+
+                if kg_linked_ids:
+                    KG_BOOST_FACTOR = 1.3
+                    for i, (score, cid, doc, meta, dist) in enumerate(scored):
+                        if cid in kg_linked_ids:
+                            scored[i] = (score * KG_BOOST_FACTOR, cid, doc, meta, dist)
+            except Exception:
+                pass  # KG tables may not exist in all DBs
 
         # Sort by boosted RRF score descending
         scored.sort(key=lambda x: x[0], reverse=True)
