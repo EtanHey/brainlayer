@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 export function Nav() {
   const [scrolled, setScrolled] = useState(false);
@@ -49,20 +50,28 @@ export function Nav() {
           >
             Setup
           </a>
-          <a
+          <Link
             href="/docs"
             className="hidden text-sm text-text-secondary transition-colors hover:text-text sm:inline"
           >
             Docs
-          </a>
+          </Link>
           <a
             href="https://github.com/EtanHey/brainlayer"
             className="flex items-center gap-1.5 text-sm text-text-secondary transition-colors hover:text-text"
           >
-            GitHub{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-0.5">
-              ↗
-            </span>
+            GitHub
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              className="ml-0.5 opacity-50"
+            >
+              <path d="M3 9L9 3M9 3H4.5M9 3v4.5" />
+            </svg>
           </a>
         </div>
       </div>
