@@ -12,6 +12,14 @@ PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
 APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 
+# Kill any running BrainBar instances before installing
+if pgrep -x BrainBar > /dev/null 2>&1; then
+    echo "[build-app] Stopping running BrainBar instances..."
+    killall BrainBar 2>/dev/null || true
+    sleep 1
+    rm -f /tmp/brainbar.sock
+fi
+
 echo "[build-app] Building BrainBar (release)..."
 swift build -c release --package-path "$PACKAGE_DIR"
 
