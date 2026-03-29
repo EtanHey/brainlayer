@@ -1,10 +1,10 @@
 """Entity lookup MCP handlers."""
 
 import asyncio
-import json
 
 from mcp.types import CallToolResult, TextContent
 
+from ._format import format_entity_card, format_entity_simple
 from ._shared import (
     _error_result,
     _get_embedding_model,
@@ -39,7 +39,8 @@ async def _brain_entity(
 
     if result is None:
         return CallToolResult(content=[TextContent(type="text", text=f"No entity found matching '{query}'.")])
-    return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+    formatted = format_entity_simple(result)
+    return CallToolResult(content=[TextContent(type="text", text=formatted)])
 
 
 async def _brain_get_person(
@@ -120,4 +121,5 @@ async def _brain_get_person(
         "memory_count": len(memories),
     }
 
-    return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+    formatted = format_entity_card(result)
+    return CallToolResult(content=[TextContent(type="text", text=formatted)])

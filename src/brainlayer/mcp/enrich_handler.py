@@ -1,11 +1,11 @@
 """brain_enrich MCP handler — unified enrichment through a single tool."""
 
 import asyncio
-import json
 import logging
 
 from mcp.types import CallToolResult, TextContent
 
+from ._format import format_digest_result
 from ._shared import _error_result, _get_vector_store
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,8 @@ async def _brain_enrich(
         if result.errors:
             output["errors"] = result.errors[:10]  # Cap error list
 
-        return CallToolResult(content=[TextContent(type="text", text=json.dumps(output, indent=2))])
+        formatted = format_digest_result(output)
+        return CallToolResult(content=[TextContent(type="text", text=formatted)])
 
     except Exception as e:
         logger.error("brain_enrich failed: %s", e)
@@ -126,6 +127,13 @@ async def _enrich_stats(store) -> CallToolResult:
             "enriched_pct": round(enriched / total * 100, 1) if total > 0 else 0,
             "enriched_last_24h": recent,
         }
-        return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+        pct = result["enriched_pct"]
+        lines = [
+            "\u250c\u2500 Enrichment Stats",
+            f"\u2502 Total: {total:,}  Enriched: {enriched:,} ({pct}%)  Remaining: {unenriched:,}  Skipped: {skipped:,}",
+            f"\u2502 Last 24h: {recent:,} enriched",
+            "\u2514\u2500",
+        ]
+        return CallToolResult(content=[TextContent(type="text", text="\n".join(lines))])
     except Exception as e:
         return _error_result(f"Stats query failed: {e}")

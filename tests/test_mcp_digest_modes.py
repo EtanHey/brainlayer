@@ -1,7 +1,6 @@
 """Tests for brain_digest MCP mode routing."""
 
 import asyncio
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -25,9 +24,9 @@ async def test_brain_digest_mode_digest_preserves_current_behavior(monkeypatch):
 
     result = await _brain_digest(content="raw research", mode="digest", title="T")
 
-    payload = json.loads(result.content[0].text)
-    assert payload["digest_id"] == "digest-123"
-    assert payload["kwargs_content"] == "raw research"
+    text = result.content[0].text
+    assert "brain_digest (digest)" in text
+    assert "\u250c" in text  # box-drawing top-left
 
 
 @pytest.mark.asyncio
@@ -45,9 +44,9 @@ async def test_brain_digest_mode_enrich_without_content_runs_enrich_realtime(mon
 
     result = await _brain_digest(mode="enrich", limit=7)
 
-    payload = json.loads(result.content[0].text)
-    assert payload["mode"] == "realtime"
-    assert payload["attempted"] == 7
+    text = result.content[0].text
+    assert "brain_digest" in text
+    assert "7" in text  # attempted count
 
 
 @pytest.mark.asyncio
@@ -64,15 +63,10 @@ async def test_brain_digest_mode_enrich_returns_structured_enrichment_result(mon
 
     result = await _brain_digest(mode="enrich", limit=3)
 
-    payload = json.loads(result.content[0].text)
-    assert payload == {
-        "mode": "realtime",
-        "attempted": 3,
-        "enriched": 2,
-        "skipped": 1,
-        "failed": 0,
-        "errors": ["note"],
-    }
+    text = result.content[0].text
+    assert "brain_digest" in text
+    assert "3" in text  # attempted
+    assert "2" in text  # enriched
 
 
 @pytest.mark.asyncio

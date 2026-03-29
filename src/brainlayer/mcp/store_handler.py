@@ -7,6 +7,7 @@ import threading
 import apsw
 from mcp.types import CallToolResult, TextContent
 
+from ._format import format_digest_result, format_store_result
 from ._shared import (
     _auto_importance,
     _detect_memory_type,
@@ -54,7 +55,8 @@ async def _brain_digest(
                 "failed": enrich_result.failed,
                 "errors": enrich_result.errors,
             }
-            return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+            formatted = format_digest_result(result)
+            return CallToolResult(content=[TextContent(type="text", text=formatted)])
 
         from ..pipeline.digest import digest_connect, digest_content
 
@@ -86,7 +88,8 @@ async def _brain_digest(
                     participants=participants,
                 ),
             )
-        return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
+        formatted = format_digest_result(result)
+        return CallToolResult(content=[TextContent(type="text", text=formatted)])
     except ValueError as e:
         return _error_result(str(e))
     except Exception as e:
@@ -556,15 +559,14 @@ async def _store(
         t = threading.Thread(target=_background_embed_and_flush, daemon=True)
         t.start()
 
-        parts = [f"Stored memory `{chunk_id}`"]
-        if supersedes and superseded_ok:
-            parts.append(f"Superseded `{supersedes}`")
-        elif supersedes and not superseded_ok:
-            parts.append(f"Warning: could not supersede `{supersedes}` (not found)")
+        superseded_id = supersedes if supersedes and superseded_ok else None
+        formatted = format_store_result(chunk_id, superseded=superseded_id)
+        if supersedes and not superseded_ok:
+            formatted += f"\n  warn: could not supersede {supersedes} (not found)"
         structured = {"chunk_id": chunk_id, "related": result["related"]}
         if supersedes:
             structured["superseded"] = supersedes if superseded_ok else None
-        return ([TextContent(type="text", text="\n".join(parts))], structured)
+        return ([TextContent(type="text", text=formatted)], structured)
 
     except ValueError as e:
         return _error_result(f"Validation error: {str(e)}")
@@ -590,8 +592,9 @@ async def _store(
                 }
             )
             structured = {"chunk_id": "queued", "related": []}
+            formatted = format_store_result("queued", queued=True)
             return (
-                [TextContent(type="text", text="Memory queued (DB busy). Will flush on next successful store.")],
+                [TextContent(type="text", text=formatted)],
                 structured,
             )
         return _error_result(f"Store error: {str(e)}")

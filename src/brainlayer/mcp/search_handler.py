@@ -13,6 +13,7 @@ _VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
 
+from ._format import format_kg_search, format_search_results, format_stats
 from ._shared import (
     _build_compact_result,
     _error_result,
@@ -304,7 +305,8 @@ async def _brain_search(
                 "results": structured_results,
                 "facts": fact_items,
             }
-            return ([], structured)
+            formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
+            return ([TextContent(type="text", text=formatted_text)], structured)
         except Exception as e:
             logger.debug("Entity-aware search failed, falling back to default: %s", e)
 
@@ -619,11 +621,13 @@ async def _search(
                         "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
                         "importance": meta.get("importance"),
                         "summary": meta.get("summary"),
+                        "tags": [str(t) for t in meta["tags"][:5]] if meta.get("tags") and isinstance(meta["tags"], list) else None,
                     }
                 )
                 structured_results.append(item)
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
-            return ([], structured)
+            formatted_text = format_search_results(query, structured_results, len(structured_results))
+            return ([TextContent(type="text", text=formatted_text)], structured)
 
         output_parts = [f"## Search Results for: {query}\n"]
         structured_results = []
@@ -699,12 +703,12 @@ async def _stats():
     try:
         store = _get_vector_store()
         stats = store.get_stats()
-        output = f"""## BrainLayer Knowledge Base Stats\n\n- **Total Chunks:** {stats["total_chunks"]}\n- **Projects:** {", ".join(stats["projects"][:15])}{"..." if len(stats["projects"]) > 15 else ""}\n- **Content Types:** {", ".join(stats["content_types"])}\n"""
         structured = {
             "total_chunks": stats["total_chunks"],
             "projects": stats["projects"],
             "content_types": stats["content_types"],
         }
+        output = format_stats(structured)
         return ([TextContent(type="text", text=output)], structured)
     except Exception as e:
         return _error_result(f"Stats error: {str(e)}")
