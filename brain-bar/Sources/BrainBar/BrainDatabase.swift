@@ -718,7 +718,12 @@ final class BrainDatabase: @unchecked Sendable {
         let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
 
         var stmt: OpaquePointer?
-        let sql = "SELECT created_at FROM chunks WHERE created_at >= datetime('now', ?) ORDER BY created_at ASC"
+        let sql = """
+            SELECT datetime(created_at)
+            FROM chunks
+            WHERE datetime(created_at) >= datetime('now', ?)
+            ORDER BY datetime(created_at) ASC
+        """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }

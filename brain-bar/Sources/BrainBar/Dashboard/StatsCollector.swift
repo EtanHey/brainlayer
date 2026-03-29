@@ -90,8 +90,8 @@ private final class DatabaseChangeObserver: @unchecked Sendable {
     }
 
     func start(onChange: @escaping @Sendable () -> Void) {
-        self.onChange = onChange
         queue.async { [weak self] in
+            self?.onChange = onChange
             self?.startOnQueue()
         }
     }

@@ -59,6 +59,26 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets, [0, 0, 0, 0])
     }
 
+    func testDashboardStatsCountsRecentISO8601Timestamps() throws {
+        try db.insertChunk(
+            id: "dash-iso",
+            content: "Recent chunk written by Python with ISO timestamp",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 'dash-iso'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
+
+        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
+    }
+
     func testPipelineStateIsOfflineWhenDaemonSnapshotMissing() {
         let stats = DashboardStats(
             chunkCount: 10,
