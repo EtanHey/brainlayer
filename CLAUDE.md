@@ -9,9 +9,9 @@
 
 ---
 
-## BrainBar Tool Status
+## BrainBar Native Tools
 
-All BrainBar tools are now implemented natively in Swift (PR #135, 2026-03-30):
+Current native Swift BrainBar tools (PR #135, 2026-03-30):
 - **brain_search** — FTS5 hybrid search with BM25 ranking, AND matching, ANSI formatted output
 - **brain_store** — Store chunks with tags and importance
 - **brain_recall** — Stats mode (counts, enrichment %) or context mode (session lookup by conversation_id)
