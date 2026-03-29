@@ -141,6 +141,21 @@
     .hero {
       padding: 180px 0 80px;
       text-align: center;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 900px;
+      height: 600px;
+      background:
+        radial-gradient(ellipse at 35% 40%, rgba(212, 149, 106, 0.05) 0%, transparent 50%),
+        radial-gradient(ellipse at 65% 60%, rgba(94, 234, 212, 0.03) 0%, transparent 50%);
+      pointer-events: none;
     }
 
     h1 {
@@ -530,7 +545,11 @@
 
     .setup-card {
       text-align: left;
+      display: flex;
+      flex-direction: column;
     }
+
+    .setup-card .setup-text { flex: 1; }
 
     .setup-num {
       font-family: var(--mono);
@@ -679,6 +698,7 @@
       <div class="nav-right">
         <a href="#tools">Tools</a>
         <a href="#setup">Setup</a>
+        <a href="https://etanhey.github.io/brainlayer">Docs</a>
         <a href="https://github.com/EtanHey/brainlayer" class="nav-gh">GitHub <span class="arrow">&nearr;</span></a>
       </div>
     </div>
@@ -721,21 +741,22 @@
           <span class="terminal-title">claude ~ myproject</span>
         </div>
         <div class="terminal-body">
-          <span class="t"><span class="t-prompt">&#10095;</span> <span class="t-user">What approach did we use for auth?</span></span>
-          <span class="t t-gap"><span class="t-sys">[BrainLayer] SessionStart hook &middot; 3 chunks injected (12ms)</span></span>
-          <span class="t t-gap"><span class="t-body">I'll check our past decisions on authentication.</span></span>
-          <span class="t t-gap"><span class="t-border">&#9484;&#9472;</span> <span class="t-tool">brain_search</span>(<span class="t-arg">query</span>=<span class="t-str">"auth approach architecture decision"</span>)</span>
+          <span class="t"><span class="t-prompt">&#10095;</span> <span class="t-user">What database architecture does BrainLayer use?</span></span>
+          <span class="t t-gap"><span class="t-sys">[BrainLayer] SessionStart hook &middot; 4 chunks injected (8ms)</span></span>
+          <span class="t t-gap"><span class="t-body">Let me search our architecture decisions.</span></span>
+          <span class="t t-gap"><span class="t-border">&#9484;&#9472;</span> <span class="t-tool">brain_search</span>(<span class="t-arg">query</span>=<span class="t-str">"BrainLayer architecture hybrid search pipeline"</span>)</span>
           <span class="t"><span class="t-border">&#9474;</span></span>
-          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-dim">chunks:</span> <span class="t-num">3</span>  <span class="t-dim">latency:</span> <span class="t-num">12ms</span>  <span class="t-dim">top:</span> <span class="t-num">0.94</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-dim">chunks:</span> <span class="t-num">3</span>  <span class="t-dim">latency:</span> <span class="t-num">9ms</span>  <span class="t-dim">top:</span> <span class="t-num">0.91</span></span>
           <span class="t"><span class="t-border">&#9474;</span></span>
-          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-str">"Chose JWT with refresh tokens over session cookies.</span></span>
-          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">Reason: stateless API, mobile client support.</span></span>
-          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">Decision: 2026-02-14. Confidence: high."</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>  <span class="t-str">"Claude Code / Cursor / Zed &rarr; MCP &rarr; BrainLayer Server</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">&rarr; Hybrid Search (semantic + keyword via RRF)</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">&rarr; SQLite + sqlite-vec, single .db file</span></span>
+          <span class="t"><span class="t-border">&#9474;</span>   <span class="t-str">&rarr; Knowledge Graph (entities + relations)"</span></span>
           <span class="t"><span class="t-border">&#9474;</span></span>
-          <span class="t"><span class="t-border">&#9492;&#9472;</span> <span class="t-dim">rt-a4f82c19 &middot; importance: 9</span></span>
-          <span class="t t-gap"><span class="t-body">You chose JWT with refresh tokens on Feb 14th. The rationale</span></span>
-          <span class="t"><span class="t-body">was stateless APIs and mobile client support. Continuing</span></span>
-          <span class="t"><span class="t-body">with that pattern.</span></span>
+          <span class="t"><span class="t-border">&#9492;&#9472;</span> <span class="t-dim">agent-a34f466 &middot; importance: 8 &middot; tags: architecture</span></span>
+          <span class="t t-gap"><span class="t-body">BrainLayer uses a single SQLite file with sqlite-vec for</span></span>
+          <span class="t"><span class="t-body">vector storage. Search fuses semantic, FTS5 keyword, and</span></span>
+          <span class="t"><span class="t-body">knowledge graph signals via Reciprocal Rank Fusion.</span></span>
         </div>
       </div>
     </div>
