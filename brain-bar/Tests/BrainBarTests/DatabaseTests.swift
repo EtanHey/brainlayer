@@ -324,6 +324,18 @@ final class DatabaseTests: XCTestCase {
         XCTAssertGreaterThan(score, 0, "Search results should have a non-zero relevance score")
     }
 
+    func testMultiWordSearchUsesAND() throws {
+        // "overnight hardening sprint" should match chunk with ALL three words,
+        // not chunks with just "sprint" alone (OR would match both)
+        try db.insertChunk(id: "and-1", content: "The overnight hardening sprint produced great results with improved stability.", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "and-2", content: "We had a quick sprint planning session this morning.", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5)
+
+        let results = try db.search(query: "overnight hardening sprint", limit: 5)
+        // Only and-1 should match (has all 3 words). and-2 only has "sprint".
+        XCTAssertEqual(results.count, 1, "AND mode: only chunks with ALL query terms should match")
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "and-1")
+    }
+
     func testSearchResultsOrderedByRelevance() throws {
         // "sprint" appears in content of both, but the first has it more prominently
         try db.insertChunk(id: "rel-1", content: "The overnight hardening sprint was a success. Sprint results show improvements.", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
