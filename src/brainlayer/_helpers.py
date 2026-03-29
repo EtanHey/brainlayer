@@ -42,10 +42,10 @@ def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
         "auto" — always AND (implicit via space). RRF fusion with semantic
                   search already provides recall; FTS5 should maximize precision.
         "or"   — always OR (for entity search where any term should match).
-    Empty/whitespace-only queries return a wildcard match-all.
+    Empty/whitespace-only queries return an empty string so callers can skip FTS.
     """
     if not query or not query.strip():
-        return "*"
+        return ""
     # Split into words, wrap each in double quotes (escaping any internal quotes)
     terms = []
     for word in query.split():
@@ -54,7 +54,7 @@ def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
         if clean:
             terms.append(f'"{clean}"')
     if not terms:
-        return "*"
+        return ""
     if match_mode == "or":
         joiner = " OR "
     else:
