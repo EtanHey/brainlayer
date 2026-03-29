@@ -235,39 +235,102 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> String {
-        throw ToolError.notImplemented("brain_recall")
+        guard let db = database else { throw ToolError.noDatabase }
+        let mode = args["mode"] as? String ?? "stats"
+        if mode == "context" {
+            let sessionId = args["session_id"] as? String ?? ""
+            if sessionId.isEmpty {
+                let stats = try db.recallStats()
+                return Formatters.formatStats(stats: stats)
+            }
+            let results = try db.recallSession(sessionId: sessionId, limit: 20)
+            return Formatters.formatSearchResults(query: "session:\(sessionId)", results: results, total: results.count)
+        }
+        let stats = try db.recallStats()
+        return Formatters.formatStats(stats: stats)
     }
 
     private func handleBrainEntity(_ args: [String: Any]) throws -> String {
-        guard let _ = args["query"] as? String else {
+        guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
-        throw ToolError.notImplemented("brain_entity")
+        guard let db = database else { throw ToolError.noDatabase }
+        guard let entity = try db.lookupEntity(query: query) else {
+            return "\u{2502} No entity found for \"\(query)\""
+        }
+        return Formatters.formatEntityCard(entity: entity)
     }
 
     private func handleBrainDigest(_ args: [String: Any]) throws -> String {
-        guard args["content"] is String else {
+        guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
-        throw ToolError.notImplemented("brain_digest")
+        guard let db = database else { throw ToolError.noDatabase }
+        let result = try db.digest(content: content)
+        return Formatters.formatDigestResult(result: result)
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> String {
-        guard let _ = args["action"] as? String else {
-            throw ToolError.missingParameter("action")
+        guard let db = database else { throw ToolError.noDatabase }
+        let chunkId = args["chunk_id"] as? String ?? ""
+        if chunkId.isEmpty {
+            throw ToolError.missingParameter("chunk_id")
         }
-        throw ToolError.notImplemented("brain_update")
+        let importance = args["importance"] as? Int
+        let tags = args["tags"] as? [String]
+        if importance == nil && tags == nil {
+            throw ToolError.missingParameter("importance or tags")
+        }
+        try db.updateChunk(id: chunkId, importance: importance, tags: tags)
+        return "\u{2714} Updated \(chunkId)" + (importance != nil ? " imp:\(importance!)" : "") + (tags != nil ? " tags:\(tags!.joined(separator: ","))" : "")
     }
 
     private func handleBrainExpand(_ args: [String: Any]) throws -> String {
-        guard let _ = args["chunk_id"] as? String else {
+        guard let chunkId = args["chunk_id"] as? String else {
             throw ToolError.missingParameter("chunk_id")
         }
-        throw ToolError.notImplemented("brain_expand")
+        guard let db = database else { throw ToolError.noDatabase }
+        let before = args["before"] as? Int ?? 3
+        let after = args["after"] as? Int ?? 3
+        let expanded = try db.expandChunk(id: chunkId, before: before, after: after)
+        let target = expanded["target"] as? [String: Any] ?? [:]
+        let context = expanded["context"] as? [[String: Any]] ?? []
+        var lines: [String] = []
+        lines.append("\u{250c}\u{2500} brain_expand: \(chunkId)")
+        let targetContent = (target["summary"] as? String) ?? (target["content"] as? String) ?? ""
+        if !targetContent.isEmpty {
+            lines.append("\u{251c}\u{2500} Target")
+            lines.append("\u{2502} \(String(targetContent.prefix(200)))")
+        }
+        if !context.isEmpty {
+            lines.append("\u{251c}\u{2500} Context (\(context.count) chunks)")
+            for c in context {
+                let cid = (c["chunk_id"] as? String ?? "").prefix(12)
+                let snippet = String(((c["content"] as? String) ?? "").prefix(80))
+                lines.append("\u{2502}  [\(cid)] \(snippet)")
+            }
+        }
+        lines.append("\u{2514}\u{2500}")
+        return lines.joined(separator: "\n")
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> String {
-        throw ToolError.notImplemented("brain_tags")
+        guard let db = database else { throw ToolError.noDatabase }
+        let query = args["query"] as? String
+        let limit = args["limit"] as? Int ?? 50
+        let tags = try db.listTags(query: query, limit: limit)
+        if tags.isEmpty {
+            return "\u{2502} No tags found" + (query != nil ? " matching \"\(query!)\"" : "")
+        }
+        var lines: [String] = []
+        lines.append("\u{250c}\u{2500} brain_tags (\(tags.count) tags)")
+        for t in tags {
+            let name = t["tag"] as? String ?? ""
+            let count = t["count"] as? Int ?? 0
+            lines.append("\u{2502}  \(name) (\(count))")
+        }
+        lines.append("\u{2514}\u{2500}")
+        return lines.joined(separator: "\n")
     }
 
     private func handleBrainSubscribe(_ args: [String: Any]) throws -> String {

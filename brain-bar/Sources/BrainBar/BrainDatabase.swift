@@ -129,6 +129,31 @@ final class BrainDatabase: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS idx_brainbar_subscriptions_tag
             ON brainbar_subscriptions(tag)
         """)
+
+        try execute("""
+            CREATE TABLE IF NOT EXISTS kg_entities (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}',
+                description TEXT,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(entity_type, name)
+            )
+        """)
+
+        try execute("""
+            CREATE TABLE IF NOT EXISTS kg_relations (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                properties TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(source_id, target_id, relation_type)
+            )
+        """)
     }
 
     func close() {
@@ -791,6 +816,377 @@ final class BrainDatabase: @unchecked Sendable {
 
     private static func timestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
+    }
+
+    // MARK: - brain_tags: list unique tags with counts
+
+    func listTags(query: String? = nil, limit: Int = 50) throws -> [[String: Any]] {
+        guard let db else { throw DBError.notOpen }
+        // Tags are stored as JSON arrays in the tags column. Parse and count.
+        let sql = "SELECT tags FROM chunks WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var tagCounts: [String: Int] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let raw = columnText(stmt, 0),
+                  let data = raw.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else { continue }
+            for tag in arr {
+                let t = tag.trimmingCharacters(in: .whitespaces).lowercased()
+                guard !t.isEmpty else { continue }
+                if let q = query?.lowercased(), !t.contains(q) { continue }
+                tagCounts[t, default: 0] += 1
+            }
+        }
+
+        var results = tagCounts.map { ["tag": $0.key as Any, "count": $0.value as Any] }
+        results.sort { ($0["count"] as? Int ?? 0) > ($1["count"] as? Int ?? 0) }
+        return Array(results.prefix(limit))
+    }
+
+    // MARK: - brain_update: update chunk importance/tags
+
+    func updateChunk(id: String, importance: Int? = nil, tags: [String]? = nil) throws {
+        guard let db else { throw DBError.notOpen }
+
+        if let importance {
+            let sql = "UPDATE chunks SET importance = ? WHERE id = ?"
+            try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+                sqlite3_bind_int(stmt, 1, Int32(importance))
+                bindText(id, to: stmt, index: 2)
+            }
+        }
+
+        if let tags {
+            let tagsJSON = try encodeJSON(tags)
+            let sql = "UPDATE chunks SET tags = ? WHERE id = ?"
+            try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+                bindText(tagsJSON, to: stmt, index: 1)
+                bindText(id, to: stmt, index: 2)
+            }
+        }
+    }
+
+    // MARK: - brain_expand: get chunk + surrounding session context
+
+    func expandChunk(id: String, before: Int = 3, after: Int = 3) throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+
+        // Get the target chunk with its session_id and rowid
+        let targetSQL = "SELECT rowid, id, content, conversation_id, project, content_type, importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(id, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+
+        let targetRowID = sqlite3_column_int64(stmt, 0)
+        let sessionId = columnText(stmt, 3) ?? ""
+        let target: [String: Any] = [
+            "chunk_id": columnText(stmt, 1) as Any,
+            "content": columnText(stmt, 2) as Any,
+            "session_id": sessionId,
+            "project": columnText(stmt, 4) as Any,
+            "content_type": columnText(stmt, 5) as Any,
+            "importance": sqlite3_column_double(stmt, 6),
+            "created_at": columnText(stmt, 7) as Any,
+            "summary": columnText(stmt, 8) as Any,
+            "tags": columnText(stmt, 9) as Any
+        ]
+        // defer handles finalize for stmt — do NOT call sqlite3_finalize manually
+
+        // Get surrounding chunks from same session using two separate queries
+        var context: [[String: Any]] = []
+
+        // Before chunks (reverse order, then flip)
+        let beforeSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        var beforeStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
+            bindText(sessionId, to: beforeStmt, index: 1)
+            sqlite3_bind_int64(beforeStmt, 2, targetRowID)
+            sqlite3_bind_int(beforeStmt, 3, Int32(before))
+            var beforeChunks: [[String: Any]] = []
+            while sqlite3_step(beforeStmt) == SQLITE_ROW {
+                beforeChunks.append([
+                    "chunk_id": columnText(beforeStmt, 0) as Any,
+                    "content": columnText(beforeStmt, 1) as Any,
+                    "content_type": columnText(beforeStmt, 2) as Any,
+                    "importance": sqlite3_column_double(beforeStmt, 3),
+                    "created_at": columnText(beforeStmt, 4) as Any,
+                    "summary": columnText(beforeStmt, 5) as Any
+                ])
+            }
+            sqlite3_finalize(beforeStmt)
+            context.append(contentsOf: beforeChunks.reversed())
+        }
+
+        // After chunks
+        let afterSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        var afterStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
+            bindText(sessionId, to: afterStmt, index: 1)
+            sqlite3_bind_int64(afterStmt, 2, targetRowID)
+            sqlite3_bind_int(afterStmt, 3, Int32(after))
+            while sqlite3_step(afterStmt) == SQLITE_ROW {
+                context.append([
+                    "chunk_id": columnText(afterStmt, 0) as Any,
+                    "content": columnText(afterStmt, 1) as Any,
+                    "content_type": columnText(afterStmt, 2) as Any,
+                    "importance": sqlite3_column_double(afterStmt, 3),
+                    "created_at": columnText(afterStmt, 4) as Any,
+                    "summary": columnText(afterStmt, 5) as Any
+                ])
+            }
+            sqlite3_finalize(afterStmt)
+        }
+
+        return ["target": target, "context": context]
+    }
+
+    // MARK: - brain_entity: insert + lookup entities
+
+    func insertEntity(id: String, type: String, name: String, metadata: String = "{}") throws {
+        guard let db else { throw DBError.notOpen }
+        let sql = "INSERT OR REPLACE INTO kg_entities (id, entity_type, name, metadata) VALUES (?, ?, ?, ?)"
+        try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+            bindText(id, to: stmt, index: 1)
+            bindText(type, to: stmt, index: 2)
+            bindText(name, to: stmt, index: 3)
+            bindText(metadata, to: stmt, index: 4)
+        }
+    }
+
+    func insertRelation(sourceId: String, targetId: String, relationType: String) throws {
+        guard let db else { throw DBError.notOpen }
+        let relId = "\(sourceId)-\(relationType)-\(targetId)"
+        let sql = "INSERT OR REPLACE INTO kg_relations (id, source_id, target_id, relation_type) VALUES (?, ?, ?, ?)"
+        try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+            bindText(relId, to: stmt, index: 1)
+            bindText(sourceId, to: stmt, index: 2)
+            bindText(targetId, to: stmt, index: 3)
+            bindText(relationType, to: stmt, index: 4)
+        }
+    }
+
+    func lookupEntity(query: String) throws -> [String: Any]? {
+        guard let db else { throw DBError.notOpen }
+
+        // First try exact name match
+        let exactSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name = ? LIMIT 1"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, exactSQL, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        bindText(query, to: stmt, index: 1)
+
+        var entityId: String?
+        var result: [String: Any]?
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            entityId = columnText(stmt, 0)
+            result = [
+                "entity_id": entityId as Any,
+                "entity_type": columnText(stmt, 1) as Any,
+                "name": columnText(stmt, 2) as Any,
+                "metadata": columnText(stmt, 3) as Any,
+                "description": columnText(stmt, 4) as Any
+            ]
+        }
+        sqlite3_finalize(stmt)
+
+        // If no exact match, try LIKE
+        if result == nil {
+            let likeSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name LIKE ? LIMIT 1"
+            guard sqlite3_prepare_v2(db, likeSQL, -1, &stmt, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            bindText("%\(query)%", to: stmt, index: 1)
+
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                entityId = columnText(stmt, 0)
+                result = [
+                    "entity_id": entityId as Any,
+                    "entity_type": columnText(stmt, 1) as Any,
+                    "name": columnText(stmt, 2) as Any,
+                    "metadata": columnText(stmt, 3) as Any,
+                    "description": columnText(stmt, 4) as Any
+                ]
+            }
+            sqlite3_finalize(stmt)
+        }
+
+        // Get relations for found entity
+        if let entityId, result != nil {
+            let relSQL = """
+                SELECT r.relation_type, r.target_id, e.name
+                FROM kg_relations r
+                LEFT JOIN kg_entities e ON e.id = r.target_id
+                WHERE r.source_id = ?
+                UNION ALL
+                SELECT r.relation_type, r.source_id, e.name
+                FROM kg_relations r
+                LEFT JOIN kg_entities e ON e.id = r.source_id
+                WHERE r.target_id = ?
+            """
+            var relStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, relSQL, -1, &relStmt, nil) == SQLITE_OK {
+                bindText(entityId, to: relStmt, index: 1)
+                bindText(entityId, to: relStmt, index: 2)
+                var relations: [[String: Any]] = []
+                while sqlite3_step(relStmt) == SQLITE_ROW {
+                    let targetName = columnText(relStmt, 2) ?? ""
+                    relations.append([
+                        "relation_type": columnText(relStmt, 0) as Any,
+                        "target_id": columnText(relStmt, 1) as Any,
+                        "target_name": targetName as Any,
+                        "target": ["name": targetName] as [String: Any]
+                    ])
+                }
+                sqlite3_finalize(relStmt)
+                result?["relations"] = relations
+            }
+        }
+
+        return result
+    }
+
+    // MARK: - brain_recall
+
+    func recallSession(sessionId: String, limit: Int = 20) throws -> [[String: Any]] {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT id, content, project, content_type, importance, created_at, summary, tags
+            FROM chunks WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(sessionId, to: stmt, index: 1)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            results.append([
+                "chunk_id": columnText(stmt, 0) as Any,
+                "content": columnText(stmt, 1) as Any,
+                "project": columnText(stmt, 2) as Any,
+                "content_type": columnText(stmt, 3) as Any,
+                "importance": sqlite3_column_double(stmt, 4),
+                "created_at": columnText(stmt, 5) as Any,
+                "summary": columnText(stmt, 6) as Any,
+                "tags": columnText(stmt, 7) as Any,
+                "score": 1.0  // session recall has no relevance scoring
+            ])
+        }
+        return results
+    }
+
+    func recallStats() throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+
+        func queryInt(_ sql: String) throws -> Int {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+
+        let totalChunks = try queryInt("SELECT COUNT(*) FROM chunks")
+        let totalEntities = try queryInt("SELECT COUNT(*) FROM kg_entities")
+        let totalRelations = try queryInt("SELECT COUNT(*) FROM kg_relations")
+        let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL")
+        let totalProjects = try queryInt("SELECT COUNT(DISTINCT project) FROM chunks")
+
+        return [
+            "total_chunks": totalChunks,
+            "total_entities": totalEntities,
+            "total_relations": totalRelations,
+            "enriched_chunks": enrichedChunks,
+            "total_projects": totalProjects,
+            "enrichment_pct": totalChunks > 0 ? Double(enrichedChunks) / Double(totalChunks) * 100.0 : 0.0
+        ]
+    }
+
+    // MARK: - brain_digest: rule-based entity extraction
+
+    func digest(content: String) throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+
+        // Rule-based entity extraction
+        var entities: [String] = []
+        var urls: [String] = []
+        var codeIds: [String] = []
+
+        // Extract capitalized multi-word names (2-3 words, each capitalized)
+        let namePattern = try NSRegularExpression(pattern: "\\b([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,2})\\b")
+        let nsContent = content as NSString
+        let nameMatches = namePattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        for match in nameMatches {
+            let name = nsContent.substring(with: match.range)
+            // Filter common non-entity phrases
+            let skip = ["The", "This", "That", "These", "Those", "Here", "There", "When", "What", "Which", "Where", "How"]
+            if !skip.contains(where: { name.hasPrefix($0 + " ") }) {
+                entities.append(name)
+            }
+        }
+
+        // Extract PascalCase identifiers (code names like BrainLayer, MCPRouter)
+        let pascalPattern = try NSRegularExpression(pattern: "\\b([A-Z][a-z]+[A-Z][a-zA-Z]+)\\b")
+        let pascalMatches = pascalPattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        for match in pascalMatches {
+            entities.append(nsContent.substring(with: match.range))
+        }
+
+        // Extract URLs
+        let urlPattern = try NSRegularExpression(pattern: "https?://[^\\s,)]+")
+        let urlMatches = urlPattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        for match in urlMatches {
+            urls.append(nsContent.substring(with: match.range))
+        }
+
+        // Extract code identifiers (snake_case, dotted paths)
+        let codePattern = try NSRegularExpression(pattern: "\\b([a-z][a-z_]+\\.[a-z_]+)\\b")
+        let codeMatches = codePattern.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        for match in codeMatches {
+            codeIds.append(nsContent.substring(with: match.range))
+        }
+
+        // Deduplicate
+        entities = Array(Set(entities))
+        urls = Array(Set(urls))
+        codeIds = Array(Set(codeIds))
+
+        // Store the digest as a chunk
+        let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
+        let stored = try store(
+            content: content.prefix(500) + (content.count > 500 ? "..." : ""),
+            tags: ["digest"] + entities.prefix(5).map { $0 },
+            importance: 5,
+            source: "digest"
+        )
+
+        return [
+            "mode": "digest",
+            "entities": entities,
+            "entities_created": entities.count,
+            "urls": urls,
+            "code_identifiers": codeIds,
+            "chunks_created": 1,
+            "relations_created": 0,
+            "chunk_id": stored.chunkID,
+            "summary": digestSummary
+        ]
     }
 
     enum DBError: LocalizedError {

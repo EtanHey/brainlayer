@@ -347,4 +347,118 @@ final class DatabaseTests: XCTestCase {
         let score2 = results[1]["score"] as? Double ?? 0
         XCTAssertGreaterThanOrEqual(score1, score2, "Results should be ordered by relevance (highest score first)")
     }
+
+    // MARK: - brain_tags (list unique tags with counts)
+
+    func testListTagsReturnsUniqueTags() throws {
+        try db.insertChunk(id: "tag-1", content: "First chunk", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"swift\", \"macos\"]")
+        try db.insertChunk(id: "tag-2", content: "Second chunk", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"swift\", \"daemon\"]")
+        try db.insertChunk(id: "tag-3", content: "Third chunk", sessionId: "s3", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"daemon\"]")
+
+        let tags = try db.listTags(limit: 10)
+        XCTAssertFalse(tags.isEmpty)
+        // swift=2, daemon=2, macos=1
+        let swiftTag = tags.first(where: { $0["tag"] as? String == "swift" })
+        XCTAssertNotNil(swiftTag)
+        XCTAssertEqual(swiftTag?["count"] as? Int, 2)
+        let daemonTag = tags.first(where: { $0["tag"] as? String == "daemon" })
+        XCTAssertEqual(daemonTag?["count"] as? Int, 2)
+    }
+
+    func testListTagsFiltersByQuery() throws {
+        try db.insertChunk(id: "tq-1", content: "A", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"architecture\", \"swift\"]")
+        try db.insertChunk(id: "tq-2", content: "B", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"archival\", \"python\"]")
+
+        let tags = try db.listTags(query: "arch", limit: 10)
+        let tagNames = tags.compactMap { $0["tag"] as? String }
+        XCTAssertTrue(tagNames.contains("architecture"))
+        XCTAssertTrue(tagNames.contains("archival"))
+        XCTAssertFalse(tagNames.contains("swift"))
+    }
+
+    // MARK: - brain_update (update chunk content/tags/importance)
+
+    func testUpdateChunkImportance() throws {
+        try db.insertChunk(id: "upd-1", content: "Original content", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+
+        try db.updateChunk(id: "upd-1", importance: 9)
+
+        let results = try db.search(query: "Original content", limit: 1)
+        XCTAssertEqual(results.first?["importance"] as? Double, 9.0)
+    }
+
+    func testUpdateChunkTags() throws {
+        try db.insertChunk(id: "upd-2", content: "Tag update test", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"old-tag\"]")
+
+        try db.updateChunk(id: "upd-2", tags: ["new-tag", "updated"])
+
+        let results = try db.search(query: "Tag update test", limit: 1)
+        let tagsStr = results.first?["tags"] as? String ?? ""
+        XCTAssertTrue(tagsStr.contains("new-tag"))
+        XCTAssertTrue(tagsStr.contains("updated"))
+        XCTAssertFalse(tagsStr.contains("old-tag"))
+    }
+
+    // MARK: - brain_expand (get chunk + surrounding context)
+
+    func testExpandChunkReturnsSurroundingContext() throws {
+        // Insert 5 chunks in same session
+        for i in 1...5 {
+            try db.insertChunk(id: "exp-\(i)", content: "Chunk number \(i) in session", sessionId: "expand-session", project: "test", contentType: "assistant_text", importance: 5)
+        }
+
+        let expanded = try db.expandChunk(id: "exp-3", before: 2, after: 2)
+        XCTAssertNotNil(expanded["target"])
+        let context = expanded["context"] as? [[String: Any]] ?? []
+        // Should have surrounding chunks from same session
+        XCTAssertGreaterThanOrEqual(context.count, 2, "Should return at least 2 surrounding chunks")
+    }
+
+    // MARK: - brain_entity (lookup entity + relations)
+
+    func testEntityLookup() throws {
+        try db.insertEntity(id: "ent-bl", type: "project", name: "BrainLayer", metadata: "{\"description\": \"Local knowledge pipeline\"}")
+        try db.insertEntity(id: "ent-eh", type: "person", name: "Etan Heyman", metadata: "{}")
+        try db.insertRelation(sourceId: "ent-eh", targetId: "ent-bl", relationType: "works_on")
+
+        let entity = try db.lookupEntity(query: "BrainLayer")
+        XCTAssertNotNil(entity)
+        XCTAssertEqual(entity?["name"] as? String, "BrainLayer")
+        XCTAssertEqual(entity?["entity_type"] as? String, "project")
+        let relations = entity?["relations"] as? [[String: Any]] ?? []
+        XCTAssertFalse(relations.isEmpty, "Should include relations")
+    }
+
+    func testEntityLookupNotFound() throws {
+        let entity = try db.lookupEntity(query: "NonexistentEntity12345")
+        XCTAssertNil(entity)
+    }
+
+    // MARK: - brain_recall (session context)
+
+    func testRecallStatsMode() throws {
+        try db.insertChunk(id: "rc-1", content: "Stats test chunk", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+
+        let stats = try db.recallStats()
+        XCTAssertNotNil(stats["total_chunks"])
+        let total = stats["total_chunks"] as? Int ?? 0
+        XCTAssertGreaterThan(total, 0)
+    }
+
+    // MARK: - brain_digest (rule-based entity extraction)
+
+    func testDigestExtractsEntities() throws {
+        let content = "Etan Heyman discussed BrainLayer architecture with Claude. The project uses SQLite and Swift."
+        let result = try db.digest(content: content)
+        let entities = result["entities"] as? [String] ?? []
+        // Should extract capitalized multi-word names
+        XCTAssertTrue(entities.contains(where: { $0.contains("Etan") }), "Should extract 'Etan Heyman'")
+        XCTAssertTrue(entities.contains(where: { $0.contains("BrainLayer") }), "Should extract 'BrainLayer'")
+    }
+
+    func testDigestExtractsKeyPhrases() throws {
+        let content = "Decision: Use SQLite for storage. The architecture should support real-time indexing."
+        let result = try db.digest(content: content)
+        XCTAssertNotNil(result["chunks_created"])
+    }
 }
