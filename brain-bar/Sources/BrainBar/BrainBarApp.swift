@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var collector: StatsCollector?
+    private var quickCapturePanel: QuickCapturePanelController?
+    private var quickCaptureHotkey: HotkeyManager?
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -41,10 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.collector = collector
         configureStatusItem(with: collector)
+        configureQuickCapture(dbPath: BrainBarServer.defaultDBPath())
         collector.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        quickCaptureHotkey?.stop()
         collector?.stop()
         server?.stop()
     }
@@ -94,6 +98,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.statusItem = item
         self.popover = popover
+    }
+
+    private func configureQuickCapture(dbPath: String) {
+        let panelController = QuickCapturePanelController(dbPath: dbPath)
+        quickCapturePanel = panelController
+
+        let gesture = GestureStateMachine()
+        gesture.onSingleTap = { [weak panelController] in
+            panelController?.toggle()
+        }
+        gesture.onDoubleTap = { [weak panelController] in
+            panelController?.show(mode: .search)
+        }
+
+        let hotkey = HotkeyManager(gesture: gesture)
+        hotkey.configure(keycodes: [118, 129], useModifierMode: false)
+        _ = hotkey.start()
+        quickCaptureHotkey = hotkey
     }
 }
 
