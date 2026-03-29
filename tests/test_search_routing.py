@@ -108,7 +108,6 @@ class TestCompactFormat:
         compact_item = _build_compact_item(self._sample_item())
         dropped_keys = {
             "content_type",
-            "tags",
             "intent",
             "source_file",
             "session_summary",
