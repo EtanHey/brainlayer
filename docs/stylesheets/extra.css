@@ -1,18 +1,18 @@
-/* BrainLayer docs — dark theme matching landing page */
+/* BrainLayer docs — dark theme matching landing page (warm/amber) */
 
 :root {
-  --md-primary-fg-color: #7c6aef;
-  --md-primary-fg-color--light: #9b8cff;
-  --md-primary-fg-color--dark: #5a4ed0;
-  --md-accent-fg-color: #9b8cff;
+  --md-primary-fg-color: #d4956a;
+  --md-primary-fg-color--light: #e8b090;
+  --md-primary-fg-color--dark: #b87a50;
+  --md-accent-fg-color: #e8b090;
 }
 
 [data-md-color-scheme="slate"] {
-  --md-default-bg-color: #0a0a0b;
-  --md-default-bg-color--light: #111113;
-  --md-code-bg-color: #16161a;
-  --md-code-hl-color: rgba(124, 106, 239, 0.15);
-  --md-typeset-a-color: #9b8cff;
+  --md-default-bg-color: #09090b;
+  --md-default-bg-color--light: #111114;
+  --md-code-bg-color: #151519;
+  --md-code-hl-color: rgba(212, 149, 106, 0.12);
+  --md-typeset-a-color: #e8b090;
 }
 
 [data-md-color-scheme="slate"] .md-header {
@@ -22,20 +22,20 @@
 }
 
 [data-md-color-scheme="slate"] .md-sidebar {
-  background-color: #0a0a0b;
+  background-color: #09090b;
 }
 
 [data-md-color-scheme="slate"] .md-typeset code {
-  background-color: #16161a;
+  background-color: #151519;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .admonition,
 [data-md-color-scheme="slate"] .md-typeset details {
-  border-color: #7c6aef;
+  border-color: #d4956a;
 }
 
 [data-md-color-scheme="slate"] .md-footer {
-  background-color: #0a0a0b;
+  background-color: #09090b;
 }
 
 /* Links get accent color hover */
@@ -44,7 +44,7 @@
 }
 
 [data-md-color-scheme="slate"] .md-typeset a:hover {
-  color: #c4b5fd;
+  color: #e8b090;
 }
 
 /* Nav items hover */
@@ -53,19 +53,19 @@
 }
 
 [data-md-color-scheme="slate"] .md-nav__link:hover {
-  color: #9b8cff;
+  color: #e8b090;
 }
 
 /* Search bar styling */
 [data-md-color-scheme="slate"] .md-search__input {
-  background-color: #16161a;
+  background-color: #151519;
   border: 1px solid #222228;
   transition: border-color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-search__input:hover,
 [data-md-color-scheme="slate"] .md-search__input:focus {
-  border-color: #7c6aef;
+  border-color: #d4956a;
 }
 
 /* Code copy button hover */
@@ -74,7 +74,7 @@
 }
 
 [data-md-color-scheme="slate"] .md-clipboard:hover {
-  color: #9b8cff;
+  color: #e8b090;
 }
 
 /* Tab hover states */
@@ -83,20 +83,20 @@
 }
 
 [data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label:hover {
-  color: #9b8cff;
+  color: #e8b090;
 }
 
 /* Table of contents hover */
 [data-md-color-scheme="slate"] .md-sidebar .md-nav__link:hover {
-  color: #9b8cff;
+  color: #e8b090;
 }
 
 /* Card-like styling for content sections */
 [data-md-color-scheme="slate"] .md-typeset .admonition {
-  background-color: #111113;
+  background-color: #111114;
   transition: border-color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .admonition:hover {
-  border-color: #9b8cff;
+  border-color: #e8b090;
 }

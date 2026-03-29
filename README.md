@@ -9,8 +9,11 @@
 [![MCP](https://img.shields.io/badge/MCP-12%20tools-green.svg)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-1%2C454%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
+[![Website](https://img.shields.io/badge/website-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
 ---
+
+**[Website](https://brainlayer.etanheyman.com)** · **[Documentation](https://etanhey.github.io/brainlayer)** · **[PyPI](https://pypi.org/project/brainlayer/)**
 
 **284,000+ chunks indexed** · **1,454 Python + 54 Swift tests** · **Real-time JSONL watcher** · **12 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
 

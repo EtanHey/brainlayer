@@ -584,15 +584,7 @@
 
     .setup-code:hover { border-color: var(--accent); }
 
-    .setup-code span { flex: 1; }
-
-    .setup-code .copy-icon {
-      color: var(--text-dim);
-      transition: color 0.2s;
-      flex-shrink: 0;
-    }
-
-    .setup-code:hover .copy-icon { color: var(--accent); }
+    .setup-code code { flex: 1; font-family: var(--mono); font-size: 12px; }
 
     /* ─── CTA ─── */
     .cta-section {
@@ -889,24 +881,30 @@
           <div class="setup-num">01</div>
           <p class="setup-text">Install from PyPI</p>
           <div class="setup-code" onclick="copyText(this, 'pip install brainlayer')">
-            <span>pip install brainlayer</span>
-            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            <code>pip install brainlayer</code>
+            <button class="copy-btn" aria-label="Copy">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            </button>
           </div>
         </div>
         <div class="setup-card">
           <div class="setup-num">02</div>
           <p class="setup-text">Configure MCP and index conversations</p>
           <div class="setup-code" onclick="copyText(this, 'brainlayer init')">
-            <span>brainlayer init</span>
-            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            <code>brainlayer init</code>
+            <button class="copy-btn" aria-label="Copy">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            </button>
           </div>
         </div>
         <div class="setup-card">
           <div class="setup-num">03</div>
           <p class="setup-text">Start real-time indexing</p>
           <div class="setup-code" onclick="copyText(this, 'brainlayer watch')">
-            <span>brainlayer watch</span>
-            <svg class="copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            <code>brainlayer watch</code>
+            <button class="copy-btn" aria-label="Copy">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-6A1.5 1.5 0 013.5 2h6A1.5 1.5 0 0111 3.5V5"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -957,23 +955,11 @@
     // Copy to clipboard
     function copyText(el, text) {
       navigator.clipboard.writeText(text).then(() => {
-        const icon = el.querySelector('.copy-btn, .copy-icon');
-        if (!icon) return;
-        const original = icon.innerHTML || '';
-        const isSvg = icon.tagName === 'svg';
-
-        if (isSvg) {
-          // For SVG elements in setup cards
-          const parent = icon.parentElement;
-          const check = document.createElement('span');
-          check.textContent = 'copied';
-          check.style.cssText = 'font-size:11px;color:var(--accent);font-family:var(--mono);';
-          parent.replaceChild(check, icon);
-          setTimeout(() => parent.replaceChild(icon, check), 1500);
-        } else {
-          icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>';
-          setTimeout(() => { icon.innerHTML = original; }, 1500);
-        }
+        const btn = el.querySelector('.copy-btn');
+        if (!btn) return;
+        const original = btn.innerHTML;
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>';
+        setTimeout(() => { btn.innerHTML = original; }, 1500);
       });
     }
   </script>
