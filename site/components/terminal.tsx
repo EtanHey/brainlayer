@@ -199,13 +199,15 @@ function RenderLine({ line }: { line: Line }) {
 }
 
 function colorizeJson(text: string) {
-  // Color JSON keys and values
+  // Split on quoted strings, colorize keys vs values
   return text.split(/("(?:[^"\\]|\\.)*")/).map((part, i) => {
     if (i % 2 === 1) {
-      // It's a quoted string
-      if (part.endsWith('":') || text.includes(part + ":")) {
+      // Check if this quoted string is followed by a colon (it's a key)
+      const afterQuote = text.indexOf(part) + part.length;
+      const isKey = text[afterQuote] === ":";
+      if (isKey) {
         return (
-          <span key={i} className="text-text-secondary">
+          <span key={i} className="text-[#8b9eb0]">
             {part}
           </span>
         );
@@ -302,16 +304,19 @@ export function Terminal() {
           </div>
 
           {/* Status bar - matches real Claude Code */}
-          <div className="px-[18px] font-mono text-[11px] text-text-dim">
+          <div className="px-[18px] font-mono text-text-dim">
             <div className="h-px bg-[#333338] mb-1" />
             <div className="flex items-center text-[#6ec1e4] py-0.5">
               <span>{"❯"}</span>
               <span className="ml-1 w-[7px] h-[13px] bg-text/30 animate-pulse" />
             </div>
-            <div className="h-px bg-[#333338] mt-1 mb-1.5" />
-            <div className="flex items-center justify-between pb-1.5 text-[10px]">
+            <div className="h-px bg-[#333338] mt-1 mb-1" />
+            <div className="flex items-center justify-between pb-0.5 text-[10px]">
               <span>{"  ⎇ main | 🔧 7"}</span>
               <span>284,291 tokens</span>
+            </div>
+            <div className="flex items-center justify-between pb-2 text-[10px] opacity-60">
+              <span>{"  🤖 Opus 4.6 (1M context)"}</span>
             </div>
           </div>
         </motion.div>
