@@ -63,6 +63,7 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.results.count, 1)
         XCTAssertTrue(model.feedback.isIdle)
         XCTAssertEqual(model.results.first?.title, "Quick capture panel should auto focus when shown")
+        XCTAssertEqual(model.results.first?.id, "search-1", "Should use chunk_id from database, not generate random UUID")
     }
 
     func testPanelAppearanceRequestsFieldFocus() throws {
@@ -101,6 +102,46 @@ final class QuickCapturePanelTests: XCTestCase {
 
         XCTAssertEqual(model.mode, .capture)
         XCTAssertEqual(model.placeholderText, "Capture an idea. Press Return to store.")
+    }
+
+    func testSubmitCaptureWithWhitespaceOnlyFails() throws {
+        let (db, path) = try makeDatabase(name: "whitespace-capture")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "   \n\t  "
+
+        model.submit()
+
+        XCTAssertEqual(model.feedback, .error("Content cannot be empty"))
+        XCTAssertEqual(model.inputText, "   \n\t  ", "Should not clear input on error")
+    }
+
+    func testModeSwitchClearsResultsWhenSwitchingToCapture() throws {
+        let (db, path) = try makeDatabase(name: "mode-switch-clear")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "mode-1",
+            content: "Test content for mode switch",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "mode switch"
+        model.submit()
+
+        XCTAssertGreaterThan(model.results.count, 0, "Should have search results")
+
+        model.setMode(.capture)
+
+        XCTAssertEqual(model.results.count, 0, "Should clear results when switching to capture mode")
+        XCTAssertTrue(model.feedback.isIdle, "Should reset feedback")
     }
 
     private func makeDatabase(name: String) throws -> (BrainDatabase, String) {

@@ -114,6 +114,12 @@ final class QuickCaptureViewModel: ObservableObject {
     }
 
     private func submitCapture() {
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            feedback = .error("Content cannot be empty")
+            return
+        }
+        
         do {
             _ = try QuickCaptureController.capture(
                 db: db,
@@ -137,7 +143,7 @@ final class QuickCaptureViewModel: ObservableObject {
                 limit: 8
             )
             results = searchResult.results.map { result in
-                let rawID = (result["id"] as? String) ?? UUID().uuidString
+                let rawID = (result["chunk_id"] as? String) ?? UUID().uuidString
                 let title = (result["content"] as? String) ?? "Untitled result"
                 let createdAt = (result["created_at"] as? String) ?? "unknown time"
                 let importance = (result["importance"] as? Double).map { String(format: "imp %.0f", $0) } ?? "imp ?"
@@ -227,10 +233,11 @@ final class QuickCapturePanelController {
             context.duration = 0.14
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().alphaValue = 0
-        } completionHandler: { [panel] in
+        } completionHandler: { [weak self] in
+            guard let self else { return }
             Task { @MainActor in
-                panel.orderOut(nil)
-                panel.alphaValue = 1
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
             }
         }
     }
