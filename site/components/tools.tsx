@@ -60,7 +60,7 @@ export function Tools() {
 
         <div className="mx-auto mb-12 max-w-[640px]">
           <div className="mb-4 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
-            Core — what you use daily
+            Core - what you use daily
           </div>
           {coreTools.map((tool) => (
             <ToolItem key={tool.name} {...tool} />

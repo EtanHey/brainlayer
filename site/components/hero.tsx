@@ -3,7 +3,7 @@ import { CopyBlock } from "./copy-block";
 export function Hero() {
   return (
     <section className="relative pt-44 pb-20 text-center">
-      {/* Ambient glow — wide and soft, no hard edges */}
+      {/* Ambient glow - wide and soft, no hard edges */}
       <div
         className="pointer-events-none absolute top-0 left-1/2 h-[700px] w-[1400px] -translate-x-1/2"
         style={{
@@ -22,7 +22,7 @@ export function Hero() {
 
         <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary">
           Local-first memory for MCP agents. Every decision, correction, and
-          preference — indexed and searchable in &lt;50ms. Nothing leaves your
+          preference - indexed and searchable in &lt;50ms. Nothing leaves your
           machine.
         </p>
 

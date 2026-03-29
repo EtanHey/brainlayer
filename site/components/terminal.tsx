@@ -3,139 +3,103 @@
 import { useEffect, useState, useRef } from "react";
 import { motion, useInView } from "framer-motion";
 
-interface TerminalLine {
-  type:
-    | "prompt"
-    | "sys"
-    | "body"
-    | "border-start"
-    | "border"
-    | "border-meta"
-    | "border-str"
-    | "border-end"
-    | "cursor";
-  content: string;
+interface Line {
+  type: "prompt" | "claude" | "tool" | "output" | "result" | "hr" | "status";
+  text: string;
   gap?: boolean;
-  /** ms to wait before showing this line */
-  delay?: number;
+  delay: number;
 }
 
-const lines: TerminalLine[] = [
+// Real Claude Code output format
+const lines: Line[] = [
   {
     type: "prompt",
-    content: "What database architecture does BrainLayer use?",
+    text: "What database architecture does BrainLayer use?",
     delay: 0,
   },
   {
-    type: "sys",
-    content: "[BrainLayer] SessionStart hook \u00b7 4 chunks injected (8ms)",
+    type: "claude",
+    text: "I'll search our architecture decisions.",
     gap: true,
-    delay: 1200,
+    delay: 1400,
   },
   {
-    type: "body",
-    content: "Let me search our architecture decisions.",
+    type: "tool",
+    text: 'brain_search (MCP)(query: "BrainLayer architecture hybrid search")',
     gap: true,
-    delay: 1800,
+    delay: 2000,
   },
+  { type: "output", text: "{", delay: 2400 },
+  { type: "output", text: '  "chunks": 3,', delay: 2450 },
+  { type: "output", text: '  "latency": "9ms",', delay: 2500 },
+  { type: "output", text: '  "results": [{', delay: 2550 },
   {
-    type: "border-start",
-    content:
-      '\u250c\u2500 brain_search(query="BrainLayer architecture hybrid search pipeline")',
-    gap: true,
-    delay: 2400,
-  },
-  { type: "border", content: "\u2502", delay: 2500 },
-  {
-    type: "border-meta",
-    content: "\u2502  chunks: 3  latency: 9ms  top: 0.94",
+    type: "result",
+    text: '    "content": "Claude Code / Cursor / Zed -> MCP -> BrainLayer Server',
     delay: 2600,
   },
-  { type: "border", content: "\u2502", delay: 2700 },
   {
-    type: "border-str",
-    content:
-      '\u2502  "Claude Code / Cursor / Zed \u2192 MCP \u2192 BrainLayer Server',
-    delay: 2800,
+    type: "result",
+    text: "       -> Hybrid Search (semantic + keyword via RRF)",
+    delay: 2650,
   },
   {
-    type: "border-str",
-    content: "\u2502   \u2192 Hybrid Search (semantic + keyword via RRF)",
-    delay: 2900,
+    type: "result",
+    text: '       -> SQLite + sqlite-vec, single .db file",',
+    delay: 2700,
   },
+  { type: "output", text: '    "chunk_id": "agent-a34f466",', delay: 2750 },
+  { type: "output", text: '    "importance": 8,', delay: 2800 },
   {
-    type: "border-str",
-    content: "\u2502   \u2192 SQLite + sqlite-vec, single .db file",
-    delay: 3000,
+    type: "output",
+    text: '    "tags": ["architecture", "search"]',
+    delay: 2850,
   },
+  { type: "output", text: "  }]", delay: 2900 },
+  { type: "output", text: "}", delay: 2950 },
   {
-    type: "border-str",
-    content: '\u2502   \u2192 Knowledge Graph (entities + relations)"',
-    delay: 3100,
-  },
-  { type: "border", content: "\u2502", delay: 3200 },
-  {
-    type: "border-end",
-    content:
-      "\u2514\u2500 agent-a34f466 \u00b7 importance: 8 \u00b7 tags: architecture",
-    delay: 3300,
-  },
-  {
-    type: "body",
-    content: "BrainLayer uses a single SQLite file with sqlite-vec for",
+    type: "claude",
+    text: "BrainLayer uses a single SQLite file with sqlite-vec for",
     gap: true,
-    delay: 3800,
+    delay: 3400,
   },
   {
-    type: "body",
-    content: "vector storage. Search fuses semantic, FTS5 keyword, and",
-    delay: 3900,
+    type: "claude",
+    text: "vector storage. Search fuses semantic, FTS5 keyword, and",
+    delay: 3500,
   },
   {
-    type: "body",
-    content: "knowledge graph signals via Reciprocal Rank Fusion.",
-    delay: 4000,
+    type: "claude",
+    text: "knowledge graph signals via Reciprocal Rank Fusion.",
+    delay: 3600,
   },
 ];
 
-function useTypingEffect(
-  text: string,
-  isActive: boolean,
-  speed: number = 35,
-): string {
-  const [displayed, setDisplayed] = useState("");
-
+function useTyping(text: string, active: boolean, speed = 30) {
+  const [out, setOut] = useState("");
   useEffect(() => {
-    if (!isActive) {
-      setDisplayed("");
+    if (!active) {
+      setOut("");
       return;
     }
-    setDisplayed("");
+    setOut("");
     let i = 0;
-    const interval = setInterval(() => {
+    const iv = setInterval(() => {
       i++;
-      setDisplayed(text.slice(0, i));
-      if (i >= text.length) clearInterval(interval);
+      setOut(text.slice(0, i));
+      if (i >= text.length) clearInterval(iv);
     }, speed);
-    return () => clearInterval(interval);
-  }, [text, isActive, speed]);
-
-  return displayed;
+    return () => clearInterval(iv);
+  }, [text, active, speed]);
+  return out;
 }
 
-function PromptLine({
-  content,
-  isActive,
-}: {
-  content: string;
-  isActive: boolean;
-}) {
-  const typed = useTypingEffect(content, isActive, 30);
-  const showCursor = isActive && typed.length < content.length;
-
+function PromptLine({ text, active }: { text: string; active: boolean }) {
+  const typed = useTyping(text, active, 28);
+  const showCursor = active && typed.length < text.length;
   return (
     <span className="block">
-      <span className="text-[#6ec1e4]">{"\u276f"}</span>{" "}
+      <span className="text-[#6ec1e4]">{"❯"}</span>{" "}
       <span className="text-text">
         {typed}
         {showCursor && (
@@ -146,121 +110,120 @@ function PromptLine({
   );
 }
 
-function RenderLine({ line }: { line: TerminalLine }) {
-  const { type, content, gap } = line;
-  const gapClass = gap ? "mt-3" : "";
+function RenderLine({ line }: { line: Line }) {
+  const g = line.gap ? "mt-3" : "";
 
-  if (type === "prompt") {
-    // Handled separately by PromptLine
-    return null;
-  }
+  if (line.type === "prompt") return null; // handled separately
 
-  if (type === "sys") {
+  if (line.type === "claude") {
+    // First claude line in a group gets the ⏺ marker
     return (
-      <span className={`block ${gapClass} italic text-[#78787f]`}>
-        {content}
+      <span className={`block ${g} text-text-secondary`}>
+        {line.gap && <span className="text-text-dim">{"⏺ "}</span>}
+        {!line.gap && <span className="text-text-dim">{"  "}</span>}
+        {line.text}
       </span>
     );
   }
 
-  if (type === "body") {
-    return (
-      <span className={`block ${gapClass} text-text-secondary`}>{content}</span>
-    );
-  }
-
-  if (type === "border-start") {
-    const match = content.match(/^(\u250c\u2500)\s*(brain_search)\((.+)\)$/);
+  if (line.type === "tool") {
+    const match = line.text.match(/^(\S+)\s+\(MCP\)\((.+)\)$/);
     if (match) {
       return (
-        <span className={`block ${gapClass}`}>
-          <span className="text-[#333338]">{match[1]}</span>{" "}
-          <span className="font-medium text-accent">{match[2]}</span>
-          <span className="text-text-secondary">({match[3]})</span>
+        <span className={`block ${g}`}>
+          <span className="text-text-dim">{"⏺ "}</span>
+          <span className="font-medium text-accent">{match[1]}</span>
+          <span className="text-text-dim">{" (MCP)"}</span>
+          <span className="text-text-secondary">({match[2]})</span>
         </span>
       );
     }
-    return <span className={`block ${gapClass}`}>{content}</span>;
-  }
-
-  if (type === "border") {
-    return <span className="block text-[#333338]">{content}</span>;
-  }
-
-  if (type === "border-meta") {
     return (
-      <span className="block">
-        <span className="text-[#333338]">{"\u2502"}</span>
-        <span className="text-[#4a4a52]">
-          {"  "}chunks: <span className="text-teal">3</span>
-          {"  "}latency: <span className="text-teal">9ms</span>
-          {"  "}top: <span className="text-teal">0.94</span>
+      <span className={`block ${g} text-text-secondary`}>
+        {"⏺ "}
+        {line.text}
+      </span>
+    );
+  }
+
+  if (line.type === "output") {
+    return (
+      <span className={`block ${g} text-text-dim`}>
+        {"  ⎿  "}
+        {colorizeJson(line.text)}
+      </span>
+    );
+  }
+
+  if (line.type === "result") {
+    return (
+      <span className={`block text-accent-bright`}>
+        {"  ⎿  "}
+        {line.text}
+      </span>
+    );
+  }
+
+  return <span className={`block ${g} text-text-secondary`}>{line.text}</span>;
+}
+
+function colorizeJson(text: string) {
+  // Color JSON keys and values
+  return text.split(/("(?:[^"\\]|\\.)*")/).map((part, i) => {
+    if (i % 2 === 1) {
+      // It's a quoted string
+      if (part.endsWith('":') || text.includes(part + ":")) {
+        return (
+          <span key={i} className="text-text-secondary">
+            {part}
+          </span>
+        );
+      }
+      return (
+        <span key={i} className="text-accent-bright">
+          {part}
         </span>
-      </span>
-    );
-  }
-
-  if (type === "border-str") {
-    const border = content.substring(0, 1);
-    const text = content.substring(1);
-    return (
-      <span className="block">
-        <span className="text-[#333338]">{border}</span>
-        <span className="text-accent-bright">{text}</span>
-      </span>
-    );
-  }
-
-  if (type === "border-end") {
-    const border = content.substring(0, 2);
-    const text = content.substring(2);
-    return (
-      <span className="block">
-        <span className="text-[#333338]">{border}</span>
-        <span className="text-[#4a4a52]">{text}</span>
-      </span>
-    );
-  }
-
-  return <span className="block text-text-secondary">{content}</span>;
+      );
+    }
+    // Numbers
+    const withNums = part.replace(/\b(\d+)\b/g, "\x00$1\x01");
+    if (withNums.includes("\x00")) {
+      return withNums.split(/\x00|\x01/).map((seg, j) =>
+        j % 2 === 1 ? (
+          <span key={`${i}-${j}`} className="text-teal">
+            {seg}
+          </span>
+        ) : (
+          <span key={`${i}-${j}`}>{seg}</span>
+        ),
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 export function Terminal() {
   const ref = useRef<HTMLDivElement>(null);
   const isInView = useInView(ref, { once: true, margin: "-80px" });
   const [visibleCount, setVisibleCount] = useState(0);
-  const [promptDone, setPromptDone] = useState(false);
   const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     if (!isInView) return;
-
-    // Clear any existing timeouts
     timeoutsRef.current.forEach(clearTimeout);
     timeoutsRef.current = [];
-
-    // Show prompt immediately (typing animation handles its reveal)
     setVisibleCount(1);
 
-    // Mark prompt as done typing after a delay matching the text length
-    const promptLength = lines[0].content.length;
-    const promptTimeout = setTimeout(
-      () => {
-        setPromptDone(true);
-      },
-      promptLength * 30 + 200,
-    );
-    timeoutsRef.current.push(promptTimeout);
-
-    // Schedule remaining lines
+    const promptLen = lines[0].text.length;
     for (let i = 1; i < lines.length; i++) {
-      const baseDelay = (lines[i].delay ?? 0) + promptLength * 30;
-      const t = setTimeout(() => {
-        setVisibleCount((prev) => Math.max(prev, i + 1));
-      }, baseDelay);
+      const t = setTimeout(
+        () => {
+          setVisibleCount((prev) => Math.max(prev, i + 1));
+        },
+        (lines[i].delay ?? 0) + promptLen * 28,
+      );
       timeoutsRef.current.push(t);
     }
-
     return () => {
       timeoutsRef.current.forEach(clearTimeout);
     };
@@ -277,9 +240,6 @@ export function Terminal() {
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.8, ease: "easeOut" }}
         >
-          {/* Gradient fade at bottom */}
-          <div className="pointer-events-none absolute right-0 bottom-0 left-0 h-16 bg-gradient-to-t from-bg to-transparent z-10" />
-
           {/* Title bar */}
           <div className="flex items-center gap-[7px] border-b border-white/[0.05] bg-white/[0.03] px-[18px] py-3.5">
             <div className="h-[11px] w-[11px] rounded-full bg-[#ff5f57]" />
@@ -291,13 +251,10 @@ export function Terminal() {
           </div>
 
           {/* Body */}
-          <div className="px-[22px] pt-5 pb-14 font-mono text-[13px] leading-[1.85] min-h-[380px]">
-            {/* Prompt line with typing animation */}
+          <div className="px-[22px] pt-5 pb-4 font-mono text-[13px] leading-[1.85] min-h-[380px]">
             {visibleCount >= 1 && (
-              <PromptLine content={lines[0].content} isActive={isInView} />
+              <PromptLine text={lines[0].text} active={isInView} />
             )}
-
-            {/* Rest of lines revealed progressively */}
             {lines.slice(1).map((line, i) => {
               if (i + 1 >= visibleCount) return null;
               return (
@@ -305,19 +262,18 @@ export function Terminal() {
                   key={i}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  transition={{ duration: 0.15 }}
+                  transition={{ duration: 0.12 }}
                 >
                   <RenderLine line={line} />
                 </motion.div>
               );
             })}
+          </div>
 
-            {/* Blinking cursor at the end when prompt is typing and no other lines shown */}
-            {promptDone && visibleCount <= 1 && (
-              <span className="block mt-3">
-                <span className="inline-block w-[7px] h-[15px] bg-text/40 animate-pulse" />
-              </span>
-            )}
+          {/* Status bar - like real Claude Code */}
+          <div className="border-t border-white/[0.05] px-[18px] py-2 font-mono text-[11px] text-text-dim flex items-center justify-between">
+            <span>⎇ main | 🔧 7</span>
+            <span>284K chunks indexed</span>
           </div>
         </motion.div>
       </div>
