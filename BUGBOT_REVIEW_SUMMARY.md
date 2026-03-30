@@ -1,146 +1,157 @@
-# BugBot Review Summary - PR #144
+# BugBot Review Summary - PR #146
 
-**Date**: 2026-03-30  
-**PR**: fix: repair quick capture search and keyboard ux  
-**Status**: ✅ **APPROVED**
+**Date:** 2026-03-30  
+**Branch:** `feat/fix-dashboard-perf`  
+**PR:** https://github.com/EtanHey/brainlayer/pull/146
 
 ---
 
 ## Quick Summary
 
-This PR successfully fixes Quick Capture UX issues with well-tested changes:
+✅ **APPROVED WITH FIXES APPLIED**
 
-✅ **Live search** - Query while typing (new feature)  
-✅ **Focus management** - Tab stays on mode toggle, not all UI elements  
-✅ **Bug fix** - Mode switch order corrected  
-✅ **Visual polish** - Borderless panel, reduced padding  
-✅ **Test coverage** - 2 new tests added  
+Found and fixed 3 issues:
+1. ❌ **CRITICAL** - Missing `collector.start()` call → **FIXED**
+2. ⚠️ **MEDIUM** - Silent error swallowing → **FIXED** (added logging)
+3. ⚠️ **LOW** - Unused import → **FIXED** (removed)
 
-**Recommendation**: Safe to merge. Optional follow-up for performance optimization.
-
----
-
-## Key Findings
-
-### ✅ No Blocking Issues
-
-All changes are well-implemented and tested. The code is production-ready.
-
-### ⚠️ One Performance Consideration (Non-Blocking)
-
-**Live search triggers on every keystroke without debouncing.**
-
-- **Risk**: Low for typical databases (FTS5 is fast, limited to 8 results)
-- **Impact**: Could cause lag on very large databases (>100K chunks)
-- **Mitigation**: Monitor in production, add 150ms debounce if needed
-- **Verdict**: Not a blocker, can be addressed in follow-up if issues arise
-
-### 🔧 Minor Polish Items (Optional)
-
-1. **Input validation**: Search doesn't trim whitespace like capture does
-2. **Test coverage**: Could add tests for empty input and rapid typing
-3. **Error handling**: No test for database errors during live search
+All fixes committed in `fe887e3` and pushed to PR.
 
 ---
 
-## Code Changes Analysis
+## Issues Found & Fixed
 
-### Change #1: Live Search ✅
+### 1. Missing collector.start() Call ❌ → ✅ FIXED
+
+**Problem:** Menu bar icon showed stale/zero data until popover was opened for the first time.
+
+**Root Cause:** `collector.start()` was never called in `applicationDidFinishLaunching`, so initial stats were never loaded.
+
+**Fix Applied:**
 ```swift
-func handleInputChange(_ newValue: String) {
-    if inputText != newValue {
-        inputText = newValue
+self.collector = collector
+collector.start()  // ← ADDED THIS LINE
+configureStatusItem(with: collector)
+```
+
+**Impact:** Menu bar icon now shows current stats immediately on app launch.
+
+---
+
+### 2. Silent Error Handling ⚠️ → ✅ FIXED
+
+**Problem:** Database errors were silently ignored when `force: false`, making debugging difficult.
+
+**Fix Applied:**
+```swift
+} catch {
+    if force {
+        daemon = nil
+        state = .offline
+    } else {
+        NSLog("[StatsCollector] Refresh failed (non-forced): \(error)")  // ← ADDED
     }
-    guard mode == .search else { return }
-    submitSearch()  // Runs on every keystroke
 }
 ```
-- ✅ Properly gated to search mode only
-- ✅ Test coverage added
-- ⚠️ No debouncing (monitor performance)
 
-### Change #2: Mode Switch Bug Fix ✅
-```swift
-// BEFORE (buggy)
-inputText = row.title
-setMode(.capture)
+**Impact:** Non-forced refresh failures now log to console for better observability.
 
-// AFTER (fixed)
-setMode(.capture)  // Clear state first
-inputText = row.title  // Then set input
-```
-- ✅ Eliminates race condition in UI updates
-- ✅ Correct state management
+---
 
-### Change #3: Focus Management ✅
-- Added `.focusable(false)` to 8 UI elements
-- ✅ Keeps Tab focused on mode toggle
-- ✅ Improves keyboard-first UX
+### 3. Unused Import ⚠️ → ✅ FIXED
 
-### Change #4: Visual Polish ✅
-- Borderless panel style (was `.titled`)
-- Reduced padding (16px vs 18px)
-- ✅ Cleaner, more modern appearance
+**Problem:** `import Darwin` was unused in `StatsCollector.swift` (leftover from removed notification code).
+
+**Fix Applied:** Removed the import.
+
+**Impact:** Cleaner code, no functional change.
+
+---
+
+## False Alarms (Verified Safe)
+
+### Memory Leak Concern → ✅ SAFE
+- **Concern:** Combine subscriptions accumulating in `cancellables` Set
+- **Reality:** This is correct for a menu bar app - subscriptions should live for entire app lifetime
+- **Verdict:** Not a bug, this is the correct pattern
+
+### Database Connection Leak → ✅ SAFE
+- **Concern:** Multiple `BrainDatabase` instances could be created
+- **Reality:** Production code creates exactly ONE collector in `AppDelegate`
+- **Verdict:** Not a bug, production code is safe
+
+### Thread Safety Concern → ✅ SAFE
+- **Concern:** `@Published` properties updated from background thread
+- **Reality:** `@MainActor` annotation ensures ALL methods run on main thread
+- **Verdict:** Not a bug, properly thread-safe
+
+---
+
+## Code Quality Assessment
+
+### Strengths ✅
+- Clean separation of concerns
+- Good use of SwiftUI reactive patterns
+- Proper resource cleanup
+- Thread-safe via `@MainActor`
+- Excellent test coverage (regression test validates no background polling)
+
+### Improvements Made ✅
+- Initial data load on app launch
+- Error logging for better observability
+- Code cleanup (removed unused import)
 
 ---
 
 ## Test Coverage
 
-### New Tests ✅
-1. `testHandleInputChangeRunsSearchImmediatelyInSearchMode`
-   - Validates live search triggers on input
-   - Checks results populate correctly
-   - Confirms first result auto-selected
-
-2. `testHandleInputReturnInCaptureModeStoresAndTriggersConfirmationFlash`
-   - Validates Return key stores content
-   - Confirms flash animation triggers
-   - Verifies database persistence
-
 ### Existing Tests ✅
-All 11 existing tests should continue to pass. No breaking changes.
+- `testDashboardStatsSummarizesChunkAndEnrichmentCounts` - validates stats calculation
+- `testDashboardStatsReturnsZeroPercentForEmptyDatabase` - edge case handling
+- `testDashboardStatsCountsRecentISO8601Timestamps` - timestamp parsing
+- `testStatsCollectorDoesNotRefreshWithoutExplicitRequest` - **KEY TEST** validates no background polling
+- `testPipelineState*` tests - state derivation logic
 
----
-
-## Risk Assessment
-
-| Risk | Severity | Likelihood | Mitigation |
-|------|----------|------------|------------|
-| Performance lag | Medium | Low | Monitor, add debounce if needed |
-| Wasted DB calls | Low | High | Add whitespace trim (polish) |
-| Missing edge cases | Low | Medium | Add tests (optional) |
-
-**Overall Risk**: **LOW** ✅
+### New Test Added ✅
+`testStatsCollectorDoesNotRefreshWithoutExplicitRequest` proves:
+1. Collector doesn't auto-refresh after `start()`
+2. Database changes don't trigger updates
+3. Explicit `refresh(force: true)` works correctly
 
 ---
 
 ## Recommendations
 
-### Immediate Action
-✅ **MERGE** - All critical functionality works correctly
+### Completed ✅
+- [x] Add `collector.start()` call
+- [x] Add error logging
+- [x] Remove unused import
 
-### Optional Follow-up Work
-1. **Performance**: Add 150ms debounce if users report lag
-2. **Validation**: Trim whitespace in `submitSearch()` like `submitCapture()` does
-3. **Tests**: Add edge case tests for empty input, rapid typing, errors
-
----
-
-## Files Changed
-
-- `brain-bar/Sources/BrainBar/QuickCapturePanel.swift` (+33, -6 lines)
-- `brain-bar/Tests/BrainBarTests/QuickCapturePanelTests.swift` (+40 lines)
-
-**Total**: 67 lines added, 6 lines removed
+### Future Enhancements (Not Blocking)
+- [ ] Add loading indicator for "Refresh" button (UX improvement)
+- [ ] Add error UI for database failures (better than silent failure)
+- [ ] Consider adding telemetry for refresh operations
 
 ---
 
 ## Final Verdict
 
-✅ **APPROVED FOR MERGE**
+**Status:** ✅ **APPROVED**
 
-This PR delivers the promised UX improvements with good test coverage and no breaking changes. The one performance consideration is theoretical and can be addressed in a follow-up if needed.
+All critical and medium-priority issues have been fixed. The PR successfully removes background polling while maintaining correct behavior. The menu bar icon now loads data on launch, errors are logged, and code is clean.
+
+**Confidence:** HIGH (based on static analysis and code review)
 
 ---
 
-**Full detailed review**: See `BUGBOT_REVIEW_QUICK_CAPTURE_UX_FIX.md`
+## Files Changed
+
+1. `brain-bar/Sources/BrainBar/BrainBarApp.swift` - Added `collector.start()` call
+2. `brain-bar/Sources/BrainBar/Dashboard/StatsCollector.swift` - Added error logging, removed unused import
+3. `BUGBOT_REVIEW_DASHBOARD_PERF.md` - Full detailed review document
+
+---
+
+**Review completed by:** @bugbot  
+**Commit with fixes:** `fe887e3`  
+**PR created:** #146
