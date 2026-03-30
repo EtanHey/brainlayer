@@ -381,6 +381,53 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.inputText, "copy this exact")
     }
 
+    func testCopySearchResultMarksCopiedRowForVisualConfirmation() throws {
+        let (db, path) = try makeDatabase(name: "copy-search-result-visual")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "copy-visual-1",
+            content: "Copy confirmation should highlight this row",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: TestClipboard())
+        model.handleInputChange("highlight this row")
+
+        model.copyResultToClipboard(id: "copy-visual-1")
+
+        XCTAssertEqual(model.copiedResultID, "copy-visual-1")
+        XCTAssertEqual(model.copyFeedbackFlashCount, 1)
+    }
+
+    func testSearchRowBuildsMetadataFromIntegerImportance() {
+        let row = QuickCaptureSearchRow.fromSearchResult([
+            "chunk_id": "int-importance-1",
+            "content": "Integer importance should still render",
+            "created_at": "2026-03-30 12:00:00",
+            "importance": 7
+        ])
+
+        XCTAssertEqual(row?.id, "int-importance-1")
+        XCTAssertEqual(row?.metadata, "imp 7 • 2026-03-30 12:00:00")
+    }
+
+    func testSearchInputFactoryCreatesSingleLineField() {
+        let field = QuickCaptureInputFactory.makeSearchField()
+        let cell = field.cell as? NSTextFieldCell
+
+        XCTAssertNotNil(cell)
+        XCTAssertEqual(cell?.wraps, false)
+        XCTAssertEqual(cell?.isScrollable, true)
+        XCTAssertEqual(cell?.lineBreakMode, .byClipping)
+        XCTAssertEqual(field.maximumNumberOfLines, 1)
+        XCTAssertTrue(cell?.usesSingleLineMode ?? false, "Search input should use single-line mode")
+    }
+
     func testBrainBarServerUsesProvidedDatabaseInstance() throws {
         let (db, path) = try makeDatabase(name: "server-shared-db")
         let socketPath = "/tmp/bb-\(UUID().uuidString.prefix(8)).sock"
