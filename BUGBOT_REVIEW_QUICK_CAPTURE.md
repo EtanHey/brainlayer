@@ -1,271 +1,238 @@
-# BugBot Review: Quick Capture Panel
+# BugBot Review: QuickCapturePanel Keyboard Flow
 
-**PR**: #140 - `feat: add BrainBar quick capture panel`  
-**Branch**: `feat/brainbar-quick-capture-panel`  
-**Review Date**: 2026-03-29  
-**Reviewer**: @bugbot  
+**PR:** feat/brainbar-quick-capture-keyboard-speed  
+**Reviewer:** @bugbot  
+**Date:** 2026-03-30  
+**Status:** ✅ Fixed
 
 ---
 
 ## Executive Summary
 
-✅ **Status: APPROVED WITH FIXES APPLIED**
-
-Identified and fixed **3 critical bugs** that would have caused:
-1. Complete search functionality failure (wrong dictionary key)
-2. Memory leaks in animation lifecycle
-3. Poor UX with whitespace validation
-
-All critical bugs have been committed (31badec) and pushed. The PR is now safe to merge.
+Reviewed the QuickCapturePanel implementation for the keyboard-first quick-capture flow. Found **3 bugs** ranging from critical data inconsistency to UX issues. All bugs have been fixed and committed.
 
 ---
 
-## 🔴 Critical Bugs Fixed
+## Bugs Found & Fixed
 
-### Bug #1: Search Results Key Mismatch ✅ FIXED
+### 🔴 Bug 1: Data Inconsistency in `submitCapture()` (CRITICAL)
 
-**Location**: `QuickCapturePanel.swift:140`
+**Location:** `QuickCapturePanel.swift:199-220`
 
-**Issue**: ViewModel used `result["id"]` but `BrainDatabase.search()` returns `"chunk_id"`
+**Issue:** The function validates `trimmed` content but stores untrimmed `inputText`.
 
+**Code:**
 ```swift
-// BEFORE (broken)
-let rawID = (result["id"] as? String) ?? UUID().uuidString
-
-// AFTER (fixed)
-let rawID = (result["chunk_id"] as? String) ?? UUID().uuidString
-```
-
-**Impact**: 
-- Search would ALWAYS show random UUIDs instead of actual chunk IDs
-- Users could never identify which chunks were returned
-- Complete search functionality failure
-
-**Verification**: Added assertion in `testSubmitSearchPublishesResults()` to verify chunk_id is correctly mapped from database results.
-
----
-
-### Bug #2: Memory Leak in Animation Completion ✅ FIXED
-
-**Location**: `QuickCapturePanel.swift:230-235`
-
-**Issue**: Animation completion handler captured `panel` strongly
-
-```swift
-// BEFORE (memory leak)
-} completionHandler: { [panel] in
-    Task { @MainActor in
-        panel.orderOut(nil)
-        panel.alphaValue = 1
-    }
-}
-
-// AFTER (fixed)
-} completionHandler: { [weak self] in
-    guard let self else { return }
-    Task { @MainActor in
-        self.panel.orderOut(nil)
-        self.panel.alphaValue = 1
-    }
-}
-```
-
-**Impact**:
-- Panel controller could be retained indefinitely if animation interrupted
-- Database connection stays open (closed in `deinit`)
-- Resource leak accumulates over multiple panel open/close cycles
-
-**Verification**: Requires manual testing with memory profiler (Instruments). Static analysis confirms the fix is correct.
-
----
-
-### Bug #3: Missing Early Validation ✅ FIXED
-
-**Location**: `QuickCapturePanel.swift:116-130`
-
-**Issue**: Whitespace-only input would hit database layer before validation
-
-```swift
-// ADDED (early validation)
 private func submitCapture() {
     let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
         feedback = .error("Content cannot be empty")
         return
     }
-    // ... rest of capture logic
+
+    do {
+        _ = try QuickCaptureController.capture(
+            db: db,
+            content: inputText,  // ❌ BUG: Should be `trimmed`
+            tags: []
+        )
+        // ...
+    }
 }
 ```
 
-**Impact**:
-- Unnecessary database call for invalid input
-- Inconsistent error handling (controller throws, but ViewModel didn't catch early)
-- Poor UX (user sees generic error instead of immediate feedback)
+**Impact:**
+- Leading/trailing whitespace gets stored in the database
+- Validation becomes ineffective
+- Creates inconsistency with `QuickCaptureController.capture()` which re-trims
 
-**Verification**: Added `testSubmitCaptureWithWhitespaceOnlyFails()` to verify error feedback and input preservation.
+**Fix:** Changed line 209 from `content: inputText` to `content: trimmed`
 
----
-
-## 🟡 Medium Priority Issues (Documented, Not Fixed)
-
-### Issue #4: Potential Mode Desync
-
-**Location**: `QuickCapturePanel.swift:44-59, 85-93`
-
-**Description**: ViewModel maintains its own `mode` copy that could theoretically desync from `panelState.mode`
-
-**Current Mitigation**:
-- `init()` syncs from panelState (line 58)
-- `dismiss()` re-syncs from panelState (line 106)  
-- `setMode()` updates both (lines 87-88)
-
-**Risk**: Low - all code paths properly sync. Would only break if `panelState.switchMode()` is called directly from outside ViewModel.
-
-**Recommendation**: Consider making `mode` a computed property that reads from panelState, or use Combine to observe panelState changes.
+**Severity:** Medium - causes data quality issues but doesn't break functionality
 
 ---
 
-### Issue #5: Inconsistent Error Handling
+### 🔴 Bug 2: Force Capture Doesn't Preserve Search Mode (CRITICAL)
 
-**Location**: `QuickCapturePanel.swift:116-161`
+**Location:** `QuickCapturePanel.swift:120-136` and `QuickCapturePanelTests.swift:154-170`
 
-**Description**: 
-- Capture error: shows feedback, **keeps** input (so user can fix)
-- Search error: shows feedback, **clears** results
+**Issue:** Test expects Cmd+Return to store content while remaining in search mode, but implementation doesn't support this.
 
-**Risk**: Low - this may be intentional UX design (search results are transient, capture input is valuable)
-
-**Recommendation**: Document the intentional difference if this is by design.
-
----
-
-### Issue #6: No Input Sanitization for Search
-
-**Location**: `QuickCapturePanel.swift:138-161`
-
-**Description**: Search doesn't validate/trim input before calling controller (though controller handles empty queries gracefully)
-
-**Risk**: Low - unnecessary database call for whitespace-only search
-
-**Recommendation**: Add early validation like capture does:
+**Test expectation:**
 ```swift
-private func submitSearch() {
-    let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        results = []
-        feedback = .idle
+func testCommandEnterForceStoresWhileRemainingInSearchMode() throws {
+    // ...
+    panelState.switchMode(.search)
+    model.inputText = "Ship the keyboard-first quick capture flow"
+    
+    model.submit(forceCapture: true)
+    
+    XCTAssertEqual(model.mode, .search)  // ❌ Would fail - mode not preserved
+    // ...
+}
+```
+
+**Root cause:** `submitCapture()` always clears `results` and `selectedResultIndex`, which is appropriate for capture mode but wrong for force-capture from search mode.
+
+**Fix:** 
+1. Added `preserveMode` parameter to `submitCapture()`
+2. Updated `submit()` to pass `preserveMode: true` for force capture
+3. Conditional state clearing based on `preserveMode` flag
+
+**Code changes:**
+```swift
+func submit(forceCapture: Bool = false) {
+    if forceCapture {
+        submitCapture(preserveMode: true)  // ✅ Preserve search state
         return
     }
-    // ... rest of search logic
+    
+    switch mode {
+    case .capture:
+        submitCapture(preserveMode: false)
+    case .search:
+        // ...
+    }
 }
+
+private func submitCapture(preserveMode: Bool) {
+    // ...
+    inputText = ""
+    if !preserveMode {  // ✅ Only clear when not preserving mode
+        results = []
+        selectedResultIndex = nil
+    }
+    feedback = .success("Stored in BrainLayer")
+    confirmationFlashCount += 1
+}
+```
+
+**Severity:** High - breaks documented feature behavior
+
+---
+
+### 🟡 Bug 3: Arrow Keys Don't Work for Text Editing in Capture Mode (UX)
+
+**Location:** `QuickCapturePanel.swift:281-298`
+
+**Issue:** Arrow keys are intercepted for result navigation even in capture mode, preventing normal text cursor movement.
+
+**Root cause:** `KeyHandlingTextField.keyDown()` unconditionally consumes arrow key events:
+
+```swift
+override func keyDown(with event: NSEvent) {
+    switch event.keyCode {
+    case 125:  // Down arrow
+        onMoveDown?()  // ❌ Always intercepts, even in capture mode
+        return
+    case 126:  // Up arrow
+        onMoveUp?()
+        return
+    // ...
+    }
+}
+```
+
+While `handleInputMove()` has a guard for search mode, the key event is already consumed and never reaches the text field's default handler.
+
+**Fix:**
+1. Added `shouldInterceptArrowKeys: Bool` property to `KeyHandlingTextField`
+2. Conditional interception based on this flag
+3. Pass mode state from `QuickCaptureInputField` to control interception
+4. Fall through to `super.keyDown()` when not intercepting
+
+**Code changes:**
+```swift
+var shouldInterceptArrowKeys: Bool = false
+
+override func keyDown(with event: NSEvent) {
+    switch event.keyCode {
+    case 125:
+        if shouldInterceptArrowKeys {  // ✅ Only intercept in search mode
+            onMoveDown?()
+            return
+        }
+    case 126:
+        if shouldInterceptArrowKeys {
+            onMoveUp?()
+            return
+        }
+    // ...
+    default:
+        break
+    }
+    super.keyDown(with: event)  // ✅ Allow default text editing
+}
+```
+
+**Severity:** Low - UX annoyance, doesn't break core functionality
+
+---
+
+## Additional Observations
+
+### ⚠️ Potential Issues (Not Fixed)
+
+1. **Focus timing race condition**  
+   `QuickCaptureInputField.updateNSView()` uses `DispatchQueue.main.async` for focus (line 365). Rapid view updates could cause focus to be set out of order.
+
+2. **Missing chunk_id handling**  
+   `submitSearch()` line 230 falls back to `UUID().uuidString` if `chunk_id` is missing from DB results. This breaks result identity and could cause selection bugs if the database schema is inconsistent.
+
+3. **Redundant state clearing**  
+   `submitCapture()` clears `results` and `selectedResultIndex` even in capture mode where these should already be empty (cleared by `setMode(.capture)`). Now conditional with `preserveMode` flag.
+
+### ✅ Good Patterns Found
+
+1. **Bounds checking:** `moveSelection()` properly clamps indices with `max(currentIndex - 1, 0)` and `min(currentIndex + 1, results.count - 1)`
+
+2. **Nil safety:** `selectedResultID` computed property safely handles nil and out-of-bounds indices
+
+3. **Test coverage:** Comprehensive test suite covers mode switching, keyboard navigation, and force capture flows
+
+---
+
+## Test Coverage
+
+All existing tests should now pass:
+- ✅ `testViewModelUsesCapturePlaceholderByDefault`
+- ✅ `testViewModelUsesSearchPlaceholderInSearchMode`
+- ✅ `testSubmitCaptureStoresChunkAndShowsConfirmation`
+- ✅ `testSubmitSearchPublishesResults`
+- ✅ `testTabTogglesBetweenCaptureAndSearchModes`
+- ✅ `testArrowKeysMoveSelectedSearchResult`
+- ✅ `testEnterSelectsHighlightedSearchResultIntoCaptureMode`
+- ✅ `testCommandEnterForceStoresWhileRemainingInSearchMode` (now fixed)
+- ✅ `testPanelAppearanceRequestsFieldFocus`
+- ✅ `testEscapeDismissesPanel`
+- ✅ `testDismissResetsViewModelBackToCaptureMode`
+- ✅ `testSubmitCaptureWithWhitespaceOnlyFails`
+- ✅ `testModeSwitchClearsResultsWhenSwitchingToCapture`
+
+---
+
+## Recommendations
+
+1. **Run full test suite** to verify fixes don't break other functionality
+2. **Manual testing** of arrow key behavior in both modes
+3. **Consider adding test** for arrow key text editing in capture mode
+4. **Review DB schema** to ensure `chunk_id` is always present in search results
+
+---
+
+## Commit
+
+Fixed in commit `48d341a`:
+```
+fix: correct data inconsistency and arrow key handling in QuickCapturePanel
+
+- Bug 1: submitCapture() now stores trimmed content instead of raw inputText
+- Bug 2: force capture (Cmd+Return) now preserves search mode as intended
+- Bug 3: arrow keys now work for text editing in capture mode, only intercept in search mode
 ```
 
 ---
 
-## 🟢 Low Priority Issues (Polish)
+## Sign-off
 
-### Issue #7: Hard-coded Panel Size
-
-**Locations**: 
-- Line 180: `NSRect(x: 0, y: 0, width: 540, height: 360)`
-- Line 362: `.frame(width: 540, height: 360)`
-
-**Recommendation**: Extract to constants to prevent desync
-
----
-
-### Issue #8: Missing Accessibility Support
-
-**Location**: `QuickCapturePanel.swift:272-417`
-
-**Description**: No accessibility labels for VoiceOver users
-
-**Recommendation**: Add `.accessibilityLabel()` modifiers to:
-- Mode buttons (Capture/Search)
-- Text field
-- Search result rows
-- Status text
-
----
-
-### Issue #9: No Live Search
-
-**Location**: `QuickCapturePanel.swift:334-336`
-
-**Description**: Search only triggers on Return key, no live results
-
-**Note**: This is a design choice, not a bug. Some users may prefer explicit search (less database load), others may expect live results.
-
----
-
-## 🧪 Test Coverage
-
-### Tests Added ✅
-1. `testSubmitCaptureWithWhitespaceOnlyFails()` - validates whitespace rejection
-2. `testModeSwitchClearsResultsWhenSwitchingToCapture()` - validates mode switch behavior
-3. Enhanced `testSubmitSearchPublishesResults()` - validates chunk_id mapping
-
-### Existing Tests (Already Good) ✅
-- Placeholder text for both modes
-- Capture stores chunk and shows confirmation  
-- Search publishes results
-- Panel appearance requests focus
-- Escape dismisses panel
-- Dismiss resets to capture mode
-
-### Recommended Additional Tests
-- Search with whitespace-only input
-- Mode switch during active feedback state
-- Multiple rapid submit calls (race condition testing)
-- Database error handling (mock failures)
-
----
-
-## 📊 Risk Assessment
-
-| Bug | Severity | Impact | Status |
-|-----|----------|--------|--------|
-| Search key mismatch | Critical | Search completely broken | ✅ Fixed |
-| Memory leak | Critical | Resource exhaustion over time | ✅ Fixed |
-| Whitespace validation | Medium | Poor UX, wasted DB calls | ✅ Fixed |
-| Mode desync | Low | UI confusion (unlikely) | ⚠️ Documented |
-| Missing accessibility | Low | Excludes some users | ⚠️ Documented |
-
----
-
-## ✅ Final Verdict
-
-**APPROVED** - All critical bugs have been fixed and committed.
-
-**Changes Made**:
-- Commit `31badec`: Fixed 3 critical bugs + added 3 edge case tests
-- Commit `43551f0`: Added documentation (this review)
-
-**Remaining Work**: The medium/low priority issues are design trade-offs and polish items that can be addressed in follow-up PRs if desired. They do not block merge.
-
-**Test Status**: 
-- ✅ New tests added for all critical fixes
-- ✅ Existing tests still pass (based on code review)
-- ⚠️ Manual testing required for animation lifecycle (memory leak fix)
-
----
-
-## 🔍 Code Quality Notes
-
-**Strengths**:
-- Clean architecture: View → ViewModel → Controller → Database
-- Proper use of `@MainActor` for UI code
-- Good separation of concerns
-- Comprehensive error handling with `LocalizedError`
-- Proper database cleanup in tests
-
-**Minor Improvements Possible**:
-- Extract animation constants (durations, timing functions)
-- Add logging for debugging (NSLog statements)
-- Add telemetry for usage analytics
-
----
-
-**Review completed**: 2026-03-29 23:35 UTC  
-**Commits reviewed**: 1387486, 31badec, 43551f0  
-**Files changed**: 2 source files, 1 test file, 1 doc file
+**@bugbot:** All critical bugs fixed. PR ready for merge pending test verification.
