@@ -3,7 +3,7 @@
 #
 # Usage: bash brain-bar/build-app.sh
 #
-# Output: /Applications/BrainBar.app
+# Output: ~/Applications/BrainBar.app (override with BRAINBAR_APP_DIR)
 
 set -euo pipefail
 
@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
 APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
+SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Apple Development: Etan Heyman (DXHB5E7P2D)}"
 
 # Kill any running BrainBar instances before installing
 if pgrep -x BrainBar > /dev/null 2>&1; then
@@ -44,9 +45,16 @@ mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
 
-# Ad-hoc codesign
+# Developer signing keeps TCC permissions stable across rebuilds.
 echo "[build-app] Signing..."
-codesign --force --sign - "$APP_DIR"
+codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none "$APP_DIR"
+
+echo "[build-app] Verifying signature..."
+if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTITY" >/dev/null; then
+    echo "[build-app] ERROR: Installed app is not signed with $SIGN_IDENTITY"
+    codesign -dv --verbose=4 "$APP_DIR" 2>&1
+    exit 1
+fi
 
 echo "[build-app] Done: $APP_DIR"
 echo "[build-app] Socket: /tmp/brainbar.sock"
