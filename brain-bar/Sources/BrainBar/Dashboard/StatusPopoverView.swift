@@ -45,6 +45,9 @@ struct StatusPopoverView: View {
                     .stroke(Color(nsColor: collector.state.color), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .frame(height: 42)
                     .padding(.vertical, 4)
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(nsColor: .windowBackgroundColor))
@@ -75,6 +78,9 @@ struct StatusPopoverView: View {
         }
         .padding(14)
         .frame(width: 340)
+        .onAppear {
+            collector.refresh(force: true)
+        }
     }
 
     private func metricTile(_ label: String, value: String) -> some View {
