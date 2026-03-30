@@ -1,12 +1,100 @@
-// HotkeyManager.swift — Global hotkey detection via CGEventTap.
+// HotkeyManager.swift — Optional global hotkey via CGEventTap (fallback path).
 //
-// Ported from VoiceBar (PR #87). Uses .listenOnly tap (Input Monitoring
-// permission) with F4 as the default hotkey for BrainBar quick capture.
+// Primary hotkeys are expected from Karabiner Elements → `open brainbar://toggle`
+// or `brainbar://search` (see brain-bar/karabiner/brainbar-f4.json). This tap
+// is only started when the user enables “CGEventTap fallback” in the status
+// popover (Input Monitoring / Listen Events required).
 //
 // Gesture state machine: single tap = toggle panel, hold = not used (reserved).
 
+import ApplicationServices
 import CoreGraphics
 import Foundation
+
+struct HotkeyPermissionStatus: Equatable {
+    let inputMonitoringGranted: Bool
+    let accessibilityGranted: Bool
+
+    var isSatisfied: Bool {
+        inputMonitoringGranted && accessibilityGranted
+    }
+
+    var missingPermissionsMessage: String {
+        switch (inputMonitoringGranted, accessibilityGranted) {
+        case (false, false):
+            return "Input Monitoring and Accessibility"
+        case (false, true):
+            return "Input Monitoring"
+        case (true, false):
+            return "Accessibility"
+        case (true, true):
+            return "None"
+        }
+    }
+}
+
+final class HotkeyDebouncer {
+    private let window: TimeInterval
+    private var lastProcessedKeyDownAt: Date?
+
+    init(windowMs: Int = 300) {
+        window = Double(windowMs) / 1000.0
+    }
+
+    func shouldProcessKeyDown(at now: Date = Date()) -> Bool {
+        if let lastProcessedKeyDownAt, now.timeIntervalSince(lastProcessedKeyDownAt) < window {
+            return false
+        }
+        lastProcessedKeyDownAt = now
+        return true
+    }
+}
+
+enum HotkeyAction: Equatable {
+    case none
+    case keyDown
+    case keyUp
+}
+
+struct HotkeyEventDecision: Equatable {
+    let matchesHotkey: Bool
+    let shouldConsumeEvent: Bool
+    let action: HotkeyAction
+
+    static func make(
+        type: CGEventType,
+        keycode: Int64,
+        autorepeat: Int64,
+        targetKeycodes: Set<Int64>,
+        useModifierMode: Bool,
+        debouncer: HotkeyDebouncer,
+        now: Date = Date()
+    ) -> Self {
+        guard targetKeycodes.contains(keycode) else {
+            return Self(matchesHotkey: false, shouldConsumeEvent: false, action: .none)
+        }
+
+        if useModifierMode {
+            return Self(matchesHotkey: true, shouldConsumeEvent: true, action: .keyDown)
+        }
+
+        if autorepeat != 0 {
+            return Self(matchesHotkey: true, shouldConsumeEvent: false, action: .none)
+        }
+
+        switch type {
+        case .keyDown:
+            guard debouncer.shouldProcessKeyDown(at: now) else {
+                return Self(matchesHotkey: true, shouldConsumeEvent: false, action: .none)
+            }
+            return Self(matchesHotkey: true, shouldConsumeEvent: true, action: .keyDown)
+        case .keyUp:
+            return Self(matchesHotkey: true, shouldConsumeEvent: true, action: .keyUp)
+        default:
+            return Self(matchesHotkey: true, shouldConsumeEvent: false, action: .none)
+        }
+    }
+}
 
 // MARK: - Gesture State Machine
 
@@ -93,12 +181,14 @@ private final class TapContext: @unchecked Sendable {
     let gesture: GestureStateMachine
     let targetKeycodes: Set<Int64>
     let useModifierMode: Bool
+    let debouncer: HotkeyDebouncer
     var tap: CFMachPort?
 
-    init(gesture: GestureStateMachine, keycodes: Set<Int64>, modifierMode: Bool) {
+    init(gesture: GestureStateMachine, keycodes: Set<Int64>, modifierMode: Bool, debouncer: HotkeyDebouncer) {
         self.gesture = gesture
         targetKeycodes = keycodes
         useModifierMode = modifierMode
+        self.debouncer = debouncer
     }
 }
 
@@ -132,20 +222,34 @@ private func hotkeyCallback(
             if isDown { ctx.gesture.handleKeyDown() }
             else { ctx.gesture.handleKeyUp() }
         }
-    } else {
-        guard ctx.targetKeycodes.contains(keycode) else {
-            return Unmanaged.passUnretained(event)
-        }
-        let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
-        guard autorepeat == 0 else { return Unmanaged.passUnretained(event) }
-        let isDown = (type == .keyDown)
-        DispatchQueue.main.async {
-            if isDown { ctx.gesture.handleKeyDown() }
-            else { ctx.gesture.handleKeyUp() }
+        return nil
+    }
+
+    let decision = HotkeyEventDecision.make(
+        type: type,
+        keycode: keycode,
+        autorepeat: event.getIntegerValueField(.keyboardEventAutorepeat),
+        targetKeycodes: ctx.targetKeycodes,
+        useModifierMode: ctx.useModifierMode,
+        debouncer: ctx.debouncer
+    )
+
+    guard decision.matchesHotkey else {
+        return Unmanaged.passUnretained(event)
+    }
+
+    DispatchQueue.main.async {
+        switch decision.action {
+        case .keyDown:
+            ctx.gesture.handleKeyDown()
+        case .keyUp:
+            ctx.gesture.handleKeyUp()
+        case .none:
+            break
         }
     }
 
-    return Unmanaged.passUnretained(event)
+    return decision.shouldConsumeEvent ? nil : Unmanaged.passUnretained(event)
 }
 
 // MARK: - Hotkey Manager
@@ -157,17 +261,26 @@ final class HotkeyManager {
     private var useModifierMode: Bool = false
     private let gesture: GestureStateMachine
     private var tapContext: TapContext?
+    private let debouncer = HotkeyDebouncer()
 
     init(gesture: GestureStateMachine) {
         self.gesture = gesture
     }
 
-    static func hasPermission() -> Bool { CGPreflightListenEventAccess() }
+    static func permissionStatus() -> HotkeyPermissionStatus {
+        HotkeyPermissionStatus(
+            inputMonitoringGranted: CGPreflightListenEventAccess(),
+            accessibilityGranted: AXIsProcessTrusted()
+        )
+    }
+
+    static func hasPermission() -> Bool { permissionStatus().isSatisfied }
     static func requestPermission() { CGRequestListenEventAccess() }
 
     func start() -> Bool {
-        guard HotkeyManager.hasPermission() else {
-            NSLog("[BrainBar.Hotkey] Input Monitoring permission not granted")
+        let permissions = HotkeyManager.permissionStatus()
+        guard permissions.isSatisfied else {
+            NSLog("[BrainBar.Hotkey] Missing permission: %@", permissions.missingPermissionsMessage)
             HotkeyManager.requestPermission()
             return false
         }
@@ -181,14 +294,19 @@ final class HotkeyManager {
             )
         }
 
-        let ctx = TapContext(gesture: gesture, keycodes: targetKeycodes, modifierMode: useModifierMode)
+        let ctx = TapContext(
+            gesture: gesture,
+            keycodes: targetKeycodes,
+            modifierMode: useModifierMode,
+            debouncer: debouncer
+        )
         tapContext = ctx
         let ctxPtr = Unmanaged.passUnretained(ctx).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
+            options: .defaultTap,
             eventsOfInterest: mask,
             callback: hotkeyCallback,
             userInfo: ctxPtr

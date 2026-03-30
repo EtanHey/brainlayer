@@ -131,6 +131,104 @@ final class QuickCaptureTests: XCTestCase {
         XCTAssertNotNil(manager)
     }
 
+    func testHotkeyPermissionStatusRequiresInputMonitoringAndAccessibility() {
+        let missingInput = HotkeyPermissionStatus(inputMonitoringGranted: false, accessibilityGranted: true)
+        XCTAssertFalse(missingInput.isSatisfied)
+        XCTAssertEqual(missingInput.missingPermissionsMessage, "Input Monitoring")
+
+        let missingAccessibility = HotkeyPermissionStatus(inputMonitoringGranted: true, accessibilityGranted: false)
+        XCTAssertFalse(missingAccessibility.isSatisfied)
+        XCTAssertEqual(missingAccessibility.missingPermissionsMessage, "Accessibility")
+
+        let missingBoth = HotkeyPermissionStatus(inputMonitoringGranted: false, accessibilityGranted: false)
+        XCTAssertFalse(missingBoth.isSatisfied)
+        XCTAssertEqual(missingBoth.missingPermissionsMessage, "Input Monitoring and Accessibility")
+    }
+
+    func testDebouncerRejectsRepeatedKeyDownsWithin300Milliseconds() {
+        let debouncer = HotkeyDebouncer(windowMs: 300)
+
+        XCTAssertTrue(debouncer.shouldProcessKeyDown(at: Date(timeIntervalSinceReferenceDate: 10)))
+        XCTAssertFalse(debouncer.shouldProcessKeyDown(at: Date(timeIntervalSinceReferenceDate: 10.2)))
+        XCTAssertTrue(debouncer.shouldProcessKeyDown(at: Date(timeIntervalSinceReferenceDate: 10.31)))
+    }
+
+    func testHotkeyEventDecisionConsumesMatchedNonRepeatingF4Events() {
+        let consumeDown = HotkeyEventDecision.make(
+            type: .keyDown,
+            keycode: 118,
+            autorepeat: 0,
+            targetKeycodes: [118, 129],
+            useModifierMode: false,
+            debouncer: HotkeyDebouncer(windowMs: 300),
+            now: Date(timeIntervalSinceReferenceDate: 20)
+        )
+        XCTAssertTrue(consumeDown.matchesHotkey)
+        XCTAssertTrue(consumeDown.shouldConsumeEvent)
+        XCTAssertEqual(consumeDown.action, .keyDown)
+
+        let consumeUp = HotkeyEventDecision.make(
+            type: .keyUp,
+            keycode: 118,
+            autorepeat: 0,
+            targetKeycodes: [118, 129],
+            useModifierMode: false,
+            debouncer: HotkeyDebouncer(windowMs: 300),
+            now: Date(timeIntervalSinceReferenceDate: 21)
+        )
+        XCTAssertTrue(consumeUp.matchesHotkey)
+        XCTAssertTrue(consumeUp.shouldConsumeEvent)
+        XCTAssertEqual(consumeUp.action, .keyUp)
+    }
+
+    func testHotkeyEventDecisionPassesThroughNonMatchingAndDebouncedEvents() {
+        let debouncer = HotkeyDebouncer(windowMs: 300)
+        _ = HotkeyEventDecision.make(
+            type: .keyDown,
+            keycode: 118,
+            autorepeat: 0,
+            targetKeycodes: [118],
+            useModifierMode: false,
+            debouncer: debouncer,
+            now: Date(timeIntervalSinceReferenceDate: 30)
+        )
+
+        let debounced = HotkeyEventDecision.make(
+            type: .keyDown,
+            keycode: 118,
+            autorepeat: 0,
+            targetKeycodes: [118],
+            useModifierMode: false,
+            debouncer: debouncer,
+            now: Date(timeIntervalSinceReferenceDate: 30.1)
+        )
+        XCTAssertTrue(debounced.matchesHotkey)
+        XCTAssertFalse(debounced.shouldConsumeEvent)
+        XCTAssertEqual(debounced.action, .none)
+
+        let nonMatching = HotkeyEventDecision.make(
+            type: .keyDown,
+            keycode: 96,
+            autorepeat: 0,
+            targetKeycodes: [118],
+            useModifierMode: false,
+            debouncer: HotkeyDebouncer(windowMs: 300),
+            now: Date(timeIntervalSinceReferenceDate: 31)
+        )
+        XCTAssertFalse(nonMatching.matchesHotkey)
+        XCTAssertFalse(nonMatching.shouldConsumeEvent)
+        XCTAssertEqual(nonMatching.action, .none)
+    }
+
+    func testBrainBarHotkeyFailureMessageMentionsBothPermissions() {
+        let message = BrainBarAppSupport.hotkeyPermissionFailureMessage(
+            permissions: HotkeyPermissionStatus(inputMonitoringGranted: false, accessibilityGranted: false)
+        )
+
+        XCTAssertTrue(message.contains("Input Monitoring"))
+        XCTAssertTrue(message.contains("Accessibility"))
+    }
+
     // MARK: - Gesture State Machine
 
     func testGestureKeyDownTransitionsToWaiting() {
@@ -154,5 +252,22 @@ final class QuickCaptureTests: XCTestCase {
         XCTAssertNotEqual(gesture.state, .idle)
         gesture.reset()
         XCTAssertEqual(gesture.state, .idle)
+    }
+
+    // MARK: - brainbar:// URL scheme
+
+    func testBrainBarURLParsesToggle() {
+        let url = URL(string: "brainbar://toggle")!
+        XCTAssertEqual(BrainBarURLAction.parse(url: url), .toggle)
+    }
+
+    func testBrainBarURLParsesSearch() {
+        let url = URL(string: "brainbar://search")!
+        XCTAssertEqual(BrainBarURLAction.parse(url: url), .search)
+    }
+
+    func testBrainBarURLRejectsOtherSchemes() {
+        let url = URL(string: "https://example.com")!
+        XCTAssertNil(BrainBarURLAction.parse(url: url))
     }
 }
