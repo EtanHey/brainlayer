@@ -147,6 +147,15 @@ final class QuickCaptureViewModel: ObservableObject {
         toggleMode()
     }
 
+    func handleInputChange(_ newValue: String) {
+        if inputText != newValue {
+            inputText = newValue
+        }
+
+        guard mode == .search else { return }
+        submitSearch()
+    }
+
     func handleInputReturn(modifiers: NSEvent.ModifierFlags) {
         if modifiers.contains(.command) {
             submit(forceCapture: true)
@@ -268,8 +277,8 @@ final class QuickCaptureViewModel: ObservableObject {
         }
 
         let row = results[selectedResultIndex]
-        inputText = row.title
         setMode(.capture)
+        inputText = row.title
         feedback = .idle
     }
 }
@@ -312,6 +321,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
     let placeholder: String
     let focusRequestCount: Int
     let isSearchMode: Bool
+    let onTextChange: (String) -> Void
     let onTab: () -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
@@ -328,6 +338,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
         func controlTextDidChange(_ notification: Notification) {
             guard let textField = notification.object as? NSTextField else { return }
             parent.text = textField.stringValue
+            parent.onTextChange(textField.stringValue)
         }
     }
 
@@ -396,7 +407,7 @@ final class QuickCapturePanelController {
         viewModel = QuickCaptureViewModel(db: database, panelState: panelState)
         panel = QuickCapturePanel(
             contentRect: NSRect(x: 0, y: 0, width: 540, height: 360),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -525,6 +536,7 @@ struct QuickCapturePanelView: View {
                     ) {
                         viewModel.setMode(.capture)
                     }
+                    .focusable(false)
 
                     QuickCaptureModeButton(
                         title: "Search",
@@ -533,13 +545,18 @@ struct QuickCapturePanelView: View {
                     ) {
                         viewModel.setMode(.search)
                     }
+                    .focusable(false)
                 }
+                .focusable(false)
 
                 QuickCaptureInputField(
                     text: $viewModel.inputText,
                     placeholder: viewModel.placeholderText,
                     focusRequestCount: viewModel.focusRequestCount,
                     isSearchMode: viewModel.mode == .search,
+                    onTextChange: { newValue in
+                        viewModel.handleInputChange(newValue)
+                    },
                     onTab: {
                         viewModel.handleInputTab()
                     },
@@ -553,8 +570,8 @@ struct QuickCapturePanelView: View {
                         viewModel.handleInputReturn(modifiers: modifiers)
                     }
                 )
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 14)
                             .fill(Color(nsColor: .controlBackgroundColor))
@@ -575,6 +592,7 @@ struct QuickCapturePanelView: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                .focusable(false)
 
                 if viewModel.mode == .search {
                     SearchResultsList(
@@ -595,10 +613,9 @@ struct QuickCapturePanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(18)
+            .padding(16)
         }
         .frame(width: 540, height: 360)
-        .padding(10)
         .onChange(of: viewModel.confirmationFlashCount) { _, _ in
             flashOpacity = 0.18
             withAnimation(.easeOut(duration: 0.45)) {
@@ -641,6 +658,7 @@ struct QuickCapturePanelView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
+        .focusable(false)
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color(nsColor: .controlBackgroundColor))
@@ -666,6 +684,7 @@ private struct QuickCaptureModeButton: View {
                 )
         }
         .buttonStyle(.plain)
+        .focusable(false)
         .foregroundStyle(isSelected ? Color.accentColor : .primary)
         .keyboardShortcut(shortcut, modifiers: [.command])
     }
@@ -720,10 +739,12 @@ private struct SearchResultsList: View {
                         .onTapGesture(count: 2) {
                             onActivate(row.id)
                         }
+                        .focusable(false)
                     }
                 }
             }
         }
+        .focusable(false)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

@@ -67,6 +67,30 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.selectedResultID, "search-1", "Search should preselect the first result for keyboard navigation")
     }
 
+    func testHandleInputChangeRunsSearchImmediatelyInSearchMode() throws {
+        let (db, path) = try makeDatabase(name: "live-search")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "live-1",
+            content: "BrainBar live search should query while typing",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+
+        model.handleInputChange("live search")
+
+        XCTAssertEqual(model.inputText, "live search")
+        XCTAssertEqual(model.results.map(\.id), ["live-1"])
+        XCTAssertEqual(model.selectedResultID, "live-1")
+        XCTAssertTrue(model.feedback.isIdle)
+    }
+
     func testTabTogglesBetweenCaptureAndSearchModes() throws {
         let (db, path) = try makeDatabase(name: "tab-toggle")
         defer { cleanupDatabase(db, path: path) }
@@ -166,6 +190,22 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
         XCTAssertEqual(model.inputText, "")
         let results = try db.search(query: "keyboard-first quick capture", limit: 5)
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testHandleInputReturnInCaptureModeStoresAndTriggersConfirmationFlash() throws {
+        let (db, path) = try makeDatabase(name: "capture-return-flash")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(db: db, panelState: QuickCapturePanelState())
+        model.inputText = "Return should store and flash green"
+
+        model.handleInputReturn(modifiers: [])
+
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+        XCTAssertEqual(model.confirmationFlashCount, 1)
+        XCTAssertEqual(model.inputText, "")
+        let results = try db.search(query: "flash green", limit: 5)
         XCTAssertEqual(results.count, 1)
     }
 
