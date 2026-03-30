@@ -138,8 +138,8 @@ class TestTagFilterUsesIndex:
 # ── Gap H: FTS5 AND search returns intersection ────────────────────────────
 
 
-class TestAndSearchReturnsIntersection:
-    """Gap H: Multi-word FTS5 queries should use AND mode (intersection)."""
+class TestFts5AutoMode:
+    """Gap H: FTS5 auto mode should favor recall for long multi-word queries."""
 
     def test_escape_fts5_short_query_uses_and(self):
         """≤3 terms should use AND (space = implicit AND in FTS5)."""
@@ -149,19 +149,12 @@ class TestAndSearchReturnsIntersection:
         # Space-separated quoted terms = implicit AND in FTS5
         assert result == '"authentication" "middleware"'
 
-    def test_escape_fts5_long_query_uses_and(self):
-        """4+ terms should ALSO use AND, not OR — precision over recall.
-
-        Previously used OR for 4+ terms. Fixed to always use AND.
-        RRF fusion with semantic search already provides recall.
-        """
+    def test_escape_fts5_long_query_uses_or(self):
+        """4+ terms should use OR to avoid zero-result over-constrained MATCH queries."""
         from brainlayer._helpers import _escape_fts5_query
 
         result = _escape_fts5_query("authentication middleware session tokens")
-        # Should NOT contain OR — all terms must match
-        assert "OR" not in result
-        # Should be implicit AND (space-separated)
-        assert result == '"authentication" "middleware" "session" "tokens"'
+        assert result == '"authentication" OR "middleware" OR "session" OR "tokens"'
 
     def test_fts5_and_returns_intersection(self, tmp_path):
         """Search for 'alpha beta' should only return chunks containing BOTH words."""
@@ -195,6 +188,27 @@ class TestAndSearchReturnsIntersection:
 
         result = _escape_fts5_query("Avi Simon", match_mode="or")
         assert "OR" in result
+
+    def test_hybrid_search_long_query_uses_fts_or_and_returns_results(self, tmp_path, monkeypatch):
+        """Long multi-keyword searches should still surface partial lexical matches."""
+        store = _make_store(tmp_path)
+        expected = "owner profile and career work history"
+        _insert_chunk(store, expected)
+        _insert_chunk(store, "gardening notes and grocery list")
+
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+
+        results = store.hybrid_search(
+            query_embedding=[0.0] * 1024,
+            query_text="owner profile career work history years experience",
+            n_results=5,
+        )
+
+        assert expected in results["documents"][0]
 
     def test_empty_fts5_query_returns_no_match_expression(self):
         """Blank input should skip FTS instead of expanding to a match-all wildcard."""

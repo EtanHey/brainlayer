@@ -39,8 +39,8 @@ def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
     We wrap each word in double quotes so they're treated as literal terms.
 
     match_mode:
-        "auto" — always AND (implicit via space). RRF fusion with semantic
-                  search already provides recall; FTS5 should maximize precision.
+        "auto" — use AND for 1-3 terms, OR for 4+ terms. Longer natural-language
+                  queries otherwise over-constrain FTS and collapse recall.
         "or"   — always OR (for entity search where any term should match).
     Empty/whitespace-only queries return an empty string so callers can skip FTS.
     """
@@ -57,9 +57,10 @@ def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
         return ""
     if match_mode == "or":
         joiner = " OR "
+    elif match_mode == "auto" and len(terms) >= 4:
+        joiner = " OR "
     else:
-        # Always AND (space = implicit AND in FTS5). Semantic search via RRF
-        # already handles recall — FTS5 should maximize precision.
+        # Space-separated terms in FTS5 are implicit AND.
         joiner = " "
     return joiner.join(terms)
 
