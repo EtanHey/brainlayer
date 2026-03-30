@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+protocol QuickCaptureClipboard {
+    func copy(_ string: String)
+}
+
+struct SystemQuickCaptureClipboard: QuickCaptureClipboard {
+    func copy(_ string: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+    }
+}
+
 enum QuickCaptureFeedback: Equatable {
     case idle
     case success(String)
@@ -37,6 +49,7 @@ enum QuickCaptureFeedback: Equatable {
 struct QuickCaptureSearchRow: Identifiable, Equatable {
     let id: String
     let title: String
+    let content: String
     let metadata: String
 }
 
@@ -57,10 +70,16 @@ final class QuickCaptureViewModel: ObservableObject {
 
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
+    private let clipboard: QuickCaptureClipboard
 
-    init(db: BrainDatabase, panelState: QuickCapturePanelState) {
+    init(
+        db: BrainDatabase,
+        panelState: QuickCapturePanelState,
+        clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard()
+    ) {
         self.db = db
         self.panelState = panelState
+        self.clipboard = clipboard
         mode = panelState.mode
     }
 
@@ -188,6 +207,12 @@ final class QuickCaptureViewModel: ObservableObject {
         applySelectedSearchResult()
     }
 
+    func copyResultToClipboard(id: String) {
+        guard let row = results.first(where: { $0.id == id }) else { return }
+        clipboard.copy(row.content)
+        feedback = .success("Copied result to clipboard")
+    }
+
     func clearResultsSelection() {
         selectedResultIndex = nil
     }
@@ -245,6 +270,7 @@ final class QuickCaptureViewModel: ObservableObject {
                 return QuickCaptureSearchRow(
                     id: rawID,
                     title: title,
+                    content: title,
                     metadata: "\(importance) • \(createdAt)"
                 )
             }
@@ -283,7 +309,7 @@ final class QuickCaptureViewModel: ObservableObject {
     }
 }
 
-private final class KeyHandlingTextField: NSTextField {
+final class KeyHandlingTextView: NSTextView {
     var onTab: (() -> Void)?
     var onMoveUp: (() -> Void)?
     var onMoveDown: (() -> Void)?
@@ -291,28 +317,29 @@ private final class KeyHandlingTextField: NSTextField {
 
     var shouldInterceptArrowKeys: Bool = false
 
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 48:
+    override func doCommand(by selector: Selector) {
+        switch selector {
+        case #selector(insertTab(_:)):
             onTab?()
             return
-        case 125:
+        case #selector(moveDown(_:)):
             if shouldInterceptArrowKeys {
                 onMoveDown?()
                 return
             }
-        case 126:
+        case #selector(moveUp(_:)):
             if shouldInterceptArrowKeys {
                 onMoveUp?()
                 return
             }
-        case 36, 76:
-            onReturn?(event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        case #selector(insertNewline(_:)), #selector(insertNewlineIgnoringFieldEditor(_:)):
+            let modifiers = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+            onReturn?(modifiers)
             return
         default:
             break
         }
-        super.keyDown(with: event)
+        super.doCommand(by: selector)
     }
 }
 
@@ -327,7 +354,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
     let onMoveDown: () -> Void
     let onReturn: (NSEvent.ModifierFlags) -> Void
 
-    final class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: QuickCaptureInputField
         var lastFocusRequestCount: Int = 0
 
@@ -335,10 +362,10 @@ private struct QuickCaptureInputField: NSViewRepresentable {
             self.parent = parent
         }
 
-        func controlTextDidChange(_ notification: Notification) {
-            guard let textField = notification.object as? NSTextField else { return }
-            parent.text = textField.stringValue
-            parent.onTextChange(textField.stringValue)
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+            parent.onTextChange(textView.string)
         }
     }
 
@@ -346,39 +373,57 @@ private struct QuickCaptureInputField: NSViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeNSView(context: Context) -> KeyHandlingTextField {
-        let textField = KeyHandlingTextField(frame: .zero)
-        textField.delegate = context.coordinator
-        textField.isBordered = false
-        textField.isBezeled = false
-        textField.drawsBackground = false
-        textField.focusRingType = .none
-        textField.font = .systemFont(ofSize: 14, weight: .medium)
-        textField.placeholderString = placeholder
-        textField.stringValue = text
-        textField.onTab = onTab
-        textField.onMoveUp = onMoveUp
-        textField.onMoveDown = onMoveDown
-        textField.onReturn = onReturn
-        return textField
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = KeyHandlingTextView(frame: .zero)
+        textView.delegate = context.coordinator
+        textView.drawsBackground = false
+        textView.focusRingType = .none
+        textView.font = .systemFont(ofSize: 14, weight: .medium)
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.string = text
+        textView.onTab = onTab
+        textView.onMoveUp = onMoveUp
+        textView.onMoveDown = onMoveDown
+        textView.onReturn = onReturn
+
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = textView
+        return scrollView
     }
 
-    func updateNSView(_ nsView: KeyHandlingTextField, context: Context) {
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        if nsView.stringValue != text {
-            nsView.stringValue = text
+        guard let textView = nsView.documentView as? KeyHandlingTextView else { return }
+        if textView.string != text {
+            textView.string = text
         }
-        nsView.placeholderString = placeholder
-        nsView.shouldInterceptArrowKeys = isSearchMode
-        nsView.onTab = onTab
-        nsView.onMoveUp = onMoveUp
-        nsView.onMoveDown = onMoveDown
-        nsView.onReturn = onReturn
+        textView.shouldInterceptArrowKeys = isSearchMode
+        textView.onTab = onTab
+        textView.onMoveUp = onMoveUp
+        textView.onMoveDown = onMoveDown
+        textView.onReturn = onReturn
 
         if context.coordinator.lastFocusRequestCount != focusRequestCount {
             context.coordinator.lastFocusRequestCount = focusRequestCount
             DispatchQueue.main.async {
-                nsView.window?.makeFirstResponder(nsView)
+                nsView.window?.makeFirstResponder(textView)
             }
         }
     }
@@ -401,9 +446,24 @@ final class QuickCapturePanelController {
     private let database: BrainDatabase
     private let panel: QuickCapturePanel
     private let viewModel: QuickCaptureViewModel
+    private let ownsDatabase: Bool
 
     init(dbPath: String) {
         database = BrainDatabase(path: dbPath)
+        ownsDatabase = true
+        viewModel = QuickCaptureViewModel(db: database, panelState: panelState)
+        panel = QuickCapturePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 360),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        configurePanel()
+    }
+
+    init(db: BrainDatabase) {
+        database = db
+        ownsDatabase = false
         viewModel = QuickCaptureViewModel(db: database, panelState: panelState)
         panel = QuickCapturePanel(
             contentRect: NSRect(x: 0, y: 0, width: 540, height: 360),
@@ -415,7 +475,9 @@ final class QuickCapturePanelController {
     }
 
     deinit {
-        database.close()
+        if ownsDatabase {
+            database.close()
+        }
     }
 
     func toggle() {
@@ -549,27 +611,39 @@ struct QuickCapturePanelView: View {
                 }
                 .focusable(false)
 
-                QuickCaptureInputField(
-                    text: $viewModel.inputText,
-                    placeholder: viewModel.placeholderText,
-                    focusRequestCount: viewModel.focusRequestCount,
-                    isSearchMode: viewModel.mode == .search,
-                    onTextChange: { newValue in
-                        viewModel.handleInputChange(newValue)
-                    },
-                    onTab: {
-                        viewModel.handleInputTab()
-                    },
-                    onMoveUp: {
-                        viewModel.handleInputMove(.up)
-                    },
-                    onMoveDown: {
-                        viewModel.handleInputMove(.down)
-                    },
-                    onReturn: { modifiers in
-                        viewModel.handleInputReturn(modifiers: modifiers)
+                ZStack(alignment: .topLeading) {
+                    if viewModel.inputText.isEmpty {
+                        Text(viewModel.placeholderText)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 10)
+                            .padding(.leading, 12)
+                            .allowsHitTesting(false)
                     }
-                )
+
+                    QuickCaptureInputField(
+                        text: $viewModel.inputText,
+                        placeholder: viewModel.placeholderText,
+                        focusRequestCount: viewModel.focusRequestCount,
+                        isSearchMode: viewModel.mode == .search,
+                        onTextChange: { newValue in
+                            viewModel.handleInputChange(newValue)
+                        },
+                        onTab: {
+                            viewModel.handleInputTab()
+                        },
+                        onMoveUp: {
+                            viewModel.handleInputMove(.up)
+                        },
+                        onMoveDown: {
+                            viewModel.handleInputMove(.down)
+                        },
+                        onReturn: { modifiers in
+                            viewModel.handleInputReturn(modifiers: modifiers)
+                        }
+                    )
+                }
+                    .frame(minHeight: viewModel.mode == .search ? 72 : 44, maxHeight: viewModel.mode == .search ? 96 : 64)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
@@ -602,7 +676,7 @@ struct QuickCapturePanelView: View {
                             viewModel.selectResult(id: id)
                         },
                         onActivate: { id in
-                            viewModel.activateResult(id: id)
+                            viewModel.copyResultToClipboard(id: id)
                         }
                     )
                         .transition(.opacity.combined(with: .move(edge: .bottom)))

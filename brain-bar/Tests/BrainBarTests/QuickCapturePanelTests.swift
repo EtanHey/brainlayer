@@ -2,6 +2,18 @@ import AppKit
 import XCTest
 @testable import BrainBar
 
+private final class TestClipboard: QuickCaptureClipboard {
+    private(set) var copiedStrings: [String] = []
+
+    func copy(_ string: String) {
+        copiedStrings.append(string)
+    }
+}
+
+private final class DatabaseBox: @unchecked Sendable {
+    var database: BrainDatabase?
+}
+
 @MainActor
 final class QuickCapturePanelTests: XCTestCase {
     func testViewModelUsesCapturePlaceholderByDefault() throws {
@@ -105,6 +117,20 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.mode, .capture)
     }
 
+    func testHandleInputTabTogglesBetweenCaptureAndSearchModes() throws {
+        let (db, path) = try makeDatabase(name: "handle-tab-toggle")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(db: db, panelState: QuickCapturePanelState())
+        XCTAssertEqual(model.mode, .capture)
+
+        model.handleInputTab()
+        XCTAssertEqual(model.mode, .search)
+
+        model.handleInputTab()
+        XCTAssertEqual(model.mode, .capture)
+    }
+
     func testArrowKeysMoveSelectedSearchResult() throws {
         let (db, path) = try makeDatabase(name: "arrow-navigation")
         defer { cleanupDatabase(db, path: path) }
@@ -193,6 +219,24 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
     }
 
+    func testHandleInputReturnWithCommandStoresWhileRemainingInSearchMode() throws {
+        let (db, path) = try makeDatabase(name: "handle-command-return-search-mode")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.inputText = "Command return should store through the live input handler"
+
+        model.handleInputReturn(modifiers: [.command])
+
+        XCTAssertEqual(model.mode, .search)
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+        XCTAssertEqual(model.inputText, "")
+        let results = try db.search(query: "live input handler", limit: 5)
+        XCTAssertEqual(results.count, 1)
+    }
+
     func testHandleInputReturnInCaptureModeStoresAndTriggersConfirmationFlash() throws {
         let (db, path) = try makeDatabase(name: "capture-return-flash")
         defer { cleanupDatabase(db, path: path) }
@@ -207,6 +251,29 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.inputText, "")
         let results = try db.search(query: "flash green", limit: 5)
         XCTAssertEqual(results.count, 1)
+    }
+
+    func testTextViewRoutesTabReturnAndArrowCommands() {
+        let textView = KeyHandlingTextView(frame: .zero)
+        var tabCount = 0
+        var returnCount = 0
+        var moveUpCount = 0
+        var moveDownCount = 0
+        textView.onTab = { tabCount += 1 }
+        textView.onReturn = { _ in returnCount += 1 }
+        textView.onMoveUp = { moveUpCount += 1 }
+        textView.onMoveDown = { moveDownCount += 1 }
+        textView.shouldInterceptArrowKeys = true
+
+        textView.doCommand(by: #selector(NSTextView.insertTab(_:)))
+        textView.doCommand(by: #selector(NSTextView.insertNewline(_:)))
+        textView.doCommand(by: #selector(NSTextView.moveUp(_:)))
+        textView.doCommand(by: #selector(NSTextView.moveDown(_:)))
+
+        XCTAssertEqual(tabCount, 1)
+        XCTAssertEqual(returnCount, 1)
+        XCTAssertEqual(moveUpCount, 1)
+        XCTAssertEqual(moveDownCount, 1)
     }
 
     func testPanelAppearanceRequestsFieldFocus() throws {
@@ -286,6 +353,55 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.results.count, 0, "Should clear results when switching to capture mode")
         XCTAssertNil(model.selectedResultID, "Should clear the selected result when switching to capture mode")
         XCTAssertTrue(model.feedback.isIdle, "Should reset feedback")
+    }
+
+    func testCopySearchResultCopiesContentToClipboardAndShowsConfirmation() throws {
+        let (db, path) = try makeDatabase(name: "copy-search-result")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "copy-1",
+            content: "Double click should copy this exact search result",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let clipboard = TestClipboard()
+        let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: clipboard)
+        model.handleInputChange("copy this exact")
+
+        model.copyResultToClipboard(id: "copy-1")
+
+        XCTAssertEqual(clipboard.copiedStrings, ["Double click should copy this exact search result"])
+        XCTAssertEqual(model.feedback, .success("Copied result to clipboard"))
+        XCTAssertEqual(model.mode, .search)
+        XCTAssertEqual(model.inputText, "copy this exact")
+    }
+
+    func testBrainBarServerUsesProvidedDatabaseInstance() throws {
+        let (db, path) = try makeDatabase(name: "server-shared-db")
+        let socketPath = "/tmp/bb-\(UUID().uuidString.prefix(8)).sock"
+        defer {
+            try? FileManager.default.removeItem(atPath: socketPath)
+            cleanupDatabase(db, path: path)
+        }
+
+        let server = BrainBarServer(socketPath: socketPath, dbPath: path, database: db)
+        let ready = expectation(description: "database ready")
+        let databaseBox = DatabaseBox()
+        server.onDatabaseReady = { database in
+            databaseBox.database = database
+            ready.fulfill()
+        }
+
+        server.start()
+        wait(for: [ready], timeout: 2.0)
+        server.stop()
+
+        XCTAssertTrue(databaseBox.database === db)
     }
 
     private func makeDatabase(name: String) throws -> (BrainDatabase, String) {
