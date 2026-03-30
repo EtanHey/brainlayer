@@ -14,11 +14,12 @@ All BrainLayer configuration is via environment variables. No config files neede
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | LLM backend: `mlx` or `ollama`. Auto-detects Apple Silicon → MLX, else Ollama. |
+| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | LLM backend: `mlx`, `ollama`, or Gemini realtime where the controller explicitly uses the Google API. Auto-detects Apple Silicon → MLX, else Ollama for local enrichment flows. |
 | `BRAINLAYER_ENRICH_MODEL` | `glm-4.7-flash` | Ollama model name for enrichment |
 | `BRAINLAYER_MLX_MODEL` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | MLX model identifier |
 | `BRAINLAYER_OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
 | `BRAINLAYER_MLX_URL` | `http://127.0.0.1:8080/v1/chat/completions` | MLX server endpoint |
+| `GOOGLE_API_KEY` | (empty) | Google AI API key used by realtime Gemini enrichment and the enrichment LaunchAgent installer |
 | `BRAINLAYER_STALL_TIMEOUT` | `300` | Seconds before killing a stuck enrichment chunk |
 | `BRAINLAYER_HEARTBEAT_INTERVAL` | `25` | Log progress every N chunks during enrichment |
 
@@ -54,10 +55,22 @@ BrainLayer includes launchd plist templates for automated operation:
 | Service | Schedule | Description |
 |---------|----------|-------------|
 | `com.brainlayer.index` | Every 30 minutes | Incremental indexing of new conversations |
-| `com.brainlayer.enrich` | Every hour | Enrich up to 500 new chunks per run |
+| `com.brainlayer.enrichment` | Every hour | Run realtime Gemini enrichment against recent chunks |
 
 Install with:
 
 ```bash
 brainlayer init  # Includes launchd setup option
 ```
+
+Manual install and control:
+
+```bash
+bash scripts/launchd/install.sh enrichment
+bash scripts/launchd/install.sh unload enrichment
+bash scripts/launchd/install.sh load enrichment
+```
+
+The enrichment agent renders to `~/Library/LaunchAgents/com.brainlayer.enrichment.plist`,
+reads `GOOGLE_API_KEY` from the current environment or `~/.zshrc` at install time,
+and logs to `~/Library/Logs/brainlayer-enrichment.log`.

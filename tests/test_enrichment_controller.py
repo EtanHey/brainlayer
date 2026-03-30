@@ -875,6 +875,44 @@ def test_enrichment_plist_has_start_interval():
     assert "3600" in content
 
 
+def test_enrichment_plist_invokes_python_enrich_realtime_entrypoint():
+    from pathlib import Path
+
+    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
+    content = plist_path.read_text()
+    assert "__PYTHON3__" in content
+    assert "brainlayer.enrichment_controller" in content
+    assert "enrich_realtime" in content
+
+
+def test_enrichment_plist_uses_low_priority_and_library_logs():
+    from pathlib import Path
+
+    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
+    content = plist_path.read_text()
+    assert "<key>Nice</key>" in content
+    assert "<integer>10</integer>" in content
+    assert "__HOME__/Library/Logs/brainlayer-enrichment.log" in content
+
+
+def test_launchd_installer_supports_enrichment_load_and_unload():
+    from pathlib import Path
+
+    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
+    assert 'LAUNCH_DIR="$HOME/Library/LaunchAgents"' in install_script
+    assert "load)" in install_script
+    assert "unload)" in install_script
+    assert "com.brainlayer.enrichment" in install_script
+
+
+def test_launchd_installer_reads_google_api_key_from_zshrc():
+    from pathlib import Path
+
+    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
+    assert ".zshrc" in install_script
+    assert "GOOGLE_API_KEY" in install_script
+
+
 # ── Gemini model constant test ────────────────────────────────────────────────
 
 
