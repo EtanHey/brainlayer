@@ -51,6 +51,33 @@ struct QuickCaptureSearchRow: Identifiable, Equatable {
     let title: String
     let content: String
     let metadata: String
+
+    static func fromSearchResult(_ result: [String: Any]) -> QuickCaptureSearchRow? {
+        let rawID = (result["chunk_id"] as? String) ?? UUID().uuidString
+        let title = (result["content"] as? String) ?? "Untitled result"
+        let createdAt = (result["created_at"] as? String) ?? "unknown time"
+        let importance = formattedImportance(result["importance"])
+
+        return QuickCaptureSearchRow(
+            id: rawID,
+            title: title,
+            content: title,
+            metadata: "\(importance) • \(createdAt)"
+        )
+    }
+
+    private static func formattedImportance(_ rawValue: Any?) -> String {
+        switch rawValue {
+        case let value as Double:
+            return String(format: "imp %.0f", value)
+        case let value as Int:
+            return "imp \(value)"
+        case let value as NSNumber:
+            return String(format: "imp %.0f", value.doubleValue)
+        default:
+            return "imp ?"
+        }
+    }
 }
 
 enum QuickCaptureMoveDirection {
@@ -66,11 +93,14 @@ final class QuickCaptureViewModel: ObservableObject {
     @Published private(set) var results: [QuickCaptureSearchRow] = []
     @Published private(set) var selectedResultIndex: Int?
     @Published private(set) var confirmationFlashCount = 0
+    @Published private(set) var copiedResultID: String?
+    @Published private(set) var copyFeedbackFlashCount = 0
     @Published private(set) var focusRequestCount = 0
 
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
     private let clipboard: QuickCaptureClipboard
+    private var copyResetTask: Task<Void, Never>?
 
     init(
         db: BrainDatabase,
@@ -125,6 +155,7 @@ final class QuickCaptureViewModel: ObservableObject {
         mode = newMode
         panelState.switchMode(newMode)
         feedback = .idle
+        copiedResultID = nil
         if newMode == .capture {
             results = []
             selectedResultIndex = nil
@@ -210,7 +241,15 @@ final class QuickCaptureViewModel: ObservableObject {
     func copyResultToClipboard(id: String) {
         guard let row = results.first(where: { $0.id == id }) else { return }
         clipboard.copy(row.content)
+        copiedResultID = row.id
+        copyFeedbackFlashCount += 1
         feedback = .success("Copied result to clipboard")
+        copyResetTask?.cancel()
+        copyResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            self?.copiedResultID = nil
+        }
     }
 
     func clearResultsSelection() {
@@ -223,6 +262,7 @@ final class QuickCaptureViewModel: ObservableObject {
         inputText = ""
         results = []
         selectedResultIndex = nil
+        copiedResultID = nil
         feedback = .idle
     }
 
@@ -262,23 +302,14 @@ final class QuickCaptureViewModel: ObservableObject {
                 query: inputText,
                 limit: 8
             )
-            results = searchResult.results.map { result in
-                let rawID = (result["chunk_id"] as? String) ?? UUID().uuidString
-                let title = (result["content"] as? String) ?? "Untitled result"
-                let createdAt = (result["created_at"] as? String) ?? "unknown time"
-                let importance = (result["importance"] as? Double).map { String(format: "imp %.0f", $0) } ?? "imp ?"
-                return QuickCaptureSearchRow(
-                    id: rawID,
-                    title: title,
-                    content: title,
-                    metadata: "\(importance) • \(createdAt)"
-                )
-            }
+            results = searchResult.results.compactMap(QuickCaptureSearchRow.fromSearchResult)
             selectedResultIndex = results.isEmpty ? nil : 0
+            copiedResultID = nil
             feedback = .idle
         } catch {
             results = []
             selectedResultIndex = nil
+            copiedResultID = nil
             feedback = .error(error.localizedDescription)
         }
     }
@@ -343,39 +374,32 @@ final class KeyHandlingTextView: NSTextView {
     }
 }
 
-private struct QuickCaptureInputField: NSViewRepresentable {
-    @Binding var text: String
-    let placeholder: String
-    let focusRequestCount: Int
-    let isSearchMode: Bool
-    let onTextChange: (String) -> Void
-    let onTab: () -> Void
-    let onMoveUp: () -> Void
-    let onMoveDown: () -> Void
-    let onReturn: (NSEvent.ModifierFlags) -> Void
+final class KeyHandlingTextField: NSTextField {
+    var onTab: (() -> Void)?
+    var onMoveUp: (() -> Void)?
+    var onMoveDown: (() -> Void)?
+    var onReturn: ((NSEvent.ModifierFlags) -> Void)?
+}
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: QuickCaptureInputField
-        var lastFocusRequestCount: Int = 0
-
-        init(parent: QuickCaptureInputField) {
-            self.parent = parent
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
-            parent.onTextChange(textView.string)
-        }
+enum QuickCaptureInputFactory {
+    @MainActor
+    static func makeSearchField() -> KeyHandlingTextField {
+        let field = KeyHandlingTextField(frame: .zero)
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 14, weight: .medium)
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.cell?.usesSingleLineMode = true
+        field.maximumNumberOfLines = 1
+        return field
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
+    @MainActor
+    static func makeCaptureScrollView() -> NSScrollView {
         let textView = KeyHandlingTextView(frame: .zero)
-        textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.focusRingType = .none
         textView.font = .systemFont(ofSize: 14, weight: .medium)
@@ -392,11 +416,6 @@ private struct QuickCaptureInputField: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = NSSize(width: 0, height: 0)
-        textView.string = text
-        textView.onTab = onTab
-        textView.onMoveUp = onMoveUp
-        textView.onMoveDown = onMoveDown
-        textView.onReturn = onReturn
 
         let scrollView = NSScrollView(frame: .zero)
         scrollView.borderType = .noBorder
@@ -407,6 +426,49 @@ private struct QuickCaptureInputField: NSViewRepresentable {
         scrollView.documentView = textView
         return scrollView
     }
+}
+
+private struct QuickCaptureCaptureInputField: NSViewRepresentable {
+    @Binding var text: String
+    let focusRequestCount: Int
+    let onTextChange: (String) -> Void
+    let onTab: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onReturn: (NSEvent.ModifierFlags) -> Void
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: QuickCaptureCaptureInputField
+        var lastFocusRequestCount: Int = 0
+
+        init(parent: QuickCaptureCaptureInputField) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+            parent.onTextChange(textView.string)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = QuickCaptureInputFactory.makeCaptureScrollView()
+        guard let textView = scrollView.documentView as? KeyHandlingTextView else {
+            return scrollView
+        }
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.onTab = onTab
+        textView.onMoveUp = onMoveUp
+        textView.onMoveDown = onMoveDown
+        textView.onReturn = onReturn
+        return scrollView
+    }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.parent = self
@@ -414,7 +476,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
         }
-        textView.shouldInterceptArrowKeys = isSearchMode
+        textView.shouldInterceptArrowKeys = false
         textView.onTab = onTab
         textView.onMoveUp = onMoveUp
         textView.onMoveDown = onMoveDown
@@ -424,6 +486,84 @@ private struct QuickCaptureInputField: NSViewRepresentable {
             context.coordinator.lastFocusRequestCount = focusRequestCount
             DispatchQueue.main.async {
                 nsView.window?.makeFirstResponder(textView)
+            }
+        }
+    }
+}
+
+private struct QuickCaptureSearchInputField: NSViewRepresentable {
+    @Binding var text: String
+    let focusRequestCount: Int
+    let onTextChange: (String) -> Void
+    let onTab: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onReturn: (NSEvent.ModifierFlags) -> Void
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: QuickCaptureSearchInputField
+        var lastFocusRequestCount: Int = 0
+
+        init(parent: QuickCaptureSearchInputField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+            parent.onTextChange(field.stringValue)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            switch commandSelector {
+            case #selector(NSResponder.insertTab(_:)):
+                parent.onTab()
+                return true
+            case #selector(NSResponder.moveUp(_:)):
+                parent.onMoveUp()
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                parent.onMoveDown()
+                return true
+            case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+                let modifiers = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+                parent.onReturn(modifiers)
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> KeyHandlingTextField {
+        let field = QuickCaptureInputFactory.makeSearchField()
+        field.delegate = context.coordinator
+        field.stringValue = text
+        field.onTab = onTab
+        field.onMoveUp = onMoveUp
+        field.onMoveDown = onMoveDown
+        field.onReturn = onReturn
+        return field
+    }
+
+    func updateNSView(_ nsView: KeyHandlingTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.onTab = onTab
+        nsView.onMoveUp = onMoveUp
+        nsView.onMoveDown = onMoveDown
+        nsView.onReturn = onReturn
+
+        if context.coordinator.lastFocusRequestCount != focusRequestCount {
+            context.coordinator.lastFocusRequestCount = focusRequestCount
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
             }
         }
     }
@@ -621,29 +761,49 @@ struct QuickCapturePanelView: View {
                             .allowsHitTesting(false)
                     }
 
-                    QuickCaptureInputField(
-                        text: $viewModel.inputText,
-                        placeholder: viewModel.placeholderText,
-                        focusRequestCount: viewModel.focusRequestCount,
-                        isSearchMode: viewModel.mode == .search,
-                        onTextChange: { newValue in
-                            viewModel.handleInputChange(newValue)
-                        },
-                        onTab: {
-                            viewModel.handleInputTab()
-                        },
-                        onMoveUp: {
-                            viewModel.handleInputMove(.up)
-                        },
-                        onMoveDown: {
-                            viewModel.handleInputMove(.down)
-                        },
-                        onReturn: { modifiers in
-                            viewModel.handleInputReturn(modifiers: modifiers)
-                        }
-                    )
+                    if viewModel.mode == .search {
+                        QuickCaptureSearchInputField(
+                            text: $viewModel.inputText,
+                            focusRequestCount: viewModel.focusRequestCount,
+                            onTextChange: { newValue in
+                                viewModel.handleInputChange(newValue)
+                            },
+                            onTab: {
+                                viewModel.handleInputTab()
+                            },
+                            onMoveUp: {
+                                viewModel.handleInputMove(.up)
+                            },
+                            onMoveDown: {
+                                viewModel.handleInputMove(.down)
+                            },
+                            onReturn: { modifiers in
+                                viewModel.handleInputReturn(modifiers: modifiers)
+                            }
+                        )
+                    } else {
+                        QuickCaptureCaptureInputField(
+                            text: $viewModel.inputText,
+                            focusRequestCount: viewModel.focusRequestCount,
+                            onTextChange: { newValue in
+                                viewModel.handleInputChange(newValue)
+                            },
+                            onTab: {
+                                viewModel.handleInputTab()
+                            },
+                            onMoveUp: {
+                                viewModel.handleInputMove(.up)
+                            },
+                            onMoveDown: {
+                                viewModel.handleInputMove(.down)
+                            },
+                            onReturn: { modifiers in
+                                viewModel.handleInputReturn(modifiers: modifiers)
+                            }
+                        )
+                    }
                 }
-                    .frame(minHeight: viewModel.mode == .search ? 72 : 44, maxHeight: viewModel.mode == .search ? 96 : 64)
+                    .frame(minHeight: viewModel.mode == .search ? 44 : 44, maxHeight: viewModel.mode == .search ? 44 : 64)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
@@ -672,6 +832,7 @@ struct QuickCapturePanelView: View {
                     SearchResultsList(
                         results: viewModel.results,
                         selectedResultID: viewModel.selectedResultID,
+                        copiedResultID: viewModel.copiedResultID,
                         onSelect: { id in
                             viewModel.selectResult(id: id)
                         },
@@ -767,6 +928,7 @@ private struct QuickCaptureModeButton: View {
 private struct SearchResultsList: View {
     let results: [QuickCaptureSearchRow]
     let selectedResultID: String?
+    let copiedResultID: String?
     let onSelect: (String) -> Void
     let onActivate: (String) -> Void
 
@@ -797,7 +959,7 @@ private struct SearchResultsList: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 16)
-                                .fill(row.id == selectedResultID ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor))
+                                .fill(backgroundColor(for: row))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 16)
@@ -806,6 +968,15 @@ private struct SearchResultsList: View {
                                     lineWidth: 1
                                 )
                         )
+                        .overlay(alignment: .topTrailing) {
+                            if row.id == copiedResultID {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(Color(nsColor: .systemGreen))
+                                    .padding(10)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
                         .contentShape(RoundedRectangle(cornerRadius: 16))
                         .onTapGesture {
                             onSelect(row.id)
@@ -820,5 +991,16 @@ private struct SearchResultsList: View {
         }
         .focusable(false)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeInOut(duration: 0.18), value: copiedResultID)
+    }
+
+    private func backgroundColor(for row: QuickCaptureSearchRow) -> Color {
+        if row.id == copiedResultID {
+            return Color(nsColor: .systemGreen).opacity(0.16)
+        }
+        if row.id == selectedResultID {
+            return Color.accentColor.opacity(0.16)
+        }
+        return Color(nsColor: .controlBackgroundColor)
     }
 }
