@@ -5,29 +5,26 @@
     <key>Label</key>
     <string>com.brainlayer.enrichment</string>
 
-    <!-- Unified enrichment daemon — replaces com.brainlayer.enrich
-         Runs realtime enrichment hourly on recent chunks.
-         For batch/local modes, use the CLI or brain_enrich MCP tool. -->
+    <!-- Realtime Gemini enrichment LaunchAgent.
+         Runs once at login/load and then hourly. -->
 
     <key>ProgramArguments</key>
     <array>
-        <string>__BRAINLAYER_BIN__</string>
-        <string>enrich</string>
-        <string>--mode</string>
-        <string>realtime</string>
-        <string>--since-hours</string>
-        <string>24</string>
-        <string>--limit</string>
-        <string>50</string>
+        <string>__PYTHON3__</string>
+        <string>-c</string>
+        <string>import sys; sys.path.insert(0, "__BRAINLAYER_DIR__/src"); from brainlayer.paths import get_db_path; from brainlayer.vector_store import VectorStore; from brainlayer.enrichment_controller import enrich_realtime; store = VectorStore(get_db_path()); result = enrich_realtime(store=store, limit=50, since_hours=24); print(result); store.close()</string>
     </array>
+
+    <key>WorkingDirectory</key>
+    <string>__BRAINLAYER_DIR__</string>
 
     <key>StartInterval</key>
     <integer>3600</integer>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/enrichment.log</string>
+    <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/enrichment.err</string>
+    <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -35,20 +32,19 @@
         <string>/usr/local/bin:/usr/bin:/bin:__HOME__/.local/bin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <key>PYTHONPATH</key>
+        <string>__BRAINLAYER_DIR__/src</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
         <key>GOOGLE_API_KEY</key>
         <string>__GOOGLE_API_KEY__</string>
-        <!-- Optional: set regional endpoint for lower latency -->
-        <!-- <key>GOOGLE_CLOUD_REGION</key>
-        <string>us-central1</string> -->
     </dict>
 
     <key>RunAtLoad</key>
     <true/>
 
     <key>Nice</key>
-    <integer>15</integer>
+    <integer>10</integer>
 
     <key>ProcessType</key>
     <string>Background</string>
