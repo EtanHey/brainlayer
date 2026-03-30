@@ -7,6 +7,12 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum BrainBarAppSupport {
+    static func hotkeyPermissionFailureMessage(permissions: HotkeyPermissionStatus) -> String {
+        "BrainBar could not start the fallback hotkey listener. Enable \(permissions.missingPermissionsMessage) in System Settings. The CGEventTap fallback requires both Input Monitoring and Accessibility."
+    }
+}
+
 // MARK: - App Delegate
 
 @MainActor
@@ -19,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var quickCaptureHotkey: HotkeyManager?
     private var cancellables: Set<AnyCancellable> = []
     private var sharedDatabase: BrainDatabase?
+    private let hotkeyRouteStatus = HotkeyRouteStatus()
+    private var pendingBrainBarURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-instance enforcement: exit if another BrainBar is already running
@@ -51,6 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
         self.collector = collector
+        hotkeyRouteStatus.onFallbackChange = { [weak self] in
+            self?.configureQuickCaptureHotkey()
+        }
         configureStatusItem(with: collector)
         configureQuickCaptureHotkey()
     }
@@ -63,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        ingestBrainBarURLs(urls)
     }
 
     @objc
@@ -90,8 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 270)
-        popover.contentViewController = NSHostingController(rootView: StatusPopoverView(collector: collector))
+        popover.contentSize = NSSize(width: 360, height: 320)
+        popover.contentViewController = NSHostingController(
+            rootView: StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
+        )
 
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)
@@ -109,6 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureQuickCaptureHotkey() {
+        quickCaptureHotkey?.stop()
+        quickCaptureHotkey = nil
+
+        guard hotkeyRouteStatus.useCGEventTapFallback else {
+            hotkeyRouteStatus.refreshStatusLine(eventTapActive: false)
+            return
+        }
+
         let gesture = GestureStateMachine()
         gesture.onSingleTap = { [weak self] in
             self?.quickCapturePanel?.toggle()
@@ -119,13 +144,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hotkey = HotkeyManager(gesture: gesture)
         hotkey.configure(keycodes: [118, 129], useModifierMode: false)
-        _ = hotkey.start()
-        quickCaptureHotkey = hotkey
+        let started = hotkey.start()
+        quickCaptureHotkey = started ? hotkey : nil
+        hotkeyRouteStatus.refreshStatusLine(eventTapActive: started)
+        if !started {
+            let permissions = HotkeyManager.permissionStatus()
+            let message = BrainBarAppSupport.hotkeyPermissionFailureMessage(permissions: permissions)
+            NSLog("[BrainBar.Hotkey] %@", message)
+
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "BrainBar hotkey permission missing"
+            alert.informativeText = message
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     private func configureQuickCapture(database: BrainDatabase) {
         guard quickCapturePanel == nil else { return }
         quickCapturePanel = QuickCapturePanelController(db: database)
+        flushPendingBrainBarURLs()
+    }
+
+    private func ingestBrainBarURLs(_ urls: [URL]) {
+        for url in urls {
+            guard BrainBarURLAction.parse(url: url) != nil else { continue }
+            if quickCapturePanel != nil {
+                handleBrainBarURL(url)
+            } else {
+                pendingBrainBarURLs.append(url)
+            }
+        }
+    }
+
+    private func flushPendingBrainBarURLs() {
+        guard quickCapturePanel != nil, !pendingBrainBarURLs.isEmpty else { return }
+        let batch = pendingBrainBarURLs
+        pendingBrainBarURLs.removeAll()
+        for url in batch {
+            handleBrainBarURL(url)
+        }
+    }
+
+    private func handleBrainBarURL(_ url: URL) {
+        guard let action = BrainBarURLAction.parse(url: url) else {
+            NSLog("[BrainBar] Unhandled URL %@", url.absoluteString)
+            return
+        }
+        switch action {
+        case .toggle:
+            quickCapturePanel?.toggle()
+        case .search:
+            quickCapturePanel?.show(mode: .search)
+        }
     }
 }
 
