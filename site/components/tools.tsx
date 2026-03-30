@@ -5,29 +5,25 @@ import { motion } from "framer-motion";
 const coreTools = [
   {
     name: "brain_search",
-    desc: "Hybrid semantic + keyword + KG search across all memory",
+    desc: "Hybrid semantic + keyword + KG search with compact formatted output",
   },
   {
     name: "brain_store",
-    desc: "Persist decisions, learnings, corrections with tags and importance",
+    desc: "Persist decisions, learnings, corrections, and capture notes",
   },
   {
     name: "brain_recall",
-    desc: "Proactive context injection at session start",
+    desc: "Unified recall entrypoint for search, entity, and session-aware lookup",
   },
 ];
 
 const advancedTools = [
   { name: "brain_entity", desc: "Knowledge graph entity lookup" },
+  { name: "brain_expand", desc: "Drill into one search hit with surrounding context" },
   {
     name: "brain_digest",
-    desc: "Ingest large content, auto-extract entities and relations",
+    desc: "Deep-ingest large content and extract entities, actions, and relations",
   },
-  {
-    name: "brain_subscribe",
-    desc: "Watch for new matching memories in real time",
-  },
-  { name: "brain_unsubscribe", desc: "Stop watching a subscription" },
 ];
 
 function ToolItem({ name, desc }: { name: string; desc: string }) {
@@ -55,7 +51,7 @@ export function Tools() {
           MCP tools
         </div>
         <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
-          Seven tools. One protocol.
+          Six working tools. One memory layer.
         </h2>
 
         <div className="mx-auto mb-12 max-w-[640px]">

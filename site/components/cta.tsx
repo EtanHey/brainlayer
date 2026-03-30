@@ -21,7 +21,7 @@ export function Cta() {
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
         >
-          Stop repeating yourself.
+          Keep the context. Ship faster.
         </motion.h2>
         <motion.p
           className="mb-9 text-[15px] font-light text-text-secondary"
@@ -30,7 +30,8 @@ export function Cta() {
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.1 }}
         >
-          Three commands. Persistent memory. Your data stays yours.
+          Six working tools, one local database, and a BrainBar capture flow
+          that does not lose the thread.
         </motion.p>
         <motion.div
           initial={{ opacity: 1, y: 12 }}

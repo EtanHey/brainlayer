@@ -19,80 +19,78 @@ interface Line {
 }
 
 // Matches real Claude Code output format exactly
-// Verified by reading own terminal via cmux read_screen
+// Updated to reflect current BrainLayer formatter output.
 const lines: Line[] = [
   {
     type: "prompt",
-    text: "What database architecture does BrainLayer use?",
+    text: "What changed in BrainBar this week?",
     delay: 0,
   },
   {
     type: "claude",
-    text: "I'll search our past architecture decisions.",
+    text: "I'll search the stored rollout notes.",
     gap: true,
     delay: 800,
   },
   {
     type: "tool",
-    text: 'brain_search (MCP)(query: "BrainLayer architecture")',
+    text: 'brain_search (MCP)(query: "brainbar quick capture")',
     gap: true,
     delay: 1200,
   },
-  { type: "output-first", text: "[", delay: 1500 },
-  { type: "output", text: "     {", delay: 1530 },
-  { type: "output", text: '       "chunk_id": "agent-a34f466",', delay: 1560 },
+  {
+    type: "output-first",
+    text: '┌─ brain_search: "brainbar quick capture" ─ 2 results',
+    delay: 1500,
+  },
+  { type: "output", text: "│", delay: 1530 },
   {
     type: "output",
-    text: '       "summary": "BrainLayer MCP server architecture with',
+    text: "├─ [1] agent-a34f46  score:0.93  imp: 9  2026-03-30",
     delay: 1590,
   },
   {
     type: "result",
-    text: '                   hybrid search and knowledge graph.",',
+    text: "│  brainlayer       │ BrainBar now enforces a single running instance and exits immediately i…",
     delay: 1620,
   },
   {
     type: "output",
-    text: '       "content": "Claude Code / Cursor / Zed -> MCP ->',
+    text: "│  tags: brainbar, single-instance, macos",
     delay: 1650,
   },
+  { type: "output", text: "│", delay: 1680 },
   {
-    type: "result",
-    text: "                   Hybrid Search (semantic + keyword RRF)",
-    delay: 1680,
-  },
-  {
-    type: "result",
-    text: "                   -> SQLite + sqlite-vec, single .db file",
+    type: "output",
+    text: "├─ [2] agent-c82d91  score:0.88  imp: 8  2026-03-29",
     delay: 1710,
   },
   {
     type: "result",
-    text: '                   -> Knowledge Graph (entities + relations)",',
+    text: "│  brainlayer       │ Quick capture uses the shared Unicode formatter, so search results from…",
     delay: 1740,
   },
-  { type: "output", text: '       "importance": 8,', delay: 1770 },
   {
     type: "output",
-    text: '       "tags": ["architecture", "search", "sqlite"]',
-    delay: 1800,
+    text: "│  tags: quick-capture, formatting",
+    delay: 1770,
   },
-  { type: "output", text: "     }", delay: 1830 },
-  { type: "output", text: "   ]", delay: 1860 },
+  { type: "output", text: "│", delay: 1800 },
+  { type: "output", text: "└─", delay: 1830 },
   {
     type: "claude",
-    text: "BrainLayer uses a single SQLite file with sqlite-vec for",
+    text: "BrainBar now ships the keyboard-first capture flow, a live dashboard",
     gap: true,
-    delay: 2300,
+    delay: 2250,
   },
   {
     type: "claude",
-    text: "vector storage. Search fuses semantic, FTS5 keyword, and",
-    delay: 2400,
+    text: "popover, and single-instance startup guard. Search output is compact",
+    delay: 2350,
   },
   {
     type: "claude",
-    text: "knowledge graph signals via Reciprocal Rank Fusion.",
+    text: "and formatted instead of raw JSON.",
     delay: 2500,
   },
 ];
@@ -206,6 +204,9 @@ function RenderLine({ line }: { line: Line }) {
 }
 
 function colorizeJson(text: string) {
+  if (text.includes("┌") || text.includes("├") || text.includes("└") || text === "│") {
+    return <span className="text-[#d8c1af]">{text}</span>;
+  }
   // Split on quoted strings, colorize keys vs values
   const parts = text.split(/("(?:[^"\\]|\\.)*")/);
   let consumed = 0;
