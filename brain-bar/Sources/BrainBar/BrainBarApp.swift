@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var quickCapturePanel: QuickCapturePanelController?
     private var quickCaptureHotkey: HotkeyManager?
     private var cancellables: Set<AnyCancellable> = []
+    private var sharedDatabase: BrainDatabase?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-instance enforcement: exit if another BrainBar is already running
@@ -33,7 +34,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.setActivationPolicy(.accessory)
 
-        let srv = BrainBarServer()
+        let sharedDatabase = BrainDatabase(path: BrainBarServer.defaultDBPath())
+        self.sharedDatabase = sharedDatabase
+
+        let srv = BrainBarServer(database: sharedDatabase)
+        srv.onDatabaseReady = { [weak self] database in
+            Task { @MainActor in
+                self?.configureQuickCapture(database: database)
+            }
+        }
         server = srv
         srv.start()
 
@@ -43,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.collector = collector
         configureStatusItem(with: collector)
-        configureQuickCapture(dbPath: BrainBarServer.defaultDBPath())
+        configureQuickCaptureHotkey()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -99,22 +108,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.popover = popover
     }
 
-    private func configureQuickCapture(dbPath: String) {
-        let panelController = QuickCapturePanelController(dbPath: dbPath)
-        quickCapturePanel = panelController
-
+    private func configureQuickCaptureHotkey() {
         let gesture = GestureStateMachine()
-        gesture.onSingleTap = { [weak panelController] in
-            panelController?.toggle()
+        gesture.onSingleTap = { [weak self] in
+            self?.quickCapturePanel?.toggle()
         }
-        gesture.onDoubleTap = { [weak panelController] in
-            panelController?.show(mode: .search)
+        gesture.onDoubleTap = { [weak self] in
+            self?.quickCapturePanel?.show(mode: .search)
         }
 
         let hotkey = HotkeyManager(gesture: gesture)
         hotkey.configure(keycodes: [118, 129], useModifierMode: false)
         _ = hotkey.start()
         quickCaptureHotkey = hotkey
+    }
+
+    private func configureQuickCapture(database: BrainDatabase) {
+        guard quickCapturePanel == nil else { return }
+        quickCapturePanel = QuickCapturePanelController(db: database)
     }
 }
 

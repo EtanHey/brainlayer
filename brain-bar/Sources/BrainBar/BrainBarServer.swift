@@ -68,12 +68,14 @@ final class BrainBarServer: @unchecked Sendable {
 
     private let socketPath: String
     private let dbPath: String
+    private let providedDatabase: BrainDatabase?
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
     private var listenFD: Int32 = -1
     private var listenSource: DispatchSourceRead?
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
     static let maxWriteRetries = 10
@@ -107,9 +109,10 @@ final class BrainBarServer: @unchecked Sendable {
         var subscribedTags: Set<String> = []
     }
 
-    init(socketPath: String? = nil, dbPath: String? = nil) {
+    init(socketPath: String? = nil, dbPath: String? = nil, database: BrainDatabase? = nil) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
+        providedDatabase = database
     }
 
     static func defaultSocketPath() -> String {
@@ -216,10 +219,11 @@ final class BrainBarServer: @unchecked Sendable {
         //    Connections accepted above queue in the listen backlog.
         //    initialize / tools/list already work; tools/call returns a
         //    graceful error until the DB is ready.
-        let db = BrainDatabase(path: dbPath)
+        let db = providedDatabase ?? BrainDatabase(path: dbPath)
         if db.isOpen {
             database = db
             router.setDatabase(db)
+            onDatabaseReady?(db)
             NSLog("[BrainBar] Database ready (%@)", dbPath)
         } else {
             NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
@@ -384,7 +388,9 @@ final class BrainBarServer: @unchecked Sendable {
         clients.removeAll()
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
-        database?.close()
+        if providedDatabase == nil {
+            database?.close()
+        }
         NSLog("[BrainBar] Server stopped")
     }
 
