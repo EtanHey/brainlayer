@@ -79,6 +79,35 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
     }
 
+    @MainActor
+    func testStatsCollectorDoesNotRefreshWithoutExplicitRequest() async throws {
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        XCTAssertEqual(collector.stats.chunkCount, 0)
+
+        try db.insertChunk(
+            id: "dash-late-write",
+            content: "Inserted after collector start",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        try await Task.sleep(for: .milliseconds(2500))
+
+        XCTAssertEqual(collector.stats.chunkCount, 0)
+
+        collector.refresh(force: true)
+
+        XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
     func testPipelineStateIsOfflineWhenDaemonSnapshotMissing() {
         let stats = DashboardStats(
             chunkCount: 10,

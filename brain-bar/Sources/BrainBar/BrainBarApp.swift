@@ -44,7 +44,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.collector = collector
         configureStatusItem(with: collector)
         configureQuickCapture(dbPath: BrainBarServer.defaultDBPath())
-        collector.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
