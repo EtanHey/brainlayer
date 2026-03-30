@@ -297,11 +297,12 @@ final class DatabaseTests: XCTestCase {
 
         let expectation = XCTestExpectation(description: "concurrent reads")
         expectation.expectedFulfillmentCount = 10
+        let database = db!
 
         for _ in 0..<10 {
             DispatchQueue.global().async {
                 do {
-                    let results = try self.db.search(query: "concurrent", limit: 5)
+                    let results = try database.search(query: "concurrent", limit: 5)
                     XCTAssertFalse(results.isEmpty)
                 } catch {
                     XCTFail("Concurrent read failed: \(error)")
