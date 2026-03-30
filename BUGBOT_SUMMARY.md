@@ -1,76 +1,93 @@
 # BugBot Review Summary
 
-**PR #140**: feat: add BrainBar quick capture panel  
-**Status**: ✅ **APPROVED** - All critical bugs fixed  
-**Date**: 2026-03-29
+**PR #147**: feat: refresh BrainLayer website  
+**Status**: ⚠️ Critical issue found - recommend fixing before merge  
+**Review Date**: 2026-03-30
 
 ---
 
-## What I Found
+## Quick Summary
 
-Reviewed the Quick Capture Panel implementation and identified **3 critical bugs** that would have caused production issues:
-
-### 1. Search Completely Broken 🔴
-- **Bug**: Used wrong dictionary key `result["id"]` instead of `result["chunk_id"]`
-- **Impact**: Search would ALWAYS show random UUIDs, never actual chunk IDs
-- **Fixed**: Line 146 in QuickCapturePanel.swift
-
-### 2. Memory Leak 🔴  
-- **Bug**: Animation completion handler captured `[panel]` strongly
-- **Impact**: Panel controller never deallocated, database connection leaked
-- **Fixed**: Changed to `[weak self]` at line 236
-
-### 3. Poor Input Validation 🟡
-- **Bug**: Whitespace-only input hit database before validation
-- **Impact**: Wasted database calls, inconsistent error messages
-- **Fixed**: Added early trim + isEmpty check at line 117-121
+I performed a comprehensive bug-focused review of the website refresh PR. The code quality is excellent (build passes, lint passes, TypeScript passes, accessibility is good), but I found a **critical content accuracy issue** that should be fixed before deploying to production.
 
 ---
 
-## What I Did
+## 🔴 Critical Issue: Misleading Tool Count
 
-✅ **Fixed all 3 bugs** in commit `31badec`  
-✅ **Added 3 new tests** to prevent regressions  
-✅ **Documented 6 minor issues** for future consideration  
-✅ **Pushed all changes** to `feat/brainbar-quick-capture-panel`
+**The Problem**: The website claims "6 working tools" throughout, but the actual MCP server exposes **11 tools**.
+
+**Why This Matters**: This is a marketing claim that doesn't match the product. Users will expect 6 tools but find 11 (or 8 functional ones).
+
+**The Facts**:
+- `CLAUDE.md` documents: **11 tools**
+- `src/brainlayer/mcp/__init__.py` registers: **11 tools**
+- Tests verify: **11 tools** (see `test_think_recall_integration.py` line 249)
+- MCP server instructions say: **"3 primary tools"** (brain_recall, brain_store, brain_digest)
+
+**Tool Breakdown**:
+```
+Fully Functional (8):
+✓ brain_search
+✓ brain_store  
+✓ brain_recall
+✓ brain_entity
+✓ brain_digest
+✓ brain_get_person
+✓ brain_supersede
+✓ brain_archive
+✓ brain_enrich
+
+Deprecated (3):
+⚠ brain_expand (returns error)
+⚠ brain_update (returns error)
+⚠ brain_tags (returns error)
+```
+
+**Where "6 tools" appears**:
+1. `site/components/hero.tsx` line 59: "6 working MCP tools"
+2. `site/components/tools.tsx` line 54: "Six working tools. One memory layer."
+3. `site/app/layout.tsx` line 27: "Six working tools"
+4. `site/app/layout.tsx` line 40: "six-tool surface"
+5. `site/components/cta.tsx` line 33: "Six working tools"
+6. `site/app/docs/page.tsx` line 207: "six-tool memory surface"
+
+**Recommended Fix**: Replace "6 tools" with one of:
+- "11 MCP tools" (most accurate)
+- "8 working tools" (excludes deprecated stubs)
+- "3 primary tools + 8 advanced" (matches server's description)
 
 ---
 
-## Test Coverage
+## ✅ What's Good
 
-**New Tests Added**:
-- Whitespace-only input validation
-- Mode switch clears results properly  
-- Chunk ID mapping from search results
-
-**Existing Tests** (all still passing):
-- Capture stores and shows confirmation
-- Search returns results
-- Panel focus, dismiss, mode switching
-
----
-
-## Remaining Issues (Non-Blocking)
-
-Documented 6 medium/low priority items in `BUGBOT_REVIEW_QUICK_CAPTURE.md`:
-- Potential mode desync (low risk, mitigated)
-- Inconsistent error handling (may be intentional)
-- Missing search validation (minor optimization)
-- Hard-coded panel sizes (polish)
-- Missing accessibility labels (future enhancement)
-- No live search (design choice)
-
-**None of these block merge** - they're polish items for future PRs.
+The PR is technically solid:
+- ✅ Build passes (5.6s, no errors)
+- ✅ Lint passes (0 errors, 0 warnings)
+- ✅ TypeScript compiles successfully
+- ✅ Proper accessibility (ARIA, focus states, keyboard nav)
+- ✅ Responsive design with mobile-first approach
+- ✅ Respects `prefers-reduced-motion`
+- ✅ Good SEO metadata and OpenGraph tags
+- ✅ Clean React patterns, no anti-patterns
 
 ---
 
-## Verdict
+## 📋 Full Review
 
-**✅ APPROVED** - Safe to merge after critical fixes applied.
-
-The Quick Capture Panel is now production-ready with proper error handling, memory management, and test coverage.
+See `BUGBOT_REVIEW_WEBSITE_REFRESH.md` for the complete review including:
+- Detailed evidence for the tool count issue
+- Medium and low priority issues
+- Test results
+- Recommendations for immediate and future improvements
 
 ---
 
-**Full review**: `BUGBOT_REVIEW_QUICK_CAPTURE.md`  
-**Commits**: 31badec (fixes), 0fc3850 (docs), 63789d9 (cleanup)
+## Recommendation
+
+**Before merging**: Fix the tool count claims to match reality.
+
+**After fixing**: This is a high-quality website refresh that accurately represents the current BrainLayer product.
+
+---
+
+Review completed by @bugbot (autonomous code review agent)
