@@ -296,45 +296,53 @@ class TestFormatStats:
 
 class TestFormatDigestResult:
     def test_enrich_mode(self):
-        result = format_digest_result({
-            "mode": "enrich",
-            "attempted": 50,
-            "enriched": 45,
-            "skipped": 3,
-            "failed": 2,
-        })
+        result = format_digest_result(
+            {
+                "mode": "enrich",
+                "attempted": 50,
+                "enriched": 45,
+                "skipped": 3,
+                "failed": 2,
+            }
+        )
         assert "enrich" in result
         assert "50" in result
         assert "45" in result
 
     def test_digest_mode(self):
-        result = format_digest_result({
-            "mode": "digest",
-            "chunks_created": 12,
-            "entities_created": 3,
-            "relations_created": 5,
-        })
+        result = format_digest_result(
+            {
+                "mode": "digest",
+                "chunks_created": 12,
+                "entities_created": 3,
+                "relations_created": 5,
+            }
+        )
         assert "digest" in result
         assert "12" in result
         assert "3" in result
 
     def test_with_action_items(self):
-        result = format_digest_result({
-            "mode": "digest",
-            "chunks_created": 1,
-            "entities_created": 0,
-            "relations_created": 0,
-            "action_items": [{"description": "Review the auth module"}],
-        })
+        result = format_digest_result(
+            {
+                "mode": "digest",
+                "chunks_created": 1,
+                "entities_created": 0,
+                "relations_created": 0,
+                "action_items": [{"description": "Review the auth module"}],
+            }
+        )
         assert "Review the auth module" in result
 
     def test_connect_mode(self):
-        result = format_digest_result({
-            "mode": "connect",
-            "chunks_created": 5,
-            "entities_created": 2,
-            "relations_created": 8,
-        })
+        result = format_digest_result(
+            {
+                "mode": "connect",
+                "chunks_created": 5,
+                "entities_created": 2,
+                "relations_created": 8,
+            }
+        )
         assert "connect" in result
 
 

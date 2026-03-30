@@ -621,7 +621,9 @@ async def _search(
                         "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
                         "importance": meta.get("importance"),
                         "summary": meta.get("summary"),
-                        "tags": [str(t) for t in meta["tags"][:5]] if meta.get("tags") and isinstance(meta["tags"], list) else None,
+                        "tags": [str(t) for t in meta["tags"][:5]]
+                        if meta.get("tags") and isinstance(meta["tags"], list)
+                        else None,
                     }
                 )
                 structured_results.append(item)

@@ -16,9 +16,7 @@ class TestKGSignalInHybridSearch:
         from brainlayer.search_repo import SearchMixin
 
         sig = inspect.signature(SearchMixin.hybrid_search)
-        assert "kg_boost" in sig.parameters, (
-            "hybrid_search must accept kg_boost param for KG-linked chunk boosting"
-        )
+        assert "kg_boost" in sig.parameters, "hybrid_search must accept kg_boost param for KG-linked chunk boosting"
 
     def test_kg_linked_chunks_get_score_boost(self, tmp_path):
         """Chunks linked to entities via kg_entity_chunks should get a score boost in hybrid_search."""
@@ -75,9 +73,7 @@ class TestKGSignalInHybridSearch:
         if "chunk-linked" in ids and "chunk-unlinked" in ids:
             linked_idx = ids.index("chunk-linked")
             unlinked_idx = ids.index("chunk-unlinked")
-            assert linked_idx <= unlinked_idx, (
-                "KG-linked chunk should rank at least as high as unlinked chunk"
-            )
+            assert linked_idx <= unlinked_idx, "KG-linked chunk should rank at least as high as unlinked chunk"
 
         store.close()
 
@@ -96,8 +92,7 @@ class TestEntityTypeEnumAlignment:
         mcp_enum = schema["properties"]["entity_type"]["enum"]
 
         assert sorted(mcp_enum) == sorted(ENTITY_TYPES), (
-            f"MCP brain_recall entity_type enum {mcp_enum} "
-            f"does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
+            f"MCP brain_recall entity_type enum {mcp_enum} does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
         )
 
     async def test_mcp_entity_enum_matches_canonical(self):
@@ -111,8 +106,7 @@ class TestEntityTypeEnumAlignment:
         mcp_enum = schema["properties"]["entity_type"]["enum"]
 
         assert sorted(mcp_enum) == sorted(ENTITY_TYPES), (
-            f"MCP brain_entity entity_type enum {mcp_enum} "
-            f"does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
+            f"MCP brain_entity entity_type enum {mcp_enum} does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
         )
 
 
@@ -150,9 +144,12 @@ class TestEnrichBatchNotStub:
                     @staticmethod
                     def generate_content(model, contents, config):
                         import json
+
                         class MockResponse:
                             text = json.dumps(mock_enrichment)
+
                         return MockResponse()
+
             return MockClient()
 
         monkeypatch.setattr(enrichment_controller, "_get_gemini_client", mock_get_gemini_client)

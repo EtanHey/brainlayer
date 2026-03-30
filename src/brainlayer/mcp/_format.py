@@ -27,17 +27,18 @@ def _pad(text: str, width: int, align: str = "left") -> str:
     return text.ljust(width)
 
 
-
 def format_search_results(query: str, results: list[dict], total: int) -> str:
     """Format search results as a clean table.
 
     Each result dict should have: chunk_id, score, project, date, snippet, summary, importance.
     """
     if total == 0:
-        return f"\u250c\u2500 brain_search: \"{_truncate(query, 50)}\"\n\u2502 No results found.\n\u2514\u2500"
+        return f'\u250c\u2500 brain_search: "{_truncate(query, 50)}"\n\u2502 No results found.\n\u2514\u2500'
 
     lines = []
-    lines.append(f"\u250c\u2500 brain_search: \"{_truncate(query, 50)}\" \u2500 {total} result{'s' if total != 1 else ''}")
+    lines.append(
+        f'\u250c\u2500 brain_search: "{_truncate(query, 50)}" \u2500 {total} result{"s" if total != 1 else ""}'
+    )
     lines.append("\u2502")
 
     for i, r in enumerate(results):
@@ -126,7 +127,11 @@ def format_entity_card(entity: dict) -> str:
         for rel in relations[:8]:
             if isinstance(rel, dict):
                 rtype = rel.get("relation_type", "")
-                target = rel.get("target", {}).get("name", "") if isinstance(rel.get("target"), dict) else str(rel.get("target", ""))
+                target = (
+                    rel.get("target", {}).get("name", "")
+                    if isinstance(rel.get("target"), dict)
+                    else str(rel.get("target", ""))
+                )
                 lines.append(f"\u2502   \u2192 {rtype}: {target}")
             else:
                 lines.append(f"\u2502   \u2192 {rel}")
@@ -253,7 +258,9 @@ def format_kg_search(entity_name: str, results: list[dict], facts: list[dict], q
     """Format entity-aware KG hybrid search results."""
     lines = []
     total = len(results)
-    lines.append(f"\u250c\u2500 Entity search: \"{entity_name}\" (query: \"{_truncate(query, 40)}\") \u2500 {total} result{'s' if total != 1 else ''}")
+    lines.append(
+        f'\u250c\u2500 Entity search: "{entity_name}" (query: "{_truncate(query, 40)}") \u2500 {total} result{"s" if total != 1 else ""}'
+    )
 
     if facts:
         lines.append(f"\u251c\u2500 Knowledge Graph ({len(facts)} fact{'s' if len(facts) != 1 else ''})")
