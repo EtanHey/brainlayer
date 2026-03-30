@@ -900,9 +900,9 @@ def test_launchd_installer_supports_enrichment_load_and_unload():
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert 'LAUNCH_DIR="$HOME/Library/LaunchAgents"' in install_script
-    assert 'load)' in install_script
-    assert 'unload)' in install_script
-    assert 'com.brainlayer.enrichment' in install_script
+    assert "load)" in install_script
+    assert "unload)" in install_script
+    assert "com.brainlayer.enrichment" in install_script
 
 
 def test_launchd_installer_reads_google_api_key_from_zshrc():
