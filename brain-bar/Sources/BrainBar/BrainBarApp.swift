@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
         self.collector = collector
+        collector.start()
         configureStatusItem(with: collector)
         configureQuickCapture(dbPath: BrainBarServer.defaultDBPath())
     }

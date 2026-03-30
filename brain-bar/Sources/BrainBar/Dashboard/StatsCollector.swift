@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import SwiftUI
 
@@ -47,6 +46,8 @@ final class StatsCollector: ObservableObject {
             if force {
                 daemon = nil
                 state = .offline
+            } else {
+                NSLog("[StatsCollector] Refresh failed (non-forced): \(error)")
             }
         }
     }
