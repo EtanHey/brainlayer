@@ -18,10 +18,14 @@ const steps = [
   { num: "01", text: "Install from PyPI", cmd: "pip install brainlayer" },
   {
     num: "02",
-    text: "Configure MCP and index conversations",
+    text: "Configure MCP and create the local database",
     cmd: "brainlayer init",
   },
-  { num: "03", text: "Start real-time indexing", cmd: "brainlayer watch" },
+  {
+    num: "03",
+    text: "Start indexing and optional BrainBar capture flows",
+    cmd: "brainlayer watch",
+  },
 ];
 
 export function Integrations() {
@@ -89,6 +93,12 @@ export function Integrations() {
             </div>
           ))}
         </motion.div>
+
+        <p className="mx-auto mt-8 max-w-[680px] text-sm leading-relaxed font-light text-text-secondary">
+          BrainLayer runs local-first. MCP clients talk to the same memory
+          layer, and BrainBar exposes the same formatter and database through a
+          menu-bar capture flow on macOS.
+        </p>
       </div>
     </section>
   );

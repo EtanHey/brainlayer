@@ -22,22 +22,22 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BrainLayer - Persistent Memory for AI Agents",
+  title: "BrainLayer - Persistent Memory for MCP Agents",
   description:
-    "Local-first memory layer for MCP-compatible AI agents. 284K chunks indexed. Hybrid search in <50ms. Privacy-first.",
+    "Local-first memory for MCP agents and BrainBar. Six working tools, formatted Unicode output, and keyboard-first quick capture.",
   openGraph: {
-    title: "BrainLayer - Persistent Memory for AI Agents",
+    title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory layer for MCP-compatible AI agents. Hybrid search in <50ms.",
+      "Local-first memory for MCP agents and BrainBar with six working tools and formatted search output.",
     url: "https://brainlayer.etanheyman.com",
     siteName: "BrainLayer",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "BrainLayer - Persistent Memory for AI Agents",
+    title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory for MCP agents. Every decision, correction, and preference - indexed and searchable in <50ms.",
+      "Local-first memory for MCP agents and BrainBar. Formatted output, F4 quick capture, and a cleaner six-tool surface.",
   },
 };
 

@@ -41,7 +41,7 @@ const sections = [
   },
   {
     title: "MCP Tools",
-    desc: "Full reference for brain_search, brain_store, brain_recall, and 5 more tools.",
+    desc: "Current reference for the 6 working tools: search, store, recall, entity, expand, digest.",
     href: "https://etanhey.github.io/brainlayer/mcp-tools/",
     icon: (
       <svg
@@ -80,7 +80,7 @@ const sections = [
   },
   {
     title: "Enrichment",
-    desc: "Auto-enrich chunks with entity extraction, tagging, and knowledge graph links.",
+    desc: "Auto-enrich chunks with entity extraction, action items, and knowledge graph links.",
     href: "https://etanhey.github.io/brainlayer/enrichment/",
     icon: (
       <svg
@@ -203,8 +203,8 @@ export default function DocsPage() {
               Learn BrainLayer
             </h1>
             <p className="text-lg text-text-secondary font-light max-w-[560px]">
-              Everything you need to set up persistent memory for your AI
-              agents. From installation to advanced knowledge graph features.
+              Setup, MCP configuration, BrainBar flows, and the current
+              six-tool memory surface for persistent AI-agent context.
             </p>
           </div>
 

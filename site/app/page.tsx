@@ -4,6 +4,7 @@ import { Nav } from "@/components/nav";
 import { Hero } from "@/components/hero";
 import { Terminal } from "@/components/terminal";
 import { ProblemSolution } from "@/components/problem-solution";
+import { SearchExamples } from "@/components/search-examples";
 import { Tools } from "@/components/tools";
 import { Integrations } from "@/components/integrations";
 import { Cta } from "@/components/cta";
@@ -15,6 +16,8 @@ export default function Home() {
       <Nav />
       <Hero />
       <Terminal />
+      <Divider />
+      <SearchExamples />
       <Divider />
       <div className="section-tinted">
         <ProblemSolution />

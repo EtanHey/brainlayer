@@ -39,6 +39,12 @@ export function Nav() {
         </Link>
         <div className="flex items-center gap-6">
           <a
+            href="#examples"
+            className="hidden text-sm text-text-secondary transition-colors hover:text-text sm:inline focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
+          >
+            Examples
+          </a>
+          <a
             href="#tools"
             className="hidden text-sm text-text-secondary transition-colors hover:text-text sm:inline focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >

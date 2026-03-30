@@ -15,15 +15,15 @@ export function Hero() {
 
       <div className="relative mx-auto max-w-[960px] px-6">
         <h1 className="hero-fade mx-auto mb-6 max-w-[700px] font-display text-[clamp(40px,6vw,68px)] leading-[1.08] font-bold tracking-[-0.035em] text-balance">
-          Your AI forgets
+          BrainLayer remembers
           <br />
-          everything. <em className="italic text-accent">Fix that.</em>
+          the work you already did.
         </h1>
 
         <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary">
-          Local-first memory for MCP agents. Every decision, correction, and
-          preference - indexed and searchable in &lt;50ms. Nothing leaves your
-          machine.
+          Local-first memory for MCP agents and BrainBar. Six working tools,
+          formatted Unicode output, keyboard-first capture, and one SQLite file
+          that stays on your machine.
         </p>
 
         <div className="hero-fade hero-fade-d2 mb-12 flex flex-wrap items-center justify-center gap-3">
@@ -52,6 +52,21 @@ export function Hero() {
 
         <div className="hero-fade hero-fade-d3">
           <CopyBlock text="pip install brainlayer" showDollar />
+        </div>
+
+        <div className="hero-fade hero-fade-d4 mt-8 flex flex-wrap items-center justify-center gap-2 text-[12px] text-text-dim">
+          <span className="rounded-full border border-border px-3 py-1">
+            6 working MCP tools
+          </span>
+          <span className="rounded-full border border-border px-3 py-1">
+            F4 quick capture
+          </span>
+          <span className="rounded-full border border-border px-3 py-1">
+            dashboard popover
+          </span>
+          <span className="rounded-full border border-border px-3 py-1">
+            no tag bloat
+          </span>
         </div>
       </div>
     </section>
