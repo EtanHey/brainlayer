@@ -709,15 +709,19 @@ class SearchMixin:
                 for w in words:
                     if len(w) < 3:
                         continue
-                    rows = list(cursor.execute(
-                        "SELECT id FROM kg_entities WHERE LOWER(name) LIKE ?",
-                        (f"%{w.lower()}%",),
-                    ))
+                    rows = list(
+                        cursor.execute(
+                            "SELECT id FROM kg_entities WHERE LOWER(name) LIKE ?",
+                            (f"%{w.lower()}%",),
+                        )
+                    )
                     for row in rows:
-                        linked = list(cursor.execute(
-                            "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
-                            (row[0],),
-                        ))
+                        linked = list(
+                            cursor.execute(
+                                "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
+                                (row[0],),
+                            )
+                        )
                         for lrow in linked:
                             kg_linked_ids.add(lrow[0])
 

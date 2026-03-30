@@ -604,7 +604,15 @@ Returns: Structured JSON or Markdown depending on mode.""",
                     },
                     "entity_type": {
                         "type": "string",
-                        "enum": ["person", "constraint", "preference", "life_event", "meeting", "location", "organization"],
+                        "enum": [
+                            "person",
+                            "constraint",
+                            "preference",
+                            "life_event",
+                            "meeting",
+                            "location",
+                            "organization",
+                        ],
                         "description": "Filter by entity type (mode=entity only)",
                     },
                     "file_path": {
@@ -769,7 +777,15 @@ Returns: Structured JSON with name, entity_type, relations[], evidence[], or nul
                     },
                     "entity_type": {
                         "type": "string",
-                        "enum": ["person", "constraint", "preference", "life_event", "meeting", "location", "organization"],
+                        "enum": [
+                            "person",
+                            "constraint",
+                            "preference",
+                            "life_event",
+                            "meeting",
+                            "location",
+                            "organization",
+                        ],
                         "description": "Optional: filter by entity type",
                     },
                 },

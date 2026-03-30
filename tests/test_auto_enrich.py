@@ -323,7 +323,7 @@ class TestStoreAutoEnrich:
 
         content_items, structured = result
         assert structured["chunk_id"] != "queued"
-        assert "Stored memory" in content_items[0].text
+        assert content_items[0].text == f"✔ Stored → {structured['chunk_id']}"
 
         for t in threading.enumerate():
             if t.daemon and t.name != "MainThread":

@@ -101,9 +101,18 @@ def populated_store(store, mock_embedding):
     for i in range(5):
         chunk_id = f"chunk-coach-{i}"
         store.upsert_chunks(
-            [{"id": chunk_id, "content": f"Coach info chunk {i}", "metadata": {},
-              "source_file": "test", "project": "test", "content_type": "user_message",
-              "value_type": None, "char_count": 20}],
+            [
+                {
+                    "id": chunk_id,
+                    "content": f"Coach info chunk {i}",
+                    "metadata": {},
+                    "source_file": "test",
+                    "project": "test",
+                    "content_type": "user_message",
+                    "value_type": None,
+                    "char_count": 20,
+                }
+            ],
             [dummy_emb],
         )
         store.link_entity_chunk("ent-coach", chunk_id, relevance=0.8 + i * 0.04)
@@ -112,9 +121,18 @@ def populated_store(store, mock_embedding):
     for i in range(3):
         chunk_id = f"chunk-brain-{i}"
         store.upsert_chunks(
-            [{"id": chunk_id, "content": f"BrainLayer info chunk {i}", "metadata": {},
-              "source_file": "test", "project": "test", "content_type": "user_message",
-              "value_type": None, "char_count": 20}],
+            [
+                {
+                    "id": chunk_id,
+                    "content": f"BrainLayer info chunk {i}",
+                    "metadata": {},
+                    "source_file": "test",
+                    "project": "test",
+                    "content_type": "user_message",
+                    "value_type": None,
+                    "char_count": 20,
+                }
+            ],
             [dummy_emb],
         )
         store.link_entity_chunk("ent-brain", chunk_id, relevance=0.9)
@@ -130,9 +148,7 @@ class TestEntityContractsSchema:
 
     def test_entity_contracts_table_exists(self, store):
         cursor = store._read_cursor()
-        tables = {row[0] for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "entity_contracts" in tables
 
     def test_entity_contracts_columns(self, store):
@@ -143,26 +159,27 @@ class TestEntityContractsSchema:
 
     def test_entity_health_table_exists(self, store):
         cursor = store._read_cursor()
-        tables = {row[0] for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "entity_health" in tables
 
     def test_entity_health_columns(self, store):
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(entity_health)")}
         expected = {
-            "entity_name", "completeness_score", "health_level",
-            "missing_required", "missing_expected", "chunk_count",
-            "relationship_count", "last_scored_at",
+            "entity_name",
+            "completeness_score",
+            "health_level",
+            "missing_required",
+            "missing_expected",
+            "chunk_count",
+            "relationship_count",
+            "last_scored_at",
         }
         assert expected.issubset(cols)
 
     def test_entity_type_hierarchy_table_exists(self, store):
         cursor = store._read_cursor()
-        tables = {row[0] for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "entity_type_hierarchy" in tables
 
     def test_entity_type_hierarchy_columns(self, store):
@@ -197,9 +214,7 @@ class TestAlteredColumns:
             embedding=mock_embedding("test"),
         )
         cursor = store._read_cursor()
-        row = list(cursor.execute(
-            "SELECT status FROM kg_entities WHERE id = ?", ("ent-test",)
-        ))
+        row = list(cursor.execute("SELECT status FROM kg_entities WHERE id = ?", ("ent-test",)))
         assert row[0][0] == "active"
 
     def test_kg_entities_has_updated_at(self, store):
@@ -227,17 +242,28 @@ class TestAlteredColumns:
             embedding=mock_embedding("tier"),
         )
         store.upsert_chunks(
-            [{"id": "chunk-tier-1", "content": "test", "metadata": {},
-              "source_file": "t", "project": "t", "content_type": "user_message",
-              "value_type": None, "char_count": 4}],
+            [
+                {
+                    "id": "chunk-tier-1",
+                    "content": "test",
+                    "metadata": {},
+                    "source_file": "t",
+                    "project": "t",
+                    "content_type": "user_message",
+                    "value_type": None,
+                    "char_count": 4,
+                }
+            ],
             [mock_embedding("tier chunk")],
         )
         store.link_entity_chunk("ent-tier", "chunk-tier-1")
         cursor = store._read_cursor()
-        row = list(cursor.execute(
-            "SELECT relation_tier, weight FROM kg_entity_chunks WHERE entity_id = ? AND chunk_id = ?",
-            ("ent-tier", "chunk-tier-1"),
-        ))
+        row = list(
+            cursor.execute(
+                "SELECT relation_tier, weight FROM kg_entity_chunks WHERE entity_id = ? AND chunk_id = ?",
+                ("ent-tier", "chunk-tier-1"),
+            )
+        )
         assert row[0][0] == 4  # default tier
         assert row[0][1] == 0.25  # default weight
 
@@ -322,16 +348,16 @@ class TestHealthScoring:
 
     def test_load_contracts(self, contracts_path):
         from scripts.score_entity_health import load_contracts
+
         contracts = load_contracts(str(contracts_path))
         assert "agent" in contracts
         assert "person" in contracts
 
     def test_score_returns_required_fields(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         assert "completeness_score" in result
         assert "health_level" in result
         assert "missing_required" in result
@@ -341,23 +367,22 @@ class TestHealthScoring:
 
     def test_score_range_0_to_1(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         assert 0.0 <= result["completeness_score"] <= 1.0
 
     def test_health_level_1_to_5(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         assert 1 <= result["health_level"] <= 5
 
     def test_health_level_classification(self):
         """Verify the 5-tier classification boundaries."""
         from scripts.score_entity_health import classify_health_level
+
         assert classify_health_level(0.90) == 5  # Very Detailed
         assert classify_health_level(0.85) == 5  # boundary
         assert classify_health_level(0.84) == 4  # Detailed
@@ -367,47 +392,44 @@ class TestHealthScoring:
         assert classify_health_level(0.44) == 2  # Basic
         assert classify_health_level(0.25) == 2  # boundary
         assert classify_health_level(0.24) == 1  # Stub
-        assert classify_health_level(0.0) == 1   # Stub
+        assert classify_health_level(0.0) == 1  # Stub
 
     def test_chunk_count_accurate(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         assert result["chunk_count"] == 5
 
     def test_relationship_count_accurate(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         assert result["relationship_count"] == 2
 
     def test_missing_required_detected(self, populated_store, contracts_path):
         """coachClaude doesn't have all required fields populated — detect gaps."""
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-coach", "agent", contracts["agent"]
-        )
+        result = score_entity(populated_store, "ent-coach", "agent", contracts["agent"])
         # capabilities is partially there in metadata, memory_domains is missing
         assert isinstance(result["missing_required"], list)
 
     def test_tool_entity_scoring(self, populated_store, contracts_path):
         """BrainLayer (tool) should also get scored."""
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
-        result = score_entity(
-            populated_store, "ent-brain", "tool", contracts["tool"]
-        )
+        result = score_entity(populated_store, "ent-brain", "tool", contracts["tool"])
         assert 0.0 <= result["completeness_score"] <= 1.0
         assert result["chunk_count"] == 3
 
     def test_stub_entity_low_score(self, store, mock_embedding, contracts_path):
         """An entity with no chunks, no relations = very low score (Stub)."""
         from scripts.score_entity_health import load_contracts, score_entity
+
         contracts = load_contracts(str(contracts_path))
         store.upsert_entity(
             entity_id="ent-stub",
@@ -415,9 +437,7 @@ class TestHealthScoring:
             name="StubConcept",
             embedding=mock_embedding("stub"),
         )
-        result = score_entity(
-            store, "ent-stub", "concept", contracts["concept"]
-        )
+        result = score_entity(store, "ent-stub", "concept", contracts["concept"])
         assert result["health_level"] <= 2  # Stub or Basic
         assert result["chunk_count"] == 0
         assert result["relationship_count"] == 0
@@ -431,13 +451,12 @@ class TestHealthPersistence:
 
     def test_populate_entity_health(self, populated_store, contracts_path):
         from scripts.score_entity_health import load_contracts, score_all_entities
+
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
 
         cursor = populated_store._read_cursor()
-        rows = list(cursor.execute(
-            "SELECT entity_name, completeness_score, health_level FROM entity_health"
-        ))
+        rows = list(cursor.execute("SELECT entity_name, completeness_score, health_level FROM entity_health"))
         names = {row[0] for row in rows}
         assert "coachClaude" in names
         assert "BrainLayer" in names
@@ -445,6 +464,7 @@ class TestHealthPersistence:
     def test_health_score_updates_on_rerun(self, populated_store, contracts_path):
         """Running score_all_entities twice should upsert, not duplicate."""
         from scripts.score_entity_health import load_contracts, score_all_entities
+
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
         score_all_entities(populated_store, contracts)
@@ -465,10 +485,12 @@ class TestEntityLookupEnhanced:
     def test_entity_lookup_includes_health(self, populated_store, mock_embedding, contracts_path):
         """After scoring, entity_lookup should include health data."""
         from scripts.score_entity_health import load_contracts, score_all_entities
+
         contracts = load_contracts(str(contracts_path))
         score_all_entities(populated_store, contracts)
 
         from brainlayer.pipeline.digest import entity_lookup
+
         result = entity_lookup(
             query="coachClaude",
             store=populated_store,
@@ -490,6 +512,7 @@ class TestEntityLookupEnhanced:
             embedding=mock_embedding("unscored"),
         )
         from brainlayer.pipeline.digest import entity_lookup
+
         result = entity_lookup(
             query="UnscoredConcept",
             store=store,
@@ -510,9 +533,7 @@ class TestTypeHierarchy:
     def test_hierarchy_has_seed_data(self, store):
         """entity_type_hierarchy should contain core types."""
         cursor = store._read_cursor()
-        rows = list(cursor.execute(
-            "SELECT child_type, parent_type FROM entity_type_hierarchy"
-        ))
+        rows = list(cursor.execute("SELECT child_type, parent_type FROM entity_type_hierarchy"))
         hierarchy = {row[0]: row[1] for row in rows}
         assert "agent" in hierarchy
         assert "person" in hierarchy
@@ -523,9 +544,7 @@ class TestTypeHierarchy:
     def test_subtypes_mapped(self, store):
         """Subtypes like golem->agent, platform->tool should exist."""
         cursor = store._read_cursor()
-        rows = list(cursor.execute(
-            "SELECT child_type, parent_type FROM entity_type_hierarchy"
-        ))
+        rows = list(cursor.execute("SELECT child_type, parent_type FROM entity_type_hierarchy"))
         hierarchy = {row[0]: row[1] for row in rows}
         assert hierarchy.get("golem") == "agent"
         assert hierarchy.get("platform") == "tool"
