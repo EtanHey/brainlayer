@@ -119,13 +119,13 @@ final class QuickCaptureViewModel: ObservableObject {
 
     func submit(forceCapture: Bool = false) {
         if forceCapture {
-            submitCapture()
+            submitCapture(preserveMode: true)
             return
         }
 
         switch mode {
         case .capture:
-            submitCapture()
+            submitCapture(preserveMode: false)
         case .search:
             if selectedResultIndex != nil, !results.isEmpty {
                 applySelectedSearchResult()
@@ -196,7 +196,7 @@ final class QuickCaptureViewModel: ObservableObject {
         focusRequestCount += 1
     }
 
-    private func submitCapture() {
+    private func submitCapture(preserveMode: Bool) {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             feedback = .error("Content cannot be empty")
@@ -206,12 +206,14 @@ final class QuickCaptureViewModel: ObservableObject {
         do {
             _ = try QuickCaptureController.capture(
                 db: db,
-                content: inputText,
+                content: trimmed,
                 tags: []
             )
             inputText = ""
-            results = []
-            selectedResultIndex = nil
+            if !preserveMode {
+                results = []
+                selectedResultIndex = nil
+            }
             feedback = .success("Stored in BrainLayer")
             confirmationFlashCount += 1
         } catch {
@@ -278,23 +280,30 @@ private final class KeyHandlingTextField: NSTextField {
     var onMoveDown: (() -> Void)?
     var onReturn: ((NSEvent.ModifierFlags) -> Void)?
 
+    var shouldInterceptArrowKeys: Bool = false
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 48:
             onTab?()
             return
         case 125:
-            onMoveDown?()
-            return
+            if shouldInterceptArrowKeys {
+                onMoveDown?()
+                return
+            }
         case 126:
-            onMoveUp?()
-            return
+            if shouldInterceptArrowKeys {
+                onMoveUp?()
+                return
+            }
         case 36, 76:
             onReturn?(event.modifierFlags.intersection(.deviceIndependentFlagsMask))
             return
         default:
-            super.keyDown(with: event)
+            break
         }
+        super.keyDown(with: event)
     }
 }
 
@@ -302,6 +311,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let focusRequestCount: Int
+    let isSearchMode: Bool
     let onTab: () -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
@@ -348,6 +358,7 @@ private struct QuickCaptureInputField: NSViewRepresentable {
             nsView.stringValue = text
         }
         nsView.placeholderString = placeholder
+        nsView.shouldInterceptArrowKeys = isSearchMode
         nsView.onTab = onTab
         nsView.onMoveUp = onMoveUp
         nsView.onMoveDown = onMoveDown
@@ -528,6 +539,7 @@ struct QuickCapturePanelView: View {
                     text: $viewModel.inputText,
                     placeholder: viewModel.placeholderText,
                     focusRequestCount: viewModel.focusRequestCount,
+                    isSearchMode: viewModel.mode == .search,
                     onTab: {
                         viewModel.handleInputTab()
                     },
