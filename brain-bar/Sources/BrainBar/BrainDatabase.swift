@@ -9,6 +9,11 @@ import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
     static let dashboardDidChangeNotification = "com.brainlayer.brainbar.database-changed"
+    private static let previewExpression = """
+        trim(substr(replace(replace(replace(coalesce(nullif(summary, ''), content), char(10), ' '), char(13), ' '), char(9), ' '), 1, 220))
+    """
+    private static let ftsColumns = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
+    private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
 
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
@@ -76,40 +81,19 @@ final class BrainDatabase: @unchecked Sendable {
                     tags TEXT DEFAULT '[]',
                     tag_confidence REAL,
                     summary TEXT,
+                    preview_text TEXT,
                     importance REAL DEFAULT 5,
                     intent TEXT,
                     enriched_at TEXT,
                     created_at TEXT DEFAULT (datetime('now'))
                 )
             """)
-
-            try execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                    content, summary, tags, resolved_query, chunk_id UNINDEXED
-                )
-            """)
-
-            try execute("""
-                CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
-                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
-                END
-            """)
-
-            try execute("""
-                CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
-                    DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                END
-            """)
-
-            try execute("""
-                CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
-                    DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
-                END
-            """)
         }
+
+        try ensureChunkColumns()
+        try ensurePreviewTextTriggers()
+        try rebuildFTSTableIfNeeded()
+        try backfillPreviewText()
 
         try execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at
@@ -117,6 +101,7 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         try ensureAuxiliarySchema()
+        try refreshSearchStatistics()
     }
 
     private func ensureAuxiliarySchema() throws {
@@ -224,8 +209,8 @@ final class BrainDatabase: @unchecked Sendable {
     ) throws {
         guard let db else { throw DBError.notOpen }
         let sql = """
-            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary)
-            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '')
+            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary, preview_text)
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '', ?)
         """
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
             bindText(id, to: stmt, index: 1)
@@ -236,7 +221,9 @@ final class BrainDatabase: @unchecked Sendable {
             bindText(sessionId, to: stmt, index: 6)
             sqlite3_bind_int(stmt, 7, Int32(content.count))
             bindText(tags, to: stmt, index: 8)
+            bindText(Self.previewText(summary: "", content: content), to: stmt, index: 9)
         }
+        try refreshSearchStatistics()
     }
 
     func search(
@@ -331,6 +318,7 @@ final class BrainDatabase: @unchecked Sendable {
                 "importance": sqlite3_column_double(stmt, 5),
                 "created_at": columnText(stmt, 6) as Any,
                 "summary": columnText(stmt, 7) as Any,
+                "preview_text": Self.previewText(summary: columnText(stmt, 7), content: columnText(stmt, 2)),
                 "tags": columnText(stmt, 8) as Any,
                 "session_id": columnText(stmt, 9) as Any,
                 "score": score
@@ -349,8 +337,8 @@ final class BrainDatabase: @unchecked Sendable {
         let chunkID = "brainbar-\(UUID().uuidString.lowercased().prefix(12))"
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, tags, importance, source, content_type, char_count)
-            VALUES (?, ?, '{}', 'brainbar-store', ?, ?, ?, 'user_message', ?)
+            INSERT INTO chunks (id, content, metadata, source_file, tags, importance, source, content_type, char_count, preview_text)
+            VALUES (?, ?, '{}', 'brainbar-store', ?, ?, ?, 'user_message', ?, ?)
         """
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
             bindText(chunkID, to: stmt, index: 1)
@@ -359,8 +347,105 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int(stmt, 4, Int32(importance))
             bindText(source, to: stmt, index: 5)
             sqlite3_bind_int(stmt, 6, Int32(content.count))
+            bindText(Self.previewText(summary: "", content: content), to: stmt, index: 7)
         }
+        try refreshSearchStatistics()
         return StoredChunk(chunkID: chunkID, rowID: sqlite3_last_insert_rowid(db))
+    }
+
+    func searchCandidates(
+        query: String,
+        limit: Int,
+        project: String? = nil,
+        tag: String? = nil,
+        importanceMin: Double? = nil,
+        subscriberID: String? = nil,
+        unreadOnly: Bool = false
+    ) throws -> [SearchQueryCandidate] {
+        guard let db else { throw DBError.notOpen }
+        let sanitized = sanitizeFTS5Query(query)
+
+        var subscribedTags: [String] = []
+        var ackFloor: Int64 = 0
+        if unreadOnly, let subscriberID, let record = try subscription(agentID: subscriberID) {
+            subscribedTags = record.tags
+            ackFloor = record.lastAckedSeq
+        }
+
+        var conditions = ["chunks_fts MATCH ?"]
+        if project != nil { conditions.append("c.project = ?") }
+        if let explicitTag = tag {
+            conditions.append("c.tags LIKE ?")
+            subscribedTags = [explicitTag]
+        } else if unreadOnly, !subscribedTags.isEmpty {
+            let tagTerms = Array(repeating: "c.tags LIKE ?", count: subscribedTags.count).joined(separator: " OR ")
+            conditions.append("(\(tagTerms))")
+        }
+        if importanceMin != nil { conditions.append("c.importance >= ?") }
+        if unreadOnly { conditions.append("c.rowid > ?") }
+
+        let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
+        let sql = """
+            SELECT c.rowid, c.id, c.preview_text, f.rank
+            FROM chunks_fts f
+            JOIN chunks c ON c.id = f.chunk_id
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY \(orderByClause)
+            LIMIT ?
+        """
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        var paramIdx: Int32 = 1
+        bindText(sanitized, to: stmt, index: paramIdx)
+        paramIdx += 1
+        if let project {
+            bindText(project, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let explicitTag = tag {
+            bindText("%\"\(explicitTag)\"%", to: stmt, index: paramIdx)
+            paramIdx += 1
+        } else if unreadOnly, !subscribedTags.isEmpty {
+            for subscribedTag in subscribedTags {
+                bindText("%\"\(subscribedTag)\"%", to: stmt, index: paramIdx)
+                paramIdx += 1
+            }
+        }
+        if let importanceMin {
+            sqlite3_bind_double(stmt, paramIdx, importanceMin)
+            paramIdx += 1
+        }
+        if unreadOnly {
+            sqlite3_bind_int64(stmt, paramIdx, ackFloor)
+            paramIdx += 1
+        }
+        sqlite3_bind_int(stmt, paramIdx, Int32(limit))
+
+        var results: [SearchQueryCandidate] = []
+        var maxRowID: Int64 = 0
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rowID = sqlite3_column_int64(stmt, 0)
+            maxRowID = max(maxRowID, rowID)
+            let rawRank = sqlite3_column_double(stmt, 3)
+            let score = max(0, -rawRank)
+            results.append(
+                SearchQueryCandidate(
+                    id: columnText(stmt, 1) ?? "",
+                    previewText: columnText(stmt, 2) ?? "",
+                    lexicalScore: score
+                )
+            )
+        }
+
+        if unreadOnly, let subscriberID, maxRowID > 0 {
+            try markDelivered(agentID: subscriberID, seq: maxRowID)
+        }
+
+        return results
     }
 
     func upsertSubscription(agentID: String, tags: [String], incrementGeneration: Bool = false) throws -> SubscriberRecord {
@@ -898,13 +983,150 @@ final class BrainDatabase: @unchecked Sendable {
                 .replacingOccurrences(of: "*", with: "")
                 .trimmingCharacters(in: .whitespaces)
             guard !cleaned.isEmpty else { return nil }
-            return "\"\(cleaned)\""
+            return "\"\(cleaned)\"*"
         }
         guard !tokens.isEmpty else { return "\"\"" }
-        // Implicit AND (space-separated) — matches Python _escape_fts5_query default.
-        // FTS5 treats space as AND. Semantic recall comes from vector search (future);
-        // FTS5 should maximize precision.
+        // Prefix search keeps typeahead fast while the reranker narrows the
+        // bounded candidate set later in the search pipeline.
         return tokens.joined(separator: " ")
+    }
+
+    private func ensureChunkColumns() throws {
+        guard let db else { throw DBError.notOpen }
+        let existingColumns = try tableColumns(name: "chunks", on: db)
+        if !existingColumns.contains("preview_text") {
+            try execute("ALTER TABLE chunks ADD COLUMN preview_text TEXT")
+        }
+    }
+
+    private func ensurePreviewTextTriggers() throws {
+        try execute("DROP TRIGGER IF EXISTS chunks_preview_text_insert")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_preview_text_insert
+            AFTER INSERT ON chunks
+            WHEN new.preview_text IS NULL OR trim(new.preview_text) = ''
+            BEGIN
+                UPDATE chunks
+                SET preview_text = \(Self.previewExpression)
+                WHERE rowid = new.rowid;
+            END
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_preview_text_update")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_preview_text_update
+            AFTER UPDATE OF content, summary ON chunks
+            BEGIN
+                UPDATE chunks
+                SET preview_text = \(Self.previewExpression)
+                WHERE rowid = new.rowid;
+            END
+        """)
+    }
+
+    private func rebuildFTSTableIfNeeded() throws {
+        let needsRebuild = try ftsTableNeedsRebuild()
+        if needsRebuild {
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_update")
+            try execute("DROP TABLE IF EXISTS chunks_fts")
+        }
+
+        try execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                \(Self.ftsColumns),
+                \(Self.ftsOptions)
+            )
+        """)
+        try execute("DELETE FROM chunks_fts")
+        try execute("""
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+            SELECT content, summary, tags, NULL, id FROM chunks
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+            END
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+            END
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_update")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+            END
+        """)
+    }
+
+    private func ftsTableNeedsRebuild() throws -> Bool {
+        guard let db else { throw DBError.notOpen }
+        guard let sql = try sqliteMasterSQL(name: "chunks_fts", on: db) else { return true }
+        let normalizedSQL = sql.lowercased()
+        return !normalizedSQL.contains("prefix='2 3 4'") ||
+            !normalizedSQL.contains("tokenize='unicode61 remove_diacritics 2'") ||
+            !normalizedSQL.contains("summary") ||
+            !normalizedSQL.contains("resolved_query")
+    }
+
+    private func backfillPreviewText() throws {
+        try execute("""
+            UPDATE chunks
+            SET preview_text = \(Self.previewExpression)
+            WHERE preview_text IS NULL OR trim(preview_text) = ''
+        """)
+    }
+
+    private func refreshSearchStatistics() throws {
+        try execute("ANALYZE chunks")
+        try execute("ANALYZE chunks_fts")
+    }
+
+    private func tableColumns(name: String, on db: OpaquePointer) throws -> Set<String> {
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "PRAGMA table_info(\(name))", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        var columns: Set<String> = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let columnName = columnText(stmt, 1) {
+                columns.insert(columnName)
+            }
+        }
+        return columns
+    }
+
+    private func sqliteMasterSQL(name: String, on db: OpaquePointer) throws -> String? {
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE name = ?", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(name, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return columnText(stmt, 0)
+    }
+
+    private static func previewText(summary: String?, content: String?) -> String {
+        let preferred = (summary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? summary! : (content ?? "")
+        let flattened = preferred
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(flattened.prefix(220))
     }
 
     private static func timestamp() -> String {
@@ -967,7 +1189,7 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_update: update chunk importance/tags
 
     func updateChunk(id: String, importance: Int? = nil, tags: [String]? = nil) throws {
-        guard let db else { throw DBError.notOpen }
+        guard db != nil else { throw DBError.notOpen }
         var rowsChanged = 0
 
         if let importance {

@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private var collector: StatsCollector?
     private var quickCapturePanel: QuickCapturePanelController?
+    private var searchPanel: SearchPanelController?
     private var quickCaptureHotkey: HotkeyManager?
     private var cancellables: Set<AnyCancellable> = []
     private var sharedDatabase: BrainDatabase?
@@ -81,6 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ingestBrainBarURLs(urls)
     }
 
+    func showSearchPanel() {
+        searchPanel?.show()
+    }
+
     @objc
     private func togglePopover(_ sender: Any?) {
         guard let button = statusItem?.button else { return }
@@ -138,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.quickCapturePanel?.toggle()
         }
         gesture.onDoubleTap = { [weak self] in
-            self?.quickCapturePanel?.show(mode: .search)
+            self?.searchPanel?.show()
         }
 
         let hotkey = HotkeyManager(gesture: gesture)
@@ -163,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureQuickCapture(database: BrainDatabase) {
         guard quickCapturePanel == nil else { return }
         quickCapturePanel = QuickCapturePanelController(db: database)
+        if searchPanel == nil {
+            searchPanel = SearchPanelController(db: database)
+        }
         flushPendingBrainBarURLs()
     }
 
@@ -195,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .toggle:
             quickCapturePanel?.toggle()
         case .search:
-            quickCapturePanel?.show(mode: .search)
+            searchPanel?.show()
         }
     }
 }
@@ -209,6 +217,14 @@ struct BrainBarApp: App {
     var body: some Scene {
         Settings {
             EmptyView()
+        }
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Search BrainLayer") {
+                    appDelegate.showSearchPanel()
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+            }
         }
     }
 }

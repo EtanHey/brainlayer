@@ -65,6 +65,13 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "chunks_fts FTS5 table must exist")
     }
 
+    func testFTSTableUsesPrefixIndexAndUnicodeTokenizer() throws {
+        let sql = try sqliteMasterSQL(name: "chunks_fts", path: tempDBPath)
+
+        XCTAssertTrue(sql.contains("prefix='2 3 4'"))
+        XCTAssertTrue(sql.contains("tokenize='unicode61 remove_diacritics 2'"))
+    }
+
     func testBrainbarAgentsTableExists() throws {
         let exists = try db.tableExists("brainbar_agents")
         XCTAssertTrue(exists, "brainbar_agents table must exist")
@@ -126,6 +133,39 @@ final class DatabaseTests: XCTestCase {
         // Verify it's searchable
         let results = try db.search(query: "GRDB SQLite", limit: 10)
         XCTAssertFalse(results.isEmpty)
+    }
+
+    func testAnalyzePopulatesStatsForSearchIndexes() throws {
+        try db.insertChunk(
+            id: "analyze-1",
+            content: "Cmd K search should use analyzed prefix indexes",
+            sessionId: "session-1",
+            project: "brainbar",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        XCTAssertGreaterThan(try sqliteStatCount(for: ["chunks", "chunks_fts"], path: tempDBPath), 0, "ANALYZE should populate sqlite_stat1 for search tables")
+    }
+
+    func testSearchCandidatesReturnPrecomputedPreviewText() throws {
+        try db.insertChunk(
+            id: "preview-1",
+            content: """
+            Search previews must be precomputed ahead of keystrokes so the UI never calls snippet() while typing.
+            This content is intentionally long enough to exercise truncation and whitespace normalization.
+            """,
+            sessionId: "session-1",
+            project: "brainbar",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let results = try db.searchCandidates(query: "precomputed keystrokes", limit: 10)
+
+        XCTAssertEqual(results.first?.id, "preview-1")
+        XCTAssertFalse(results.first?.previewText.isEmpty ?? true)
+        XCTAssertFalse(results.first?.previewText.contains("\n") ?? false)
     }
 
     func testStoreRetriesThroughTransientWriteLock() throws {
@@ -473,4 +513,80 @@ final class DatabaseTests: XCTestCase {
         let result = try db.digest(content: content)
         XCTAssertNotNil(result["chunks_created"])
     }
+}
+
+private func sqliteMasterSQL(name: String, path: String) throws -> String {
+    try withSQLiteConnection(path: path) { db in
+        try scalarString(
+            db: db,
+            sql: "SELECT sql FROM sqlite_master WHERE name = ?",
+            bind: { stmt in
+                sqlite3_bind_text(stmt, 1, name, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            }
+        ) ?? ""
+    }
+}
+
+private func sqliteStatCount(for tables: [String], path: String) throws -> Int {
+    try withSQLiteConnection(path: path) { db in
+        let placeholders = Array(repeating: "?", count: tables.count).joined(separator: ", ")
+        return try scalarInt(
+            db: db,
+            sql: "SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl IN (\(placeholders))",
+            bind: { stmt in
+                for (index, table) in tables.enumerated() {
+                    sqlite3_bind_text(
+                        stmt,
+                        Int32(index + 1),
+                        table,
+                        -1,
+                        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+                    )
+                }
+            }
+        )
+    }
+}
+
+private func withSQLiteConnection<T>(path: String, body: (OpaquePointer) throws -> T) throws -> T {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "DatabaseTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+    return try body(db)
+}
+
+private func scalarString(
+    db: OpaquePointer,
+    sql: String,
+    bind: (OpaquePointer?) -> Void
+) throws -> String? {
+    var stmt: OpaquePointer?
+    let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard rc == SQLITE_OK else {
+        throw NSError(domain: "DatabaseTests", code: Int(rc))
+    }
+    defer { sqlite3_finalize(stmt) }
+    bind(stmt)
+    guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+    guard let value = sqlite3_column_text(stmt, 0) else { return nil }
+    return String(cString: value)
+}
+
+private func scalarInt(
+    db: OpaquePointer,
+    sql: String,
+    bind: (OpaquePointer?) -> Void
+) throws -> Int {
+    var stmt: OpaquePointer?
+    let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard rc == SQLITE_OK else {
+        throw NSError(domain: "DatabaseTests", code: Int(rc))
+    }
+    defer { sqlite3_finalize(stmt) }
+    bind(stmt)
+    guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+    return Int(sqlite3_column_int(stmt, 0))
 }
