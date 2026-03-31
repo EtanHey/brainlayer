@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.configureQuickCaptureHotkey()
         }
         configureStatusItem(with: collector)
+        collector.start()
         configureQuickCaptureHotkey()
     }
 
@@ -106,9 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 360, height: 320)
-        popover.contentViewController = NSHostingController(
-            rootView: StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
-        )
+        popover.contentViewController = StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
 
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)

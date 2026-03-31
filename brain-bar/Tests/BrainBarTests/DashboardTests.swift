@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import BrainBar
 
@@ -79,8 +80,25 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
     }
 
+    func testDashboardDataVersionChangesAfterExternalWrite() throws {
+        let baseline = try db.dataVersion()
+        let writer = BrainDatabase(path: tempDBPath)
+        defer { writer.close() }
+
+        try writer.insertChunk(
+            id: "dash-version",
+            content: "External writer changed the database",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        XCTAssertGreaterThan(try db.dataVersion(), baseline)
+    }
+
     @MainActor
-    func testStatsCollectorDoesNotRefreshWithoutExplicitRequest() async throws {
+    func testStatsCollectorRefreshesAfterDatabaseWriteNotification() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
@@ -90,7 +108,10 @@ final class DashboardTests: XCTestCase {
         collector.start()
         XCTAssertEqual(collector.stats.chunkCount, 0)
 
-        try db.insertChunk(
+        let writer = BrainDatabase(path: tempDBPath)
+        defer { writer.close() }
+
+        try writer.insertChunk(
             id: "dash-late-write",
             content: "Inserted after collector start",
             sessionId: "dashboard",
@@ -99,16 +120,15 @@ final class DashboardTests: XCTestCase {
             importance: 5
         )
 
-        try await Task.sleep(for: .milliseconds(2500))
-
-        XCTAssertEqual(collector.stats.chunkCount, 0)
-
-        collector.refresh(force: true)
+        let deadline = Date().addingTimeInterval(2.0)
+        while collector.stats.chunkCount == 0 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
-    func testPipelineStateIsOfflineWhenDaemonSnapshotMissing() {
+    func testPipelineStateTreatsMissingDaemonSnapshotAsDegraded() {
         let stats = DashboardStats(
             chunkCount: 10,
             enrichedChunkCount: 10,
@@ -120,7 +140,7 @@ final class DashboardTests: XCTestCase {
 
         let state = PipelineState.derive(daemon: nil, stats: stats)
 
-        XCTAssertEqual(state, .offline)
+        XCTAssertEqual(state, .degraded)
     }
 
     func testPipelineStatePrefersDegradedOverBusyWhenDaemonIsUnhealthy() {
@@ -213,5 +233,20 @@ final class DashboardTests: XCTestCase {
         let state = PipelineState.derive(daemon: daemon, stats: stats)
 
         XCTAssertEqual(state, .idle)
+    }
+
+    @MainActor
+    func testStatusPopoverViewIsAppKitViewController() {
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        defer { collector.stop() }
+
+        let viewController = StatusPopoverView(collector: collector)
+
+        XCTAssertFalse(viewController.isViewLoaded)
+        _ = viewController.view
+        XCTAssertTrue(viewController.isViewLoaded)
     }
 }
