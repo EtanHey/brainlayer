@@ -1172,6 +1172,8 @@ final class BrainDatabase: @unchecked Sendable {
         let totalRelations = try queryInt("SELECT COUNT(*) FROM kg_relations")
         let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL")
         let totalProjects = try queryInt("SELECT COUNT(DISTINCT project) FROM chunks")
+        let projects = try queryStrings("SELECT DISTINCT project FROM chunks WHERE project IS NOT NULL AND project != '' ORDER BY project ASC LIMIT 12")
+        let contentTypes = try queryStrings("SELECT DISTINCT content_type FROM chunks WHERE content_type IS NOT NULL AND content_type != '' ORDER BY content_type ASC")
 
         return [
             "total_chunks": totalChunks,
@@ -1179,8 +1181,27 @@ final class BrainDatabase: @unchecked Sendable {
             "total_relations": totalRelations,
             "enriched_chunks": enrichedChunks,
             "total_projects": totalProjects,
-            "enrichment_pct": totalChunks > 0 ? Double(enrichedChunks) / Double(totalChunks) * 100.0 : 0.0
+            "enrichment_pct": totalChunks > 0 ? Double(enrichedChunks) / Double(totalChunks) * 100.0 : 0.0,
+            "projects": projects,
+            "content_types": contentTypes
         ]
+    }
+
+    private func queryStrings(_ sql: String) throws -> [String] {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var values: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let value = columnText(stmt, 0), !value.isEmpty {
+                values.append(value)
+            }
+        }
+        return values
     }
 
     // MARK: - brain_digest: rule-based entity extraction

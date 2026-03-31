@@ -830,7 +830,9 @@ struct QuickCapturePanelView: View {
 
                 if viewModel.mode == .search {
                     SearchResultsList(
-                        results: viewModel.results,
+                        results: viewModel.results.map {
+                            SearchResult(rowID: $0.id, title: $0.title, metadata: $0.metadata)
+                        },
                         selectedResultID: viewModel.selectedResultID,
                         copiedResultID: viewModel.copiedResultID,
                         onSelect: { id in
@@ -925,7 +927,7 @@ private struct QuickCaptureModeButton: View {
     }
 }
 
-private struct SearchResultsList: View {
+private struct LegacySearchResultsList: View {
     let results: [QuickCaptureSearchRow]
     let selectedResultID: String?
     let copiedResultID: String?
