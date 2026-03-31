@@ -101,6 +101,8 @@ final class QuickCaptureViewModel: ObservableObject {
     private let panelState: QuickCapturePanelState
     private let clipboard: QuickCaptureClipboard
     private var copyResetTask: Task<Void, Never>?
+    /// Exposed for test awaiting — set when an async store is in flight.
+    var _pendingStoreTask: Task<Void, Never>?
 
     init(
         db: BrainDatabase,
@@ -177,7 +179,11 @@ final class QuickCaptureViewModel: ObservableObject {
         case .capture:
             submitCapture(preserveMode: false)
         case .search:
-            if selectedResultIndex != nil, !results.isEmpty {
+            if !results.isEmpty {
+                // Auto-select first result if none selected
+                if selectedResultIndex == nil {
+                    selectedResultIndex = 0
+                }
                 applySelectedSearchResult()
             } else {
                 submitSearch()
@@ -277,21 +283,25 @@ final class QuickCaptureViewModel: ObservableObject {
             return
         }
 
-        do {
-            _ = try QuickCaptureController.capture(
-                db: db,
-                content: trimmed,
-                tags: []
-            )
-            inputText = ""
-            if !preserveMode {
-                results = []
-                selectedResultIndex = nil
+        feedback = .idle
+        _pendingStoreTask = Task { @MainActor in
+            do {
+                _ = try await db.storeAsync(
+                    content: trimmed,
+                    tags: [],
+                    importance: 5,
+                    source: "quick-capture"
+                )
+                inputText = ""
+                if !preserveMode {
+                    results = []
+                    selectedResultIndex = nil
+                }
+                feedback = .success("Stored in BrainLayer")
+                confirmationFlashCount += 1
+            } catch {
+                feedback = .error(error.localizedDescription)
             }
-            feedback = .success("Stored in BrainLayer")
-            confirmationFlashCount += 1
-        } catch {
-            feedback = .error(error.localizedDescription)
         }
     }
 
@@ -334,9 +344,17 @@ final class QuickCaptureViewModel: ObservableObject {
         }
 
         let row = results[selectedResultIndex]
-        setMode(.capture)
-        inputText = row.title
-        feedback = .idle
+        clipboard.copy(row.content)
+        copiedResultID = row.id
+        copyFeedbackFlashCount += 1
+        feedback = .success("Copied to clipboard")
+
+        // Auto-clear copy highlight after a short delay
+        copyResetTask?.cancel()
+        copyResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            copiedResultID = nil
+        }
     }
 }
 

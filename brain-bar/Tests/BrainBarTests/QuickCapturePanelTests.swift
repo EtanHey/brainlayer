@@ -36,7 +36,7 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.placeholderText, "Search memory. Press Return to run or select.")
     }
 
-    func testSubmitCaptureStoresChunkAndShowsConfirmation() throws {
+    func testSubmitCaptureStoresChunkAndShowsConfirmation() async throws {
         let (db, path) = try makeDatabase(name: "submit-capture")
         defer { cleanupDatabase(db, path: path) }
 
@@ -45,6 +45,7 @@ final class QuickCapturePanelTests: XCTestCase {
         model.inputText = "Remember to verify the real MCP handshake"
 
         model.submit()
+        await model._pendingStoreTask?.value
 
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
         XCTAssertGreaterThan(model.confirmationFlashCount, 0)
@@ -166,7 +167,7 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.selectedResultID, "arrow-1")
     }
 
-    func testEnterSelectsHighlightedSearchResultIntoCaptureMode() throws {
+    func testEnterCopiesHighlightedSearchResult() throws {
         let (db, path) = try makeDatabase(name: "enter-selects-result")
         defer { cleanupDatabase(db, path: path) }
         try db.insertChunk(
@@ -186,22 +187,23 @@ final class QuickCapturePanelTests: XCTestCase {
             importance: 5
         )
 
+        let clipboard = TestClipboard()
         let panelState = QuickCapturePanelState()
         panelState.switchMode(.search)
-        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: clipboard)
         model.inputText = "matching"
         model.submit()
         model.moveSelectionDown()
 
         model.submit()
 
-        XCTAssertEqual(model.mode, .capture)
-        XCTAssertEqual(model.inputText, "Second matching memory")
-        XCTAssertEqual(model.results.count, 0)
-        XCTAssertNil(model.selectedResultID)
+        // Enter in search mode copies the result, stays in search mode
+        XCTAssertEqual(model.mode, .search)
+        XCTAssertNotNil(model.copiedResultID)
+        XCTAssertFalse(clipboard.copiedStrings.isEmpty)
     }
 
-    func testCommandEnterForceStoresWhileRemainingInSearchMode() throws {
+    func testCommandEnterForceStoresWhileRemainingInSearchMode() async throws {
         let (db, path) = try makeDatabase(name: "force-store-search-mode")
         defer { cleanupDatabase(db, path: path) }
 
@@ -211,6 +213,7 @@ final class QuickCapturePanelTests: XCTestCase {
         model.inputText = "Ship the keyboard-first quick capture flow"
 
         model.submit(forceCapture: true)
+        await model._pendingStoreTask?.value
 
         XCTAssertEqual(model.mode, .search)
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
@@ -219,7 +222,7 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
     }
 
-    func testHandleInputReturnWithCommandStoresWhileRemainingInSearchMode() throws {
+    func testHandleInputReturnWithCommandStoresWhileRemainingInSearchMode() async throws {
         let (db, path) = try makeDatabase(name: "handle-command-return-search-mode")
         defer { cleanupDatabase(db, path: path) }
 
@@ -229,6 +232,7 @@ final class QuickCapturePanelTests: XCTestCase {
         model.inputText = "Command return should store through the live input handler"
 
         model.handleInputReturn(modifiers: [.command])
+        await model._pendingStoreTask?.value
 
         XCTAssertEqual(model.mode, .search)
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
@@ -237,7 +241,7 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
     }
 
-    func testHandleInputReturnInCaptureModeStoresAndTriggersConfirmationFlash() throws {
+    func testHandleInputReturnInCaptureModeStoresAndTriggersConfirmationFlash() async throws {
         let (db, path) = try makeDatabase(name: "capture-return-flash")
         defer { cleanupDatabase(db, path: path) }
 
@@ -245,6 +249,7 @@ final class QuickCapturePanelTests: XCTestCase {
         model.inputText = "Return should store and flash green"
 
         model.handleInputReturn(modifiers: [])
+        await model._pendingStoreTask?.value
 
         XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
         XCTAssertEqual(model.confirmationFlashCount, 1)
