@@ -158,6 +158,20 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         try execute("""
+            CREATE TABLE IF NOT EXISTS kg_entity_chunks (
+                entity_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                relevance REAL DEFAULT 1.0,
+                PRIMARY KEY (entity_id, chunk_id)
+            )
+        """)
+
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_kg_ec_entity
+            ON kg_entity_chunks(entity_id)
+        """)
+
+        try execute("""
             CREATE TABLE IF NOT EXISTS injection_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -1417,6 +1431,121 @@ final class BrainDatabase: @unchecked Sendable {
         return result
     }
 
+    // MARK: - Knowledge Graph bulk queries
+
+    struct KGEntityRow: Equatable {
+        let id: String
+        let name: String
+        let entityType: String
+        let description: String?
+        let importance: Double
+    }
+
+    struct KGRelationRow: Equatable {
+        let id: String
+        let sourceId: String
+        let targetId: String
+        let relationType: String
+    }
+
+    struct KGChunkRow: Equatable {
+        let chunkID: String
+        let snippet: String
+        let importance: Int
+        let relevance: Double
+    }
+
+    func fetchKGEntities(limit: Int = 500) throws -> [KGEntityRow] {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT id, name, entity_type, description,
+                   COALESCE(CAST(json_extract(metadata, '$.importance') AS REAL), 5.0) AS importance
+            FROM kg_entities
+            ORDER BY importance DESC
+            LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+
+        var rows: [KGEntityRow] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(KGEntityRow(
+                id: columnText(stmt, 0) ?? "",
+                name: columnText(stmt, 1) ?? "",
+                entityType: columnText(stmt, 2) ?? "",
+                description: columnText(stmt, 3),
+                importance: sqlite3_column_double(stmt, 4)
+            ))
+        }
+        return rows
+    }
+
+    func fetchKGRelations() throws -> [KGRelationRow] {
+        guard let db else { throw DBError.notOpen }
+        let sql = "SELECT id, source_id, target_id, relation_type FROM kg_relations"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var rows: [KGRelationRow] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(KGRelationRow(
+                id: columnText(stmt, 0) ?? "",
+                sourceId: columnText(stmt, 1) ?? "",
+                targetId: columnText(stmt, 2) ?? "",
+                relationType: columnText(stmt, 3) ?? ""
+            ))
+        }
+        return rows
+    }
+
+    func linkEntityChunk(entityId: String, chunkId: String, relevance: Double = 1.0) throws {
+        guard let db else { throw DBError.notOpen }
+        let sql = "INSERT OR REPLACE INTO kg_entity_chunks (entity_id, chunk_id, relevance) VALUES (?, ?, ?)"
+        try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+            bindText(entityId, to: stmt, index: 1)
+            bindText(chunkId, to: stmt, index: 2)
+            sqlite3_bind_double(stmt, 3, relevance)
+        }
+    }
+
+    func fetchEntityChunks(entityId: String, limit: Int = 20) throws -> [KGChunkRow] {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT c.id, COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
+                   c.importance, ec.relevance
+            FROM kg_entity_chunks ec
+            JOIN chunks c ON c.id = ec.chunk_id
+            WHERE ec.entity_id = ?
+            ORDER BY ec.relevance DESC
+            LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(entityId, to: stmt, index: 1)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+
+        var rows: [KGChunkRow] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(KGChunkRow(
+                chunkID: columnText(stmt, 0) ?? "",
+                snippet: columnText(stmt, 1) ?? "",
+                importance: Int(sqlite3_column_int(stmt, 2)),
+                relevance: sqlite3_column_double(stmt, 3)
+            ))
+        }
+        return rows
+    }
+
     // MARK: - brain_recall
 
     func recallSession(sessionId: String, limit: Int = 20) throws -> [[String: Any]] {
@@ -1498,6 +1627,67 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
         return values
+    }
+
+    // MARK: - Injection events
+
+    @discardableResult
+    func recordInjectionEvent(sessionID: String, query: String, chunkIDs: [String], tokenCount: Int, timestamp: String? = nil) -> InjectionEvent {
+        guard let db else {
+            return InjectionEvent(id: 0, sessionID: sessionID, timestamp: "", query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
+        }
+        let chunkJSON = (try? JSONSerialization.data(withJSONObject: chunkIDs)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let ts = timestamp ?? Self.sqliteDateFormatter.string(from: Date())
+        let sql = "INSERT INTO injection_events (session_id, timestamp, query, chunk_ids, token_count) VALUES (?, ?, ?, ?, ?)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return InjectionEvent(id: 0, sessionID: sessionID, timestamp: ts, query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(sessionID, to: stmt, index: 1)
+        bindText(ts, to: stmt, index: 2)
+        bindText(query, to: stmt, index: 3)
+        bindText(chunkJSON, to: stmt, index: 4)
+        sqlite3_bind_int(stmt, 5, Int32(tokenCount))
+        sqlite3_step(stmt)
+        let rowID = sqlite3_last_insert_rowid(db)
+        return InjectionEvent(id: rowID, sessionID: sessionID, timestamp: ts, query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
+    }
+
+    // MARK: - Injection event listing
+
+    func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
+        guard let db else { throw DBError.notOpen }
+        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
+        if sessionID != nil { sql += " WHERE session_id = ?" }
+        sql += " ORDER BY timestamp DESC LIMIT ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let sessionID {
+            bindText(sessionID, to: stmt, index: idx)
+            idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+
+        var events: [InjectionEvent] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let row: [String: Any] = [
+                "id": Int64(sqlite3_column_int64(stmt, 0)),
+                "session_id": columnText(stmt, 1) as Any,
+                "timestamp": columnText(stmt, 2) as Any,
+                "query": columnText(stmt, 3) as Any,
+                "chunk_ids": columnText(stmt, 4) as Any,
+                "token_count": Int(sqlite3_column_int(stmt, 5))
+            ]
+            if let event = try? InjectionEvent(row: row) {
+                events.append(event)
+            }
+        }
+        return events
     }
 
     // MARK: - brain_digest: rule-based entity extraction
