@@ -156,6 +156,22 @@ final class BrainDatabase: @unchecked Sendable {
                 UNIQUE(source_id, target_id, relation_type)
             )
         """)
+
+        try execute("""
+            CREATE TABLE IF NOT EXISTS injection_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                query TEXT NOT NULL,
+                chunk_ids TEXT NOT NULL DEFAULT '[]',
+                token_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_injection_events_session_timestamp
+            ON injection_events(session_id, timestamp DESC)
+        """)
     }
 
     func close() {

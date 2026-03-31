@@ -6,9 +6,15 @@ let package = Package(
     platforms: [
         .macOS(.v14),
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0"),
+    ],
     targets: [
         .executableTarget(
             name: "BrainBar",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Sources/BrainBar",
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
@@ -16,7 +22,10 @@ let package = Package(
         ),
         .testTarget(
             name: "BrainBarTests",
-            dependencies: ["BrainBar"],
+            dependencies: [
+                "BrainBar",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Tests/BrainBarTests"
         ),
     ]
