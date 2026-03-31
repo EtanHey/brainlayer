@@ -289,6 +289,74 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(text.contains("i-2"), "Should not contain low-importance chunk")
     }
 
+    func testBrainEntityUsesPythonSimpleEntityStructure() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-entity-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertEntity(
+            id: "proj-1",
+            type: "project",
+            name: "BrainLayer",
+            metadata: #"{"language":"Swift","owner":"Etan"}"#
+        )
+        try db.insertEntity(id: "tool-1", type: "tool", name: "Claude Code")
+        try db.insertRelation(sourceId: "proj-1", targetId: "tool-1", relationType: "used_by")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_entity",
+                "arguments": ["query": "BrainLayer"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("Entity: BrainLayer"))
+        XCTAssertTrue(text.contains("Relations (1)"))
+        XCTAssertTrue(text.contains("→ used_by: Claude Code"))
+        XCTAssertTrue(text.contains("Metadata"))
+        XCTAssertTrue(text.contains("language: Swift"))
+    }
+
+    func testBrainRecallStatsIncludesProjectAndTypeLists() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-stats-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "s-1", content: "Search result one", sessionId: "session-1", project: "brainlayer", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "s-2", content: "Search result two", sessionId: "session-2", project: "orchestrator", contentType: "user_message", importance: 4)
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_recall",
+                "arguments": ["mode": "stats"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("BrainLayer Stats"))
+        XCTAssertTrue(text.contains("Projects: brainlayer, orchestrator"))
+        XCTAssertTrue(text.contains("Types: assistant_text, user_message"))
+    }
+
     func testBrainSearchUnreadOnlyFiltersAckedChunksByCursor() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-unread-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

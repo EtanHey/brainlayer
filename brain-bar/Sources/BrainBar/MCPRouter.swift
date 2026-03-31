@@ -206,7 +206,8 @@ final class MCPRouter: @unchecked Sendable {
             subscriberID: subscriberID,
             unreadOnly: unreadOnly
         )
-        return ToolOutput(text: Formatters.formatSearchResults(query: query, results: results, total: results.count))
+        let typedResults = results.map(SearchResult.init(payload:))
+        return ToolOutput(text: TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count))
     }
 
     private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {
@@ -237,13 +238,14 @@ final class MCPRouter: @unchecked Sendable {
             let sessionId = args["session_id"] as? String ?? ""
             if sessionId.isEmpty {
                 let stats = try db.recallStats()
-                return ToolOutput(text: Formatters.formatStats(stats: stats))
+                return ToolOutput(text: TextFormatter.formatStats(StatsResult(payload: stats)))
             }
             let results = try db.recallSession(sessionId: sessionId, limit: 20)
-            return ToolOutput(text: Formatters.formatSearchResults(query: "session:\(sessionId)", results: results, total: results.count))
+            let typedResults = results.map(SearchResult.init(payload:))
+            return ToolOutput(text: TextFormatter.formatSearchResults(query: "session:\(sessionId)", results: typedResults, total: typedResults.count))
         }
         let stats = try db.recallStats()
-        return ToolOutput(text: Formatters.formatStats(stats: stats))
+        return ToolOutput(text: TextFormatter.formatStats(StatsResult(payload: stats)))
     }
 
     private func handleBrainEntity(_ args: [String: Any]) throws -> ToolOutput {
@@ -254,7 +256,7 @@ final class MCPRouter: @unchecked Sendable {
         guard let entity = try db.lookupEntity(query: query) else {
             return ToolOutput(text: "\u{2502} No entity found for \"\(query)\"")
         }
-        return ToolOutput(text: Formatters.formatEntityCard(entity: entity))
+        return ToolOutput(text: TextFormatter.formatEntitySimple(EntityCard(lookupPayload: entity)))
     }
 
     private func handleBrainDigest(_ args: [String: Any]) throws -> ToolOutput {
@@ -263,7 +265,7 @@ final class MCPRouter: @unchecked Sendable {
         }
         guard let db = database else { throw ToolError.noDatabase }
         let result = try db.digest(content: content)
-        return ToolOutput(text: Formatters.formatDigestResult(result: result))
+        return ToolOutput(text: TextFormatter.formatDigestResult(DigestResult(payload: result)))
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> ToolOutput {

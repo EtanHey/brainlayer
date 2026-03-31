@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StatusPopoverView: View {
     @ObservedObject var collector: StatsCollector
+    @ObservedObject var hotkeyStatus: HotkeyRouteStatus
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -64,6 +65,18 @@ struct StatusPopoverView: View {
                 Text("Daemon metrics unavailable")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(hotkeyStatus.statusLine)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Toggle("CGEventTap fallback", isOn: Binding(
+                    get: { hotkeyStatus.useCGEventTapFallback },
+                    set: { hotkeyStatus.setUseCGEventTapFallback($0) }
+                ))
+                .font(.system(size: 11))
+                .toggleStyle(.checkbox)
             }
 
             HStack {
