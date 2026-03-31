@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var collector: StatsCollector?
+    private var injectionStore: InjectionStore?
     private var quickCapturePanel: QuickCapturePanelController?
     private var searchPanel: SearchPanelController?
     private var quickCaptureHotkey: HotkeyManager?
@@ -60,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
         self.collector = collector
+        self.injectionStore = try? InjectionStore(databasePath: BrainBarServer.defaultDBPath())
         hotkeyRouteStatus.onFallbackChange = { [weak self] in
             self?.configureQuickCaptureHotkey()
         }
@@ -71,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         quickCaptureHotkey?.stop()
         collector?.stop()
+        injectionStore?.stop()
         server?.stop()
     }
 
@@ -100,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureStatusItem(with collector: StatsCollector) {
+        guard let injectionStore else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = item.button else { return }
 
@@ -111,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 320)
+        popover.contentSize = NSSize(width: 420, height: 620)
         popover.contentViewController = StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
 
         Publishers.CombineLatest(collector.$stats, collector.$state)

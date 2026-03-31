@@ -234,6 +234,24 @@ final class MCPRouter: @unchecked Sendable {
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
         guard let db = database else { throw ToolError.noDatabase }
         let mode = args["mode"] as? String ?? "stats"
+        if mode == "injections" {
+            let sessionId = args["session_id"] as? String
+            let events = try db.listInjectionEvents(sessionID: sessionId, limit: 20)
+            if events.isEmpty {
+                return ToolOutput(text: "│ No injection events found")
+            }
+            var lines: [String] = []
+            lines.append("┌─ brain_recall injections (\(events.count) events)")
+            for event in events {
+                lines.append("│  [\(event.timestamp.prefix(19))] \(event.sessionID)")
+                lines.append("│    \(event.summaryLine)")
+                if !event.chunkIDs.isEmpty {
+                    lines.append("│    " + event.chunkIDs.joined(separator: ", "))
+                }
+            }
+            lines.append("└─")
+            return ToolOutput(text: lines.joined(separator: "\n"))
+        }
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
             if sessionId.isEmpty {
@@ -445,7 +463,7 @@ final class MCPRouter: @unchecked Sendable {
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "enum": ["context", "sessions", "operations", "plan", "summary", "stats"], "description": "Recall mode"],
+                    "mode": ["type": "string", "enum": ["context", "sessions", "operations", "plan", "summary", "stats", "injections"], "description": "Recall mode"],
                     "session_id": ["type": "string", "description": "Session ID for operations/summary mode"],
                 ] as [String: Any],
             ] as [String: Any]

@@ -357,6 +357,42 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.contains("Types: assistant_text, user_message"))
     }
 
+    func testBrainRecallInjectionsReturnsRecentEvents() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-injections-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.recordInjectionEvent(
+            sessionID: "claude-session-9",
+            query: "voicebar sleep recovery",
+            chunkIDs: ["chunk-a", "chunk-b"],
+            tokenCount: 91,
+            timestamp: "2026-03-31T04:03:00.000Z"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_recall",
+                "arguments": ["mode": "injections", "session_id": "claude-session-9"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("claude-session-9"))
+        XCTAssertTrue(text.contains("voicebar sleep recovery"))
+        XCTAssertTrue(text.contains("chunk-a"))
+        XCTAssertTrue(text.contains("91"))
+    }
+
     func testBrainSearchUnreadOnlyFiltersAckedChunksByCursor() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-unread-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

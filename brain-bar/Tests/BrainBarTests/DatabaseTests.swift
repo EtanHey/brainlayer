@@ -82,6 +82,11 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "brainbar_subscriptions table must exist")
     }
 
+    func testInjectionEventsTableExists() throws {
+        let exists = try db.tableExists("injection_events")
+        XCTAssertTrue(exists, "injection_events table must exist")
+    }
+
     func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
         db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
         db.exec("DROP TABLE IF EXISTS brainbar_agents")
@@ -197,6 +202,51 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(stored.chunkID.isEmpty)
         XCTAssertGreaterThan(Date().timeIntervalSince(startedAt), 5.0)
         wait(for: [releaseExpectation], timeout: 7.0)
+    }
+
+    func testRecordInjectionEventPersistsSessionQueryChunkIDsAndTokenCount() throws {
+        try db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "voicebar sleep recovery",
+            chunkIDs: ["chunk-1", "chunk-2"],
+            tokenCount: 77
+        )
+
+        let events = try db.listInjectionEvents(limit: 5)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.sessionID, "claude-session-1")
+        XCTAssertEqual(events.first?.query, "voicebar sleep recovery")
+        XCTAssertEqual(events.first?.chunkIDs, ["chunk-1", "chunk-2"])
+        XCTAssertEqual(events.first?.tokenCount, 77)
+    }
+
+    func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
+        try db.recordInjectionEvent(
+            sessionID: "session-a",
+            query: "older event",
+            chunkIDs: ["old-1"],
+            tokenCount: 10,
+            timestamp: "2026-03-31T04:00:00.000Z"
+        )
+        try db.recordInjectionEvent(
+            sessionID: "session-b",
+            query: "other session",
+            chunkIDs: ["other-1"],
+            tokenCount: 20,
+            timestamp: "2026-03-31T04:01:00.000Z"
+        )
+        try db.recordInjectionEvent(
+            sessionID: "session-a",
+            query: "newer event",
+            chunkIDs: ["new-1", "new-2"],
+            tokenCount: 30,
+            timestamp: "2026-03-31T04:02:00.000Z"
+        )
+
+        let filtered = try db.listInjectionEvents(sessionID: "session-a", limit: 10)
+
+        XCTAssertEqual(filtered.map(\.query), ["newer event", "older event"])
     }
 
     // MARK: - Filter: project
