@@ -39,7 +39,7 @@ final class DatabaseTests: XCTestCase {
 
     func testBusyTimeoutSet() throws {
         let timeout = try db.pragma("busy_timeout")
-        XCTAssertEqual(timeout, "5000")
+        XCTAssertEqual(timeout, "30000")
     }
 
     func testCacheSizeSet() throws {

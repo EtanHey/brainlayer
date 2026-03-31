@@ -395,6 +395,20 @@ final class BrainDatabase: @unchecked Sendable {
         return StoredChunk(chunkID: chunkID, rowID: sqlite3_last_insert_rowid(db))
     }
 
+    /// Async wrapper for store() — runs DB write off the main thread.
+    func storeAsync(content: String, tags: [String], importance: Int, source: String) async throws -> StoredChunk {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                do {
+                    let result = try self.store(content: content, tags: tags, importance: importance, source: source)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func searchCandidates(
         query: String,
         limit: Int,
@@ -428,7 +442,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
-            SELECT c.rowid, c.id, c.preview_text, f.rank
+            SELECT c.rowid, c.id, c.preview_text, f.rank, c.created_at, c.project, c.importance
             FROM chunks_fts f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
@@ -478,7 +492,10 @@ final class BrainDatabase: @unchecked Sendable {
                 SearchQueryCandidate(
                     id: columnText(stmt, 1) ?? "",
                     previewText: columnText(stmt, 2) ?? "",
-                    lexicalScore: score
+                    lexicalScore: score,
+                    date: columnText(stmt, 4) ?? "",
+                    project: columnText(stmt, 5) ?? "",
+                    importance: Int(sqlite3_column_int(stmt, 6))
                 )
             )
         }

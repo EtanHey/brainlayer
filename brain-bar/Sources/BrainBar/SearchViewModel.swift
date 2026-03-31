@@ -36,8 +36,11 @@ final class SearchViewModel: ObservableObject {
             SearchResult(
                 chunkID: candidate.id,
                 score: candidate.lexicalScore,
+                project: candidate.project,
+                date: candidate.date,
                 summary: candidate.previewText,
-                snippet: candidate.previewText
+                snippet: candidate.previewText,
+                importance: candidate.importance > 0 ? candidate.importance : nil
             )
         }
         applyResults(mappedResults)

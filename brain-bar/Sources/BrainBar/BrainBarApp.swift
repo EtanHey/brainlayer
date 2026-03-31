@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 420, height: 620)
+        popover.contentSize = NSSize(width: 360, height: 320)
         popover.contentViewController = StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
 
         Publishers.CombineLatest(collector.$stats, collector.$state)
