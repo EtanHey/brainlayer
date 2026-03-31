@@ -1,13 +1,48 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
+
+// MARK: - Tab Enum
+
+enum PopoverTab: Int, CaseIterable, Sendable {
+    case dashboard = 0
+    case injections = 1
+    case graph = 2
+
+    var label: String {
+        switch self {
+        case .dashboard: "Dashboard"
+        case .injections: "Injections"
+        case .graph: "Graph"
+        }
+    }
+
+    var contentSize: NSSize {
+        switch self {
+        case .dashboard: NSSize(width: 360, height: 350)
+        case .injections: NSSize(width: 360, height: 440)
+        case .graph: NSSize(width: 620, height: 500)
+        }
+    }
+}
+
+// MARK: - Popover View Controller
 
 @MainActor
 final class StatusPopoverView: NSViewController {
     private let collector: StatsCollector
     private let hotkeyStatus: HotkeyRouteStatus?
+    private let injectionStore: InjectionStore?
+    private let database: BrainDatabase?
     private var cancellables: Set<AnyCancellable> = []
 
+    private let segmentedControl = NSSegmentedControl()
+    private let containerView = NSView()
+    private(set) var currentTab: PopoverTab = .dashboard
+    var onPreferredSizeChange: (@MainActor (NSSize) -> Void)?
+
+    // Dashboard labels
     private let titleLabel = NSTextField(labelWithString: "BrainBar")
     private let statusLabel = NSTextField(labelWithString: "")
     private let databaseSizeLabel = NSTextField(labelWithString: "")
@@ -20,9 +55,21 @@ final class StatusPopoverView: NSViewController {
     private let daemonLabel = NSTextField(labelWithString: "")
     private let hotkeyLabel = NSTextField(labelWithString: "")
 
-    init(collector: StatsCollector, hotkeyStatus: HotkeyRouteStatus? = nil) {
+    // Lazily created tab content
+    private var dashboardContent: NSView?
+    private var injectionHosting: NSHostingController<PopoverInjectionTab>?
+    private var graphHosting: NSHostingController<PopoverGraphTab>?
+
+    init(
+        collector: StatsCollector,
+        hotkeyStatus: HotkeyRouteStatus? = nil,
+        injectionStore: InjectionStore? = nil,
+        database: BrainDatabase? = nil
+    ) {
         self.collector = collector
         self.hotkeyStatus = hotkeyStatus
+        self.injectionStore = injectionStore
+        self.database = database
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -32,8 +79,12 @@ final class StatusPopoverView: NSViewController {
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 320))
+        let size = PopoverTab.dashboard.contentSize
+        view = NSView(frame: NSRect(origin: .zero, size: size))
+        configureDashboardLabels()
+        configureSegmentedControl()
         configureLayout()
+        showTab(.dashboard)
     }
 
     override func viewDidLoad() {
@@ -42,7 +93,84 @@ final class StatusPopoverView: NSViewController {
         render()
     }
 
+    // MARK: - Tab Switching
+
+    func showTab(_ tab: PopoverTab) {
+        containerView.subviews.forEach { $0.removeFromSuperview() }
+        currentTab = tab
+
+        let content: NSView
+        switch tab {
+        case .dashboard:
+            content = makeDashboardContent()
+        case .injections:
+            content = makeInjectionContent()
+        case .graph:
+            content = makeGraphContent()
+        }
+
+        content.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: containerView.topAnchor),
+            content.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+        ])
+
+        preferredContentSize = tab.contentSize
+        onPreferredSizeChange?(tab.contentSize)
+    }
+
+    // MARK: - Segmented Control
+
+    private func configureSegmentedControl() {
+        segmentedControl.segmentCount = PopoverTab.allCases.count
+        for tab in PopoverTab.allCases {
+            segmentedControl.setLabel(tab.label, forSegment: tab.rawValue)
+            segmentedControl.setWidth(0, forSegment: tab.rawValue)
+        }
+        segmentedControl.selectedSegment = 0
+        segmentedControl.segmentStyle = .automatic
+        segmentedControl.target = self
+        segmentedControl.action = #selector(tabChanged(_:))
+
+        if injectionStore == nil {
+            segmentedControl.setEnabled(false, forSegment: PopoverTab.injections.rawValue)
+        }
+        if database == nil {
+            segmentedControl.setEnabled(false, forSegment: PopoverTab.graph.rawValue)
+        }
+    }
+
+    @objc private func tabChanged(_ sender: NSSegmentedControl) {
+        guard let tab = PopoverTab(rawValue: sender.selectedSegment) else { return }
+        showTab(tab)
+    }
+
+    // MARK: - Layout
+
     private func configureLayout() {
+        segmentedControl.translatesAutoresizingMaskIntoConstraints = false
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+
+        view.addSubview(segmentedControl)
+        view.addSubview(containerView)
+
+        NSLayoutConstraint.activate([
+            segmentedControl.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            segmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            containerView.topAnchor.constraint(equalTo: segmentedControl.bottomAnchor, constant: 8),
+            containerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            containerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    // MARK: - Dashboard Content
+
+    private func configureDashboardLabels() {
         titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         databaseSizeLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
@@ -61,6 +189,10 @@ final class StatusPopoverView: NSViewController {
         sparklineImageView.wantsLayer = true
         sparklineImageView.layer?.cornerRadius = 10
         sparklineImageView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    }
+
+    private func makeDashboardContent() -> NSView {
+        if let existing = dashboardContent { return existing }
 
         let headerStack = NSStackView(views: [
             verticalStack([titleLabel, statusLabel]),
@@ -86,6 +218,9 @@ final class StatusPopoverView: NSViewController {
         buttonRow.alignment = .centerY
         buttonRow.spacing = 8
 
+        sparklineImageView.translatesAutoresizingMaskIntoConstraints = false
+        hotkeyLabel.isHidden = hotkeyStatus == nil
+
         let content = NSStackView(views: [
             headerStack,
             metricsStack,
@@ -98,21 +233,50 @@ final class StatusPopoverView: NSViewController {
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 12
-        content.translatesAutoresizingMaskIntoConstraints = false
+        content.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 14, right: 14)
 
-        sparklineImageView.translatesAutoresizingMaskIntoConstraints = false
-        hotkeyLabel.isHidden = hotkeyStatus == nil
-
-        view.addSubview(content)
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
-            content.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            content.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -14),
             sparklineImageView.widthAnchor.constraint(equalToConstant: 320),
             sparklineImageView.heightAnchor.constraint(equalToConstant: 42),
         ])
+
+        dashboardContent = content
+        return content
     }
+
+    // MARK: - Injection Content
+
+    private func makeInjectionContent() -> NSView {
+        if let hosting = injectionHosting { return hosting.view }
+
+        guard let store = injectionStore else {
+            return makePlaceholder("Injection store unavailable")
+        }
+
+        store.start()
+        let hosting = NSHostingController(rootView: PopoverInjectionTab(store: store))
+        injectionHosting = hosting
+        addChild(hosting)
+        return hosting.view
+    }
+
+    // MARK: - Graph Content
+
+    private func makeGraphContent() -> NSView {
+        if let hosting = graphHosting { return hosting.view }
+
+        guard let db = database else {
+            return makePlaceholder("Database unavailable")
+        }
+
+        let viewModel = KGViewModel(database: db)
+        let hosting = NSHostingController(rootView: PopoverGraphTab(viewModel: viewModel))
+        graphHosting = hosting
+        addChild(hosting)
+        return hosting.view
+    }
+
+    // MARK: - Data Binding
 
     private func bind() {
         collector.$stats
@@ -165,6 +329,8 @@ final class StatusPopoverView: NSViewController {
         }
     }
 
+    // MARK: - Actions
+
     @objc
     private func refreshDashboard() {
         collector.refresh(force: true)
@@ -174,6 +340,8 @@ final class StatusPopoverView: NSViewController {
     private func quitBrainBar() {
         NSApplication.shared.terminate(nil)
     }
+
+    // MARK: - Helpers
 
     private func byteString(_ value: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
@@ -186,7 +354,45 @@ final class StatusPopoverView: NSViewController {
         stack.spacing = 2
         return stack
     }
+
+    private func makePlaceholder(_ text: String) -> NSView {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        let wrapper = NSView()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        wrapper.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor),
+        ])
+        return wrapper
+    }
 }
+
+// MARK: - SwiftUI Tab Wrappers
+
+struct PopoverInjectionTab: View {
+    @ObservedObject var store: InjectionStore
+    @State private var filterText = ""
+
+    var body: some View {
+        InjectionFeedView(events: store.events, filterText: $filterText)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+    }
+}
+
+struct PopoverGraphTab: View {
+    @ObservedObject var viewModel: KGViewModel
+
+    var body: some View {
+        KGCanvasView(viewModel: viewModel)
+    }
+}
+
+// MARK: - Metric Tile
 
 private final class MetricTileView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")

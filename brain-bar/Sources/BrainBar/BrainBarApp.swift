@@ -164,8 +164,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 320)
-        popover.contentViewController = StatusPopoverView(collector: collector, hotkeyStatus: hotkeyRouteStatus)
+        popover.contentSize = PopoverTab.dashboard.contentSize
+        let statusVC = StatusPopoverView(
+            collector: collector,
+            hotkeyStatus: hotkeyRouteStatus,
+            injectionStore: injectionStore,
+            database: sharedDatabase
+        )
+        statusVC.onPreferredSizeChange = { [weak popover] size in
+            popover?.contentSize = size
+        }
+        popover.contentViewController = statusVC
 
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)
