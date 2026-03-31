@@ -52,13 +52,25 @@ final class BrainDatabase: @unchecked Sendable {
     private func openAndConfigure() {
         do {
             db = try openConnection(path: path)
+            NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
-            try ensureSchema()
+            NSLog("[BrainBar] Connection configured, checking schema...")
+            // AIDEV-NOTE: Skip ensureSchema if chunks table already exists (Python creates all tables).
+            // CREATE TABLE IF NOT EXISTS still acquires a RESERVED lock which blocks on watch agent.
+            if (try? tableExists("chunks")) == true {
+                NSLog("[BrainBar] Schema already exists — skipping ensureSchema")
+            } else {
+                try ensureSchema()
+                NSLog("[BrainBar] Schema created")
+            }
             isOpen = true
+            NSLog("[BrainBar] Database ready")
         } catch {
             NSLog("[BrainBar] Failed to open/configure database at %@: %@", path, String(describing: error))
         }
     }
+
+    // tableExists defined at line ~237 (existing method)
 
     private func ensureSchema() throws {
         if (try? tableExists("chunks")) != true {
@@ -942,19 +954,40 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func openConnection(path: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
+        // AIDEV-NOTE: READWRITE is needed for save/search. The async init in BrainBarApp.swift
+        // ensures this runs on a background queue so it doesn't block the menu item.
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(path, &handle, flags, nil)
         guard rc == SQLITE_OK, let handle else { throw DBError.open(path, rc) }
+        NSLog("[BrainBar] Database opened READWRITE")
         return handle
     }
 
     private func configureConnection(_ handle: OpaquePointer?) throws {
         guard let handle else { throw DBError.notOpen }
-        try executeOnHandle(handle, sql: "PRAGMA journal_mode = WAL")
-        try executeOnHandle(handle, sql: "PRAGMA busy_timeout = 5000")
+        // AIDEV-NOTE: busy_timeout FIRST — 30s because watch agent holds locks during enrichment.
+        try executeOnHandle(handle, sql: "PRAGMA busy_timeout = 30000")
+        // AIDEV-NOTE: Skip journal_mode=WAL if already set — the PRAGMA itself needs a write lock
+        // which blocks indefinitely when the watch agent is active. WAL is already set by Python.
+        let currentMode = queryPragma(handle, name: "journal_mode")
+        if currentMode?.lowercased() != "wal" {
+            try executeOnHandle(handle, sql: "PRAGMA journal_mode = WAL")
+        } else {
+            NSLog("[BrainBar] journal_mode already WAL — skipping PRAGMA")
+        }
         try executeOnHandle(handle, sql: "PRAGMA cache_size = -64000")
         try executeOnHandle(handle, sql: "PRAGMA synchronous = NORMAL")
         try executeOnHandle(handle, sql: "PRAGMA foreign_keys = ON")
+    }
+
+    private func queryPragma(_ handle: OpaquePointer, name: String) -> String? {
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(handle, "PRAGMA \(name)", -1, &stmt, nil)
+        guard rc == SQLITE_OK, let stmt else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        guard let cStr = sqlite3_column_text(stmt, 0) else { return nil }
+        return String(cString: cStr)
     }
 
     private func executeOnHandle(_ handle: OpaquePointer, sql: String) throws {

@@ -31,7 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingBrainBarURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Single-instance enforcement: exit if another BrainBar is already running
+        // AIDEV-NOTE: Status item MUST appear instantly. All DB/server init is async.
+        // Root cause of blank menu bar: BrainDatabase(path:) blocks on SQLite lock
+        // from the watch agent, preventing configureStatusItem from ever running.
+
+        // Single-instance enforcement
         let runningInstances = NSRunningApplication.runningApplications(
             withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brainlayer.BrainBar"
         )
@@ -44,30 +48,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.setActivationPolicy(.accessory)
 
-        let sharedDatabase = BrainDatabase(path: BrainBarServer.defaultDBPath())
-        self.sharedDatabase = sharedDatabase
-
-        let srv = BrainBarServer(database: sharedDatabase)
-        srv.onDatabaseReady = { [weak self] database in
-            Task { @MainActor in
-                self?.configureQuickCapture(database: database)
-            }
+        // STEP 1: Show status item IMMEDIATELY — no DB access, no blocking
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
+            button.target = self
+            button.action = #selector(togglePopover(_:))
+            button.toolTip = "BrainBar — loading..."
         }
-        server = srv
-        srv.start()
+        self.statusItem = item
+        NSLog("[BrainBar] Status item visible — loading backend async")
 
-        let collector = StatsCollector(
-            dbPath: BrainBarServer.defaultDBPath(),
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-        )
-        self.collector = collector
-        self.injectionStore = try? InjectionStore(databasePath: BrainBarServer.defaultDBPath())
+        // STEP 2: Load everything else on a background queue
         hotkeyRouteStatus.onFallbackChange = { [weak self] in
             self?.configureQuickCaptureHotkey()
         }
-        configureStatusItem(with: collector)
-        collector.start()
-        configureQuickCaptureHotkey()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let dbPath = BrainBarServer.defaultDBPath()
+            NSLog("[BrainBar] Opening database at %@", dbPath)
+            let sharedDatabase = BrainDatabase(path: dbPath)
+
+            let srv = BrainBarServer(database: sharedDatabase)
+            srv.onDatabaseReady = { [weak self] database in
+                Task { @MainActor in
+                    self?.configureQuickCapture(database: database)
+                }
+            }
+
+            let collector = StatsCollector(
+                dbPath: dbPath,
+                daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            )
+
+            let injStore = try? InjectionStore(databasePath: dbPath)
+            NSLog("[BrainBar] Backend loaded — injectionStore=%@", injStore != nil ? "OK" : "nil")
+
+            // STEP 3: Wire up UI on main thread
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.sharedDatabase = sharedDatabase
+                self.server = srv
+                srv.start()
+                self.collector = collector
+                self.injectionStore = injStore
+
+                // Upgrade status item with live dashboard
+                self.upgradeStatusItem(with: collector)
+                collector.start()
+                self.configureQuickCaptureHotkey()
+                NSLog("[BrainBar] Fully initialized — dashboard live")
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -92,20 +124,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func togglePopover(_ sender: Any?) {
         guard let button = statusItem?.button else { return }
-        guard let popover else { return }
 
-        if popover.isShown {
-            popover.performClose(sender)
+        // If DB hasn't loaded yet, show a loading popover
+        if popover == nil {
+            let loadingPopover = NSPopover()
+            loadingPopover.behavior = .transient
+            loadingPopover.contentSize = NSSize(width: 300, height: 80)
+            let vc = NSViewController()
+            let label = NSTextField(labelWithString: "BrainBar loading database...")
+            label.font = .systemFont(ofSize: 14)
+            label.alignment = .center
+            label.frame = NSRect(x: 20, y: 20, width: 260, height: 40)
+            let view = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+            view.addSubview(label)
+            vc.view = view
+            loadingPopover.contentViewController = vc
+            loadingPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            return
+        }
+
+        if popover!.isShown {
+            popover!.performClose(sender)
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            popover!.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover!.contentViewController?.view.window?.makeKey()
         }
     }
 
-    private func configureStatusItem(with collector: StatsCollector) {
-        guard let injectionStore else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        guard let button = item.button else { return }
+    private func upgradeStatusItem(with collector: StatsCollector) {
+        // AIDEV-NOTE: statusItem already created in applicationDidFinishLaunching.
+        // This upgrades it with live sparkline + popover once DB is ready.
+        guard let item = statusItem, let button = item.button else { return }
 
         button.target = self
         button.action = #selector(togglePopover(_:))
@@ -129,8 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        self.statusItem = item
         self.popover = popover
+        button.toolTip = "BrainBar — connected"
     }
 
     private func configureQuickCaptureHotkey() {
