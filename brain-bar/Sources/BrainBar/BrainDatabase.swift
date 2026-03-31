@@ -3,10 +3,13 @@
 // Wraps SQLite3 directly. BrainBar now keeps its pub/sub metadata in the main
 // BrainLayer database so agent state and chunk writes share one durable store.
 
+import Darwin
 import Foundation
 import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
+    static let dashboardDidChangeNotification = "com.brainlayer.brainbar.database-changed"
+
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
         let enrichedChunkCount: Int
@@ -587,10 +590,9 @@ final class BrainDatabase: @unchecked Sendable {
             )
         }
 
-        let chunkCount = try scalarInt("SELECT COUNT(*) FROM chunks")
-        let enrichedChunkCount = try scalarInt(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND TRIM(enriched_at) != ''"
-        )
+        let counts = try dashboardCounts()
+        let chunkCount = counts.chunkCount
+        let enrichedChunkCount = counts.enrichedChunkCount
         let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
         let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
         let recentActivityBuckets = try recentActivityBuckets(
@@ -606,6 +608,16 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: databaseSizeBytes(),
             recentActivityBuckets: recentActivityBuckets
         )
+    }
+
+    func dataVersion() throws -> Int {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "PRAGMA data_version", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        return Int(sqlite3_column_int(stmt, 0))
     }
 
     func exec(_ sql: String) {
@@ -638,6 +650,25 @@ final class BrainDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
         return Int(sqlite3_column_int(stmt, 0))
+    }
+
+    private func dashboardCounts() throws -> (chunkCount: Int, enrichedChunkCount: Int) {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT
+                COUNT(*) AS chunk_count,
+                SUM(CASE WHEN enriched_at IS NOT NULL AND TRIM(enriched_at) != '' THEN 1 ELSE 0 END) AS enriched_count
+            FROM chunks
+        """
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        return (
+            chunkCount: Int(sqlite3_column_int(stmt, 0)),
+            enrichedChunkCount: Int(sqlite3_column_int(stmt, 1))
+        )
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
@@ -734,6 +765,9 @@ final class BrainDatabase: @unchecked Sendable {
             let rc = sqlite3_exec(db, sql, nil, nil, &errMsg)
             if rc == SQLITE_OK {
                 sqlite3_free(errMsg)
+                if Self.isMutationStatement(sql) {
+                    Self.postDashboardChangeNotification()
+                }
                 return
             }
 
@@ -777,6 +811,7 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_finalize(stmt)
 
             if stepRC == SQLITE_DONE {
+                Self.postDashboardChangeNotification()
                 return
             }
 
@@ -833,6 +868,29 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_text(stmt, index, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
     }
 
+    private static func isMutationStatement(_ sql: String) -> Bool {
+        let keyword = sql
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .first?
+            .lowercased()
+
+        return [
+            "insert", "update", "delete", "replace",
+            "create", "drop", "alter", "begin", "commit", "rollback"
+        ].contains(keyword ?? "")
+    }
+
+    private static func postDashboardChangeNotification() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(dashboardDidChangeNotification as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
     private func sanitizeFTS5Query(_ query: String) -> String {
         let tokens = query.split(separator: " ").compactMap { token -> String? in
             let cleaned = token
@@ -861,7 +919,7 @@ final class BrainDatabase: @unchecked Sendable {
         // Use SQL aggregation for better performance with large datasets.
         // json_each extracts individual tags from the JSON array.
         let sql: String
-        if let query {
+        if query != nil {
             sql = """
                 SELECT LOWER(TRIM(json_each.value)) AS tag, COUNT(*) AS count
                 FROM chunks, json_each(chunks.tags)
@@ -1207,7 +1265,7 @@ final class BrainDatabase: @unchecked Sendable {
     // MARK: - brain_digest: rule-based entity extraction
 
     func digest(content: String) throws -> [String: Any] {
-        guard let db else { throw DBError.notOpen }
+        guard db != nil else { throw DBError.notOpen }
 
         // Rule-based entity extraction
         var entities: [String] = []

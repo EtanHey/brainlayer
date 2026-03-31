@@ -13,14 +13,13 @@ struct DaemonHealthSnapshot: Sendable, Equatable {
 }
 
 enum PipelineState: String, Sendable, Equatable {
-    case offline
     case degraded
     case indexing
     case enriching
     case idle
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats) -> PipelineState {
-        guard let daemon else { return .offline }
+        guard let daemon else { return .degraded }
         guard daemon.isResponsive else { return .degraded }
 
         let recentWrites = stats.recentActivityBuckets.reduce(0, +)
@@ -35,7 +34,6 @@ enum PipelineState: String, Sendable, Equatable {
 
     var label: String {
         switch self {
-        case .offline: return "Offline"
         case .degraded: return "Degraded"
         case .indexing: return "Indexing"
         case .enriching: return "Enriching"
@@ -45,7 +43,6 @@ enum PipelineState: String, Sendable, Equatable {
 
     var symbolName: String {
         switch self {
-        case .offline: return "wifi.slash"
         case .degraded: return "exclamationmark.triangle.fill"
         case .indexing: return "waveform.path.ecg"
         case .enriching: return "sparkles"
@@ -55,8 +52,6 @@ enum PipelineState: String, Sendable, Equatable {
 
     var color: NSColor {
         switch self {
-        case .offline:
-            return .systemGray
         case .degraded:
             return .systemOrange
         case .indexing:

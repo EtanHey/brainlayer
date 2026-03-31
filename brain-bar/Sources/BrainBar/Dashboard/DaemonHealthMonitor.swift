@@ -1,10 +1,8 @@
 import Darwin
 import Foundation
-import MachO
 
 final class DaemonHealthMonitor: @unchecked Sendable {
     private let targetPID: pid_t
-    private let launchTime = ProcessInfo.processInfo.systemUptime
 
     init(targetPID: pid_t) {
         self.targetPID = targetPID
@@ -14,33 +12,51 @@ final class DaemonHealthMonitor: @unchecked Sendable {
         guard targetPID > 0 else { return nil }
         guard kill(targetPID, 0) == 0 else { return nil }
 
-        let isCurrentProcess = targetPID == ProcessInfo.processInfo.processIdentifier
-        let rssBytes = isCurrentProcess ? currentResidentSize() : 0
-        let uptime = isCurrentProcess ? (ProcessInfo.processInfo.systemUptime - launchTime) : 0
-        let openConnections = isCurrentProcess ? countOpenSocketDescriptors() : 0
+        guard let taskInfo = taskInfo(),
+              let bsdInfo = bsdInfo() else {
+            return DaemonHealthSnapshot(
+                pid: targetPID,
+                isResponsive: false,
+                rssBytes: 0,
+                uptime: 0,
+                openConnections: 0,
+                lastSeenAt: Date()
+            )
+        }
+
+        let startTime = Date(
+            timeIntervalSince1970: TimeInterval(bsdInfo.pbi_start_tvsec) +
+                (TimeInterval(bsdInfo.pbi_start_tvusec) / 1_000_000)
+        )
 
         return DaemonHealthSnapshot(
             pid: targetPID,
             isResponsive: true,
-            rssBytes: rssBytes,
-            uptime: uptime,
-            openConnections: openConnections,
+            rssBytes: taskInfo.pti_resident_size,
+            uptime: max(0, Date().timeIntervalSince(startTime)),
+            openConnections: countOpenSocketDescriptors(),
             lastSeenAt: Date()
         )
     }
 
-    private func currentResidentSize() -> UInt64 {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
-
+    private func taskInfo() -> proc_taskinfo? {
+        var info = proc_taskinfo()
+        let size = Int32(MemoryLayout.size(ofValue: info))
         let result = withUnsafeMutablePointer(to: &info) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), rebound, &count)
-            }
+            proc_pidinfo(targetPID, PROC_PIDTASKINFO, 0, pointer, size)
         }
+        guard result == size else { return nil }
+        return info
+    }
 
-        guard result == KERN_SUCCESS else { return 0 }
-        return UInt64(info.resident_size)
+    private func bsdInfo() -> proc_bsdinfo? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout.size(ofValue: info))
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            proc_pidinfo(targetPID, PROC_PIDTBSDINFO, 0, pointer, size)
+        }
+        guard result == size else { return nil }
+        return info
     }
 
     private func countOpenSocketDescriptors() -> Int {
