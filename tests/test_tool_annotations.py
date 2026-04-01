@@ -55,7 +55,7 @@ IDEMPOTENT_TOOLS = {
 
 # Tools that destroy/remove data
 DESTRUCTIVE_TOOLS = {
-    "brain_archive",   # soft-deletes
+    "brain_archive",  # soft-deletes
     "brain_supersede",  # marks as superseded
 }
 
@@ -65,6 +65,7 @@ class TestToolAnnotationsPresent:
 
     def _get_tools(self):
         from brainlayer.mcp import list_tools
+
         return asyncio.run(list_tools())
 
     def test_all_12_tools_have_annotations(self):
@@ -126,6 +127,7 @@ class TestAgentIdScoping:
     def test_brain_store_has_agent_id_param(self):
         """brain_store inputSchema must include agent_id as optional param."""
         from brainlayer.mcp import list_tools
+
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
         props = store_tool.inputSchema["properties"]
@@ -135,6 +137,7 @@ class TestAgentIdScoping:
     def test_agent_id_not_required(self):
         """agent_id should be optional — not in required list."""
         from brainlayer.mcp import list_tools
+
         tools = asyncio.run(list_tools())
         store_tool = next(t for t in tools if t.name == "brain_store")
         required = store_tool.inputSchema.get("required", [])
