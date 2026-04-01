@@ -25,10 +25,14 @@ export const metadata: Metadata = {
   title: "BrainLayer - Persistent Memory for MCP Agents",
   description:
     "Local-first memory for MCP agents and BrainBar. Twelve working tools, formatted Unicode output, and keyboard-first quick capture.",
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/apple-icon.png",
+  },
   openGraph: {
     title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory for MCP agents and BrainBar with six working tools and formatted search output.",
+      "Local-first memory for MCP agents and BrainBar with twelve working tools and formatted search output.",
     url: "https://brainlayer.etanheyman.com",
     siteName: "BrainLayer",
     type: "website",
@@ -37,7 +41,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory for MCP agents and BrainBar. Formatted output, F4 quick capture, and a cleaner six-tool surface.",
+      "Local-first memory for MCP agents and BrainBar. Formatted output, F4 quick capture, and twelve working MCP tools.",
   },
 };
 

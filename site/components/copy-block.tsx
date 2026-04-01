@@ -25,7 +25,7 @@ export function CopyBlock({ text, showDollar, fullWidth }: CopyBlockProps) {
         aria-label={copied ? "Copied" : "Copy to clipboard"}
         className={`group flex w-full items-center gap-3 rounded-[10px] border border-border bg-bg-card font-mono text-text-secondary transition-colors hover:border-accent ${fullWidth ? "px-3 py-2.5 text-xs" : "px-4 py-3 text-sm"}`}
       >
-        <code className="flex-1 text-left text-text whitespace-nowrap">
+        <code className="min-w-0 flex-1 text-left text-text overflow-hidden text-ellipsis whitespace-nowrap">
           {showDollar && <span className="text-text-dim">$ </span>}
           {text}
         </code>
