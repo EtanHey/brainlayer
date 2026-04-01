@@ -113,10 +113,17 @@ async def _store_new(
     function_name: str | None = None,
     line_number: int | None = None,
     supersedes: str | None = None,
+    agent_id: str | None = None,
 ):
     """Wrapper for _store with auto-type detection and auto-importance."""
     resolved_type = memory_type or _detect_memory_type(content)
     resolved_importance = importance if importance is not None else _auto_importance(content)
+    # Tag chunk with agent identity for per-agent scoping
+    if agent_id:
+        tags = list(tags or [])
+        agent_tag = f"agent:{agent_id}"
+        if agent_tag not in tags:
+            tags.append(agent_tag)
     if resolved_type == "issue" and status is None:
         status = "open"
     return await _store(
