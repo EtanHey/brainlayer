@@ -2,8 +2,7 @@
 
 import asyncio
 
-import pytest
-
+import pytest  # noqa: I001
 
 # ── B6: ToolAnnotations ────────────────────────────────────────────
 
