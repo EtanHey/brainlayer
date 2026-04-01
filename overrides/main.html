@@ -1,11 +1,5 @@
 {% extends "base.html" %}
 
-{% block announce %}
-  <a href="https://brainlayer.etanheyman.com" class="md-header__back-link">
-    &larr; Back to BrainLayer
-  </a>
-{% endblock %}
-
 {% block footer %}
   <div class="ecosystem-links">
     <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
@@ -17,4 +11,20 @@
     <a href="https://github.com/EtanHey">Golems</a>
   </div>
   {{ super() }}
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
 {% endblock %}
