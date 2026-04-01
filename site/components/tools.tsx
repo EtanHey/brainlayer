@@ -19,10 +19,40 @@ const coreTools = [
 
 const advancedTools = [
   { name: "brain_entity", desc: "Knowledge graph entity lookup" },
-  { name: "brain_expand", desc: "Drill into one search hit with surrounding context" },
+  {
+    name: "brain_expand",
+    desc: "Drill into one search hit with surrounding context",
+  },
   {
     name: "brain_digest",
     desc: "Deep-ingest large content and extract entities, actions, and relations",
+  },
+  {
+    name: "brain_update",
+    desc: "Update chunk importance and tags by chunk ID",
+  },
+  {
+    name: "brain_tags",
+    desc: "List unique tags with counts, filter by prefix",
+  },
+  {
+    name: "brain_get_person",
+    desc: "Look up a person entity with all known relations",
+  },
+];
+
+const lifecycleTools = [
+  {
+    name: "brain_supersede",
+    desc: "Replace a chunk with a newer version, preserving history",
+  },
+  {
+    name: "brain_archive",
+    desc: "Soft-delete a chunk with timestamp for audit trail",
+  },
+  {
+    name: "brain_enrich",
+    desc: "Trigger deep enrichment on a stored chunk via Groq or Gemini",
   },
 ];
 
@@ -51,7 +81,7 @@ export function Tools() {
           MCP tools
         </div>
         <h2 className="mb-14 text-center font-display text-[clamp(26px,3.5vw,36px)] font-semibold leading-tight tracking-tight text-balance">
-          Six working tools. One memory layer.
+          Twelve working tools. One memory layer.
         </h2>
 
         <div className="mx-auto mb-12 max-w-[640px]">
@@ -70,6 +100,17 @@ export function Tools() {
             Advanced
           </div>
           {advancedTools.map((tool) => (
+            <ToolItem key={tool.name} {...tool} />
+          ))}
+        </div>
+
+        <div className="mx-auto h-px max-w-[640px] bg-border" />
+
+        <div className="mx-auto mt-2 max-w-[640px]">
+          <div className="mb-4 mt-6 pl-1 text-xs font-medium uppercase tracking-[0.1em] text-text-dim">
+            Lifecycle
+          </div>
+          {lifecycleTools.map((tool) => (
             <ToolItem key={tool.name} {...tool} />
           ))}
         </div>

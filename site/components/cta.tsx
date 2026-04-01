@@ -30,7 +30,7 @@ export function Cta() {
           viewport={{ once: true }}
           transition={{ duration: 0.6, delay: 0.1 }}
         >
-          Six working tools, one local database, and a BrainBar capture flow
+          Twelve working tools, one local database, and a BrainBar capture flow
           that does not lose the thread.
         </motion.p>
         <motion.div

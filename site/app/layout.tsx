@@ -24,7 +24,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "BrainLayer - Persistent Memory for MCP Agents",
   description:
-    "Local-first memory for MCP agents and BrainBar. Six working tools, formatted Unicode output, and keyboard-first quick capture.",
+    "Local-first memory for MCP agents and BrainBar. Twelve working tools, formatted Unicode output, and keyboard-first quick capture.",
   openGraph: {
     title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
