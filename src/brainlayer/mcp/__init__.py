@@ -113,6 +113,20 @@ _WRITE = ToolAnnotations(
     openWorldHint=False,
 )
 
+_WRITE_IDEMPOTENT = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+_DESTRUCTIVE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+
 # --- Output schemas ---
 
 _MEMORY_ITEM_SCHEMA = {
@@ -496,6 +510,10 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                         "type": "string",
                         "description": "Optional chunk_id to supersede. The old chunk is marked as superseded by this new one and removed from default search.",
                     },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Optional stable agent identifier. Tags the stored chunk with the agent's identity for per-agent scoping and attribution.",
+                    },
                 },
                 "required": ["content"],
             },
@@ -836,7 +854,7 @@ Actions:
 Use brain_search first to find the chunk_id(s) you want to modify.
 
 Returns: Structured JSON with action taken and affected chunk IDs.""",
-            annotations=_WRITE,
+            annotations=_WRITE_IDEMPOTENT,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -929,7 +947,7 @@ Safety: auto-supersede works for technical content. Personal data (journals, not
 health/finance/relationship content) requires safety_check='confirm' + confirm=true.
 
 Returns: Structured JSON with action taken.""",
-            annotations=_WRITE,
+            annotations=_DESTRUCTIVE,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -967,7 +985,7 @@ They can be retrieved with include_history=true or by direct chunk_id lookup.
 Use this to clean up stale, outdated, or irrelevant memories without permanent deletion.
 
 Returns: Structured JSON with chunk_id and optional reason.""",
-            annotations=_WRITE,
+            annotations=_DESTRUCTIVE,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1180,6 +1198,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             function_name=arguments.get("function_name"),
             line_number=max(1, ln) if ln is not None else None,
             supersedes=arguments.get("supersedes"),
+            agent_id=arguments.get("agent_id"),
         )
 
     elif name == "brain_supersede":
