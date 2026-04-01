@@ -7,7 +7,6 @@ LaunchAgent plist, and CLI integration.
 Target: 35+ tests per A-R2 acceptance criteria.
 """
 
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -251,19 +250,22 @@ def test_enrich_local_does_not_call_build_external_prompt(monkeypatch):
     external_prompt.assert_not_called()
 
 
-def test_enrich_batch_uses_checkpoint_db_for_resume(monkeypatch):
+def test_enrich_batch_returns_early_for_no_candidates(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     store = MagicMock()
-    ensure_mock = MagicMock()
-    monkeypatch.setattr(controller, "ensure_checkpoint_table", ensure_mock)
-    monkeypatch.setattr(controller, "get_pending_jobs", MagicMock(return_value=[]))
-    monkeypatch.setattr(controller, "get_unsubmitted_export_files", MagicMock(return_value=[]))
+    store.get_enrichment_candidates.return_value = []
 
-    result = controller.enrich_batch(store, phase="run", limit=100)
+    # _get_gemini_client should never be reached when there are no candidates
+    monkeypatch.setattr(
+        controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(AssertionError("should not be called"))
+    )
 
-    ensure_mock.assert_called_once_with(store)
+    result = controller.enrich_batch(store, limit=100)
+
+    store.get_enrichment_candidates.assert_called_once_with(limit=100, chunk_ids=None)
     assert result.mode == "batch"
+    assert result.enriched == 0
 
 
 # ── Content-hash dedup tests ─────────────────────────────────────────────────
@@ -762,8 +764,10 @@ async def test_brain_enrich_handler_stats_mode(monkeypatch):
 
     result = await _brain_enrich(stats=True)
     assert result.isError is not True
-    data = json.loads(result.content[0].text)
-    assert "total_chunks" in data
+    text = result.content[0].text
+    # _enrich_stats returns formatted text with box-drawing chars, not JSON
+    assert "Total:" in text
+    assert "Enriched:" in text
 
 
 @pytest.mark.asyncio
@@ -777,51 +781,47 @@ async def test_enrich_stats_returns_correct_structure():
     store._read_cursor.return_value = cursor
 
     result = await _enrich_stats(store)
-    data = json.loads(result.content[0].text)
+    text = result.content[0].text
 
-    assert data["total_chunks"] == 1000
-    assert data["enriched"] == 600
-    assert data["unenriched_eligible"] == 350
-    assert data["skipped_too_short"] == 50
-    assert data["enriched_pct"] == 60.0
-    assert data["enriched_last_24h"] == 20
+    # _enrich_stats returns formatted text lines, not JSON
+    assert "Total: 1,000" in text
+    assert "Enriched: 600" in text
+    assert "(60.0%)" in text
+    assert "Remaining: 350" in text
+    assert "Skipped: 50" in text
+    assert "Last 24h: 20" in text
 
 
 # ── Batch mode tests ─────────────────────────────────────────────────────────
 
 
-def test_enrich_batch_poll_phase_only_checks_pending(monkeypatch):
+def test_enrich_batch_processes_candidates_with_gemini(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     store = MagicMock()
-    monkeypatch.setattr(controller, "ensure_checkpoint_table", MagicMock())
-    pending_mock = MagicMock(return_value=[{"id": "job1"}])
-    monkeypatch.setattr(controller, "get_pending_jobs", pending_mock)
-    export_mock = MagicMock(return_value=[])
-    monkeypatch.setattr(controller, "get_unsubmitted_export_files", export_mock)
+    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
+    _patch_realtime_deps(monkeypatch, controller, store)
 
-    result = controller.enrich_batch(store, phase="poll")
+    result = controller.enrich_batch(store, limit=10)
 
-    pending_mock.assert_called_once()
-    export_mock.assert_not_called()
-    assert result.attempted == 1
-
-
-def test_enrich_batch_submit_phase_only_checks_exports(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    monkeypatch.setattr(controller, "ensure_checkpoint_table", MagicMock())
-    pending_mock = MagicMock(return_value=[])
-    monkeypatch.setattr(controller, "get_pending_jobs", pending_mock)
-    export_mock = MagicMock(return_value=["f1.jsonl", "f2.jsonl"])
-    monkeypatch.setattr(controller, "get_unsubmitted_export_files", export_mock)
-
-    result = controller.enrich_batch(store, phase="submit")
-
-    pending_mock.assert_not_called()
-    export_mock.assert_called_once()
+    assert result.mode == "batch"
     assert result.attempted == 2
+    assert result.enriched == 2
+
+
+def test_enrich_batch_graceful_when_no_gemini_key(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate()]
+
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(RuntimeError("no key")))
+
+    result = controller.enrich_batch(store, limit=5)
+
+    assert result.mode == "batch"
+    assert result.enriched == 0
+    assert any("No Gemini client" in e for e in result.errors)
 
 
 # ── Realtime chunk_ids filter test ────────────────────────────────────────────
