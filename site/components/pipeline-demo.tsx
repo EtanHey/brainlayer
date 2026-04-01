@@ -574,7 +574,7 @@ export function PipelineDemo() {
         </h2>
         <p className="mx-auto mb-14 max-w-[720px] text-center text-[15px] leading-relaxed font-light text-text-secondary">
           Store decisions, search across sessions, recall context, digest
-          documents. One pipeline, six tools, zero configuration.
+          documents. One pipeline, twelve tools, zero configuration.
         </p>
 
         <motion.div
