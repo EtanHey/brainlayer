@@ -235,7 +235,7 @@ def _sync_stats_to_supabase(store: "VectorStore") -> None:
         )
         resp.raise_for_status()
     except Exception:
-        pass  # Never let sync failure affect enrichment
+        logger.debug("Axiom sync failed (non-critical)", exc_info=True)
 
 
 def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int, model: str = "") -> None:

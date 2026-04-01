@@ -403,7 +403,7 @@ def _queue_store(item: dict) -> None:
                 len(lines) - _QUEUE_MAX_SIZE,
             )
     except Exception:
-        pass  # Non-critical — queue still works, just unbounded
+        logger.debug("Queue trim failed (non-critical)", exc_info=True)
 
 
 def _flush_pending_stores(store, embed_fn) -> int:
