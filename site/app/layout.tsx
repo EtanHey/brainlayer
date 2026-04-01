@@ -25,6 +25,8 @@ export const metadata: Metadata = {
   title: "BrainLayer - Persistent Memory for MCP Agents",
   description:
     "Local-first memory for MCP agents and BrainBar. Twelve working tools, formatted Unicode output, and keyboard-first quick capture.",
+  metadataBase: new URL("https://brainlayer.etanheyman.com"),
+  alternates: { canonical: "/" },
   icons: {
     icon: "/favicon.ico",
     apple: "/apple-icon.png",
@@ -41,7 +43,11 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory for MCP agents and BrainBar. Formatted output, F4 quick capture, and twelve working MCP tools.",
+      "Local-first memory for MCP agents and BrainBar. Twelve working MCP tools, formatted output, and F4 quick capture.",
+  },
+  robots: {
+    index: true,
+    follow: true,
   },
 };
 
