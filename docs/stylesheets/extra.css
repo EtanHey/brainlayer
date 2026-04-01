@@ -1,102 +1,312 @@
-/* BrainLayer docs — dark theme matching landing page */
+/* BrainLayer docs — synced with landing page (brainlayer.etanheyman.com) */
+/* Design tokens from landing/index.html */
 
+/* ─── Google Fonts ─── */
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,700&family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ─── Root palette ─── */
 :root {
-  --md-primary-fg-color: #7c6aef;
-  --md-primary-fg-color--light: #9b8cff;
-  --md-primary-fg-color--dark: #5a4ed0;
-  --md-accent-fg-color: #9b8cff;
+  --md-primary-fg-color: #d4956a;
+  --md-primary-fg-color--light: #e8b090;
+  --md-primary-fg-color--dark: #b87a50;
+  --md-accent-fg-color: #5eead4;
+
+  /* Typography */
+  --md-text-font: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+  --md-code-font: "JetBrains Mono", "SF Mono", Menlo, monospace;
 }
 
+/* ─── Slate color scheme overrides ─── */
 [data-md-color-scheme="slate"] {
-  --md-default-bg-color: #0a0a0b;
-  --md-default-bg-color--light: #111113;
-  --md-code-bg-color: #16161a;
-  --md-code-hl-color: rgba(124, 106, 239, 0.15);
-  --md-typeset-a-color: #9b8cff;
+  --md-default-bg-color: #09090b;
+  --md-default-bg-color--light: #111114;
+  --md-code-bg-color: #151519;
+  --md-code-hl-color: rgba(212, 149, 106, 0.12);
+  --md-typeset-a-color: #d4956a;
+
+  /* Footer & header backgrounds */
+  --md-footer-bg-color: #09090b;
+  --md-footer-bg-color--dark: #09090b;
 }
 
+/* ─── Header ─── */
 [data-md-color-scheme="slate"] .md-header {
-  background-color: rgba(10, 10, 11, 0.9);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background-color: rgba(9, 9, 11, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid #222228;
 }
 
+/* ─── Sidebar ─── */
 [data-md-color-scheme="slate"] .md-sidebar {
-  background-color: #0a0a0b;
+  background-color: #09090b;
 }
 
+/* ─── Code blocks ─── */
 [data-md-color-scheme="slate"] .md-typeset code {
-  background-color: #16161a;
+  background-color: #151519;
+  color: #fafaf9;
 }
 
-[data-md-color-scheme="slate"] .md-typeset .admonition,
-[data-md-color-scheme="slate"] .md-typeset details {
-  border-color: #7c6aef;
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  background-color: #111114;
+  border: 1px solid #222228;
 }
 
-[data-md-color-scheme="slate"] .md-footer {
-  background-color: #0a0a0b;
-}
-
-/* Links get accent color hover */
+/* ─── Links ─── */
 [data-md-color-scheme="slate"] .md-typeset a {
+  color: #d4956a;
   transition: color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-typeset a:hover {
-  color: #c4b5fd;
+  color: #e8b090;
 }
 
-/* Nav items hover */
+/* ─── Nav links ─── */
 [data-md-color-scheme="slate"] .md-nav__link {
   transition: color 0.2s, opacity 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-nav__link:hover {
-  color: #9b8cff;
+  color: #d4956a;
 }
 
-/* Search bar styling */
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: #d4956a;
+  font-weight: 500;
+}
+
+/* Active nav indicator */
+[data-md-color-scheme="slate"] .md-nav__item--active > .md-nav__link {
+  color: #d4956a;
+}
+
+/* ─── Sidebar nav hover ─── */
+[data-md-color-scheme="slate"] .md-sidebar .md-nav__link:hover {
+  color: #d4956a;
+}
+
+/* ─── Admonitions ─── */
+[data-md-color-scheme="slate"] .md-typeset .admonition,
+[data-md-color-scheme="slate"] .md-typeset details {
+  background-color: #111114;
+  border-color: #d4956a;
+  border-left-width: 3px;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition:hover,
+[data-md-color-scheme="slate"] .md-typeset details:hover {
+  border-color: #e8b090;
+}
+
+/* ─── Footer ─── */
+[data-md-color-scheme="slate"] .md-footer {
+  background-color: #09090b;
+  border-top: 1px solid #222228;
+}
+
+[data-md-color-scheme="slate"] .md-footer a {
+  color: #a8a29e;
+  transition: color 0.2s;
+}
+
+[data-md-color-scheme="slate"] .md-footer a:hover {
+  color: #d4956a;
+}
+
+/* ─── Search ─── */
 [data-md-color-scheme="slate"] .md-search__input {
-  background-color: #16161a;
+  background-color: #111114;
   border: 1px solid #222228;
   transition: border-color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-search__input:hover,
 [data-md-color-scheme="slate"] .md-search__input:focus {
-  border-color: #7c6aef;
+  border-color: #d4956a;
 }
 
-/* Code copy button hover */
+/* ─── Code copy button ─── */
 [data-md-color-scheme="slate"] .md-clipboard {
   transition: color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-clipboard:hover {
-  color: #9b8cff;
+  color: #d4956a;
 }
 
-/* Tab hover states */
+/* ─── Tabs ─── */
 [data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label {
   transition: color 0.2s, border-color 0.2s;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label:hover {
-  color: #9b8cff;
+  color: #d4956a;
 }
 
-/* Table of contents hover */
-[data-md-color-scheme="slate"] .md-sidebar .md-nav__link:hover {
-  color: #9b8cff;
+[data-md-color-scheme="slate"] .md-typeset .tabbed-set > input:checked + label {
+  color: #d4956a;
+  border-color: #d4956a;
 }
 
-/* Card-like styling for content sections */
-[data-md-color-scheme="slate"] .md-typeset .admonition {
-  background-color: #111113;
-  transition: border-color 0.2s;
+/* ─── Headlines ─── */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: "Newsreader", Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fafaf9;
 }
 
-[data-md-color-scheme="slate"] .md-typeset .admonition:hover {
-  border-color: #9b8cff;
+.md-typeset h1 {
+  font-size: 2em;
+}
+
+/* ─── Body text ─── */
+.md-typeset {
+  color: #fafaf9;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.md-typeset p,
+.md-typeset li {
+  color: #a8a29e;
+}
+
+.md-typeset strong {
+  color: #fafaf9;
+}
+
+/* ─── Teal accent for special elements ─── */
+[data-md-color-scheme="slate"] .md-typeset .admonition.tip,
+[data-md-color-scheme="slate"] .md-typeset details.tip {
+  border-color: #5eead4;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note {
+  border-color: #5eead4;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition.info,
+[data-md-color-scheme="slate"] .md-typeset details.info {
+  border-color: #5eead4;
+}
+
+/* ─── Table styling ─── */
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border: 1px solid #222228;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background-color: #111114;
+  color: #fafaf9;
+  border-bottom: 2px solid #d4956a;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
+  border-bottom: 1px solid #222228;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) tr:hover td {
+  background-color: rgba(212, 149, 106, 0.04);
+}
+
+/* ─── Header title / logo ─── */
+.md-header__title {
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ─── Back-to-landing link in header ─── */
+.md-header__back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a8a29e;
+  text-decoration: none;
+  font-size: 13px;
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 400;
+  padding: 4px 12px;
+  border: 1px solid #222228;
+  border-radius: 6px;
+  margin-left: 16px;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.md-header__back-link:hover {
+  color: #d4956a;
+  border-color: #d4956a;
+}
+
+/* ─── Ecosystem footer links ─── */
+.ecosystem-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px 0 8px;
+  font-size: 13px;
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.ecosystem-links a {
+  color: #6b6660 !important;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.ecosystem-links a:hover {
+  color: #d4956a !important;
+}
+
+.ecosystem-links .sep {
+  color: #222228;
+  user-select: none;
+}
+
+/* ─── Announce bar (back-to-landing link) ─── */
+[data-md-color-scheme="slate"] .md-banner {
+  background-color: #111114;
+  border-bottom: 1px solid #222228;
+}
+
+[data-md-color-scheme="slate"] .md-banner a {
+  color: #a8a29e;
+  font-size: 13px;
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+[data-md-color-scheme="slate"] .md-banner a:hover {
+  color: #d4956a;
+}
+
+/* ─── Scrollbar ─── */
+[data-md-color-scheme="slate"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-thumb {
+  background: #222228;
+  border-radius: 4px;
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-thumb:hover {
+  background: #38383f;
+}
+
+/* ─── Selection highlight ─── */
+::selection {
+  background: rgba(212, 149, 106, 0.25);
+  color: #fafaf9;
 }

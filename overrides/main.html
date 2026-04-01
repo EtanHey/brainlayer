@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block announce %}
+  <a href="https://brainlayer.etanheyman.com" class="md-header__back-link">
+    &larr; Back to BrainLayer
+  </a>
+{% endblock %}
+
+{% block footer %}
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://etanhey.github.io/voicelayer">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://etanhey.github.io/cmuxlayer">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  {{ super() }}
+{% endblock %}
