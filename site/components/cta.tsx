@@ -5,7 +5,7 @@ import { CopyBlock } from "./copy-block";
 
 export function Cta() {
   return (
-    <section className="relative py-24 text-center">
+    <section className="relative overflow-hidden py-24 text-center">
       <div
         className="pointer-events-none absolute bottom-[30%] left-1/2 h-[300px] w-[600px] -translate-x-1/2"
         style={{
