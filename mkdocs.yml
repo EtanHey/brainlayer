@@ -6,12 +6,14 @@ repo_name: EtanHey/brainlayer
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     scheme: slate
     primary: custom
     accent: custom
   logo: assets/logo.svg
   favicon: assets/logo.svg
+  font: false
   features:
     - navigation.sections
     - navigation.expand
