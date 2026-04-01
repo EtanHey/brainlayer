@@ -84,9 +84,7 @@ def _get_gemini_client():
     try:
         from google import genai
     except ImportError:
-        raise RuntimeError(
-            "google-genai package not installed. Install with: pip install google-genai"
-        )
+        raise RuntimeError("google-genai package not installed. Install with: pip install google-genai")
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
     if not api_key:
