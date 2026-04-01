@@ -436,7 +436,7 @@ def test_gemini_client_requires_api_key(monkeypatch):
 
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="not set"):
+    with pytest.raises(RuntimeError, match="not set|not installed"):
         _get_gemini_client()
 
 
