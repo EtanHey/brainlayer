@@ -2,7 +2,7 @@ import { CopyBlock } from "./copy-block";
 
 export function Hero() {
   return (
-    <section className="relative pt-44 pb-20 text-center">
+    <section className="relative overflow-hidden pt-44 pb-20 text-center">
       {/* Ambient glow - wide and soft, no hard edges */}
       <div
         className="pointer-events-none absolute top-0 left-1/2 h-[700px] w-[1400px] -translate-x-1/2"
