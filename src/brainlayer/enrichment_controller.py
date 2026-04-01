@@ -81,7 +81,10 @@ def get_unsubmitted_export_files(*args, **kwargs):
 
 def _get_gemini_client():
     """Create Gemini client. Uses regional endpoint when GOOGLE_CLOUD_REGION is set."""
-    from google import genai
+    try:
+        from google import genai
+    except ImportError:
+        raise RuntimeError("google-genai package not installed. Install with: pip install google-genai")
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
     if not api_key:
