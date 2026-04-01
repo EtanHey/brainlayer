@@ -720,6 +720,165 @@
     .reveal-d1 { transition-delay: 0.1s; }
     .reveal-d2 { transition-delay: 0.2s; }
     .reveal-d3 { transition-delay: 0.3s; }
+
+    /* ─── Pipeline Demo ─── */
+    .demo-section { padding: 100px 0; }
+
+    .demo-frame {
+      max-width: 920px;
+      margin: 0 auto;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #0c0c0e;
+      position: relative;
+    }
+
+    .demo-titlebar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 14px 18px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .demo-layout {
+      display: flex;
+      min-height: 360px;
+      transition: opacity 0.6s ease;
+    }
+
+    .demo-left {
+      flex: 0 0 58%;
+      border-right: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .demo-right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      position: relative;
+    }
+
+    .demo-pane-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--text-dim);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+
+    .demo-pane-bar .label { color: var(--text-secondary); font-weight: 500; }
+
+    .demo-body {
+      flex: 1;
+      padding: 16px 18px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.8;
+      overflow: hidden;
+    }
+
+    .demo-body .line { display: block; }
+    .demo-body .gap { margin-top: 8px; }
+    .demo-body .user-input { color: var(--text); font-weight: 400; }
+
+    /* Terminal colors */
+    .d-tool { color: var(--accent); font-weight: 500; }
+    .d-str { color: #e8b090; }
+    .d-num { color: var(--teal); }
+    .d-dim { color: #4a4a52; }
+    .d-key { color: #a8d8a8; }
+    .d-purple { color: #8B5CF6; }
+    .d-body { color: var(--text-secondary); }
+    .d-border { color: #333338; }
+    .d-tag { color: #8B5CF6; background: rgba(139,92,246,0.1); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+    .d-score { color: var(--teal); font-weight: 500; }
+
+    .demo-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 13px;
+      background: var(--accent);
+      vertical-align: text-bottom;
+      animation: cursor-blink 1s step-end infinite;
+    }
+
+    @keyframes cursor-blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Knowledge graph pane */
+    .kg-graph { width: 100%; height: 100%; position: relative; }
+    .kg-graph svg { width: 100%; height: 100%; }
+
+    .kg-node {
+      transition: opacity 0.5s ease, r 0.3s ease;
+      opacity: 0;
+    }
+
+    .kg-node.visible { opacity: 1; }
+
+    .kg-edge {
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      transition: stroke-dashoffset 0.8s ease;
+    }
+
+    .kg-edge.drawn { stroke-dashoffset: 0; }
+
+    .kg-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      fill: var(--text-dim);
+      text-anchor: middle;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+    }
+
+    .kg-label.visible { opacity: 1; }
+
+    .kg-pulse {
+      animation: node-pulse 1.5s ease-in-out;
+    }
+
+    @keyframes node-pulse {
+      0% { r: 0; opacity: 0; }
+      30% { opacity: 0.8; }
+      60% { opacity: 1; }
+      100% { opacity: 1; }
+    }
+
+    /* Stats bar */
+    .demo-stats {
+      display: flex;
+      gap: 24px;
+      padding: 10px 18px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .demo-stats .val { color: var(--teal); font-weight: 500; }
+    .demo-stats .lbl { margin-right: 4px; }
+
+    @media (max-width: 768px) {
+      .demo-layout { flex-direction: column; min-height: auto; }
+      .demo-left { flex: none; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.05); }
+      .demo-right { min-height: 240px; }
+    }
   </style>
 </head>
 <body>
@@ -927,6 +1086,50 @@
 
   <div class="wrap"><div class="divider"></div></div>
 
+  <!-- Pipeline Demo -->
+  <section class="demo-section" id="demo">
+    <div class="wrap">
+      <div class="section-label">See it work</div>
+      <h2 class="section-heading reveal">The memory pipeline in action</h2>
+    </div>
+    <div class="wrap-wide">
+      <div class="demo-frame reveal">
+        <div class="demo-titlebar">
+          <div class="dot dot-r"></div>
+          <div class="dot dot-y"></div>
+          <div class="dot dot-g"></div>
+          <span style="font-size:12px;color:var(--text-dim);margin-left:10px;font-family:var(--mono);">brainlayer &mdash; memory pipeline</span>
+        </div>
+        <div class="demo-layout" id="demo-layout">
+          <div class="demo-left">
+            <div class="demo-pane-bar">
+              <span class="label" id="demo-session-label">Session 1 &mdash; storing</span>
+              <span id="demo-session-id" class="d-dim">sess-a7f3c</span>
+            </div>
+            <div class="demo-body" id="demo-terminal"></div>
+          </div>
+          <div class="demo-right">
+            <div class="demo-pane-bar" style="width:100%;">
+              <span class="label">Knowledge Graph</span>
+              <span class="d-dim" id="demo-entity-count">0 entities</span>
+            </div>
+            <div class="kg-graph" id="demo-graph">
+              <svg viewBox="0 0 320 280" id="kg-svg"></svg>
+            </div>
+          </div>
+        </div>
+        <div class="demo-stats">
+          <span><span class="lbl">chunks</span> <span class="val" id="ds-chunks">284,291</span></span>
+          <span><span class="lbl">entities</span> <span class="val" id="ds-entities">12,847</span></span>
+          <span><span class="lbl">latency</span> <span class="val" id="ds-latency">11ms</span></span>
+          <span><span class="lbl">pipeline</span> <span class="val" id="ds-status">idle</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="divider"></div></div>
+
   <!-- Integrations + Setup -->
   <section class="integrations-section" id="setup">
     <div class="wrap">
@@ -1060,6 +1263,349 @@
         }
       });
     }
+    // ─── Pipeline Demo Animation ───
+    (function() {
+      const terminal = document.getElementById('demo-terminal');
+      const layout = document.getElementById('demo-layout');
+      const svg = document.getElementById('kg-svg');
+      const sessionLabel = document.getElementById('demo-session-label');
+      const sessionId = document.getElementById('demo-session-id');
+      const entityCount = document.getElementById('demo-entity-count');
+      const dsChunks = document.getElementById('ds-chunks');
+      const dsEntities = document.getElementById('ds-entities');
+      const dsLatency = document.getElementById('ds-latency');
+      const dsStatus = document.getElementById('ds-status');
+
+      if (!terminal || !svg) return;
+
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+      // Typing effect — types into a new span appended to terminal
+      async function typeIn(el, text, speed = 30) {
+        const span = document.createElement('span');
+        span.className = 'line user-input';
+        el.appendChild(span);
+        const cursor = '<span class="demo-cursor"></span>';
+        for (let i = 0; i <= text.length; i++) {
+          span.innerHTML = esc(text.slice(0, i)) + cursor;
+          await sleep(speed + Math.random() * speed * 0.5);
+        }
+        await sleep(200);
+        span.innerHTML = esc(text);
+      }
+
+      function append(html) {
+        const span = document.createElement('span');
+        span.className = 'line';
+        span.innerHTML = html;
+        terminal.appendChild(span);
+      }
+      function gap() {
+        const span = document.createElement('span');
+        span.className = 'line gap';
+        terminal.appendChild(span);
+      }
+
+      // Colored spans
+      const tool = s => `<span class="d-tool">${s}</span>`;
+      const str = s => `<span class="d-str">${s}</span>`;
+      const num = s => `<span class="d-num">${s}</span>`;
+      const dim = s => `<span class="d-dim">${s}</span>`;
+      const key = s => `<span class="d-key">${s}</span>`;
+      const bdr = s => `<span class="d-border">${s}</span>`;
+      const body = s => `<span class="d-body">${s}</span>`;
+      const tag = s => `<span class="d-tag">${s}</span>`;
+      const score = s => `<span class="d-score">${s}</span>`;
+
+      // Graph nodes data
+      const nodes = [
+        { id: 'auth', x: 160, y: 60, r: 8, label: 'auth', color: '#8B5CF6' },
+        { id: 'extract', x: 90, y: 130, r: 10, label: 'extraction', color: '#8B5CF6' },
+        { id: '6pm', x: 240, y: 110, r: 7, label: '6pm-mini', color: '#d4956a' },
+        { id: 'twin', x: 140, y: 200, r: 9, label: 'twin-primary', color: '#8B5CF6' },
+        { id: 'decision', x: 60, y: 60, r: 6, label: 'decision', color: '#d4956a' },
+        { id: 'convex', x: 250, y: 200, r: 7, label: 'convex', color: '#5eead4' },
+        { id: 'session', x: 50, y: 190, r: 5, label: 'session', color: '#5eead4' },
+        { id: 'broker', x: 200, y: 250, r: 6, label: 'broker', color: '#8B5CF6' },
+        { id: 'slot', x: 100, y: 260, r: 5, label: 'slot-confirm', color: '#d4956a' },
+      ];
+
+      const edges = [
+        ['extract', 'twin'], ['extract', 'auth'], ['twin', '6pm'],
+        ['decision', 'extract'], ['6pm', 'convex'], ['auth', '6pm'],
+        ['twin', 'broker'], ['session', 'extract'], ['broker', 'slot'],
+        ['convex', 'twin'], ['decision', 'auth'],
+      ];
+
+      function resetGraph() {
+        svg.innerHTML = '';
+        // Draw edges (hidden initially)
+        edges.forEach(([from, to], i) => {
+          const a = nodes.find(n => n.id === from);
+          const b = nodes.find(n => n.id === to);
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+          line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+          line.setAttribute('stroke', '#8B5CF6');
+          line.setAttribute('stroke-width', '1');
+          line.setAttribute('stroke-opacity', '0.12');
+          line.classList.add('kg-edge');
+          line.id = 'edge-' + i;
+          svg.appendChild(line);
+        });
+        // Draw nodes (hidden initially)
+        nodes.forEach(n => {
+          const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          c.setAttribute('cx', n.x); c.setAttribute('cy', n.y);
+          c.setAttribute('r', n.r);
+          c.setAttribute('fill', n.color);
+          c.setAttribute('opacity', '0');
+          c.classList.add('kg-node');
+          c.id = 'node-' + n.id;
+          svg.appendChild(c);
+
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          t.setAttribute('x', n.x); t.setAttribute('y', n.y + n.r + 12);
+          t.classList.add('kg-label');
+          t.id = 'label-' + n.id;
+          t.textContent = n.label;
+          svg.appendChild(t);
+        });
+      }
+
+      function showNode(id, pulse) {
+        const node = document.getElementById('node-' + id);
+        if (!node) return;
+        node.style.opacity = '1';
+        node.classList.add('visible');
+        if (pulse) node.classList.add('kg-pulse');
+        const label = document.getElementById('label-' + id);
+        if (label) label.classList.add('visible');
+      }
+
+      function highlightNode(id) {
+        const node = document.getElementById('node-' + id);
+        if (!node) return;
+        const orig = node.getAttribute('fill');
+        node.setAttribute('fill', '#e8b090');
+        node.setAttribute('r', parseFloat(node.getAttribute('r')) + 3);
+        setTimeout(() => {
+          node.setAttribute('fill', orig);
+          node.setAttribute('r', parseFloat(node.getAttribute('r')) - 3);
+        }, 2000);
+      }
+
+      function drawEdge(idx) {
+        const e = document.getElementById('edge-' + idx);
+        if (e) {
+          e.setAttribute('stroke-opacity', '0.4');
+          e.classList.add('drawn');
+        }
+      }
+
+      let baseChunks = 284291;
+      let baseEntities = 12847;
+
+      function updateStats(chunks, entities, latency, status) {
+        if (chunks !== null) dsChunks.textContent = chunks.toLocaleString();
+        if (entities !== null) dsEntities.textContent = entities.toLocaleString();
+        if (latency !== null) dsLatency.textContent = latency;
+        if (status !== null) dsStatus.textContent = status;
+      }
+
+      function setEntityCount(n) { entityCount.textContent = n + ' entities'; }
+
+      async function runCycle() {
+        terminal.innerHTML = '';
+        resetGraph();
+        baseChunks++; baseEntities += 3;
+
+        // ── Phase 1: Store a decision ──
+        sessionLabel.textContent = 'Session 1 \u2014 storing';
+        sessionId.textContent = 'sess-a7f3c';
+        updateStats(null, null, null, 'indexing');
+
+        append(dim('$') + ' ' + body('Claude Code \u2014 6pm-mini project'));
+        gap();
+        await sleep(500);
+
+        await typeIn(terminal, 'Store this architecture decision.', 30);
+        gap();
+        await sleep(300);
+
+        // Show tool call box
+        append(bdr('\u250C\u2500') + ' ' + tool('brain_store') + '(' + key('content') + '=..., ' + key('tags') + '=..., ' + key('importance') + '=' + num('8') + ')');
+        append(bdr('\u2502'));
+        await sleep(300);
+        append(bdr('\u2502') + '  ' + str('"Chose twin-primary extraction over'));
+        append(bdr('\u2502') + '   ' + str('broker-primary \u2014 twins extract in'));
+        append(bdr('\u2502') + '   ' + str('real-time during conversation"'));
+        append(bdr('\u2502'));
+        await sleep(400);
+
+        // Graph: show first nodes
+        showNode('extract', true);
+        showNode('twin', true);
+        setEntityCount(2);
+        await sleep(500);
+
+        showNode('decision', true);
+        drawEdge(3); // decision -> extract
+        setEntityCount(3);
+        await sleep(400);
+
+        showNode('6pm', false);
+        drawEdge(0); // extract -> twin
+        drawEdge(2); // twin -> 6pm
+        setEntityCount(4);
+
+        append(bdr('\u2502') + '  ' + dim('stored:') + ' ' + str('"rt-a4f82c19"'));
+        append(bdr('\u2502') + '  ' + dim('tags:') + ' ' + tag('decision') + ' ' + tag('6pm'));
+        append(bdr('\u2502') + '  ' + dim('importance:') + ' ' + num('8') + '  ' + dim('entities:') + ' ' + num('3'));
+        append(bdr('\u2514\u2500') + ' ' + dim('12ms'));
+        gap();
+        updateStats(baseChunks, baseEntities, '12ms', 'stored');
+        await sleep(1500);
+
+        // ── Phase 2: Graph grows ──
+        showNode('auth', false);
+        drawEdge(1); // extract -> auth
+        drawEdge(5); // auth -> 6pm
+        setEntityCount(5);
+        await sleep(600);
+
+        showNode('convex', false);
+        drawEdge(4); // 6pm -> convex
+        drawEdge(9); // convex -> twin
+        setEntityCount(6);
+        await sleep(800);
+
+        showNode('broker', false);
+        drawEdge(6); // twin -> broker
+        setEntityCount(7);
+        await sleep(600);
+
+        // ── Phase 3: New session searches ──
+        terminal.innerHTML = '';
+        sessionLabel.textContent = 'Session 2 \u2014 searching';
+        sessionId.textContent = 'sess-e92b1';
+        updateStats(null, null, null, 'searching');
+
+        append(dim('$') + ' ' + body('New session \u2014 different project'));
+        gap();
+        await sleep(500);
+
+        await typeIn(terminal, 'What approach did we use for extraction?', 28);
+        gap();
+        await sleep(300);
+
+        // Search result
+        append(bdr('\u250C\u2500') + ' ' + tool('brain_search') + '(' + key('query') + '=' + str('"extraction architecture"') + ')');
+        append(bdr('\u2502'));
+        await sleep(300);
+
+        updateStats(null, null, '9ms', null);
+        append(bdr('\u2502') + '  ' + dim('chunks:') + ' ' + num('3') + '  ' + dim('latency:') + ' ' + num('9ms') + '  ' + dim('top:') + ' ' + score('0.94'));
+        append(bdr('\u2502'));
+        await sleep(500);
+
+        highlightNode('extract');
+        highlightNode('twin');
+
+        append(bdr('\u2502') + '  ' + str('"Chose twin-primary extraction over broker-primary.'));
+        append(bdr('\u2502') + '   ' + str('Reason: twins extract in real-time during conversation.'));
+        append(bdr('\u2502') + '   ' + str('Decision: 2026-03-14. Confidence: high."'));
+        append(bdr('\u2502'));
+        append(bdr('\u2502') + '  ' + dim('tags:') + ' ' + tag('decision') + ' ' + tag('6pm'));
+        append(bdr('\u2514\u2500') + ' ' + dim('rt-a4f82c19 \u00B7 importance:') + ' ' + num('8'));
+        gap();
+        await sleep(2000);
+
+        // ── Phase 4: brain_recall ──
+        terminal.innerHTML = '';
+        sessionLabel.textContent = 'Session 2 \u2014 recalling';
+        updateStats(null, null, null, 'context');
+
+        await typeIn(terminal, 'Show me the full session context.', 28);
+        gap();
+        await sleep(300);
+
+        append(bdr('\u250C\u2500') + ' ' + tool('brain_recall') + '(' + key('mode') + '=' + str('"context"') + ')');
+        append(bdr('\u2502'));
+        await sleep(400);
+
+        append(bdr('\u2502') + '  ' + dim('session:') + ' ' + str('"sess-e92b1"'));
+        append(bdr('\u2502') + '  ' + dim('chunks injected:') + ' ' + num('4'));
+        append(bdr('\u2502') + '  ' + dim('tokens used:') + ' ' + num('1,247'));
+        append(bdr('\u2502') + '  ' + dim('decisions found:') + ' ' + num('2'));
+        append(bdr('\u2502') + '  ' + dim('corrections:') + ' ' + num('1'));
+        append(bdr('\u2514\u2500') + ' ' + dim('context loaded in') + ' ' + num('8ms'));
+        gap();
+        updateStats(null, null, '8ms', 'recalled');
+
+        // Show remaining graph nodes
+        showNode('session', false);
+        drawEdge(7); // session -> extract
+        showNode('slot', false);
+        drawEdge(8); // broker -> slot
+        drawEdge(10); // decision -> auth
+        setEntityCount(9);
+        await sleep(2000);
+
+        // ── Phase 5: brain_digest ──
+        terminal.innerHTML = '';
+        sessionLabel.textContent = 'Session 2 \u2014 digesting';
+        updateStats(null, null, null, 'digesting');
+
+        await typeIn(terminal, 'Digest this architecture doc.', 28);
+        gap();
+        await sleep(300);
+
+        append(bdr('\u250C\u2500') + ' ' + tool('brain_digest') + '(' + key('content') + '=' + str('"<2400 words>"') + ')');
+        append(bdr('\u2502'));
+        await sleep(400);
+
+        append(bdr('\u2502') + '  ' + dim('extracting entities...'));
+        await sleep(600);
+        append(bdr('\u2502') + '  ' + dim('\u2192 entities:') + ' ' + num('7') + '  ' + dim('relations:') + ' ' + num('12'));
+        await sleep(400);
+        append(bdr('\u2502') + '  ' + dim('\u2192 chunks created:') + ' ' + num('4'));
+        append(bdr('\u2502') + '  ' + dim('\u2192 tags auto-applied:') + ' ' + tag('architecture') + ' ' + tag('extraction') + ' ' + tag('convex'));
+        append(bdr('\u2514\u2500') + ' ' + dim('digested in') + ' ' + num('340ms'));
+        gap();
+
+        updateStats(baseChunks + 4, baseEntities + 7, '340ms', 'digested');
+        setEntityCount(9 + ' +7');
+        await sleep(2000);
+
+        // ── Phase 6: Stats update ──
+        updateStats(baseChunks + 4, baseEntities + 7, '11ms', 'idle');
+        await sleep(1500);
+      }
+
+      // Start on scroll intersection
+      const demoObs = new IntersectionObserver((entries) => {
+        entries.forEach(async (entry) => {
+          if (!entry.isIntersecting) return;
+          demoObs.disconnect();
+
+          if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            await runCycle();
+            return;
+          }
+
+          while (true) {
+            layout.style.opacity = '1';
+            await runCycle();
+            layout.style.opacity = '0.15';
+            await sleep(1200);
+          }
+        });
+      }, { threshold: 0.15 });
+
+      demoObs.observe(document.getElementById('demo'));
+    })();
   </script>
 </body>
 </html>
