@@ -11,7 +11,7 @@ export function Footer() {
             Etan Heyman
           </a>
         </div>
-        <div className="flex gap-5">
+        <div className="flex flex-wrap justify-center gap-5">
           <a
             href="https://github.com/EtanHey/brainlayer"
             className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
@@ -29,6 +29,19 @@ export function Footer() {
             className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
           >
             PyPI
+          </a>
+          <span className="text-[13px] text-border">|</span>
+          <a
+            href="https://voicelayer.etanheyman.com"
+            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
+          >
+            VoiceLayer
+          </a>
+          <a
+            href="https://cmuxlayer.etanheyman.com"
+            className="text-[13px] text-text-dim transition-colors hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none rounded"
+          >
+            cmuxLayer
           </a>
         </div>
       </div>

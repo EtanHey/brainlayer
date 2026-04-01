@@ -7,6 +7,7 @@ import { ProblemSolution } from "@/components/problem-solution";
 import { SearchExamples } from "@/components/search-examples";
 import { Tools } from "@/components/tools";
 import { Integrations } from "@/components/integrations";
+import { PipelineDemo } from "@/components/pipeline-demo";
 import { Cta } from "@/components/cta";
 import { Footer } from "@/components/footer";
 
@@ -28,6 +29,8 @@ export default function Home() {
       <div className="section-tinted">
         <Integrations />
       </div>
+      <Divider />
+      <PipelineDemo />
       <Cta />
       <Footer />
     </>
