@@ -21,7 +21,7 @@ export function Hero() {
         </h1>
 
         <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary">
-          Local-first memory for MCP agents and BrainBar. Six working tools,
+          Local-first memory for MCP agents and BrainBar. Twelve working tools,
           formatted Unicode output, keyboard-first capture, and one SQLite file
           that stays on your machine.
         </p>
@@ -56,7 +56,7 @@ export function Hero() {
 
         <div className="hero-fade hero-fade-d4 mt-8 flex flex-wrap items-center justify-center gap-2 text-[12px] text-text-dim">
           <span className="rounded-full border border-border px-3 py-1">
-            6 working MCP tools
+            12 working MCP tools
           </span>
           <span className="rounded-full border border-border px-3 py-1">
             F4 quick capture

@@ -41,7 +41,7 @@ const sections = [
   },
   {
     title: "MCP Tools",
-    desc: "Current reference for the 6 working tools: search, store, recall, entity, expand, digest.",
+    desc: "Current reference for all 12 MCP tools: search, store, recall, entity, expand, digest, update, tags, and more.",
     href: "https://etanhey.github.io/brainlayer/mcp-tools/",
     icon: (
       <svg
@@ -203,8 +203,8 @@ export default function DocsPage() {
               Learn BrainLayer
             </h1>
             <p className="text-lg text-text-secondary font-light max-w-[560px]">
-              Setup, MCP configuration, BrainBar flows, and the current
-              six-tool memory surface for persistent AI-agent context.
+              Setup, MCP configuration, BrainBar flows, and the twelve-tool
+              memory surface for persistent AI-agent context.
             </p>
           </div>
 
