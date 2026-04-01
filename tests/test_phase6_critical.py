@@ -394,10 +394,12 @@ class TestCompactFormatSize:
         # importance is now included in compact format for relevance visibility
         assert "importance" in compact
 
+        # tags is now included in compact format for filtering
+        assert "tags" in compact
+
         # Verbose fields dropped
         for dropped in (
             "content_type",
-            "tags",
             "intent",
             "source_file",
             "session_summary",
