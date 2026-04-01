@@ -290,9 +290,9 @@ def test_brain_digest_description_teaches_routing():
     assert "on schedule for backfill" in desc
     assert "faceted tags" in desc
     assert "sanitizes pii" in desc
-    assert "realtime" in desc
+    assert "digest" in desc
+    assert "connect" in desc
     assert "enrich" in desc
-    assert "backfill" in desc
 
 
 # --- Task 4: brain_entity MCP tool ---
