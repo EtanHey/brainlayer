@@ -1,11 +1,11 @@
 [project]
 name = "brainlayer"
 version = "1.0.0"
-description = "Persistent memory for AI agents — search, think, recall across every conversation"
-license = "Apache-2.0"
+description = "Persistent memory MCP server for AI agents — 12 tools, semantic search, knowledge graph, on-device SQLite"
+license = {text = "Apache-2.0"}
 readme = "README.md"
-authors = [{name = "BrainLayer Contributors"}]
-keywords = ["ai", "memory", "mcp", "claude", "knowledge-graph", "embeddings", "sqlite-vec"]
+authors = [{name = "Etan Heyman"}]
+keywords = ["mcp", "memory", "knowledge-graph", "ai-agent", "claude", "semantic-search", "sqlite-vec", "embeddings"]
 requires-python = ">=3.11"
 dependencies = [
     # Vector DB (sqlite-vec via APSW)
@@ -84,7 +84,7 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/EtanHey/brainlayer"
+Homepage = "https://brainlayer.etanheyman.com"
 Repository = "https://github.com/EtanHey/brainlayer"
 Documentation = "https://etanhey.github.io/brainlayer"
 Issues = "https://github.com/EtanHey/brainlayer/issues"
