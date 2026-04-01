@@ -1,6 +1,6 @@
 # BrainLayer
 
-> Persistent memory and knowledge graph for AI agents — 11 MCP tools, real-time JSONL watcher, Axiom telemetry, and a native macOS daemon for always-on recall across every conversation.
+> Persistent memory and knowledge graph for AI agents — 12 MCP tools, real-time JSONL watcher, Axiom telemetry, and a native macOS daemon for always-on recall across every conversation.
 
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
@@ -93,7 +93,7 @@ That's it. Your agent now has persistent memory across every conversation.
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>11 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer MCP Server<br/>12 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
@@ -129,35 +129,35 @@ graph LR
 
 ### Core (4)
 
-| Tool | Description |
-|------|-------------|
-| `brain_search` | Semantic search — unified search across query, file_path, chunk_id, filters. Lifecycle-aware: excludes superseded/archived by default. |
-| `brain_store` | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. Optional `supersedes` param for atomic store-and-replace. |
-| `brain_recall` | Proactive retrieval — current context, sessions, session summaries. |
-| `brain_tags` | Browse and filter by tag — discover what's in memory without a search query. |
+| Tool | Annotations | Description |
+|------|-------------|-------------|
+| `brain_search` | read-only, idempotent | Semantic search — unified search across query, file_path, chunk_id, filters. Lifecycle-aware. |
+| `brain_store` | write | Persist memories — ideas, decisions, learnings, mistakes. Auto-type/auto-importance. Accepts `agent_id` for per-agent scoping. |
+| `brain_recall` | read-only, idempotent | Proactive retrieval — current context, sessions, session summaries. |
+| `brain_tags` | read-only, idempotent | Browse and filter by tag — discover what's in memory without a search query. |
 
 ### Knowledge Graph (5)
 
-| Tool | Description |
-|------|-------------|
-| `brain_digest` | Ingest raw content — two modes: `digest` (entity extraction, relations, action items) and `enrich` (run realtime LLM enrichment on existing chunks). |
-| `brain_entity` | Look up entities in the knowledge graph — type, relations, evidence. |
-| `brain_expand` | Expand a chunk_id with N surrounding chunks for full context. |
-| `brain_update` | Update, archive, or merge existing memories. |
-| `brain_get_person` | Person lookup — entity details, interactions, preferences (~200-500ms). |
+| Tool | Annotations | Description |
+|------|-------------|-------------|
+| `brain_digest` | write | Ingest raw content — entity extraction, relations, action items, or realtime LLM enrichment. |
+| `brain_entity` | read-only, idempotent | Look up entities in the knowledge graph — type, relations, evidence. |
+| `brain_expand` | read-only, idempotent | Expand a chunk_id with N surrounding chunks for full context. |
+| `brain_update` | write, idempotent | Update, archive, or merge existing memories. |
+| `brain_get_person` | read-only, idempotent | Person lookup — entity details, interactions, preferences (~200-500ms). |
 
 ### Enrichment (1)
 
-| Tool | Description |
-|------|-------------|
-| `brain_enrich` | Run LLM enrichment on chunks — unified controller with Gemini, Groq, and MLX backends. Auto-enriches on store, or batch-enrich existing chunks. |
+| Tool | Annotations | Description |
+|------|-------------|-------------|
+| `brain_enrich` | write | Run LLM enrichment on chunks — Gemini, Groq, and MLX backends. |
 
 ### Lifecycle (2)
 
-| Tool | Description |
-|------|-------------|
-| `brain_supersede` | Mark old memory as replaced by new one. Safety gate: personal data requires explicit confirmation. |
-| `brain_archive` | Soft-delete with timestamp. Excluded from default search, accessible via direct lookup. |
+| Tool | Annotations | Description |
+|------|-------------|-------------|
+| `brain_supersede` | destructive | Mark old memory as replaced by new one. Safety gate: personal data requires explicit confirmation. |
+| `brain_archive` | destructive | Soft-delete with timestamp. Excluded from default search, accessible via direct lookup. |
 
 ### Backward Compatibility
 
