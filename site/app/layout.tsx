@@ -43,7 +43,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "BrainLayer - Persistent Memory for MCP Agents",
     description:
-      "Local-first memory for MCP agents and BrainBar. Twelve working MCP tools, formatted output, and F4 quick capture.",
+      "Local-first memory for MCP agents and BrainBar. Twelve working MCP tools, formatted output, and keyboard-first capture.",
   },
   robots: {
     index: true,
