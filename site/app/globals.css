@@ -75,3 +75,66 @@ body::before {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(212,149,106,0.12), transparent);
 }
+
+/* ── Pipeline demo terminal ────────────────────────────────── */
+.demo-terminal .dt-line { display: block; }
+.demo-terminal .dt-gap { margin-top: 8px; }
+.demo-terminal .dt-user { color: var(--color-text); font-weight: 400; }
+
+.dt-tool { color: var(--color-accent); font-weight: 500; }
+.dt-str { color: #e8b090; }
+.dt-num { color: var(--color-teal); }
+.dt-dim { color: #4a4a52; }
+.dt-key { color: #a8d8a8; }
+.dt-body { color: var(--color-text-secondary); }
+.dt-border { color: #333338; }
+.dt-tag {
+  color: #8B5CF6;
+  background: rgba(139,92,246,0.1);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.dt-score { color: var(--color-teal); font-weight: 500; }
+
+.dt-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  background: var(--color-accent);
+  vertical-align: text-bottom;
+  animation: dt-blink 1s step-end infinite;
+}
+@keyframes dt-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ── Knowledge graph SVG ───────────────────────────────────── */
+.kg-node {
+  transition: opacity 0.5s ease, r 0.3s ease;
+  opacity: 0;
+}
+.kg-node.visible { opacity: 1; }
+.kg-edge {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  transition: stroke-dashoffset 0.8s ease;
+}
+.kg-edge.drawn { stroke-dashoffset: 0; }
+.kg-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--color-text-dim);
+  text-anchor: middle;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+.kg-label.visible { opacity: 1; }
+.kg-pulse { animation: node-pulse 1.5s ease-in-out; }
+@keyframes node-pulse {
+  0% { r: 0; opacity: 0; }
+  30% { opacity: 0.8; }
+  60% { opacity: 1; }
+  100% { opacity: 1; }
+}
