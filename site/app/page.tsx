@@ -2,6 +2,7 @@
 
 import { Nav } from "@/components/nav";
 import { Hero } from "@/components/hero";
+import { Comparison } from "@/components/comparison";
 import { Terminal } from "@/components/terminal";
 import { ProblemSolution } from "@/components/problem-solution";
 import { SearchExamples } from "@/components/search-examples";
@@ -16,6 +17,8 @@ export default function Home() {
     <>
       <Nav />
       <Hero />
+      <Comparison />
+      <Divider />
       <Terminal />
       <Divider />
       <SearchExamples />

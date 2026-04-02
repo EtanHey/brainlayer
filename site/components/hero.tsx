@@ -15,18 +15,17 @@ export function Hero() {
 
       <div className="relative mx-auto max-w-[960px] px-6">
         <h1 className="hero-fade mx-auto mb-6 max-w-[700px] font-display text-[clamp(40px,6vw,68px)] leading-[1.08] font-bold tracking-[-0.035em] text-balance">
-          BrainLayer remembers
-          <br />
-          the work you already did.
+          Your AI has <em className="not-italic text-accent">amnesia.</em>
         </h1>
 
-        <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[480px] text-[17px] leading-relaxed font-light text-text-secondary">
-          Local-first memory for MCP agents and BrainBar. Twelve working tools,
-          formatted Unicode output, keyboard-first capture, and one SQLite file
-          that stays on your machine.
+        <p className="hero-fade hero-fade-d1 mx-auto mb-10 max-w-[520px] text-[17px] leading-relaxed font-light text-text-secondary">
+          Every architecture decision, every debug session, every preference you
+          expressed &mdash; gone between sessions. BrainLayer gives any MCP
+          agent persistent memory that survives restarts, compactions, and
+          context limits.
         </p>
 
-        <div className="hero-fade hero-fade-d2 mb-12 flex flex-wrap items-center justify-center gap-3">
+        <div className="hero-fade hero-fade-d2 mb-6 flex flex-wrap items-center justify-center gap-3">
           <a
             href="#setup"
             className="inline-flex items-center gap-2 rounded-full bg-text px-6 py-3 text-sm font-medium text-bg transition-transform hover:scale-[1.03] hover:shadow-[0_0_24px_rgba(250,250,249,0.15)] active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
@@ -54,20 +53,10 @@ export function Hero() {
           <CopyBlock text="pip install brainlayer" showDollar />
         </div>
 
-        <div className="hero-fade hero-fade-d4 mt-8 flex flex-wrap items-center justify-center gap-2 text-[12px] text-text-dim">
-          <span className="rounded-full border border-border px-3 py-1">
-            12 working MCP tools
-          </span>
-          <span className="rounded-full border border-border px-3 py-1">
-            F4 quick capture
-          </span>
-          <span className="rounded-full border border-border px-3 py-1">
-            dashboard popover
-          </span>
-          <span className="rounded-full border border-border px-3 py-1">
-            no tag bloat
-          </span>
-        </div>
+        <p className="hero-fade hero-fade-d4 mt-5 text-[12px] font-light text-text-dim">
+          Free &middot; open source &middot; local-first &middot; one SQLite
+          file
+        </p>
       </div>
     </section>
   );
