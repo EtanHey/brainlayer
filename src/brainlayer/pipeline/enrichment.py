@@ -857,12 +857,12 @@ def _enrich_one(
             from .entity_extraction import extract_entities_from_tags
             from .kg_extraction import extract_kg_from_chunk
 
-            # Seed + tag extraction (no API calls, always enabled)
+            # Entity extraction: seed matching + LLM extraction via Gemini
             extract_kg_from_chunk(
                 store=store,
                 chunk_id=chunk["id"],
                 seed_entities=DEFAULT_SEED_ENTITIES,
-                use_llm=False,
+                use_llm=True,
                 use_gliner=False,
             )
 
