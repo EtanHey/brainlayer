@@ -13,7 +13,7 @@ Every architecture decision, every debugging session, every preference you've ex
 
 BrainLayer gives any MCP-compatible AI agent persistent memory across conversations. One SQLite file. No cloud. No Docker. Just `pip install`.
 
-```
+```text
 "What approach did I use for auth last month?"     →  brain_search
 "Remember this decision for later"                 →  brain_store
 "What was I working on yesterday?"                 →  brain_recall
@@ -207,7 +207,7 @@ ruff check src/ && ruff format src/     # Lint + format
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path |
-| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | Enrichment backend (`mlx`, `ollama`, `groq`) |
+| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | Enrichment backend (`groq`, `gemini`, `mlx`, `ollama`) |
 | `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment |
 | `AXIOM_TOKEN` | (unset) | Axiom telemetry token (optional) |
 | `BRAINLAYER_ENRICH_RATE` | `0.2` | Requests per second (0.2 = 12 RPM) |
