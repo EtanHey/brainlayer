@@ -497,6 +497,40 @@ def extract_entities_from_tags(
     return entities
 
 
+def extract_cooccurrence_relations(entities: list[ExtractedEntity]) -> list[ExtractedRelation]:
+    """Infer co-occurrence relations between entities of different types.
+
+    Two entities in the same text that have different types are assumed to be
+    related (e.g., a project uses a technology). This is a low-cost heuristic
+    that runs without any LLM, producing edges for the knowledge graph.
+
+    Only cross-type pairs are linked — same-type pairs (project-project) are
+    skipped as too noisy.
+    """
+    relations: list[ExtractedRelation] = []
+    seen: set[tuple[str, str]] = set()
+
+    for i, a in enumerate(entities):
+        for b in entities[i + 1 :]:
+            if a.entity_type == b.entity_type:
+                continue
+            pair = (a.text, b.text) if a.text < b.text else (b.text, a.text)
+            if pair in seen:
+                continue
+            seen.add(pair)
+            confidence = min(a.confidence, b.confidence) * 0.7
+            relations.append(
+                ExtractedRelation(
+                    source_text=a.text,
+                    target_text=b.text,
+                    relation_type="co_occurs_with",
+                    confidence=confidence,
+                )
+            )
+
+    return relations
+
+
 def extract_entities_combined(
     text: str,
     seed_entities: dict[str, list[str]],
@@ -542,6 +576,10 @@ def extract_entities_combined(
             final_entities.append(entity)
 
     final_entities.sort(key=lambda e: e.start)
+
+    # 4. Co-occurrence relations (always runs — no LLM needed)
+    cooccurrence = extract_cooccurrence_relations(final_entities)
+    all_relations.extend(cooccurrence)
 
     return ExtractionResult(
         entities=final_entities,
