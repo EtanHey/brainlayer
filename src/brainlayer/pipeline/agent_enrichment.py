@@ -51,13 +51,9 @@ def enrich_agents(db_path: str | None = None, dry_run: bool = False) -> dict[str
 
     try:
         # Fix 1: Remove self-referential edges
-        self_refs = conn.execute(
-            "SELECT id, source_id FROM kg_relations WHERE source_id = target_id"
-        ).fetchall()
+        self_refs = conn.execute("SELECT id, source_id FROM kg_relations WHERE source_id = target_id").fetchall()
         for rel_id, source_id in self_refs:
-            name = conn.execute(
-                "SELECT name FROM kg_entities WHERE id = ?", (source_id,)
-            ).fetchone()
+            name = conn.execute("SELECT name FROM kg_entities WHERE id = ?", (source_id,)).fetchone()
             logger.info("Removing self-referential edge: %s → %s", name, name)
             if not dry_run:
                 conn.execute("DELETE FROM kg_relations WHERE id = ?", (rel_id,))
@@ -143,9 +139,7 @@ def _add_relation(
     description = rel.get("description", "")
 
     # Find target entity
-    target_row = conn.execute(
-        "SELECT id FROM kg_entities WHERE name = ?", (target_name,)
-    ).fetchone()
+    target_row = conn.execute("SELECT id FROM kg_entities WHERE name = ?", (target_name,)).fetchone()
 
     if not target_row:
         logger.debug("Target entity %r not found for relation %s -> %s", target_name, source_name, target_name)
