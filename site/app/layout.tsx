@@ -38,6 +38,14 @@ export const metadata: Metadata = {
     url: "https://brainlayer.etanheyman.com",
     siteName: "BrainLayer",
     type: "website",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "BrainLayer — Persistent memory for AI agents",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
