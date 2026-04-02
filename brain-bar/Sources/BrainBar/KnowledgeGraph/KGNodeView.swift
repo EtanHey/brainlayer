@@ -31,10 +31,11 @@ enum KGNodeRenderer {
             lineWidth: isSelected ? 3 : 1.5
         )
 
-        // Label
+        // Label — underlined when selected to signal clickability
         let label = Text(node.name)
-            .font(.system(size: max(9, r * 0.55), weight: .medium))
-            .foregroundColor(isSelected ? .black : .white)
+            .font(.system(size: max(9, r * 0.55), weight: isSelected ? .bold : .medium))
+            .underline(isSelected)
+            .foregroundColor(isSelected ? node.color : .white)
         context.draw(
             context.resolve(label),
             at: CGPoint(x: node.position.x, y: node.position.y + r + 12),

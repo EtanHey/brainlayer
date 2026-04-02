@@ -4,7 +4,9 @@ struct KGCanvasView: View {
     @ObservedObject var viewModel: KGViewModel
 
     @State private var offset: CGSize = .zero
+    @State private var lastDragOffset: CGSize = .zero
     @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
     @State private var draggedNodeId: String?
     @State private var timerActive = true
 
@@ -57,6 +59,7 @@ struct KGCanvasView: View {
             }
         }
         .background(Color.black.opacity(0.85))
+        .overlay { ScrollWheelZoomView(scale: $scale) }
         .gesture(tapGesture)
         .gesture(dragGesture)
         .gesture(magnifyGesture)
@@ -81,16 +84,22 @@ struct KGCanvasView: View {
         DragGesture()
             .onChanged { value in
                 offset = CGSize(
-                    width: value.translation.width,
-                    height: value.translation.height
+                    width: lastDragOffset.width + value.translation.width,
+                    height: lastDragOffset.height + value.translation.height
                 )
+            }
+            .onEnded { _ in
+                lastDragOffset = offset
             }
     }
 
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                scale = max(0.2, min(3.0, value.magnification))
+                scale = max(0.2, min(5.0, lastScale * value.magnification))
+            }
+            .onEnded { _ in
+                lastScale = scale
             }
     }
 
