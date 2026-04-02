@@ -80,6 +80,12 @@ export function Nav() {
               <path d="M3 9L9 3M9 3H4.5M9 3v4.5" />
             </svg>
           </a>
+          <a
+            href="https://etanheyman.com"
+            className="hidden items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] text-text-dim transition-colors hover:border-border-hover hover:text-text-secondary sm:inline-flex focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+          >
+            Golems
+          </a>
         </div>
       </div>
     </nav>
