@@ -119,8 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
-        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: urlString) else { return }
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue else {
+            NSLog("[BrainBar] URL event missing direct object: %@", event.description)
+            return
+        }
+        guard let url = URL(string: urlString) else {
+            NSLog("[BrainBar] Malformed URL in event: %@", urlString)
+            return
+        }
         ingestBrainBarURLs([url])
     }
 
