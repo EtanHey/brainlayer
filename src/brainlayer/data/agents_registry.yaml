@@ -1,0 +1,146 @@
+# Agent Registry — structured data for KG agent entities.
+# Used by agent_enrichment.py to populate entity profiles and relations.
+
+agents:
+  orcClaude:
+    type: agent
+    description: "Orchestrator agent that coordinates multi-repo sprints, spawns and monitors other agents, dispatches research, manages ecosystem-wide workflows."
+    repo: orchestrator
+    skill_path: skills/golem-powers/orc/SKILL.md
+    model: claude-opus-4-6
+    capabilities:
+      - sprint coordination
+      - agent spawning and monitoring
+      - cross-repo planning
+      - research dispatch
+      - collab file management
+    relations:
+      - type: spawns
+        target: brainlayerClaude
+        description: "orcClaude spawns brainlayerClaude for BrainLayer implementation tasks"
+      - type: spawns
+        target: voiceClaude
+        description: "orcClaude spawns voiceClaude for VoiceLayer work"
+      - type: spawns
+        target: golemsClaude
+        description: "orcClaude spawns golemsClaude for golems monorepo work"
+      - type: uses
+        target: BrainLayer
+        description: "orcClaude uses BrainLayer for cross-session memory and decision tracking"
+
+  coachClaude:
+    type: agent
+    description: "Life admin assistant covering health/habits (WHOOP, sleep, diet), recruiting/jobs, freelancing/contracts, Israeli business law, and scheduling."
+    repo: golems
+    skill_path: skills/golem-powers/coach/SKILL.md
+    model: claude-opus-4-6
+    capabilities:
+      - health tracking (WHOOP data)
+      - daily planning and scheduling
+      - recruiting and job hunting
+      - freelance contracts
+      - Hebrew client communications
+      - financial decisions
+    relations:
+      - type: uses
+        target: BrainLayer
+        description: "coachClaude uses BrainLayer heavily for client preferences, health data, scheduling rules"
+      - type: coaches
+        target: Etan Heyman
+        description: "coachClaude provides life admin coaching to Etan"
+
+  brainClaude:
+    type: agent
+    description: "BrainLayer specialist agent that implements features, fixes bugs, and maintains the BrainLayer memory system and BrainBar native app."
+    repo: brainlayer
+    skill_path: null
+    model: claude-opus-4-6
+    capabilities:
+      - BrainLayer Python development
+      - BrainBar Swift development
+      - search quality optimization
+      - enrichment pipeline
+      - KG extraction
+    relations:
+      - type: builds
+        target: BrainLayer
+        description: "brainClaude builds and maintains BrainLayer"
+      - type: builds
+        target: BrainBar
+        description: "brainClaude builds the BrainBar native Swift app"
+
+  golemsClaude:
+    type: agent
+    description: "Golems monorepo specialist that works on the golems ecosystem website, shared packages, skills, and agent definitions."
+    repo: golems
+    skill_path: null
+    model: claude-opus-4-6
+    capabilities:
+      - golems monorepo development
+      - website and landing pages
+      - skill creation and testing
+      - package management
+    relations:
+      - type: builds
+        target: golems
+        description: "golemsClaude builds the golems ecosystem"
+      - type: builds
+        target: etanheyman.com
+        description: "golemsClaude builds the portfolio website"
+
+  voiceClaude:
+    type: agent
+    description: "VoiceLayer specialist agent that works on the voice I/O system, VoiceBar native app, and audio pipeline."
+    repo: voicelayer
+    skill_path: null
+    model: claude-opus-4-6
+    capabilities:
+      - VoiceLayer TypeScript development
+      - VoiceBar Swift development
+      - audio pipeline (sox, whisper-cpp, ElevenLabs)
+      - MCP server implementation
+    relations:
+      - type: builds
+        target: VoiceLayer
+        description: "voiceClaude builds and maintains VoiceLayer"
+
+  Ralph:
+    type: agent
+    description: "Legacy orchestrator concept (Feb 2026). Now replaced by orcClaude + cmuxLayer MCP. Originally a bash loop manager for spawning and watching agents."
+    repo: orchestrator
+    skill_path: null
+    model: null
+    capabilities:
+      - legacy agent spawning (replaced by cmuxLayer)
+    relations:
+      - type: related_to
+        target: golems
+        description: "Ralph was the original orchestration concept for the golems ecosystem"
+
+  recruiterGolem:
+    type: agent
+    description: "Recruiting specialist that helps with job applications, interview prep, salary research, and LinkedIn outreach."
+    repo: golems
+    skill_path: null
+    model: claude-opus-4-6
+    capabilities:
+      - job application assistance
+      - interview preparation
+      - salary research
+      - LinkedIn messaging
+
+  contentGolem:
+    type: agent
+    description: "Content creation agent for LinkedIn posts, README sections, documentation, and portfolio pages."
+    repo: golems
+    skill_path: null
+    model: claude-opus-4-6
+    capabilities:
+      - LinkedIn content creation
+      - README writing
+      - documentation
+      - portfolio pages
+    relations:
+      - type: related_to
+        target: golems
+        description: "contentGolem creates content for the golems ecosystem"
