@@ -118,15 +118,8 @@ final class StatusPopoverView: NSViewController {
             content.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
         ])
 
-        // Animate both size changes together to avoid jitter.
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            ctx.allowsImplicitAnimation = true
-            self.preferredContentSize = tab.contentSize
-            self.onPreferredSizeChange?(tab.contentSize)
-            self.view.layoutSubtreeIfNeeded()
-        }
+        preferredContentSize = tab.contentSize
+        onPreferredSizeChange?(tab.contentSize)
     }
 
     // MARK: - Segmented Control

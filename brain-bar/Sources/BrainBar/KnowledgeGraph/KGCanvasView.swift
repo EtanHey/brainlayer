@@ -9,6 +9,7 @@ struct KGCanvasView: View {
     @State private var lastScale: CGFloat = 1.0
     @State private var draggedNodeId: String?
     @State private var timerActive = true
+    @State private var canvasSize: CGSize = .zero
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,7 +59,13 @@ struct KGCanvasView: View {
                 )
             }
         }
-        .background(Color.black.opacity(0.85))
+        .background(
+            GeometryReader { geo in
+                Color.black.opacity(0.85)
+                    .onAppear { canvasSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
+            }
+        )
         .overlay { ScrollWheelZoomView(scale: $scale) }
         .gesture(tapGesture)
         .gesture(dragGesture)
@@ -71,7 +78,7 @@ struct KGCanvasView: View {
     private var tapGesture: some Gesture {
         SpatialTapGesture()
             .onEnded { value in
-                let point = canvasPoint(from: value.location, in: .zero)
+                let point = canvasPoint(from: value.location, in: canvasSize)
                 if let node = viewModel.nodeAt(point: point) {
                     viewModel.selectNode(id: node.id)
                 } else {
@@ -106,9 +113,13 @@ struct KGCanvasView: View {
     // MARK: - Coordinate transform
 
     private func canvasPoint(from screenPoint: CGPoint, in size: CGSize) -> CGPoint {
-        CGPoint(
-            x: (screenPoint.x - offset.width) / scale,
-            y: (screenPoint.y - offset.height) / scale
+        // Inverse of the canvas transform:
+        //   translate(offset + size/2) → scale → translate(-size/2)
+        let cx = size.width / 2
+        let cy = size.height / 2
+        return CGPoint(
+            x: (screenPoint.x - offset.width - cx) / scale + cx,
+            y: (screenPoint.y - offset.height - cy) / scale + cy
         )
     }
 
