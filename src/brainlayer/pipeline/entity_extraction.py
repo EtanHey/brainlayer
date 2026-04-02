@@ -249,7 +249,10 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
         if not source or not target or not rtype:
             continue
 
-        strength = raw_rel.get("strength", 0.7)
+        try:
+            strength = float(raw_rel.get("strength", 0.7))
+        except (TypeError, ValueError):
+            strength = 0.7
         fact = raw_rel.get("fact") or desc
         props = raw_rel.get("properties") or {}
         if fact:
@@ -296,7 +299,7 @@ def _extract_json(text: str) -> Optional[dict[str, Any]]:
 def extract_entities_llm(
     text: str,
     llm_caller: Optional[Any] = None,
-    enable_gleaning: bool = True,
+    enable_gleaning: bool = False,
 ) -> tuple[list[ExtractedEntity], list[ExtractedRelation]]:
     """Extract entities using LLM with optional gleaning second pass.
 
@@ -304,6 +307,7 @@ def extract_entities_llm(
         text: Source text to extract from.
         llm_caller: Callable(prompt) -> str. If None, uses Gemini via enrichment_controller.
         enable_gleaning: If True, re-prompt for missed entities (catches 20-40% more).
+            Default False to avoid doubling LLM calls. Enable for high-value chunks.
 
     Returns:
         Tuple of (entities, relations).

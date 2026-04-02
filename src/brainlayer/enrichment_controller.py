@@ -17,7 +17,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,11 @@ GEMINI_EXTRACTION_MODEL = os.environ.get("BRAINLAYER_GEMINI_EXTRACTION_MODEL", "
 
 
 def call_gemini_for_extraction(prompt: str) -> Optional[str]:
-    """Call Gemini for entity/relation extraction. Returns raw text response."""
+    """Call Gemini for entity/relation extraction. Returns raw text response.
+
+    Rate-limited by BRAINLAYER_ENRICH_RATE (default 0.2 = 12 RPM).
+    Timeout: 30 seconds per call.
+    """
     try:
         client = _get_gemini_client()
     except RuntimeError:
@@ -125,7 +129,11 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
         response = client.models.generate_content(
             model=GEMINI_EXTRACTION_MODEL,
             contents=prompt,
-            config={"response_mime_type": "application/json", "thinking_config": {"thinking_budget": 0}},
+            config={
+                "response_mime_type": "application/json",
+                "thinking_config": {"thinking_budget": 0},
+                "http_options": {"timeout": 30_000},
+            },
         )
         return response.text if response and response.text else None
     except Exception:
