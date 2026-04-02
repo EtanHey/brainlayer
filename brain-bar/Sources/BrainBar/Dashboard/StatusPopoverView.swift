@@ -19,11 +19,9 @@ enum PopoverTab: Int, CaseIterable, Sendable {
     }
 
     var contentSize: NSSize {
-        switch self {
-        case .dashboard: NSSize(width: 360, height: 350)
-        case .injections: NSSize(width: 360, height: 440)
-        case .graph: NSSize(width: 620, height: 500)
-        }
+        // Fixed size for all tabs — changing NSPopover contentSize causes
+        // the popover to detach from its anchor and jump position.
+        NSSize(width: 620, height: 500)
     }
 }
 
@@ -221,6 +219,12 @@ final class StatusPopoverView: NSViewController {
         sparklineImageView.translatesAutoresizingMaskIntoConstraints = false
         hotkeyLabel.isHidden = hotkeyStatus == nil
 
+        // Stretch all rows to fill width
+        for row in [headerStack, metricsStack, activityHeader, sparklineImageView, buttonRow] as [NSView] {
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        }
+
         let content = NSStackView(views: [
             headerStack,
             metricsStack,
@@ -231,13 +235,12 @@ final class StatusPopoverView: NSViewController {
             buttonRow,
         ])
         content.orientation = .vertical
-        content.alignment = .leading
+        content.alignment = .width
         content.spacing = 12
         content.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 14, right: 14)
 
         NSLayoutConstraint.activate([
-            sparklineImageView.widthAnchor.constraint(equalToConstant: 320),
-            sparklineImageView.heightAnchor.constraint(equalToConstant: 42),
+            sparklineImageView.heightAnchor.constraint(equalToConstant: 80),
         ])
 
         dashboardContent = content
@@ -389,6 +392,8 @@ struct PopoverGraphTab: View {
 
     var body: some View {
         KGCanvasView(viewModel: viewModel)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
     }
 }
 

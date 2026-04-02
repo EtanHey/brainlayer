@@ -1507,10 +1507,17 @@ final class BrainDatabase: @unchecked Sendable {
 
     func fetchKGEntities(limit: Int = 500) throws -> [KGEntityRow] {
         guard let db else { throw DBError.notOpen }
+        // Only return entities that participate in at least one semantic relation.
+        // Without this, the graph is mostly disconnected noise.
         let sql = """
-            SELECT id, name, entity_type, description,
-                   COALESCE(CAST(json_extract(metadata, '$.importance') AS REAL), 5.0) AS importance
-            FROM kg_entities
+            SELECT e.id, e.name, e.entity_type, e.description,
+                   COALESCE(CAST(json_extract(e.metadata, '$.importance') AS REAL), 5.0) AS importance
+            FROM kg_entities e
+            WHERE EXISTS (
+                SELECT 1 FROM kg_relations r
+                WHERE r.relation_type != 'co_occurs_with'
+                AND (r.source_id = e.id OR r.target_id = e.id)
+            )
             ORDER BY importance DESC
             LIMIT ?
         """

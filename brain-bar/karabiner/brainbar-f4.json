@@ -1,0 +1,73 @@
+{
+  "description": "BrainBar: F4 toggle / double-tap F4 search",
+  "manipulators": [
+    {
+      "type": "basic",
+      "conditions": [
+        {
+          "type": "variable_if",
+          "name": "brainbar_f4",
+          "value": 1
+        }
+      ],
+      "from": {
+        "key_code": "f4",
+        "modifiers": {
+          "optional": ["any"]
+        }
+      },
+      "to": [
+        {
+          "shell_command": "touch /tmp/.brainbar-search"
+        },
+        {
+          "set_variable": {
+            "name": "brainbar_f4",
+            "value": 0
+          }
+        }
+      ]
+    },
+    {
+      "type": "basic",
+      "from": {
+        "key_code": "f4",
+        "modifiers": {
+          "optional": ["any"]
+        }
+      },
+      "to": [
+        {
+          "set_variable": {
+            "name": "brainbar_f4",
+            "value": 1
+          }
+        }
+      ],
+      "to_delayed_action": {
+        "to_if_invoked": [
+          {
+            "shell_command": "touch /tmp/.brainbar-toggle"
+          },
+          {
+            "set_variable": {
+              "name": "brainbar_f4",
+              "value": 0
+            }
+          }
+        ],
+        "to_if_canceled": [
+          {
+            "set_variable": {
+              "name": "brainbar_f4",
+              "value": 0
+            }
+          }
+        ]
+      },
+      "parameters": {
+        "basic.to_delayed_action_delay_milliseconds": 400
+      }
+    }
+  ]
+}

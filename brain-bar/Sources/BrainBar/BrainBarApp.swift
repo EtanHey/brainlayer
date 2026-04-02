@@ -29,16 +29,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sharedDatabase: BrainDatabase?
     private let hotkeyRouteStatus = HotkeyRouteStatus()
     private var pendingBrainBarURLs: [URL] = []
+    private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register Apple Events handler for brainbar:// URLs.
-        // This is more reliable than application(_:open:) under the SwiftUI App lifecycle.
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
+
+        // Watch /tmp for hotkey flag files (LaunchAgent apps can't receive URL Apple Events).
+        startHotkeyFileWatcher()
 
         // Single-instance enforcement
         let runningInstances = NSRunningApplication.runningApplications(
@@ -107,7 +110,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Hotkey File Watcher
+
+    private static let toggleFlagPath = "/tmp/.brainbar-toggle"
+    private static let searchFlagPath = "/tmp/.brainbar-search"
+
+    private func startHotkeyFileWatcher() {
+        let fd = Darwin.open("/tmp", O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: .write, queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            self?.checkHotkeyFlags()
+        }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        hotkeyFileWatcher = source
+    }
+
+    private func checkHotkeyFlags() {
+        if FileManager.default.fileExists(atPath: Self.toggleFlagPath) {
+            try? FileManager.default.removeItem(atPath: Self.toggleFlagPath)
+            quickCapturePanel?.toggle()
+        }
+        if FileManager.default.fileExists(atPath: Self.searchFlagPath) {
+            try? FileManager.default.removeItem(atPath: Self.searchFlagPath)
+            searchPanel?.show()
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        hotkeyFileWatcher?.cancel()
         quickCaptureHotkey?.stop()
         collector?.stop()
         injectionStore?.stop()
