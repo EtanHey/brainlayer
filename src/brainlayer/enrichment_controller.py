@@ -108,6 +108,31 @@ def _build_gemini_config() -> dict[str, Any]:
     }
 
 
+# ── Entity extraction via Gemini ───────────────────────────────────────────────
+
+GEMINI_EXTRACTION_MODEL = os.environ.get("BRAINLAYER_GEMINI_EXTRACTION_MODEL", "gemini-2.5-flash-lite")
+
+
+def call_gemini_for_extraction(prompt: str) -> Optional[str]:
+    """Call Gemini for entity/relation extraction. Returns raw text response."""
+    try:
+        client = _get_gemini_client()
+    except RuntimeError:
+        logger.debug("Gemini not available for extraction")
+        return None
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_EXTRACTION_MODEL,
+            contents=prompt,
+            config={"response_mime_type": "application/json", "thinking_config": {"thinking_budget": 0}},
+        )
+        return response.text if response and response.text else None
+    except Exception:
+        logger.warning("Gemini extraction call failed", exc_info=True)
+        return None
+
+
 # ── Content-hash dedup ─────────────────────────────────────────────────────────
 
 

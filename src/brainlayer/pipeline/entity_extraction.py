@@ -118,22 +118,66 @@ def _deduplicate_overlaps(entities: list[ExtractedEntity]) -> list[ExtractedEnti
 
 # ── LLM-based extraction ──
 
-_NER_PROMPT_TEMPLATE = """Extract named entities and relationships from this developer conversation text.
+_NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this developer conversation text.
 
-Entity types: person, agent, company, project, tool, technology, topic
-- person: Human names (First Last). NOT repos/tools/agents.
-- agent: AI agents (*Claude, *Golem, Ralph). NOT humans.
-- company: Businesses. project: Code repos/apps. tool/technology: Dev tools, languages, frameworks.
+## Entity types (be precise — choose the most specific type):
+- person: Human individuals (First Last). NOT repos, tools, or agents.
+- agent: AI coding agents (orcClaude, coachClaude, brainClaude, Ralph, etc.). NOT humans.
+- company: Businesses and organizations (Anthropic, Weby, Cantaloupe AI).
+- project: Code repositories, apps, products (BrainLayer, VoiceLayer, 6PM).
+- tool: Developer tools and services (Docker, Railway, Supabase, CodeRabbit).
+- technology: Languages, frameworks, protocols (SQLite, SwiftUI, MCP, TypeScript).
+- skill: Reusable AI skill or command (/commit, /pr-loop, /coach).
+- service: Deployed infrastructure (LaunchAgent, daemon, watcher).
+- config: Configuration files or settings (CLAUDE.md, pyproject.toml, .env).
+- decision: Architectural or design decisions made during sessions.
+- topic: Abstract concepts or domains (enrichment, graph RAG, dark mode).
 
-Relation types (direction: source → target):
-- works_at: person → company. owns: person → project/company. builds: person/agent → project.
-- uses: entity → tool/technology. client_of: A → B (B serves A). affiliated_with: person → company.
-- coaches: agent → person. related_to: generic fallback.
+## Relation types (source → target, with description):
+- created: person/agent → project/tool. "Anthropic created Claude Code"
+- owns: person → project/company. "Etan owns BrainLayer"
+- works_at: person → company. "Josh Anderson works at Cantaloupe AI"
+- uses: entity → tool/technology. "BrainLayer uses SQLite"
+- depends_on: project → technology/tool. "VoiceLayer depends on whisper-cpp"
+- deployed_on: project/service → tool. "Golems deployed on Railway"
+- fixes: agent/person → topic/project. "brainClaude fixes dark mode regression"
+- configures: config → project/service. "CLAUDE.md configures BrainLayer hooks"
+- spawns: agent → agent. "orcClaude spawns brainlayerClaude"
+- client_of: person → person/company. "Yuval is client of Etan"
+- affiliated_with: person → company. "Josh affiliated with Cantaloupe AI"
+- coaches: agent → entity. "coachClaude coaches scheduling"
+- builds: person/agent → project. "Etan builds VoiceLayer"
+- related_to: generic fallback (use ONLY if no specific type fits)
 
-Return JSON only:
-{{"entities": [{{"text": "exact text from input", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "fact": "natural language sentence"}}]}}
+## Output format — return JSON only:
+{{"entities": [{{"text": "exact text from input", "type": "entity_type", "description": "one-sentence description of this entity based on context"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "description": "natural language sentence describing the relationship", "strength": 0.8}}]}}
 
-If no entities found, return: {{"entities": [], "relations": []}}
+## Rules:
+- Extract entities that are CLEARLY identifiable, not vague mentions
+- Each relation MUST have a substantive description — reject empty relations
+- Strength is 0.0-1.0: explicit statements=0.9+, implied=0.5-0.8, speculative=0.3-0.5
+- Decompose N-ary relationships into binary pairs
+- Include Hebrew entity names if present (e.g., MeHayom/מהיום)
+- If no entities found, return: {{"entities": [], "relations": []}}
+
+Text:
+{text}"""
+
+_GLEANING_PROMPT = """The previous extraction from the same text missed important entities and relationships.
+
+Previous extraction found: {previous_count} entities and {previous_rel_count} relations.
+
+Re-read the text carefully. Extract ADDITIONAL entities and relationships that were missed. Focus on:
+- Implicit relationships (X depends on Y, X was deployed to Y)
+- Agent names and their roles
+- Configuration files and what they configure
+- Decisions and what they decided about
+- Services and what they serve
+
+Return ONLY newly found entities/relations (not duplicates of previous extraction).
+
+Same JSON format:
+{{"entities": [{{"text": "exact text", "type": "entity_type", "description": "description"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "description": "description", "strength": 0.7}}]}}
 
 Text:
 {text}"""
@@ -142,6 +186,15 @@ Text:
 def build_ner_prompt(text: str) -> str:
     """Build the NER extraction prompt for a text chunk."""
     return _NER_PROMPT_TEMPLATE.format(text=text)
+
+
+def build_gleaning_prompt(text: str, prev_entity_count: int, prev_rel_count: int) -> str:
+    """Build the gleaning re-prompt for missed entities."""
+    return _GLEANING_PROMPT.format(
+        text=text,
+        previous_count=prev_entity_count,
+        previous_rel_count=prev_rel_count,
+    )
 
 
 def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[ExtractedEntity], list[ExtractedRelation]]:
@@ -192,20 +245,24 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
         source = raw_rel.get("source", "")
         target = raw_rel.get("target", "")
         rtype = raw_rel.get("type", "")
+        desc = raw_rel.get("description", "")
         if not source or not target or not rtype:
             continue
 
-        fact = raw_rel.get("fact")
+        strength = raw_rel.get("strength", 0.7)
+        fact = raw_rel.get("fact") or desc
         props = raw_rel.get("properties") or {}
-        if fact and "fact" not in props:
+        if fact:
             props["fact"] = fact
+        if desc:
+            props["description"] = desc
 
         relations.append(
             ExtractedRelation(
                 source_text=source,
                 target_text=target,
                 relation_type=rtype,
-                confidence=0.7,
+                confidence=min(float(strength), 1.0),
                 properties=props,
             )
         )
@@ -239,12 +296,14 @@ def _extract_json(text: str) -> Optional[dict[str, Any]]:
 def extract_entities_llm(
     text: str,
     llm_caller: Optional[Any] = None,
+    enable_gleaning: bool = True,
 ) -> tuple[list[ExtractedEntity], list[ExtractedRelation]]:
-    """Extract entities using LLM (Ollama/MLX).
+    """Extract entities using LLM with optional gleaning second pass.
 
     Args:
         text: Source text to extract from.
-        llm_caller: Callable(prompt) -> str. If None, uses enrichment.call_llm.
+        llm_caller: Callable(prompt) -> str. If None, uses Gemini via enrichment_controller.
+        enable_gleaning: If True, re-prompt for missed entities (catches 20-40% more).
 
     Returns:
         Tuple of (entities, relations).
@@ -252,13 +311,11 @@ def extract_entities_llm(
     if not text.strip():
         return [], []
 
-    prompt = build_ner_prompt(text)
-
     if llm_caller is None:
-        from .enrichment import call_llm
+        llm_caller = _get_default_llm_caller()
 
-        llm_caller = call_llm
-
+    # Pass 1: Primary extraction
+    prompt = build_ner_prompt(text)
     try:
         response = llm_caller(prompt)
     except Exception:
@@ -268,7 +325,55 @@ def extract_entities_llm(
     if not response:
         return [], []
 
-    return parse_llm_ner_response(response, text)
+    entities, relations = parse_llm_ner_response(response, text)
+
+    # Pass 2: Gleaning — re-prompt for missed entities
+    if enable_gleaning and (entities or relations):
+        gleaning_prompt = build_gleaning_prompt(text, len(entities), len(relations))
+        try:
+            gleaning_response = llm_caller(gleaning_prompt)
+            if gleaning_response:
+                extra_entities, extra_relations = parse_llm_ner_response(gleaning_response, text)
+                if extra_entities or extra_relations:
+                    logger.info(
+                        "Gleaning found %d extra entities, %d extra relations",
+                        len(extra_entities),
+                        len(extra_relations),
+                    )
+                    entities.extend(extra_entities)
+                    relations.extend(extra_relations)
+        except Exception:
+            logger.debug("Gleaning pass failed (non-critical)", exc_info=True)
+
+    # Deduplicate relations (gleaning may re-find the same ones)
+    seen_rels: set[tuple[str, str, str]] = set()
+    unique_relations: list[ExtractedRelation] = []
+    for r in relations:
+        key = (r.source_text.lower(), r.target_text.lower(), r.relation_type)
+        if key not in seen_rels:
+            seen_rels.add(key)
+            unique_relations.append(r)
+
+    return entities, unique_relations
+
+
+def _get_default_llm_caller():
+    """Get the best available LLM caller — Gemini first, then enrichment.call_llm."""
+    try:
+        from ..enrichment_controller import call_gemini_for_extraction
+
+        return call_gemini_for_extraction
+    except (ImportError, RuntimeError):
+        pass
+
+    try:
+        from .enrichment import call_llm
+
+        return call_llm
+    except ImportError:
+        pass
+
+    raise RuntimeError("No LLM backend available for entity extraction")
 
 
 # ── GLiNER-based extraction ──
