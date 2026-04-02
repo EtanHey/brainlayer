@@ -7,12 +7,13 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-12%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1%2C454%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C498%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Docs](https://img.shields.io/badge/docs-etanhey.github.io%2Fbrainlayer-blue.svg)](https://etanhey.github.io/brainlayer)
+[![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
 ---
 
-**284,000+ chunks indexed** · **1,454 Python + 54 Swift tests** · **Real-time JSONL watcher** · **12 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
+**284,000+ chunks indexed** · **1,498 Python + 54 Swift tests** · **Real-time JSONL watcher** · **12 MCP tools** · **Axiom telemetry** · **BrainBar daemon (209KB)**
 
 **Your AI agent forgets everything between sessions.** Every architecture decision, every debugging session, every preference you've expressed — gone. You repeat yourself constantly.
 
@@ -286,7 +287,7 @@ BrainLayer can index conversations from multiple sources:
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # Full suite (1,454 Python tests)
+pytest tests/                           # Full suite (1,498 Python tests)
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/                         # Linting
 # BrainBar (Swift): 54 tests via Xcode
@@ -304,6 +305,12 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, tes
 
 Apache 2.0 — see [LICENSE](LICENSE).
 
-## Origin
+## Part of Golems
 
-BrainLayer was originally developed as "Zikaron" (Hebrew: memory) inside a personal AI agent ecosystem. It was extracted into a standalone project because **every developer deserves persistent AI memory** — not just the ones building their own agent systems.
+BrainLayer is part of the [Golems](https://etanheyman.com) MCP agent ecosystem:
+
+- **[BrainLayer](https://brainlayer.etanheyman.com)** — Persistent memory (this repo)
+- **[VoiceLayer](https://voicelayer.etanheyman.com)** — Voice I/O for AI agents
+- **[cmuxLayer](https://cmuxlayer.etanheyman.com)** — Terminal orchestration for AI agents
+
+Originally developed as "Zikaron" (Hebrew: memory). Extracted into a standalone project because **every developer deserves persistent AI memory**.
