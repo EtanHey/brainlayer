@@ -118,8 +118,15 @@ final class StatusPopoverView: NSViewController {
             content.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
         ])
 
-        preferredContentSize = tab.contentSize
-        onPreferredSizeChange?(tab.contentSize)
+        // Animate both size changes together to avoid jitter.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.allowsImplicitAnimation = true
+            self.preferredContentSize = tab.contentSize
+            self.onPreferredSizeChange?(tab.contentSize)
+            self.view.layoutSubtreeIfNeeded()
+        }
     }
 
     // MARK: - Segmented Control
@@ -403,11 +410,16 @@ private final class MetricTileView: NSView {
         set { valueLabel.stringValue = newValue }
     }
 
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    }
+
     init(title: String) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 10
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
 
         titleLabel.stringValue = title
         titleLabel.font = .systemFont(ofSize: 11, weight: .medium)

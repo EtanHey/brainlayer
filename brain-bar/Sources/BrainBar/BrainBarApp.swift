@@ -31,9 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingBrainBarURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // AIDEV-NOTE: Status item MUST appear instantly. All DB/server init is async.
-        // Root cause of blank menu bar: BrainDatabase(path:) blocks on SQLite lock
-        // from the watch agent, preventing configureStatusItem from ever running.
+        // Register Apple Events handler for brainbar:// URLs.
+        // This is more reliable than application(_:open:) under the SwiftUI App lifecycle.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
 
         // Single-instance enforcement
         let runningInstances = NSRunningApplication.runningApplications(
@@ -113,8 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    func application(_ application: NSApplication, open urls: [URL]) {
-        ingestBrainBarURLs(urls)
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString) else { return }
+        ingestBrainBarURLs([url])
     }
 
     func showSearchPanel() {

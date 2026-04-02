@@ -56,6 +56,9 @@ if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTIT
     exit 1
 fi
 
+# Register URL scheme with Launch Services (ensures brainbar:// works after rebuild)
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -R "$APP_DIR"
+
 # Install LaunchAgent (expands path to actual APP_DIR)
 PLIST_NAME="com.brainlayer.brainbar.plist"
 PLIST_SRC="$BUNDLE_DIR/$PLIST_NAME"

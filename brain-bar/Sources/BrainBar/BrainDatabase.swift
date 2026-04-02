@@ -1536,7 +1536,9 @@ final class BrainDatabase: @unchecked Sendable {
 
     func fetchKGRelations() throws -> [KGRelationRow] {
         guard let db else { throw DBError.notOpen }
-        let sql = "SELECT id, source_id, target_id, relation_type FROM kg_relations"
+        // Exclude co_occurs_with — these are auto-generated from text proximity
+        // and produce noisy, often incorrect edges in the graph view.
+        let sql = "SELECT id, source_id, target_id, relation_type FROM kg_relations WHERE relation_type != 'co_occurs_with'"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
