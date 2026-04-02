@@ -11,10 +11,7 @@
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>StandardOutPath</key>
     <string>/tmp/brainbar.stdout.log</string>
     <key>StandardErrorPath</key>

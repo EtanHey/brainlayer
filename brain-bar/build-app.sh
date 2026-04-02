@@ -56,6 +56,18 @@ if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTIT
     exit 1
 fi
 
+# Install LaunchAgent (expands path to actual APP_DIR)
+PLIST_NAME="com.brainlayer.brainbar.plist"
+PLIST_SRC="$BUNDLE_DIR/$PLIST_NAME"
+PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
+if [ -f "$PLIST_SRC" ]; then
+    echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
+    launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+    echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"
+fi
+
 echo "[build-app] Done: $APP_DIR"
 echo "[build-app] Socket: /tmp/brainbar.sock"
 echo "[build-app] DB: ~/.local/share/brainlayer/brainlayer.db"
