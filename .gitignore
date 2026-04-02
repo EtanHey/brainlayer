@@ -70,3 +70,4 @@ scripts/.kg_rebuild_progress.json
 
 # Machine-local Claude config
 .claude.local.md
+.vercel
