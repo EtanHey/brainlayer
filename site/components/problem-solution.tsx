@@ -83,23 +83,24 @@ export function ProblemSolution() {
           </motion.div>
 
           <motion.div
-            className="flex flex-col rounded-xl border border-border border-t-2 border-t-teal bg-bg-card p-8 transition-colors hover:border-border-hover"
+            className="flex flex-col rounded-xl border border-dashed border-text-dim/30 bg-bg-elevated/50 p-8 transition-colors hover:border-text-dim/50"
             initial={{ opacity: 1, y: 16 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6, delay: 0.1 }}
           >
-            <div className="mb-3.5 text-[11px] font-medium uppercase tracking-[0.1em] text-teal">
-              Companion app
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-text-dim">
+              Companion App &mdash; macOS
             </div>
             <h2 className="mb-3.5 font-sans text-xl font-semibold tracking-tight text-balance">
-              BrainBar &mdash; native macOS menu bar
+              BrainBar
             </h2>
             <p className="flex-1 text-[15px] leading-relaxed font-light text-text-secondary">
-              Optional 209KB Swift binary that runs the same 12 MCP tools over a
-              Unix socket. Quick capture, live dashboard, knowledge graph
-              viewer. Uses the same search formatter as the MCP server &mdash;
-              identical output everywhere.
+              Optional 209KB native Swift menu bar app. Quick capture, live
+              dashboard, knowledge graph viewer &mdash; all over a Unix socket.
+            </p>
+            <p className="mt-3 text-[12px] font-light text-text-dim">
+              Requires the BrainLayer MCP server.
             </p>
           </motion.div>
         </div>
