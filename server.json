@@ -1,9 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.etanhey/brainlayer",
-  "title": "BrainLayer — Memory for AI Coding Agents",
-  "description": "Local knowledge pipeline that indexes, searches, and retrieves context from past Claude Code conversations. Gives AI agents persistent memory across sessions.",
+  "title": "BrainLayer",
+  "description": "Persistent memory for AI agents — local-first semantic search, knowledge graph, and 12 MCP tools with ToolAnnotations. One SQLite file, no cloud, no API keys.",
   "version": "1.0.0",
+  "websiteUrl": "https://brainlayer.etanheyman.com",
   "repository": {
     "url": "https://github.com/EtanHey/brainlayer",
     "source": "github"
@@ -14,17 +15,28 @@
       "registryBaseUrl": "https://pypi.org",
       "identifier": "brainlayer",
       "version": "1.0.0",
-      "runtimeHint": "uvx",
+      "runtimeHint": "pipx",
       "transport": {
         "type": "stdio"
       },
-      "packageArguments": [],
       "environmentVariables": [
         {
           "name": "BRAINLAYER_DB",
-          "description": "Path to the sqlite-vec database file. Defaults to ~/.local/share/brainlayer/brainlayer.db",
+          "description": "Path to SQLite database file (default: ~/.local/share/brainlayer/brainlayer.db)",
           "isRequired": false,
           "isSecret": false
+        },
+        {
+          "name": "BRAINLAYER_ENRICH_BACKEND",
+          "description": "LLM enrichment backend: groq, ollama, or mlx (auto-detected if omitted)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GROQ_API_KEY",
+          "description": "Groq API key for cloud enrichment backend",
+          "isRequired": false,
+          "isSecret": true
         }
       ]
     }
