@@ -1935,9 +1935,7 @@ def flush() -> None:
 
 @app.command("code-intel")
 def code_intel(
-    base_dir: Path = typer.Option(
-        Path.home() / "Gits", "--base-dir", "-d", help="Directory containing repos to scan"
-    ),
+    base_dir: Path = typer.Option(Path.home() / "Gits", "--base-dir", "-d", help="Directory containing repos to scan"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show changes without applying"),
 ) -> None:
     """Scan repos for project metadata and populate KG entities."""
