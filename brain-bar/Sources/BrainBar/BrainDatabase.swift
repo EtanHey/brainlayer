@@ -1504,6 +1504,59 @@ final class BrainDatabase: @unchecked Sendable {
         return result
     }
 
+    // MARK: - KG fact lookup for search augmentation
+
+    struct KGFact {
+        let relatedEntity: String
+        let relationType: String
+        let entityType: String
+        let direction: String  // "outgoing" or "incoming"
+    }
+
+    /// Pure SQL KG fact lookup — no embeddings needed.
+    /// Returns typed relations for an entity, excluding co_occurs_with.
+    func lookupEntityFacts(entityName: String, limit: Int = 20) throws -> [KGFact] {
+        guard let db else { throw DBError.notOpen }
+
+        let sql = """
+            SELECT e2.name, r.relation_type, e2.entity_type, 'outgoing' AS direction
+            FROM kg_relations_typed r
+            JOIN kg_entities e1 ON r.source_id = e1.id
+            JOIN kg_entities e2 ON r.target_id = e2.id
+            WHERE LOWER(e1.name) = LOWER(?1)
+            UNION ALL
+            SELECT e1.name, r.relation_type, e1.entity_type, 'incoming'
+            FROM kg_relations_typed r
+            JOIN kg_entities e1 ON r.source_id = e1.id
+            JOIN kg_entities e2 ON r.target_id = e2.id
+            WHERE LOWER(e2.name) = LOWER(?1)
+            ORDER BY 2
+            LIMIT ?2
+        """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(entityName, to: stmt, index: 1)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+
+        var facts: [KGFact] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            facts.append(KGFact(
+                relatedEntity: columnText(stmt, 0) ?? "",
+                relationType: columnText(stmt, 1) ?? "",
+                entityType: columnText(stmt, 2) ?? "",
+                direction: columnText(stmt, 3) ?? "outgoing"
+            ))
+        }
+        return facts
+    }
+
+    /// Expose the raw db pointer for EntityCache loading.
+    var dbHandle: OpaquePointer? { db }
+
     // MARK: - Knowledge Graph bulk queries
 
     struct KGEntityRow: Equatable {

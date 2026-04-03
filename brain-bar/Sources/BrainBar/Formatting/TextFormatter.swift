@@ -29,6 +29,23 @@ enum TextFormatter {
         return lines.joined(separator: "\n")
     }
 
+    static func formatKGFacts(entity: String, facts: [BrainDatabase.KGFact]) -> String {
+        guard !facts.isEmpty else { return "" }
+        var lines = [
+            "┌─ KG: \(entity)",
+            "│"
+        ]
+        // Group by relation type for scannability
+        let grouped = Dictionary(grouping: facts) { $0.relationType }
+        for (relType, group) in grouped.sorted(by: { $0.key < $1.key }) {
+            let arrow = group[0].direction == "incoming" ? "←" : "→"
+            let entities = group.map(\.relatedEntity).joined(separator: ", ")
+            lines.append("│  \(arrow) \(relType): \(entities)")
+        }
+        lines.append("└─")
+        return lines.joined(separator: "\n")
+    }
+
     static func formatEntityCard(_ entity: EntityCard) -> String {
         var lines = [
             "┌─ Entity: \(entity.name)",

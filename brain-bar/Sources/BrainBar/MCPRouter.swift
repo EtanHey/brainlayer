@@ -21,10 +21,13 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private var database: BrainDatabase?
+    let entityCache = EntityCache()
 
-    /// Inject database for tool handlers.
+    /// Inject database for tool handlers + load entity cache.
     func setDatabase(_ db: BrainDatabase) {
         self.database = db
+        entityCache.load(from: db.dbHandle)
+        entityCache.startRefreshTimer(db: db.dbHandle)
     }
 
     /// Handle a parsed JSON-RPC request and return a response.
@@ -197,6 +200,20 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
+
+        // Entity detection → KG fact lookup (prepended above text results)
+        var kgSection = ""
+        let hasActiveFilters = project != nil || tag != nil || subscriberID != nil || importanceMin != nil
+        if !hasActiveFilters {
+            let detected = entityCache.detectEntities(in: query)
+            if let first = detected.first {
+                let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
+                if !facts.isEmpty {
+                    kgSection = TextFormatter.formatKGFacts(entity: first.name, facts: facts)
+                }
+            }
+        }
+
         let results = try db.search(
             query: query,
             limit: limit,
@@ -207,7 +224,12 @@ final class MCPRouter: @unchecked Sendable {
             unreadOnly: unreadOnly
         )
         let typedResults = results.map(SearchResult.init(payload:))
-        return ToolOutput(text: TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count))
+        let textSection = TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count)
+
+        if kgSection.isEmpty {
+            return ToolOutput(text: textSection)
+        }
+        return ToolOutput(text: kgSection + "\n\n" + textSection)
     }
 
     private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {
