@@ -54,6 +54,10 @@ final class EntityCache: @unchecked Sendable {
 
     /// Start a 60-second periodic refresh timer.
     func startRefreshTimer(db: OpaquePointer?) {
+        // Cancel any existing timer before creating a new one
+        refreshTimer?.cancel()
+        refreshTimer = nil
+
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 60, repeating: 60)
         timer.setEventHandler { [weak self] in
