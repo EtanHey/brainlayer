@@ -35,6 +35,10 @@ enum TextFormatter {
             "│ id: \(entity.id)  type: \(entity.entityType.isEmpty ? "unknown" : entity.entityType)"
         ]
 
+        if !entity.description.isEmpty {
+            lines.append("│ \(truncate(entity.description, maxLen: 100))")
+        }
+
         for key in ["role", "company", "location", "email", "phone"] {
             if let value = entity.profile[key], !value.isEmpty {
                 lines.append("│ \(key): \(value)")
@@ -85,6 +89,10 @@ enum TextFormatter {
             "┌─ Entity: \(entity.name)",
             "│ id: \(entity.id)  type: \(entity.entityType.isEmpty ? "unknown" : entity.entityType)"
         ]
+
+        if !entity.description.isEmpty {
+            lines.append("│ \(truncate(entity.description, maxLen: 100))")
+        }
 
         if !entity.relations.isEmpty {
             lines.append("├─ Relations (\(entity.relations.count))")

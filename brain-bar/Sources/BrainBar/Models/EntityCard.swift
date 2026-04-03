@@ -15,6 +15,7 @@ struct EntityCard: Equatable {
     let id: String
     let name: String
     let entityType: String
+    let description: String
     let profile: [String: String]
     let hardConstraints: [String: String]
     let preferences: [String: String]
@@ -29,6 +30,7 @@ struct EntityCard: Equatable {
         id: String,
         name: String,
         entityType: String = "",
+        description: String = "",
         profile: [String: String] = [:],
         hardConstraints: [String: String] = [:],
         preferences: [String: String] = [:],
@@ -42,6 +44,7 @@ struct EntityCard: Equatable {
         self.id = id
         self.name = name
         self.entityType = entityType
+        self.description = description
         self.profile = profile
         self.hardConstraints = hardConstraints
         self.preferences = preferences
@@ -57,16 +60,19 @@ struct EntityCard: Equatable {
         id = (lookupPayload["entity_id"] as? String) ?? (lookupPayload["id"] as? String) ?? ""
         name = lookupPayload["name"] as? String ?? "Unknown"
         entityType = lookupPayload["entity_type"] as? String ?? ""
+        description = lookupPayload["description"] as? String ?? ""
         profile = [:]
         hardConstraints = [:]
         preferences = [:]
         contactInfo = [:]
-        relations = ((lookupPayload["relations"] as? [[String: Any]]) ?? []).map {
-            Relation(
-                relationType: $0["relation_type"] as? String ?? "related_to",
-                targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? ""))
-            )
-        }
+        relations = ((lookupPayload["relations"] as? [[String: Any]]) ?? [])
+            .filter { ($0["relation_type"] as? String) != "co_occurs_with" }
+            .map {
+                Relation(
+                    relationType: $0["relation_type"] as? String ?? "related_to",
+                    targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? ""))
+                )
+            }
         memories = []
         memoryCount = 0
         metadata = EntityCard.decodeMetadata(lookupPayload["metadata"])

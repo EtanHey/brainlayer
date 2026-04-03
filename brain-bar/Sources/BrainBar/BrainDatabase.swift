@@ -59,6 +59,7 @@ final class BrainDatabase: @unchecked Sendable {
             // CREATE TABLE IF NOT EXISTS still acquires a RESERVED lock which blocks on watch agent.
             if (try? tableExists("chunks")) == true {
                 NSLog("[BrainBar] Schema already exists — skipping ensureSchema")
+                try ensureMigrations()
             } else {
                 try ensureSchema()
                 NSLog("[BrainBar] Schema created")
@@ -197,6 +198,26 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE INDEX IF NOT EXISTS idx_injection_events_session_timestamp
             ON injection_events(session_id, timestamp DESC)
+        """)
+
+        // Filtered VIEW excludes co_occurs_with noise from KG queries
+        try execute("""
+            CREATE VIEW IF NOT EXISTS kg_relations_typed AS
+            SELECT id, source_id, target_id, relation_type, properties, created_at
+            FROM kg_relations
+            WHERE relation_type != 'co_occurs_with'
+        """)
+    }
+
+    /// Lightweight migrations that run even when the full schema already exists.
+    /// Safe to call repeatedly — all statements use IF NOT EXISTS.
+    private func ensureMigrations() throws {
+        // PR 1: Filtered VIEW for KG relations (excludes co_occurs_with)
+        try execute("""
+            CREATE VIEW IF NOT EXISTS kg_relations_typed AS
+            SELECT id, source_id, target_id, relation_type, properties, created_at
+            FROM kg_relations
+            WHERE relation_type != 'co_occurs_with'
         """)
     }
 
@@ -1446,18 +1467,20 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_finalize(likeStmt)
         }
 
-        // Get relations for found entity
+        // Get typed relations for found entity (excludes co_occurs_with noise)
         if let entityId, result != nil {
             let relSQL = """
                 SELECT r.relation_type, r.target_id, e.name
-                FROM kg_relations r
+                FROM kg_relations_typed r
                 LEFT JOIN kg_entities e ON e.id = r.target_id
                 WHERE r.source_id = ?
                 UNION ALL
                 SELECT r.relation_type, r.source_id, e.name
-                FROM kg_relations r
+                FROM kg_relations_typed r
                 LEFT JOIN kg_entities e ON e.id = r.source_id
                 WHERE r.target_id = ?
+                ORDER BY 1
+                LIMIT 20
             """
             var relStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, relSQL, -1, &relStmt, nil) == SQLITE_OK {
