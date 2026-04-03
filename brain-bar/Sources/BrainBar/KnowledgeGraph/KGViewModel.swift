@@ -8,6 +8,9 @@ final class KGViewModel: ObservableObject {
     @Published var selectedEntity: EntityCard?
     @Published var selectedEntityChunks: [BrainDatabase.KGChunkRow] = []
 
+    /// Set by KGCanvasView via GeometryReader — used for centering force
+    var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
+
     private let database: BrainDatabase
 
     // Force simulation parameters
@@ -91,7 +94,7 @@ final class KGViewModel: ObservableObject {
         guard nodes.count > 1 else { return }
 
         var forces = Array(repeating: CGVector.zero, count: nodes.count)
-        let center = CGPoint(x: 400, y: 300)
+        let center = canvasCenter
 
         // Repulsion: all pairs (Coulomb's law)
         for i in 0..<nodes.count {

@@ -41,8 +41,8 @@ struct KGNode: Identifiable, Equatable {
         self.entityType = entityType
         self.importance = importance
         self.position = position ?? CGPoint(
-            x: CGFloat.random(in: 50...750),
-            y: CGFloat.random(in: 50...550)
+            x: CGFloat.random(in: 100...500),
+            y: CGFloat.random(in: 100...400)
         )
         self.velocity = velocity
     }
