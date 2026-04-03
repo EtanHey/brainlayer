@@ -164,15 +164,32 @@ def format_entity_simple(entity: dict) -> str:
     lines.append(f"\u250c\u2500 Entity: {name}")
     lines.append(f"\u2502 id: {eid}  type: {etype or 'unknown'}")
 
-    # Relations from entity_lookup result
+    # Description from metadata or entity
+    desc = entity.get("description") or ""
+    if not desc:
+        metadata = entity.get("metadata", {})
+        if isinstance(metadata, dict):
+            desc = metadata.get("description", "")
+    if desc:
+        lines.append(f"\u2502 {_truncate(desc, 100)}")
+
+    # Relations from entity_lookup result (filter co_occurs_with)
     relations = entity.get("relations", [])
-    if relations:
-        lines.append(f"\u251c\u2500 Relations ({len(relations)})")
-        for rel in relations[:8]:
-            if isinstance(rel, dict):
-                rtype = rel.get("relation_type", "related_to")
-                target = rel.get("target_name", rel.get("name", ""))
-                lines.append(f"\u2502   \u2192 {rtype}: {target}")
+    semantic_rels = [r for r in relations if isinstance(r, dict) and r.get("relation_type") != "co_occurs_with"]
+    if semantic_rels:
+        lines.append(f"\u251c\u2500 Relations ({len(semantic_rels)})")
+        for rel in semantic_rels[:10]:
+            rtype = rel.get("relation_type", "related_to")
+            target = rel.get("target_name", rel.get("name", ""))
+            desc_r = rel.get("description", "")
+            line = f"\u2502   \u2192 {rtype}: {target}"
+            if desc_r:
+                line += f" \u2014 {_truncate(desc_r, 60)}"
+            lines.append(line)
+    elif relations:
+        co_count = len([r for r in relations if isinstance(r, dict) and r.get("relation_type") == "co_occurs_with"])
+        if co_count:
+            lines.append(f"\u251c\u2500 Relations: {co_count} co-occurrence edges (filtered)")
 
     # Chunks / memories
     chunks = entity.get("chunks", [])
@@ -264,11 +281,14 @@ def format_kg_search(entity_name: str, results: list[dict], facts: list[dict], q
 
     if facts:
         lines.append(f"\u251c\u2500 Knowledge Graph ({len(facts)} fact{'s' if len(facts) != 1 else ''})")
-        for f in facts[:5]:
+        for f in facts[:8]:
             src = f.get("source", "")
             rel = f.get("relation", "")
             tgt = f.get("target", "")
+            desc = f.get("description", "")
             lines.append(f"\u2502   {src} \u2500[{rel}]\u2192 {tgt}")
+            if desc:
+                lines.append(f"\u2502     {_truncate(desc, 80)}")
         lines.append("\u2502")
 
     if results:

@@ -54,6 +54,17 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
         if len(w) >= 3 and w[0].isupper() and not w.isupper():
             candidates.append(w)
 
+    # Also check all lowercase words ≥4 chars — handles "anthropic", "cantaloupe"
+    for w in words:
+        cleaned = w.strip("?.,!;:'\"")
+        if (
+            len(cleaned) >= 4
+            and cleaned.islower()
+            and cleaned
+            not in ("what", "who", "how", "when", "where", "which", "does", "that", "this", "from", "with", "about")
+        ):
+            candidates.append(cleaned)
+
     if not candidates:
         return []
 
@@ -286,14 +297,17 @@ async def _brain_search(
                         }
                     structured_results.append(item)
 
-            # Add KG facts
+            # Add KG facts with descriptions
             fact_items = []
-            for fact in facts[:5]:
+            for fact in facts[:8]:
+                props = fact.get("properties") or {}
+                desc = props.get("description") or props.get("fact") or fact.get("fact") or ""
                 fact_items.append(
                     {
                         "relation": fact.get("relation_type", ""),
                         "source": fact.get("source_entity", {}).get("name", ""),
                         "target": fact.get("target_entity", {}).get("name", ""),
+                        "description": desc,
                         "score": fact.get("rrf_score", 0),
                     }
                 )

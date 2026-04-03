@@ -713,21 +713,21 @@ class KGMixin:
         relation_type: Optional[str] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
-        """Structured KG fact retrieval."""
+        """Structured KG fact retrieval. Excludes co_occurs_with noise."""
         results: List[Dict[str, Any]] = []
 
         entity = self.resolve_entity(query)
         if entity:
             cursor = self._read_cursor()
-            params: list = [entity["id"]]
-            rel_filter = ""
+
             if relation_type:
-                rel_filter = "AND r.relation_type = ?"
-                params.append(relation_type)
-            params.append(entity["id"])
-            if relation_type:
-                params.append(relation_type)
-            params.append(limit)
+                type_filter_src = "AND r.relation_type = ?"
+                type_filter_tgt = "AND r.relation_type = ?"
+                params = [entity["id"], relation_type, entity["id"], relation_type, limit]
+            else:
+                type_filter_src = "AND r.relation_type != 'co_occurs_with'"
+                type_filter_tgt = "AND r.relation_type != 'co_occurs_with'"
+                params = [entity["id"], entity["id"], limit]
 
             rows = list(
                 cursor.execute(
@@ -740,8 +740,8 @@ class KGMixin:
                     FROM kg_current_facts r
                     JOIN kg_entities se ON r.source_id = se.id
                     JOIN kg_entities te ON r.target_id = te.id
-                    WHERE (r.source_id = ? {rel_filter})
-                       OR (r.target_id = ? {rel_filter})
+                    WHERE (r.source_id = ? {type_filter_src})
+                       OR (r.target_id = ? {type_filter_tgt})
                     ORDER BY r.importance DESC, r.confidence DESC
                     LIMIT ?
                     """,
