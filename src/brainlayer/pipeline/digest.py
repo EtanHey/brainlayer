@@ -818,7 +818,7 @@ def entity_lookup(
     entity = results[0]
     entity_id = entity["id"]
 
-    # Get relations
+    # Get relations (exclude co_occurs_with noise)
     relations_raw = store.get_entity_relations(entity_id)
     relations = [
         {
@@ -827,8 +827,10 @@ def entity_lookup(
             "target_type": r.get("target_type") or r.get("source_type", ""),
             "direction": r.get("direction", "outgoing"),
             "confidence": r.get("confidence", 1.0),
+            "description": r.get("description", ""),
         }
         for r in relations_raw
+        if r.get("relation_type") != "co_occurs_with"
     ]
 
     # Get evidence chunks
@@ -864,6 +866,7 @@ def entity_lookup(
         "id": entity_id,
         "name": entity["name"],
         "entity_type": entity["entity_type"],
+        "description": entity.get("description", ""),
         "metadata": entity.get("metadata", {}),
         "relations": relations,
         "evidence": evidence,
