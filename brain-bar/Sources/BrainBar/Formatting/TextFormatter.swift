@@ -69,7 +69,8 @@ enum TextFormatter {
         if !entity.relations.isEmpty {
             lines.append("├─ Relations (\(entity.relations.count))")
             for relation in entity.relations.prefix(8) {
-                lines.append("│   → \(relation.relationType): \(relation.targetName)")
+                let arrow = relation.direction == "incoming" ? "←" : "→"
+                lines.append("│   \(arrow) \(relation.relationType): \(relation.targetName)")
             }
         }
 
@@ -97,7 +98,8 @@ enum TextFormatter {
         if !entity.relations.isEmpty {
             lines.append("├─ Relations (\(entity.relations.count))")
             for relation in entity.relations.prefix(8) {
-                lines.append("│   → \(relation.relationType): \(relation.targetName)")
+                let arrow = relation.direction == "incoming" ? "←" : "→"
+                lines.append("│   \(arrow) \(relation.relationType): \(relation.targetName)")
             }
         }
 
