@@ -62,8 +62,14 @@ struct KGCanvasView: View {
         .background(
             GeometryReader { geo in
                 Color.black.opacity(0.85)
-                    .onAppear { canvasSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
+                    .onAppear {
+                        canvasSize = geo.size
+                        viewModel.canvasCenter = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        canvasSize = newSize
+                        viewModel.canvasCenter = CGPoint(x: newSize.width / 2, y: newSize.height / 2)
+                    }
             }
         )
         .overlay { ScrollWheelZoomView(scale: $scale) }
