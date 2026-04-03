@@ -117,6 +117,69 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
         return []
 
 
+def _kg_facts_sql(store: Any, entity_name: str) -> list[dict]:
+    """Pure SQL KG fact lookup — no embeddings, no vector search.
+
+    Returns typed relations for an entity, excluding co_occurs_with noise.
+    This always works even when the embedding model isn't loaded.
+    """
+    try:
+        cursor = store._read_cursor()
+        # Find entity ID
+        row = list(
+            cursor.execute(
+                "SELECT id FROM kg_entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                (entity_name,),
+            )
+        )
+        if not row:
+            return []
+
+        entity_id = row[0][0]
+
+        # Get all semantic relations (exclude co_occurs_with)
+        facts_raw = list(
+            cursor.execute(
+                """SELECT r.relation_type, r.properties, r.confidence,
+                          se.name as source_name, se.entity_type as source_type,
+                          te.name as target_name, te.entity_type as target_type
+                   FROM kg_relations r
+                   JOIN kg_entities se ON r.source_id = se.id
+                   JOIN kg_entities te ON r.target_id = te.id
+                   WHERE (r.source_id = ? OR r.target_id = ?)
+                     AND r.relation_type != 'co_occurs_with'
+                   ORDER BY r.confidence DESC
+                   LIMIT 20""",
+                (entity_id, entity_id),
+            )
+        )
+
+        import json as _json
+
+        result = []
+        for rel_type, props_str, confidence, src_name, src_type, tgt_name, tgt_type in facts_raw:
+            props = {}
+            if props_str:
+                try:
+                    props = _json.loads(props_str)
+                except (ValueError, TypeError):
+                    pass
+            desc = props.get("description") or props.get("fact") or ""
+            result.append(
+                {
+                    "relation": rel_type,
+                    "source": src_name,
+                    "target": tgt_name,
+                    "description": desc,
+                    "score": confidence or 0.5,
+                }
+            )
+        return result
+    except Exception as e:
+        logger.warning("SQL KG lookup failed for %s: %s", entity_name, e)
+        return []
+
+
 async def _brain_search(
     query: str,
     project: str | None = None,
@@ -237,16 +300,23 @@ async def _brain_search(
     if _query_signals_recall(query):
         return await _recall(topic=query, project=project, max_results=max_results)
 
-    # Entity-aware routing: detect known entity names in query and route to
-    # kg_hybrid_search for combined chunk + KG fact retrieval.
-    # Skip entity routing when additional filters are active — kg_hybrid_search
-    # doesn't support them and we'd silently drop the user's filter intent.
+    # Entity-aware routing: detect known entity names in query.
+    # Path 1: Pure SQL KG lookup (no embeddings, always works).
+    # Path 2: Full kg_hybrid_search with vector similarity (optional, needs embedding model).
+    # Skip entity routing when additional filters are active.
     has_active_filters = any([content_type, source, tag, intent, importance_min, date_from, date_to, sentiment])
     store = _get_vector_store()
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
     if detected_entities:
+        entity_name = detected_entities[0]["name"]
+
+        # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
+        fact_items = _kg_facts_sql(store, entity_name)
+
+        # Path 2: Try full hybrid search (embedding + vector + KG)
+        structured_results = []
+        kg_degraded = False
         try:
-            entity_name = detected_entities[0]["name"]
             normalized_project = _normalize_project_name(project)
             loop = asyncio.get_running_loop()
             model = _get_embedding_model()
@@ -259,14 +329,8 @@ async def _brain_search(
                 entity_name=entity_name,
                 project_filter=normalized_project,
             )
-            # Format KG hybrid results: chunks + facts
             chunk_results = kg_results.get("chunks", {})
-            facts = kg_results.get("facts", [])
 
-            output_parts = [f"## Entity Search: {entity_name}\n"]
-            structured_results = []
-
-            # Process chunk results (same format as regular hybrid_search)
             if chunk_results.get("ids") and chunk_results["ids"][0]:
                 for cid, doc, meta, dist in zip(
                     chunk_results["ids"][0],
@@ -296,22 +360,15 @@ async def _brain_search(
                             "entity": entity_name,
                         }
                     structured_results.append(item)
+        except (RuntimeError, OSError, MemoryError) as e:
+            logger.warning("KG hybrid search failed (embedding/model issue), using SQL-only: %s", e)
+            kg_degraded = True
+        except Exception as e:
+            logger.warning("KG hybrid search failed unexpectedly: %s", e, exc_info=True)
+            kg_degraded = True
 
-            # Add KG facts with descriptions
-            fact_items = []
-            for fact in facts[:8]:
-                props = fact.get("properties") or {}
-                desc = props.get("description") or props.get("fact") or fact.get("fact") or ""
-                fact_items.append(
-                    {
-                        "relation": fact.get("relation_type", ""),
-                        "source": fact.get("source_entity", {}).get("name", ""),
-                        "target": fact.get("target_entity", {}).get("name", ""),
-                        "description": desc,
-                        "score": fact.get("rrf_score", 0),
-                    }
-                )
-
+        # If we have KG facts OR chunk results, return them
+        if fact_items or structured_results:
             structured = {
                 "query": query,
                 "entity": entity_name,
@@ -319,10 +376,12 @@ async def _brain_search(
                 "results": structured_results,
                 "facts": fact_items,
             }
+            if kg_degraded:
+                structured["kg_degraded"] = True
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
+            if kg_degraded:
+                formatted_text += "\n⚠ KG search degraded — showing SQL-only results"
             return ([TextContent(type="text", text=formatted_text)], structured)
-        except Exception as e:
-            logger.debug("Entity-aware search failed, falling back to default: %s", e)
 
     return await _search(
         query=query,
