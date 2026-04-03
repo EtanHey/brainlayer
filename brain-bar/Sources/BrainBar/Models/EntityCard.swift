@@ -4,6 +4,7 @@ struct EntityCard: Equatable {
     struct Relation: Equatable {
         let relationType: String
         let targetName: String
+        let direction: String  // "outgoing" or "incoming"
     }
 
     struct Memory: Equatable {
@@ -70,7 +71,8 @@ struct EntityCard: Equatable {
             .map {
                 Relation(
                     relationType: $0["relation_type"] as? String ?? "related_to",
-                    targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? ""))
+                    targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? "")),
+                    direction: $0["direction"] as? String ?? "outgoing"
                 )
             }
         memories = []

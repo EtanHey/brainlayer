@@ -1470,12 +1470,12 @@ final class BrainDatabase: @unchecked Sendable {
         // Get typed relations for found entity (excludes co_occurs_with noise)
         if let entityId, result != nil {
             let relSQL = """
-                SELECT r.relation_type, r.target_id, e.name
+                SELECT r.relation_type, e.name, 'outgoing' AS direction
                 FROM kg_relations_typed r
                 LEFT JOIN kg_entities e ON e.id = r.target_id
                 WHERE r.source_id = ?
                 UNION ALL
-                SELECT r.relation_type, r.source_id, e.name
+                SELECT r.relation_type, e.name, 'incoming' AS direction
                 FROM kg_relations_typed r
                 LEFT JOIN kg_entities e ON e.id = r.source_id
                 WHERE r.target_id = ?
@@ -1489,12 +1489,12 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(entityId, to: relStmt, index: 2)
                 var relations: [[String: Any]] = []
                 while sqlite3_step(relStmt) == SQLITE_ROW {
-                    let targetName = columnText(relStmt, 2) ?? ""
+                    let targetName = columnText(relStmt, 1) ?? ""
+                    let direction = columnText(relStmt, 2) ?? "outgoing"
                     relations.append([
                         "relation_type": columnText(relStmt, 0) as Any,
-                        "target_id": columnText(relStmt, 1) as Any,
                         "target_name": targetName as Any,
-                        "target": ["name": targetName] as [String: Any]
+                        "direction": direction as Any
                     ])
                 }
                 result?["relations"] = relations
