@@ -9,6 +9,8 @@ struct SearchResult: Equatable, Identifiable {
     let snippet: String
     let importance: Int?
     let tags: [String]
+    let contentType: String
+    let sessionID: String
 
     var id: String { chunkID }
     var displayText: String {
@@ -41,6 +43,31 @@ struct SearchResult: Equatable, Identifiable {
         return tags.joined(separator: ", ")
     }
 
+    /// Relevance tier derived from BM25 score.
+    var relevanceTier: String {
+        if score >= 15 { return "●●●" }
+        if score >= 8 { return "●●○" }
+        return "●○○"
+    }
+
+    /// Human-readable source label from content_type.
+    var sourceLabel: String {
+        switch contentType {
+        case "user_message": return "conversation"
+        case "assistant_text": return "conversation"
+        case "ai_code": return "code"
+        case "stack_trace": return "error"
+        case "decision": return "decision"
+        case "idea": return "idea"
+        case "journal": return "journal"
+        case "bookmark": return "bookmark"
+        case "note": return "note"
+        case "learning": return "learning"
+        case "todo": return "todo"
+        default: return contentType.isEmpty ? "memory" : contentType
+        }
+    }
+
     init(
         chunkID: String,
         score: Double = 0,
@@ -49,7 +76,9 @@ struct SearchResult: Equatable, Identifiable {
         summary: String = "",
         snippet: String = "",
         importance: Int? = nil,
-        tags: [String] = []
+        tags: [String] = [],
+        contentType: String = "",
+        sessionID: String = ""
     ) {
         self.chunkID = chunkID
         self.score = score
@@ -59,6 +88,8 @@ struct SearchResult: Equatable, Identifiable {
         self.snippet = snippet
         self.importance = importance
         self.tags = tags
+        self.contentType = contentType
+        self.sessionID = sessionID
     }
 
     init(payload: [String: Any]) {
@@ -84,6 +115,8 @@ struct SearchResult: Equatable, Identifiable {
             self.importance = nil
         }
         tags = SearchResult.decodeTags(payload["tags"])
+        contentType = payload["content_type"] as? String ?? ""
+        sessionID = payload["session_id"] as? String ?? ""
     }
 
     init(rowID: String, title: String, metadata: String, tags: [String] = []) {
@@ -95,6 +128,8 @@ struct SearchResult: Equatable, Identifiable {
         snippet = title
         importance = SearchResult.extractImportance(from: metadata)
         self.tags = tags
+        contentType = ""
+        sessionID = ""
     }
 
     private static func decodeTags(_ raw: Any?) -> [String] {

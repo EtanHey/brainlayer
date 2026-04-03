@@ -201,7 +201,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
 
-        // Entity detection → KG fact lookup (prepended above text results)
+        // Entity detection → KG fact lookup
         var kgSection = ""
         let hasActiveFilters = project != nil || tag != nil || subscriberID != nil || importanceMin != nil
         if !hasActiveFilters {
@@ -226,10 +226,11 @@ final class MCPRouter: @unchecked Sendable {
         let typedResults = results.map(SearchResult.init(payload:))
         let textSection = TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count)
 
+        // KG section goes before the <brain_search> envelope
         if kgSection.isEmpty {
             return ToolOutput(text: textSection)
         }
-        return ToolOutput(text: kgSection + "\n\n" + textSection)
+        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection)
     }
 
     private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {
