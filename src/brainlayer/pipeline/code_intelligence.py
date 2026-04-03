@@ -71,7 +71,7 @@ def _extract_pyproject(repo_path: Path, path: Path) -> dict[str, Any]:
 
     # Extract dependency names (strip version specifiers)
     raw_deps = project.get("dependencies", [])
-    deps = [re.split(r"[>=<!\[;]", d)[0].strip() for d in raw_deps]
+    deps = [re.split(r"[>=<~!\[;]", d)[0].strip() for d in raw_deps]
 
     scripts = list(project.get("scripts", {}).keys())
 
@@ -131,18 +131,23 @@ def _extract_package_json(repo_path: Path, path: Path) -> dict[str, Any]:
 
 
 def _detect_framework(deps: list[str]) -> str | None:
-    """Detect major framework from dependency list."""
-    framework_signals = {
-        "next": "Next.js",
-        "react": "React",
-        "react-native": "React Native",
-        "expo": "Expo",
-        "convex": "Convex",
-        "express": "Express",
-        "fastify": "Fastify",
-        "@modelcontextprotocol/sdk": "MCP",
-    }
-    for dep, name in framework_signals.items():
+    """Detect major framework from dependency list.
+
+    Order matters: check specific frameworks before generic ones
+    (e.g., react-native/expo before react, next before react).
+    """
+    # Ordered: most specific first
+    framework_signals = [
+        ("expo", "Expo"),
+        ("react-native", "React Native"),
+        ("next", "Next.js"),
+        ("convex", "Convex"),
+        ("@modelcontextprotocol/sdk", "MCP"),
+        ("express", "Express"),
+        ("fastify", "Fastify"),
+        ("react", "React"),
+    ]
+    for dep, name in framework_signals:
         if dep in deps:
             return name
     return None
@@ -168,7 +173,13 @@ def enrich_projects(
     projects = scan_projects(base_dir)
     if not projects:
         logger.warning("No projects found in %s", base_dir)
-        return {"projects_scanned": 0, "entities_created": 0, "entities_updated": 0, "relations_added": 0}
+        return {
+            "projects_scanned": 0,
+            "entities_created": 0,
+            "entities_updated": 0,
+            "relations_added": 0,
+            "dep_entities_created": 0,
+        }
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")

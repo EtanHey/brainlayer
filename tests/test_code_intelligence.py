@@ -170,6 +170,34 @@ class TestScanProjects:
         voice = next(p for p in projects if p["name"] == "voicelayer-mcp")
         assert voice.get("framework") == "MCP"
 
+    def test_framework_detection_prefers_specific(self, tmp_path: Path) -> None:
+        """React Native projects should not be classified as React."""
+        from brainlayer.pipeline.code_intelligence import _detect_framework
+
+        # Has both react and react-native — should detect React Native
+        assert _detect_framework(["react", "react-native"]) == "React Native"
+        # Has both react and expo — should detect Expo
+        assert _detect_framework(["react", "expo"]) == "Expo"
+        # Has both react and next — should detect Next.js
+        assert _detect_framework(["react", "react-dom", "next"]) == "Next.js"
+        # Only react — should detect React
+        assert _detect_framework(["react", "react-dom"]) == "React"
+
+    def test_tilde_version_specifier(self, tmp_path: Path) -> None:
+        """PEP 440 ~= compatible release should be stripped correctly."""
+        repo = tmp_path / "testproj"
+        repo.mkdir()
+        (repo / "pyproject.toml").write_text(
+            '[project]\nname = "testproj"\ndependencies = ["numpy~=1.0", "pandas>=2.0"]\n'
+        )
+
+        from brainlayer.pipeline.code_intelligence import _extract_metadata
+
+        meta = _extract_metadata(repo)
+        assert meta is not None
+        assert "numpy" in meta["dependencies"]
+        assert "pandas" in meta["dependencies"]
+
     def test_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
         from brainlayer.pipeline.code_intelligence import scan_projects
 
@@ -178,6 +206,16 @@ class TestScanProjects:
 
 
 class TestEnrichProjects:
+    def test_empty_scan_returns_all_keys(self, tmp_path: Path, tmp_db: str) -> None:
+        """Early return when no projects found must include all stat keys."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        stats = enrich_projects(db_path=tmp_db, base_dir=empty_dir)
+        assert stats["projects_scanned"] == 0
+        assert stats["dep_entities_created"] == 0  # The key that was missing
+
     def test_creates_project_entities(self, tmp_repos: Path, tmp_db: str) -> None:
         from brainlayer.pipeline.code_intelligence import enrich_projects
 
