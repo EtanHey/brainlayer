@@ -1933,5 +1933,29 @@ def flush() -> None:
         rprint(f"[yellow]{remaining} item(s) still pending (DB may still be locked).[/]")
 
 
+@app.command("code-intel")
+def code_intel(
+    base_dir: Path = typer.Option(
+        Path.home() / "Gits", "--base-dir", "-d", help="Directory containing repos to scan"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show changes without applying"),
+) -> None:
+    """Scan repos for project metadata and populate KG entities."""
+    from ..pipeline.code_intelligence import enrich_projects
+
+    db_path = get_db_path()
+    rprint(f"[bold blue]זיכרון[/] - Code intelligence scan: [italic]{base_dir}[/]")
+
+    result = enrich_projects(db_path=str(db_path), base_dir=base_dir, dry_run=dry_run)
+
+    prefix = "[dim][DRY RUN][/] " if dry_run else ""
+    rprint(f"\n{prefix}[bold]Scan complete:[/]")
+    rprint(f"  Projects scanned:       {result['projects_scanned']}")
+    rprint(f"  Entities created:       [green]{result['entities_created']}[/]")
+    rprint(f"  Entities updated:       [yellow]{result['entities_updated']}[/]")
+    rprint(f"  Relations added:        [blue]{result['relations_added']}[/]")
+    rprint(f"  Library entities added: [cyan]{result['dep_entities_created']}[/]")
+
+
 if __name__ == "__main__":
     app()
