@@ -12,7 +12,9 @@ Env vars tested:
 """
 
 import importlib.util
+import io
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,31 @@ def clean_env():
             os.environ.pop(k, None)
 
 
+class FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class FakeConn:
+    def __init__(self, rows_by_query=None):
+        self.rows_by_query = rows_by_query or {}
+        self.executed = []
+        self.closed = False
+
+    def execute(self, query, params=()):
+        self.executed.append((query, params))
+        for needle, rows in self.rows_by_query.items():
+            if needle in query:
+                return FakeCursor(rows)
+        return FakeCursor([])
+
+    def close(self):
+        self.closed = True
+
+
 class TestSessionStartConditional:
     def test_default_activates(self, session_start):
         hook_input = {"session_id": "abc123", "cwd": "/tmp/test"}
@@ -101,6 +128,30 @@ class TestSessionStartConditional:
         assert activate is True
         assert light is False
 
+    def test_main_adds_hebrew_style_guidance_for_coach(self, session_start, monkeypatch, capsys):
+        fake_conn = FakeConn({"FROM chunks_fts": []})
+
+        monkeypatch.setattr(session_start, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(session_start, "load_scoped_projects", lambda: {})
+        monkeypatch.setattr(
+            session_start.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            session_start.sys,
+            "stdin",
+            io.StringIO('{"cwd":"/tmp/coach","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            session_start.main()
+
+        output = capsys.readouterr().out
+        assert "[Hebrew Style]" in output
+        assert ('PRAGMA busy_timeout=1000', ()) in fake_conn.executed
+        assert ('PRAGMA query_only=true', ()) in fake_conn.executed
+
 
 class TestPromptSearchConditional:
     def test_default_activates(self, prompt_search):
@@ -123,6 +174,85 @@ class TestPromptSearchConditional:
         activate, light = prompt_search.should_activate()
         assert activate is True
         assert light is True
+
+    def test_extract_keywords_keeps_short_meaningful_terms(self, prompt_search):
+        keywords = prompt_search.extract_keywords("T3 Code AI PR review")
+
+        assert "t3" in keywords
+        assert "code" in keywords
+        assert "ai" in keywords
+        assert "pr" in keywords
+
+    def test_detect_entities_includes_project_and_tool_types(self, prompt_search):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            ("project-1", "T3 Code", "project"),
+        )
+        conn.execute(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            ("tool-1", "Claude Code", "tool"),
+        )
+
+        matches = prompt_search.detect_entities_in_prompt(
+            "Compare T3 Code with Claude Code",
+            conn,
+        )
+
+        assert {match["name"] for match in matches} == {"T3 Code", "Claude Code"}
+
+    def test_record_injection_event_persists_rows(self, prompt_search, tmp_path):
+        db_path = tmp_path / "hook-events.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE injection_events (
+                session_id TEXT,
+                query TEXT,
+                chunk_ids TEXT,
+                token_count INTEGER
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        prompt_search.record_injection_event(
+            str(db_path),
+            "session-1",
+            "Prompt text",
+            ["chunk-1", "chunk-2"],
+            42,
+        )
+
+        rows = sqlite3.connect(db_path).execute(
+            "SELECT session_id, query, chunk_ids, token_count FROM injection_events"
+        ).fetchall()
+        assert rows == [("session-1", "Prompt text", '["chunk-1", "chunk-2"]', 42)]
+
+    def test_main_prints_search_before_assume_warning(self, prompt_search, monkeypatch, capsys):
+        fake_conn = FakeConn()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"What hardware does Etan use?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert "SEARCH-BEFORE-ASSUME" in output
+        assert ('PRAGMA busy_timeout=1000', ()) in fake_conn.executed
+        assert ('PRAGMA query_only=true', ()) in fake_conn.executed
 
 
 class TestStopIndexConditional:

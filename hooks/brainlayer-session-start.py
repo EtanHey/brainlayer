@@ -222,8 +222,9 @@ def main():
         sys.exit(0)
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+        # AIDEV-NOTE: WAL already set by Python writer. Don't set on readonly — needs write lock.
+        conn.execute("PRAGMA busy_timeout=1000")
         conn.execute("PRAGMA query_only=true")
     except sqlite3.Error:
         sys.exit(0)
@@ -286,6 +287,16 @@ def main():
         pass
     finally:
         conn.close()
+
+    # Hebrew voice calibration for projects with Hebrew content
+    # Source: Phase 2+3 session mining — persistent Hebrew style violations
+    HEBREW_PROJECTS = {"coach", "mehayom", "Mehayom-app", "golems-packages-coach"}
+    if project in HEBREW_PROJECTS or search_term in {"coach", "mehayom"}:
+        lines.append(
+            "[Hebrew Style] When writing Hebrew text: no em dashes (use hyphen-minus), "
+            "verify contact gender before using gendered forms, "
+            "use text-right alignment, keep sentences short and direct."
+        )
 
     if lines:
         print("\n".join(lines))
