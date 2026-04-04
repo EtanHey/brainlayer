@@ -142,7 +142,11 @@ def pipeline_fts5_only(store, query: str, n_results: int = 20) -> list[tuple[str
 
 
 def pipeline_hybrid_rrf(store, query: str, n_results: int = 20) -> list[tuple[str, float]]:
-    """Hybrid search placeholder that uses store.hybrid_search when available."""
+    """Hybrid benchmark placeholder.
+
+    Falls back to FTS5 when the store has no hybrid path and otherwise
+    raises until the real hybrid benchmark wiring lands.
+    """
     if not hasattr(store, "hybrid_search"):
         return pipeline_fts5_only(store, query, n_results=n_results)
     raise NotImplementedError("Hybrid RRF benchmark pipeline depends on query embeddings and P0 search wiring.")
