@@ -778,12 +778,19 @@ async def _stats():
     try:
         store = _get_vector_store()
         stats = store.get_stats()
+        fts5_health = store.check_fts5_health()
         structured = {
             "total_chunks": stats["total_chunks"],
             "projects": stats["projects"],
             "content_types": stats["content_types"],
+            "fts5_health": fts5_health,
         }
         output = format_stats(structured)
+        output += (
+            "\n"
+            f"FTS5: {fts5_health['severity']} | chunks={fts5_health['chunk_count']:,} "
+            f"| fts={fts5_health['fts_count']:,} | desync={fts5_health['desync_pct']:.2f}%"
+        )
         return ([TextContent(type="text", text=output)], structured)
     except Exception as e:
         return _error_result(f"Stats error: {str(e)}")
