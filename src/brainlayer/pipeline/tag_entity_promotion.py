@@ -101,7 +101,7 @@ TOPIC_TAGS = {
     "wellness",
 }
 
-HEBREW_MARKERS = {"hebrew", "עברית", "rtl", "right-to-left"}
+HEBREW_MARKERS = {"hebrew", "rtl", "right-to-left"}
 COMMUNITY_MARKERS = {"community", "collective", "crew", "forum", "group", "guild", "network"}
 
 
