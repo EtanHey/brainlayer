@@ -1,0 +1,228 @@
+"""Tests for binary-quantized RRF hybrid search."""
+
+import json
+import uuid
+
+import pytest
+
+from brainlayer._helpers import serialize_f32
+from brainlayer.search_repo import _hybrid_cache
+from brainlayer.vector_store import VectorStore
+
+
+@pytest.fixture(autouse=True)
+def clear_hybrid_cache():
+    """Keep module-level hybrid cache isolated across tests."""
+    _hybrid_cache.clear()
+    yield
+    _hybrid_cache.clear()
+
+
+@pytest.fixture
+def store(tmp_path):
+    """Create a fresh VectorStore on a temporary DB."""
+    s = VectorStore(tmp_path / "hybrid.db")
+    yield s
+    s.close()
+
+
+def _embed(text: str) -> list[float]:
+    """Deterministic 1024-dim embedding for test data."""
+    seed = (sum(ord(c) for c in text[:40]) % 97) / 1000.0
+    return [seed + (i / 10000.0) for i in range(1024)]
+
+
+def _insert_chunk(
+    store: VectorStore,
+    *,
+    chunk_id: str,
+    content: str,
+    embedding: list[float],
+    summary: str | None = None,
+    tags: list[str] | None = None,
+    resolved_query: str | None = None,
+    importance: float | None = None,
+    created_at: str | None = "2026-04-05T00:00:00Z",
+    project: str = "hybrid-test",
+):
+    """Insert a chunk and its float vector directly."""
+    cursor = store.conn.cursor()
+    cursor.execute(
+        """INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type,
+            char_count, source, summary, tags, resolved_query, importance, created_at
+        ) VALUES (?, ?, '{}', 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?)""",
+        (
+            chunk_id,
+            content,
+            project,
+            len(content),
+            summary,
+            json.dumps(tags) if tags else None,
+            resolved_query,
+            importance,
+            created_at,
+        ),
+    )
+    cursor.execute(
+        "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
+        (chunk_id, serialize_f32(embedding)),
+    )
+
+
+def _chunk_vector_count(store: VectorStore, table: str) -> int:
+    cursor = store.conn.cursor()
+    return cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+
+class TestBinaryIndexLifecycle:
+    def test_binary_table_created(self, store):
+        cursor = store.conn.cursor()
+        tables = {
+            row[0]
+            for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' OR type = 'virtual table'")
+        }
+        assert "chunk_vectors_binary" in tables
+
+    def test_build_binary_index(self, store):
+        _insert_chunk(store, chunk_id="chunk-a", content="alpha", embedding=_embed("alpha"))
+        _insert_chunk(store, chunk_id="chunk-b", content="beta", embedding=_embed("beta"))
+
+        store.build_binary_index()
+
+        assert _chunk_vector_count(store, "chunk_vectors") == 2
+        assert _chunk_vector_count(store, "chunk_vectors_binary") == 2
+
+    def test_new_chunks_inserted_into_both_tables(self, store):
+        chunk_id = f"chunk-{uuid.uuid4().hex[:8]}"
+        store.upsert_chunks(
+            [
+                {
+                    "id": chunk_id,
+                    "content": "binary dual insert test",
+                    "metadata": {},
+                    "source_file": "test.jsonl",
+                    "project": "hybrid-test",
+                    "content_type": "assistant_text",
+                    "char_count": 23,
+                    "source": "claude_code",
+                    "created_at": "2026-04-05T00:00:00Z",
+                }
+            ],
+            [_embed("dual insert")],
+        )
+
+        cursor = store.conn.cursor()
+        float_rows = cursor.execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()[0]
+        binary_rows = cursor.execute(
+            "SELECT COUNT(*) FROM chunk_vectors_binary WHERE chunk_id = ?",
+            (chunk_id,),
+        ).fetchone()[0]
+        assert float_rows == 1
+        assert binary_rows == 1
+
+
+class TestHybridSearch:
+    def test_hybrid_search_returns_results(self, store):
+        query_embedding = _embed("hybrid auth query")
+        _insert_chunk(
+            store,
+            chunk_id="both-match",
+            content="hybrid auth query with reciprocal rank fusion",
+            summary="RRF search design",
+            tags=["search", "rrf"],
+            embedding=query_embedding,
+            importance=5.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="noise",
+            content="unrelated gardening notes",
+            embedding=_embed("gardening"),
+        )
+        store.build_binary_index()
+        store.conn.cursor().execute("DELETE FROM chunk_vectors")
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="hybrid auth query",
+            n_results=5,
+        )
+
+        assert results["ids"][0]
+        assert results["ids"][0][0] == "both-match"
+
+    def test_hybrid_search_rrf_scoring(self, store):
+        query_embedding = _embed("search fusion")
+        _insert_chunk(
+            store,
+            chunk_id="both",
+            content="search fusion architecture and ranking details",
+            embedding=query_embedding,
+            importance=5.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="fts-only",
+            content="search fusion exact keywords but distant embedding",
+            embedding=_embed("very distant vector"),
+            importance=5.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="vec-only",
+            content="semantic neighbor without exact keywords present",
+            embedding=[v + 0.00005 for v in query_embedding],
+            importance=5.0,
+        )
+        store.build_binary_index()
+        store.conn.cursor().execute("DELETE FROM chunk_vectors")
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="search fusion",
+            n_results=3,
+        )
+
+        ids = results["ids"][0]
+        assert ids[0] == "both", ids
+        assert set(ids) == {"both", "fts-only", "vec-only"}
+
+    def test_hybrid_search_fts_only_fallback(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="fts-hit",
+            content="exact keyword fallback for full text only",
+            embedding=_embed("distant vector"),
+        )
+        store.build_binary_index()
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("nothing close"),
+            query_text="keyword fallback",
+            n_results=5,
+        )
+
+        assert "fts-hit" in results["ids"][0]
+
+    def test_hybrid_search_vec_only(self, store):
+        query_embedding = _embed("vector only query")
+        _insert_chunk(
+            store,
+            chunk_id="vec-hit",
+            content="content without overlapping keywords",
+            embedding=query_embedding,
+        )
+        store.build_binary_index()
+        store.conn.cursor().execute("DELETE FROM chunk_vectors")
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="keywords not present anywhere",
+            n_results=5,
+        )
+
+        assert "vec-hit" in results["ids"][0]

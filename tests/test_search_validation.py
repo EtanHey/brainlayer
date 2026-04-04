@@ -301,31 +301,32 @@ class TestHybridSearchLatency:
         return [float(seed + i) / 10000.0 for i in range(1024)]
 
     def test_repeated_search_uses_cache(self, store):
-        """Second identical hybrid_search call hits cache (underlying search() not called twice).
+        """Second identical hybrid_search call hits cache (semantic leg not called twice).
 
-        RED: cache doesn't exist — search() is called on every hybrid_search invocation.
-        After fix: search() is called once; second call returns cached result.
+        RED: cache doesn't exist — the semantic leg runs on every hybrid_search invocation.
+        After fix: it runs once; second call returns cached result.
         """
         query_embed = self._embed("topic content")
 
-        original_search = store.search
+        method_name = "_binary_search" if getattr(store, "_binary_index_available", False) else "search"
+        original_search = getattr(store, method_name)
         call_count = []
 
         def counting_search(*args, **kwargs):
             call_count.append(1)
             return original_search(*args, **kwargs)
 
-        store.search = counting_search
+        setattr(store, method_name, counting_search)
 
         store.hybrid_search(query_embedding=query_embed, query_text="topic content", n_results=5)
         store.hybrid_search(query_embedding=query_embed, query_text="topic content", n_results=5)
 
-        store.search = original_search  # restore
+        setattr(store, method_name, original_search)
 
-        # Before fix: search() called twice (once per hybrid_search call)
+        # Before fix: semantic leg called twice (once per hybrid_search call)
         # After fix: search() called once (second call hits cache)
         assert len(call_count) == 1, (
-            f"search() was called {len(call_count)} times for 2 identical hybrid_search calls. "
+            f"{method_name}() was called {len(call_count)} times for 2 identical hybrid_search calls. "
             "Fix: implement result cache in hybrid_search."
         )
 

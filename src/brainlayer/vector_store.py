@@ -5,6 +5,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 """
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -67,7 +68,26 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db_with_retry()
+        self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
+        if self._readonly:
+            self._init_readonly_db()
+        else:
+            self._init_db_with_retry()
+
+    def _init_readonly_db(self) -> None:
+        """Open an existing DB in readonly mode without running migrations."""
+        self.conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
+        self.conn.setbusytimeout(10_000)
+        self.conn.enableloadextension(True)
+        self.conn.loadextension(sqlite_vec.loadable_path())
+        self.conn.enableloadextension(False)
+
+        cursor = self.conn.cursor()
+        existing_tables = {
+            row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+        }
+        self._binary_index_available = "chunk_vectors_binary" in existing_tables
+        self._local = threading.local()
 
     def _init_db_with_retry(self) -> None:
         """Initialize DB with retry on BusyError.
@@ -188,6 +208,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 embedding FLOAT[1024]
             )
         """)
+        existing_tables = {
+            row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+        }
+        self._binary_index_available = "chunk_vectors_binary" in existing_tables
+        if not self._binary_index_available:
+            try:
+                cursor.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors_binary USING vec0(
+                        chunk_id TEXT PRIMARY KEY,
+                        embedding BIT[1024]
+                    )
+                """)
+                self._binary_index_available = True
+            except apsw.ReadOnlyError:
+                self._binary_index_available = False
 
         # FTS5 full-text search — indexes content + enrichment metadata
         # for better keyword matches on summaries, tags, and resolved queries.
@@ -707,6 +742,47 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         """Return a cursor for read operations using a per-thread readonly connection."""
         return self._get_read_conn().cursor()
 
+    def build_binary_index(self) -> int:
+        """Backfill binary-quantized vectors from existing float vectors."""
+        if not getattr(self, "_binary_index_available", False):
+            raise RuntimeError("Binary vector index is unavailable on this database")
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR IGNORE INTO chunk_vectors_binary(chunk_id, embedding)
+            SELECT chunk_id, vec_quantize_binary(embedding) FROM chunk_vectors
+        """)
+        from .search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
+        return self.conn.changes()
+
+    def _upsert_chunk_vector(self, cursor, chunk_id: str, embedding: List[float]) -> None:
+        """Keep float and binary vector tables in sync for a chunk."""
+        embedding_bytes = serialize_f32(embedding)
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        cursor.execute(
+            """
+            INSERT INTO chunk_vectors (chunk_id, embedding)
+            VALUES (?, ?)
+        """,
+            (chunk_id, embedding_bytes),
+        )
+        if getattr(self, "_binary_index_available", False):
+            cursor.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+            cursor.execute(
+                """
+                INSERT INTO chunk_vectors_binary (chunk_id, embedding)
+                VALUES (?, vec_quantize_binary(?))
+            """,
+                (chunk_id, embedding_bytes),
+            )
+
+    def _delete_chunk_vector(self, cursor, chunk_id: str) -> None:
+        """Delete a chunk from both float and binary vector tables."""
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        if getattr(self, "_binary_index_available", False):
+            cursor.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
@@ -757,15 +833,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 ),
             )
 
-            # Upsert vector
-            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            cursor.execute(
-                """
-                INSERT INTO chunk_vectors (chunk_id, embedding)
-                VALUES (?, ?)
-            """,
-                (chunk_id, serialize_f32(embedding)),
-            )
+            self._upsert_chunk_vector(cursor, chunk_id, embedding)
+
+        from .search_repo import clear_hybrid_search_cache
+
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
 
         return len(chunks)
 
@@ -799,11 +871,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 (float(max(1, min(10, importance))), chunk_id),
             )
         if embedding is not None:
-            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            cursor.execute(
-                "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-                (chunk_id, serialize_f32(embedding)),
-            )
+            self._upsert_chunk_vector(cursor, chunk_id, embedding)
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
@@ -822,7 +890,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "UPDATE chunks SET value_type = 'ARCHIVED', archived_at = ? WHERE id = ?",
             (now, chunk_id),
         )
-        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+        self._delete_chunk_vector(cursor, chunk_id)
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
@@ -841,7 +909,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "UPDATE chunks SET superseded_by = ? WHERE id = ?",
             (new_chunk_id, old_chunk_id),
         )
-        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (old_chunk_id,))
+        self._delete_chunk_vector(cursor, old_chunk_id)
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
