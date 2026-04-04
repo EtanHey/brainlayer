@@ -7,6 +7,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,6 +69,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fts5_health_cache: dict[str, Any] = {}
         self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
         if self._readonly:
             self._init_readonly_db()
@@ -485,6 +487,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_events_action ON chunk_events(action)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_events_timestamp ON chunk_events(timestamp)")
 
+        # ── Health events audit table ─────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS health_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                details TEXT,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_events_type ON health_events(event_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_events_severity ON health_events(severity)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_events_created ON health_events(created_at)")
+
         # ── Knowledge Graph tables ──────────────────────────────────────
 
         cursor.execute("""
@@ -741,6 +757,188 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _read_cursor(self):
         """Return a cursor for read operations using a per-thread readonly connection."""
         return self._get_read_conn().cursor()
+
+    def _log_health_event(self, event_type: str, severity: str, details: Dict[str, Any]) -> None:
+        """Append a health event. Readonly stores skip writes silently."""
+        if getattr(self, "_readonly", False):
+            return
+        try:
+            self.conn.cursor().execute(
+                "INSERT INTO health_events (event_type, severity, details) VALUES (?, ?, ?)",
+                (event_type, severity, json.dumps(details, sort_keys=True)),
+            )
+        except (apsw.ReadOnlyError, apsw.BusyError):
+            return
+
+    def _get_fts5_counts(self) -> tuple[int, int]:
+        """Read chunks and FTS counts using a single query on the readonly path."""
+        row = (
+            self._read_cursor()
+            .execute("SELECT (SELECT COUNT(*) FROM chunks), (SELECT COUNT(*) FROM chunks_fts)")
+            .fetchone()
+        )
+        return int(row[0]), int(row[1])
+
+    @staticmethod
+    def _build_fts5_health_result(chunk_count: int, fts_count: int, severity: str) -> Dict[str, Any]:
+        """Shape a health payload from count data."""
+        desync_pct = 0.0
+        if chunk_count > 0:
+            desync_pct = round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        return {
+            "synced": desync_pct <= 1.0,
+            "chunk_count": chunk_count,
+            "fts_count": fts_count,
+            "desync_pct": desync_pct,
+            "severity": severity,
+        }
+
+    def check_fts5_health(self, cache_ttl_seconds: int = 60) -> Dict[str, Any]:
+        """Check FTS5 sync health with a short-lived cache for hot-path callers."""
+        now = time.time()
+        cache = self._fts5_health_cache
+        if cache_ttl_seconds > 0 and cache.get("expires_at", 0) > now:
+            return dict(cache["result"])
+
+        chunk_count, fts_count = self._get_fts5_counts()
+        desync_pct = 0.0 if chunk_count == 0 else abs(chunk_count - fts_count) * 100.0 / chunk_count
+
+        if desync_pct > 20.0:
+            self._log_health_event(
+                "fts5_desync_critical",
+                "emergency",
+                {"chunk_count": chunk_count, "fts_count": fts_count, "desync_pct": round(desync_pct, 2)},
+            )
+            rebuild_result = self.rebuild_fts5()
+            result = {
+                "synced": rebuild_result["success"],
+                "chunk_count": rebuild_result["chunk_count"],
+                "fts_count": rebuild_result["fts_count"],
+                "desync_pct": rebuild_result["desync_pct"],
+                "severity": "emergency",
+                "rebuild_triggered": True,
+            }
+        elif desync_pct > 5.0:
+            result = self._build_fts5_health_result(chunk_count, fts_count, "critical")
+            self._log_health_event("fts5_desync_critical", "critical", result)
+        elif desync_pct > 1.0:
+            result = self._build_fts5_health_result(chunk_count, fts_count, "warning")
+            self._log_health_event("fts5_desync_warning", "warning", result)
+        else:
+            result = self._build_fts5_health_result(chunk_count, fts_count, "info")
+
+        if cache_ttl_seconds > 0:
+            self._fts5_health_cache = {"result": dict(result), "expires_at": now + cache_ttl_seconds}
+        else:
+            self._fts5_health_cache = {}
+        return result
+
+    def check_wal_health(self) -> Dict[str, Any]:
+        """Check WAL size and passive checkpoint status."""
+        wal_path = Path(f"{self.db_path}-wal")
+        wal_size_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        wal_size_mb = wal_size_bytes / (1024 * 1024)
+
+        checkpoint_row = self.conn.cursor().execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        checkpoint_status = {
+            "busy": int(checkpoint_row[0]),
+            "log_frames": int(checkpoint_row[1]),
+            "checkpointed_frames": int(checkpoint_row[2]),
+        }
+
+        severity = "info"
+        if wal_size_mb > 50:
+            severity = "warning"
+            self._log_health_event(
+                "wal_bloat",
+                "warning",
+                {
+                    "wal_path": str(wal_path),
+                    "wal_size_bytes": wal_size_bytes,
+                    "wal_size_mb": round(wal_size_mb, 2),
+                    "checkpoint_status": checkpoint_status,
+                },
+            )
+
+        return {
+            "wal_path": str(wal_path),
+            "wal_exists": wal_path.exists(),
+            "wal_size_bytes": wal_size_bytes,
+            "wal_size_mb": round(wal_size_mb, 2),
+            "checkpoint_status": checkpoint_status,
+            "severity": severity,
+        }
+
+    def deep_integrity_check(self) -> Dict[str, Any]:
+        """Run an FTS integrity check plus a bounded spot-check of chunk IDs."""
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+
+        total_chunks = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        spot_check_count = min(100, total_chunks)
+        sample_ids = [
+            row[0]
+            for row in cursor.execute(
+                "SELECT id FROM chunks ORDER BY random() LIMIT ?",
+                (spot_check_count,),
+            )
+        ]
+
+        missing_chunk_ids: list[str] = []
+        if sample_ids:
+            placeholders = ", ".join("?" for _ in sample_ids)
+            found_ids = {
+                row[0]
+                for row in cursor.execute(
+                    f"SELECT chunk_id FROM chunks_fts WHERE chunk_id IN ({placeholders})",
+                    sample_ids,
+                )
+            }
+            missing_chunk_ids = sorted(set(sample_ids) - found_ids)
+
+        ok = len(missing_chunk_ids) == 0
+        details = {
+            "spot_check_count": spot_check_count,
+            "missing_chunk_ids": missing_chunk_ids,
+        }
+        if ok:
+            self._log_health_event("fts5_integrity_ok", "info", details)
+        else:
+            self._log_health_event("integrity_fail", "critical", details)
+
+        return {
+            "ok": ok,
+            "fts_integrity": "ok" if ok else "failed",
+            "spot_check_count": spot_check_count,
+            "missing_chunk_ids": missing_chunk_ids,
+        }
+
+    def rebuild_fts5(self) -> Dict[str, Any]:
+        """Rebuild the FTS5 table and verify post-rebuild counts."""
+        self._log_health_event("fts5_rebuild", "emergency", {"db_path": str(self.db_path)})
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        chunk_count, fts_count = self._get_fts5_counts()
+        if chunk_count != fts_count:
+            cursor.execute("DELETE FROM chunks_fts")
+            cursor.execute("""
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                SELECT content, summary, tags, resolved_query, id FROM chunks
+            """)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except apsw.Error:
+            pass
+
+        self._fts5_health_cache = {}
+        chunk_count, fts_count = self._get_fts5_counts()
+        desync_pct = 0.0 if chunk_count == 0 else round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        return {
+            "success": chunk_count == fts_count,
+            "chunk_count": chunk_count,
+            "fts_count": fts_count,
+            "desync_pct": desync_pct,
+        }
 
     def build_binary_index(self) -> int:
         """Backfill binary-quantized vectors from existing float vectors."""
