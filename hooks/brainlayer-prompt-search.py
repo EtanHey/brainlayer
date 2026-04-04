@@ -2,11 +2,10 @@
 """
 BrainLayer UserPromptSubmit Hook — auto-searches memories relevant to the user's prompt.
 
-Extracts keywords from the prompt, runs FTS5 search against BrainLayer.
-Three modes:
-  - Normal (default): top 3 results, ~300 tokens
-  - Deep (triggered by memory words): top 8 results, ~800 tokens
-  - Light (BRAINLAYER_HOOKS_LIGHT=1): top 2 results, reduced token cost for workers
+Uses adaptive injection:
+  - Hybrid search (FTS5 + vector) when embeddings/sqlite-vec are available
+  - Score-gated injection of 1-5 chunks based on RRF confidence
+  - FTS-only fallback when hybrid search is unavailable
 
 Output: plain text to stdout (injected as Claude context).
 Target: <500ms total.
@@ -18,8 +17,15 @@ import re
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 DEADLINE_MS = 450
+RRF_K = 60
+HIGH_CONFIDENCE_THRESHOLD = 0.015
+MODERATE_CONFIDENCE_THRESHOLD = 0.010
+LIGHT_CONFIDENCE_THRESHOLD = 0.005
+MAX_ADAPTIVE_INJECTION = 5
+MAX_HYBRID_CANDIDATES = 8
 
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
@@ -44,6 +50,7 @@ def should_activate():
     light = os.environ.get("BRAINLAYER_HOOKS_LIGHT") == "1"
 
     return True, light
+
 
 # Trigger words that activate deep mode (more results)
 DEEP_TRIGGERS = {
@@ -71,36 +78,202 @@ DEEP_TRIGGERS = {
 # Source: Phase 3 session mining — agents assumed M4 Max (wrong), tax history (wrong),
 # Avi Tour (voice transcription error). All would have been caught by brain_search.
 ASSUME_TRIGGERS = {
-    "hardware", "laptop", "macbook", "machine", "specs", "ram", "cpu",
-    "biography", "background", "tax", "salary", "income",
-    "family", "partner", "wife", "girlfriend", "husband",
-    "birthday", "age", "born",
-    "address", "apartment", "city", "neighborhood",
-    "research prompt", "research summary",
+    "hardware",
+    "laptop",
+    "macbook",
+    "machine",
+    "specs",
+    "ram",
+    "cpu",
+    "biography",
+    "background",
+    "tax",
+    "salary",
+    "income",
+    "family",
+    "partner",
+    "wife",
+    "girlfriend",
+    "husband",
+    "birthday",
+    "age",
+    "born",
+    "address",
+    "apartment",
+    "city",
+    "neighborhood",
+    "research prompt",
+    "research summary",
 }
 
 # Common English stop words to skip during keyword extraction
 STOP_WORDS = {
-    "a", "an", "the", "is", "it", "in", "on", "at", "to", "for", "of",
-    "and", "or", "but", "not", "with", "this", "that", "from", "by",
-    "are", "was", "were", "be", "been", "being", "have", "has", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "can", "shall", "must", "need", "let", "me", "my", "i",
-    "you", "your", "we", "our", "they", "them", "their", "he", "she",
-    "his", "her", "its", "if", "then", "else", "when", "where", "how",
-    "what", "which", "who", "why", "so", "just", "also", "very", "too",
-    "up", "out", "about", "into", "over", "after", "some", "any", "all",
-    "no", "yes", "ok", "okay", "please", "thanks", "thank", "hey",
-    "hi", "hello", "sure", "right", "well", "now", "here", "there",
-    "like", "want", "think", "know", "see", "look", "make", "take",
-    "get", "go", "come", "use", "try", "help", "tell", "give", "show",
-    "work", "call", "run", "set", "add", "put", "keep", "find", "read",
-    "write", "create", "build", "check", "start", "stop", "change",
-    "move", "open", "close", "new", "old", "good", "bad", "big",
-    "small", "first", "last", "next", "more", "less", "much", "many",
-    "each", "every", "other", "same", "different", "own", "still",
-    "already", "again", "even", "really", "actually", "probably",
-    "maybe", "file", "thing", "way", "something", "anything",
+    "a",
+    "an",
+    "the",
+    "is",
+    "it",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "and",
+    "or",
+    "but",
+    "not",
+    "with",
+    "this",
+    "that",
+    "from",
+    "by",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
+    "shall",
+    "must",
+    "need",
+    "let",
+    "me",
+    "my",
+    "i",
+    "you",
+    "your",
+    "we",
+    "our",
+    "they",
+    "them",
+    "their",
+    "he",
+    "she",
+    "his",
+    "her",
+    "its",
+    "if",
+    "then",
+    "else",
+    "when",
+    "where",
+    "how",
+    "what",
+    "which",
+    "who",
+    "why",
+    "so",
+    "just",
+    "also",
+    "very",
+    "too",
+    "up",
+    "out",
+    "about",
+    "into",
+    "over",
+    "after",
+    "some",
+    "any",
+    "all",
+    "no",
+    "yes",
+    "ok",
+    "okay",
+    "please",
+    "thanks",
+    "thank",
+    "hey",
+    "hi",
+    "hello",
+    "sure",
+    "right",
+    "well",
+    "now",
+    "here",
+    "there",
+    "like",
+    "want",
+    "think",
+    "know",
+    "see",
+    "look",
+    "make",
+    "take",
+    "get",
+    "go",
+    "come",
+    "use",
+    "try",
+    "help",
+    "tell",
+    "give",
+    "show",
+    "work",
+    "call",
+    "run",
+    "set",
+    "add",
+    "put",
+    "keep",
+    "find",
+    "read",
+    "write",
+    "create",
+    "build",
+    "check",
+    "start",
+    "stop",
+    "change",
+    "move",
+    "open",
+    "close",
+    "new",
+    "old",
+    "good",
+    "bad",
+    "big",
+    "small",
+    "first",
+    "last",
+    "next",
+    "more",
+    "less",
+    "much",
+    "many",
+    "each",
+    "every",
+    "other",
+    "same",
+    "different",
+    "own",
+    "still",
+    "already",
+    "again",
+    "even",
+    "really",
+    "actually",
+    "probably",
+    "maybe",
+    "file",
+    "thing",
+    "way",
+    "something",
+    "anything",
 }
 
 _CANONICAL_DB = os.path.expanduser("~/.local/share/brainlayer/brainlayer.db")
@@ -228,6 +401,8 @@ def get_entity_chunks(entity_id, conn, limit=3):
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
             WHERE ec.entity_id = ?
+              AND COALESCE(c.project, '') != 'eval-sandbox'
+              AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
             ORDER BY ec.relevance DESC
             LIMIT ?
             """,
@@ -236,6 +411,226 @@ def get_entity_chunks(entity_id, conn, limit=3):
         return rows
     except sqlite3.Error:
         return []
+
+
+def _parse_tags(tags):
+    if tags is None:
+        return []
+    if isinstance(tags, list):
+        return [str(tag) for tag in tags]
+    if isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(tag) for tag in parsed]
+        return [part.strip() for part in tags.split(",") if part.strip()]
+    return []
+
+
+def filter_pollution_rows(rows):
+    """Exclude eval/test chunks from prompt injection."""
+    filtered = []
+    for row in rows:
+        if row.get("project") == "eval-sandbox":
+            continue
+        if "eval-test" in _parse_tags(row.get("tags")):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def strategic_reorder(rows):
+    """Place best result first and second-best last for U-shaped attention."""
+    if len(rows) < 3:
+        return list(rows)
+    ordered = list(rows)
+    best = ordered[0]
+    second = ordered[1]
+    middle = ordered[2:]
+    return [best, *middle, second]
+
+
+def select_adaptive_injection_rows(rows, entity_count=0, light_mode=False):
+    """Select 0-5 rows based on RRF score thresholds."""
+    del entity_count  # Reserved for future tuning of entity-card budgets.
+
+    filtered = filter_pollution_rows(rows)
+    if not filtered:
+        return []
+
+    sorted_rows = sorted(filtered, key=lambda row: row.get("rrf_score", 0.0), reverse=True)
+    top_score = sorted_rows[0].get("rrf_score", 0.0)
+
+    if top_score < LIGHT_CONFIDENCE_THRESHOLD:
+        return []
+
+    if top_score > HIGH_CONFIDENCE_THRESHOLD:
+        high_confidence = [row for row in sorted_rows if row.get("rrf_score", 0.0) > HIGH_CONFIDENCE_THRESHOLD]
+        selected = high_confidence[:3]
+        if len(selected) < 2:
+            selected = sorted_rows[: min(2, len(sorted_rows))]
+    elif top_score >= MODERATE_CONFIDENCE_THRESHOLD:
+        selected = [row for row in sorted_rows if row.get("rrf_score", 0.0) >= MODERATE_CONFIDENCE_THRESHOLD][
+            :MAX_ADAPTIVE_INJECTION
+        ]
+    else:
+        selected = [sorted_rows[0]]
+
+    if light_mode:
+        selected = selected[:2]
+
+    return strategic_reorder(selected[:MAX_ADAPTIVE_INJECTION])
+
+
+def _ensure_src_on_syspath():
+    src_path = Path(__file__).resolve().parents[1] / "src"
+    if src_path.exists():
+        src_str = str(src_path)
+        if src_str not in sys.path:
+            sys.path.insert(0, src_str)
+
+
+def run_hybrid_search(prompt, db_path, keywords, limit):
+    """Run hybrid search and return scored rows suitable for adaptive injection."""
+    _ensure_src_on_syspath()
+
+    from brainlayer._helpers import _escape_fts5_query
+    from brainlayer.embeddings import get_embedding_model
+    from brainlayer.vector_store import VectorStore
+
+    query_text = " ".join(keywords) if keywords else prompt
+    model = get_embedding_model()
+    query_embedding = model.embed_query(prompt)
+
+    store = VectorStore(Path(db_path))
+    try:
+        semantic_limit = limit * 3
+        if getattr(store, "_binary_index_available", False):
+            semantic = store._binary_search(query_embedding=query_embedding, n_results=semantic_limit)
+            semantic = store._rerank_binary_results_with_float(query_embedding, semantic)
+        else:
+            semantic = store.search(query_embedding=query_embedding, n_results=semantic_limit)
+
+        semantic_ranks = {}
+        semantic_rows = {}
+        for idx, chunk_id in enumerate(semantic["ids"][0]):
+            if not chunk_id or chunk_id in semantic_ranks:
+                continue
+            meta = (semantic["metadatas"][0][idx] or {}).copy()
+            semantic_ranks[chunk_id] = idx
+            semantic_rows[chunk_id] = {
+                "id": chunk_id,
+                "content": semantic["documents"][0][idx],
+                "importance": meta.get("importance"),
+                "project": meta.get("project"),
+                "tags": meta.get("tags"),
+                "created_at": meta.get("created_at"),
+            }
+
+        fts_ranks = {}
+        fts_rows = {}
+        fts_query = _escape_fts5_query(query_text)
+        if fts_query:
+            cursor = store._read_cursor()
+            fts_results = list(
+                cursor.execute(
+                    """
+                    SELECT f.chunk_id, c.content, c.importance, c.project, c.tags, c.created_at
+                    FROM chunks_fts f
+                    JOIN chunks c ON c.id = f.chunk_id
+                    WHERE chunks_fts MATCH ?
+                      AND COALESCE(c.project, '') != 'eval-sandbox'
+                      AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
+                      AND c.superseded_by IS NULL
+                      AND c.aggregated_into IS NULL
+                      AND c.archived_at IS NULL
+                    ORDER BY f.rank
+                    LIMIT ?
+                    """,
+                    (fts_query, semantic_limit),
+                )
+            )
+            for idx, row in enumerate(fts_results):
+                chunk_id, content, importance, project, tags, created_at = row
+                if chunk_id in fts_ranks:
+                    continue
+                fts_ranks[chunk_id] = idx
+                fts_rows[chunk_id] = {
+                    "id": chunk_id,
+                    "content": content,
+                    "importance": importance,
+                    "project": project,
+                    "tags": tags,
+                    "created_at": created_at,
+                }
+
+        merged = []
+        for chunk_id in set(semantic_ranks) | set(fts_ranks):
+            score = 0.0
+            if chunk_id in semantic_ranks:
+                score += 1.0 / (RRF_K + semantic_ranks[chunk_id])
+            if chunk_id in fts_ranks:
+                score += 1.0 / (RRF_K + fts_ranks[chunk_id])
+
+            row = semantic_rows.get(chunk_id, fts_rows.get(chunk_id))
+            if row is None:
+                continue
+            merged.append(
+                {
+                    **row,
+                    "rrf_score": score,
+                }
+            )
+
+        return sorted(filter_pollution_rows(merged), key=lambda row: row["rrf_score"], reverse=True)
+    finally:
+        store.close()
+
+
+def run_fts_search(db_path, keywords, limit):
+    """Current FTS-only fallback path."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+    try:
+        conn.execute("PRAGMA busy_timeout=1000")
+        conn.execute("PRAGMA query_only=true")
+        fts_query = " OR ".join(f'"{kw}"' for kw in keywords)
+        rows = conn.execute(
+            """
+            SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
+            FROM chunks_fts f
+            JOIN chunks c ON c.id = f.chunk_id
+            WHERE chunks_fts MATCH ?
+              AND COALESCE(c.project, '') != 'eval-sandbox'
+              AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (fts_query, limit),
+        ).fetchall()
+        return [
+            {
+                "id": chunk_id,
+                "content": content,
+                "importance": importance,
+                "project": project,
+                "tags": tags,
+                "created_at": created_at,
+                "rrf_score": 0.0,
+            }
+            for chunk_id, content, importance, project, tags, created_at in rows
+        ]
+    finally:
+        conn.close()
+
+
+def search_prompt_chunks(prompt, db_path, keywords, limit):
+    """Search with hybrid first, then fall back to FTS-only behavior."""
+    try:
+        return run_hybrid_search(prompt, db_path, keywords, limit), True
+    except Exception:
+        return run_fts_search(db_path, keywords, limit), False
 
 
 def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
@@ -325,16 +720,8 @@ def main():
     except sqlite3.Error:
         sys.exit(0)
 
-    # Over-fetch to compensate for dedup removals
-    # Light mode: cap at 2 results to reduce token cost for workers
-    if light_mode:
-        base_limit = 2
-    else:
-        base_limit = 8 if deep else 3
-    limit = base_limit + len(already_injected) if already_injected else base_limit
-
-    # Build FTS5 query: join keywords with OR for broader matching
-    fts_query = " OR ".join(f'"{kw}"' for kw in keywords)
+    fallback_limit = 2 if light_mode else (8 if deep else 3)
+    search_limit = MAX_HYBRID_CANDIDATES + len(already_injected) if already_injected else MAX_HYBRID_CANDIDATES
 
     lines = []
     new_chunk_ids = []
@@ -356,58 +743,56 @@ def main():
                     lines.append(f"- [{date}{proj}] {truncate(content, max_chars=150)}")
 
         if elapsed_ms(start) < DEADLINE_MS:
-            rows = conn.execute(
-                """
-                SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
-                FROM chunks_fts f
-                JOIN chunks c ON c.id = f.chunk_id
-                WHERE chunks_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (fts_query, limit),
-            ).fetchall()
+            rows, used_hybrid = search_prompt_chunks(
+                prompt=prompt,
+                db_path=db_path,
+                keywords=keywords,
+                limit=search_limit,
+            )
 
-            # Filter out already-injected chunks (dedup)
-            filtered_rows = []
+            deduped_rows = []
             for row in rows:
-                chunk_id = row[0]
-                if chunk_id not in already_injected:
-                    filtered_rows.append(row)
-                if len(filtered_rows) >= base_limit:
-                    break
+                if row["id"] in already_injected:
+                    continue
+                deduped_rows.append(row)
 
-            if filtered_rows:
+            if used_hybrid:
+                selected_rows = select_adaptive_injection_rows(
+                    deduped_rows,
+                    entity_count=len(entities) if "entities" in locals() else 0,
+                    light_mode=light_mode,
+                )
+                mode_label = "adaptive"
+            else:
+                selected_rows = deduped_rows[:fallback_limit]
                 mode_label = "deep" if deep else "auto"
+
+            if selected_rows:
                 if lines:
-                    # Entity section already started — add separator
                     lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
                 else:
                     lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
-                for chunk_id, content, importance, project, tags, created_at in filtered_rows:
-                    date = created_at[:10] if created_at else "?"
+                for row in selected_rows:
+                    date = row.get("created_at", "")[:10] if row.get("created_at") else "?"
+                    importance = row.get("importance")
+                    project = row.get("project")
                     imp = f" imp:{importance:.0f}" if importance else ""
                     proj = f" ({project})" if project else ""
-                    lines.append(
-                        f"- [{date}{imp}{proj}] {truncate(content)}"
-                    )
-                    new_chunk_ids.append(chunk_id)
-                    new_briefs.append(truncate(content, max_chars=80))
+                    lines.append(f"- [{date}{imp}{proj}] {truncate(row['content'])}")
+                    new_chunk_ids.append(row["id"])
+                    new_briefs.append(truncate(row["content"], max_chars=80))
 
-                if not deep:
-                    lines.append(
-                        "(Use brain_search for deeper results.)"
-                    )
+                if used_hybrid and selected_rows[0].get("rrf_score") is not None:
+                    lines.append(f"(Adaptive RRF confidence: {selected_rows[0]['rrf_score']:.3f} top score)")
+                elif not deep:
+                    lines.append("(Use brain_search for deeper results.)")
     except sqlite3.Error:
         pass
     finally:
         conn.close()
 
     # Inject search-before-assume reminder when prompt contains assumption-prone keywords
-    assume_detected = any(
-        re.search(r"\b" + re.escape(trigger) + r"\b", prompt_lower)
-        for trigger in ASSUME_TRIGGERS
-    )
+    assume_detected = any(re.search(r"\b" + re.escape(trigger) + r"\b", prompt_lower) for trigger in ASSUME_TRIGGERS)
     if assume_detected:
         lines.append(
             "⚠️ SEARCH-BEFORE-ASSUME: This prompt mentions personal/biographical facts. "
