@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import struct
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -425,6 +426,195 @@ class SearchMixin:
             for row in results
         ]
 
+    def _binary_search(
+        self,
+        query_embedding: List[float],
+        n_results: int,
+        project_filter: Optional[str] = None,
+        content_type_filter: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        sender_filter: Optional[str] = None,
+        language_filter: Optional[str] = None,
+        tag_filter: Optional[str] = None,
+        intent_filter: Optional[str] = None,
+        importance_min: Optional[float] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        sentiment_filter: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        include_archived: bool = False,
+    ) -> Dict[str, List]:
+        """Run KNN search against binary-quantized vectors."""
+        cursor = self._read_cursor()
+        query_bytes = serialize_f32(query_embedding)
+
+        where_clauses = []
+        filter_params: list = []
+
+        if entity_id:
+            where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
+            filter_params.append(entity_id)
+        if project_filter:
+            where_clauses.append("(c.project = ? OR c.project IS NULL)")
+            filter_params.append(project_filter)
+        if content_type_filter:
+            where_clauses.append("c.content_type = ?")
+            filter_params.append(content_type_filter)
+        if source_filter:
+            where_clauses.append("c.source = ?")
+            filter_params.append(source_filter)
+        if sender_filter:
+            where_clauses.append("c.sender = ?")
+            filter_params.append(sender_filter)
+        if language_filter:
+            where_clauses.append("c.language = ?")
+            filter_params.append(language_filter)
+        if tag_filter:
+            where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
+            filter_params.append(tag_filter)
+        if intent_filter:
+            where_clauses.append("c.intent = ?")
+            filter_params.append(intent_filter)
+        if importance_min is not None:
+            where_clauses.append("c.importance >= ?")
+            filter_params.append(importance_min)
+        if date_from:
+            where_clauses.append("c.created_at >= ?")
+            filter_params.append(date_from)
+        if date_to:
+            where_clauses.append("c.created_at <= ?")
+            filter_params.append(date_to)
+        if sentiment_filter:
+            where_clauses.append("c.sentiment_label = ?")
+            filter_params.append(sentiment_filter)
+        if not include_archived:
+            where_clauses.append("c.superseded_by IS NULL")
+            where_clauses.append("c.aggregated_into IS NULL")
+            where_clauses.append("c.archived_at IS NULL")
+
+        where_sql = ""
+        if where_clauses:
+            where_sql = "AND " + " AND ".join(where_clauses)
+
+        needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
+        effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
+        params = [query_bytes, effective_k] + filter_params
+        results = list(
+            cursor.execute(
+                f"""
+                SELECT c.id, c.content, c.metadata, c.source_file, c.project,
+                       c.content_type, c.value_type, c.char_count,
+                       v.distance,
+                       c.summary, c.tags, c.importance, c.intent,
+                       c.created_at, c.source
+                FROM chunk_vectors_binary v
+                JOIN chunks c ON v.chunk_id = c.id
+                WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
+                ORDER BY v.distance
+                """,
+                params,
+            )
+        )
+
+        ids = []
+        documents = []
+        metadatas = []
+        distances = []
+
+        for row in results:
+            ids.append(row[0])
+            documents.append(row[1])
+            try:
+                metadata = json.loads(row[2])
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+            metadata.update(
+                {
+                    "source_file": row[3],
+                    "project": row[4],
+                    "content_type": row[5],
+                    "value_type": row[6],
+                    "char_count": row[7],
+                }
+            )
+            if row[9]:
+                metadata["summary"] = row[9]
+            if row[10]:
+                try:
+                    metadata["tags"] = json.loads(row[10])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if row[11] is not None:
+                metadata["importance"] = row[11]
+            if row[12]:
+                metadata["intent"] = row[12]
+            if row[13]:
+                metadata["created_at"] = row[13]
+            if row[14]:
+                metadata["source"] = row[14]
+            metadatas.append(metadata)
+            distances.append(row[8])
+
+        return {
+            "ids": [ids],
+            "documents": [documents],
+            "metadatas": [metadatas],
+            "distances": [distances],
+        }
+
+    def _rerank_binary_results_with_float(
+        self, query_embedding: List[float], semantic_results: Dict[str, List]
+    ) -> Dict[str, List]:
+        """Restore precision by reranking binary candidates with exact float distance."""
+        ids = semantic_results.get("ids", [[]])[0]
+        if not ids:
+            return semantic_results
+
+        cursor = self._read_cursor()
+        placeholders = ",".join("?" for _ in ids)
+        rows = list(
+            cursor.execute(
+                f"SELECT chunk_id, embedding FROM chunk_vectors WHERE chunk_id IN ({placeholders})",
+                ids,
+            )
+        )
+        if not rows:
+            return semantic_results
+
+        exact_distances = {}
+        query = [float(value) for value in query_embedding]
+        for chunk_id, embedding_blob in rows:
+            vector = struct.unpack(f"{len(embedding_blob) // 4}f", embedding_blob)
+            exact_distances[chunk_id] = sum((a - b) ** 2 for a, b in zip(query, vector))
+
+        order = sorted(
+            range(len(ids)),
+            key=lambda idx: (
+                exact_distances.get(
+                    ids[idx],
+                    semantic_results["distances"][0][idx]
+                    if semantic_results["distances"][0][idx] is not None
+                    else float("inf"),
+                ),
+                idx,
+            ),
+        )
+
+        return {
+            "ids": [[semantic_results["ids"][0][idx] for idx in order]],
+            "documents": [[semantic_results["documents"][0][idx] for idx in order]],
+            "metadatas": [[semantic_results["metadatas"][0][idx] for idx in order]],
+            "distances": [
+                [
+                    exact_distances.get(
+                        semantic_results["ids"][0][idx],
+                        semantic_results["distances"][0][idx],
+                    )
+                    for idx in order
+                ]
+            ],
+        }
+
     def hybrid_search(
         self,
         query_embedding: List[float],
@@ -488,24 +678,45 @@ class SearchMixin:
             else:
                 del _hybrid_cache[cache_key]
 
-        # 1. Semantic search — get more results for fusion (uses _read_cursor via search())
-        semantic = self.search(
-            query_embedding=query_embedding,
-            n_results=n_results * 3,
-            project_filter=project_filter,
-            content_type_filter=content_type_filter,
-            source_filter=source_filter,
-            sender_filter=sender_filter,
-            language_filter=language_filter,
-            tag_filter=tag_filter,
-            intent_filter=intent_filter,
-            importance_min=importance_min,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment_filter=sentiment_filter,
-            entity_id=entity_id,
-            include_archived=include_archived,
-        )
+        # 1. Semantic search leg — prefer binary vectors, fall back to float vectors
+        # when the binary index is unavailable (for example readonly live DBs).
+        if getattr(self, "_binary_index_available", False):
+            semantic = self._binary_search(
+                query_embedding=query_embedding,
+                n_results=n_results * 3,
+                project_filter=project_filter,
+                content_type_filter=content_type_filter,
+                source_filter=source_filter,
+                sender_filter=sender_filter,
+                language_filter=language_filter,
+                tag_filter=tag_filter,
+                intent_filter=intent_filter,
+                importance_min=importance_min,
+                date_from=date_from,
+                date_to=date_to,
+                sentiment_filter=sentiment_filter,
+                entity_id=entity_id,
+                include_archived=include_archived,
+            )
+            semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
+        else:
+            semantic = self.search(
+                query_embedding=query_embedding,
+                n_results=n_results * 3,
+                project_filter=project_filter,
+                content_type_filter=content_type_filter,
+                source_filter=source_filter,
+                sender_filter=sender_filter,
+                language_filter=language_filter,
+                tag_filter=tag_filter,
+                intent_filter=intent_filter,
+                importance_min=importance_min,
+                date_from=date_from,
+                date_to=date_to,
+                sentiment_filter=sentiment_filter,
+                entity_id=entity_id,
+                include_archived=include_archived,
+            )
 
         # Build semantic rank map: chunk_content -> rank
         semantic_ranks = {}

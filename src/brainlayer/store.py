@@ -36,7 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from .vector_store import VectorStore, serialize_f32
+from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -168,11 +168,7 @@ def store_memory(
 
     # Insert embedding into chunk_vectors (only if we have one)
     if embedding is not None:
-        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-        cursor.execute(
-            "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-            (chunk_id, serialize_f32(embedding)),
-        )
+        store._upsert_chunk_vector(cursor, chunk_id, embedding)
 
     # Link to entity if entity_id provided (per-person memory tagging)
     if entity_id:
@@ -236,15 +232,14 @@ def embed_pending_chunks(
     for chunk_id, content in rows:
         try:
             embedding = embed_fn(content)
-            cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-            cursor.execute(
-                "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-                (chunk_id, serialize_f32(embedding)),
-            )
+            store._upsert_chunk_vector(cursor, chunk_id, embedding)
             count += 1
         except Exception as e:
             logger.warning("Failed to embed chunk %s: %s", chunk_id, e)
 
+    from .search_repo import clear_hybrid_search_cache
+
+    clear_hybrid_search_cache(getattr(store, "db_path", None))
     return count
 
 
