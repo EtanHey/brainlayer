@@ -17,8 +17,11 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 
+from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
 
 DEADLINE_MS = 450
@@ -32,7 +35,6 @@ MAX_HYBRID_CANDIDATES = 8
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
 HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
-
 
 def should_activate():
     """Conditional activation gate — skip hook when not needed.
@@ -317,6 +319,31 @@ def extract_keywords(prompt):
             seen.add(w)
 
     return keywords[:8]  # Cap at 8 keywords for FTS5 performance
+
+
+HEBREW_WORD_RE = re.compile(r"[\u0590-\u05FF]{2,}")
+HEBREW_PREFIXES = set("בלמשהוכ")
+
+
+def strip_hebrew_prefix(text):
+    """Strip common Hebrew prefixes for alias-friendly matching."""
+    if not text or len(text) < 3:
+        return text
+    if text[0] in HEBREW_PREFIXES:
+        return text[1:]
+    return text
+
+
+def extract_hebrew_keywords(prompt):
+    """Extract Hebrew tokens and prefix-stripped variants for recall."""
+    keywords = []
+    seen = set()
+    for word in HEBREW_WORD_RE.findall(prompt):
+        for candidate in (word, strip_hebrew_prefix(word)):
+            if len(candidate) >= 2 and candidate not in seen:
+                keywords.append(candidate)
+                seen.add(candidate)
+    return keywords[:8]
 
 
 def truncate(text, max_chars=200):
@@ -707,6 +734,95 @@ def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
             conn.close()
 
 
+def record_prompt_classification(session_id, prompt, classification):
+    """Best-effort JSONL logging for route analysis without DB writes."""
+    if not prompt:
+        return
+
+    log_path = os.environ.get(
+        "BRAINLAYER_PROMPT_CLASSIFICATION_LOG",
+        os.path.expanduser("~/.local/share/brainlayer/prompt_classification_events.jsonl"),
+    )
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "session_id": session_id,
+                        "prompt_hash": sha256(prompt.encode("utf-8")).hexdigest(),
+                        "classification": classification,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                + "\n"
+            )
+    except OSError:
+        pass
+
+
+def build_fts_query(keywords):
+    return " OR ".join(f'"{kw}"' for kw in keywords)
+
+
+def fetch_matching_chunks(conn, fts_query, limit, date_from=None):
+    extra_sql = ""
+    params = [fts_query]
+    if date_from:
+        extra_sql = "AND c.created_at >= ?"
+        params.append(date_from)
+    params.append(limit)
+
+    return conn.execute(
+        f"""
+        SELECT c.id, c.content, c.importance, c.project, c.tags, c.created_at
+        FROM chunks_fts f
+        JOIN chunks c ON c.id = f.chunk_id
+        WHERE chunks_fts MATCH ?
+        {extra_sql}
+        ORDER BY rank
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def inject_entity_context(lines, prompt, conn):
+    entities = detect_entities_in_prompt(prompt, conn)
+    for entity in entities[:2]:
+        etype = entity["entity_type"]
+        ename = entity["name"]
+        lines.append(f"[Entity: {ename} — {etype}]")
+        entity_chunks = get_entity_chunks(entity["id"], conn, limit=2)
+        for content, created_at, project in entity_chunks:
+            date = created_at[:10] if created_at else "?"
+            proj = f" ({project})" if project else ""
+            lines.append(f"- [{date}{proj}] {truncate(content, max_chars=150)}")
+    return entities
+
+
+def inject_search_results(lines, rows, deep, label="auto"):
+    chunk_ids = []
+    briefs = []
+    if not rows:
+        return chunk_ids, briefs
+
+    mode_label = "deep" if deep else label
+    lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
+    for chunk_id, content, importance, project, tags, created_at in rows:
+        date = created_at[:10] if created_at else "?"
+        imp = f" imp:{importance:.0f}" if importance else ""
+        proj = f" ({project})" if project else ""
+        lines.append(f"- [{date}{imp}{proj}] {truncate(content)}")
+        chunk_ids.append(chunk_id)
+        briefs.append(truncate(content, max_chars=80))
+
+    if not deep and label in {"auto", "follow_up", "hebrew"}:
+        lines.append("(Use brain_search for deeper results.)")
+
+    return chunk_ids, briefs
+
+
 def main():
     start = time.monotonic()
 
@@ -720,14 +836,17 @@ def main():
         sys.exit(0)
 
     prompt = hook_input.get("prompt", "")
-    if not prompt or len(prompt) < MIN_PROMPT_LENGTH:
+    if not prompt:
+        sys.exit(0)
+
+    session_id = hook_input.get("session_id", "")
+
+    classification = classify_prompt(prompt)
+    record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)
+    if classification in {"command", "casual_chat"}:
         sys.exit(0)
 
     prompt_lower = prompt.lower()
-
-    # Skip if prompt is a slash command
-    if prompt.strip().startswith("/"):
-        sys.exit(0)
 
     # Handoff detection: skip auto-search to avoid duplicate injection
     # (SessionStart already injected handoff context)
@@ -740,19 +859,12 @@ def main():
     except ImportError:
         pass
 
-    deep = is_deep_mode(prompt_lower)
-    keywords = extract_keywords(prompt)
-
-    if not keywords:
-        sys.exit(0)
-
     db_path = get_db_path()
     if not db_path:
         sys.exit(0)
 
     # Load already-injected chunk IDs from coordination file
     already_injected = set()
-    session_id = hook_input.get("session_id", "")
     try:
         from dedup_coordination import get_injected_ids
 
@@ -770,72 +882,69 @@ def main():
     except sqlite3.Error:
         sys.exit(0)
 
-    fallback_limit = 2 if light_mode else (8 if deep else 3)
-    search_limit = MAX_HYBRID_CANDIDATES + len(already_injected) if already_injected else MAX_HYBRID_CANDIDATES
+    detected_entities = []
+    if classification == "knowledge_question":
+        detected_entities = detect_entities_in_prompt(prompt, conn)
+        classification = classify_prompt(prompt, detected_entities=detected_entities)
+        record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)
+
+    deep = is_deep_mode(prompt_lower)
+    if classification == "hebrew_query":
+        keywords = extract_hebrew_keywords(prompt) or extract_keywords(prompt)
+    else:
+        keywords = extract_keywords(prompt)
+
+    if not keywords and classification != "entity_lookup":
+        conn.close()
+        sys.exit(0)
+
+    # Over-fetch to compensate for dedup removals
+    # Light mode: cap at 2 results to reduce token cost for workers
+    if light_mode:
+        base_limit = 2
+    else:
+        base_limit = 8 if deep else 3
+    limit = base_limit + len(already_injected) if already_injected else base_limit
+
+    fts_query = build_fts_query(keywords)
 
     lines = []
     new_chunk_ids = []
     new_briefs = []
     try:
-        # Phase A: Entity routing — detect known entity names in prompt
-        # and inject entity profile before FTS results.
-        if elapsed_ms(start) < DEADLINE_MS:
-            entities = detect_entities_in_prompt(prompt, conn)
-            for entity in entities[:2]:  # at most 2 entities per prompt
-                etype = entity["entity_type"]
-                ename = entity["name"]
-                lines.append(f"[Entity: {ename} — {etype}]")
-                # Get entity-linked chunks for context
-                entity_chunks = get_entity_chunks(entity["id"], conn, limit=2)
-                for content, created_at, project in entity_chunks:
-                    date = created_at[:10] if created_at else "?"
-                    proj = f" ({project})" if project else ""
-                    lines.append(f"- [{date}{proj}] {truncate(content, max_chars=150)}")
+        if classification == "entity_lookup" and elapsed_ms(start) < DEADLINE_MS:
+            detected_entities = inject_entity_context(lines, prompt, conn)
+        elif classification in {"knowledge_question", "follow_up", "hebrew_query"} and elapsed_ms(start) < DEADLINE_MS:
+            if detected_entities and classification == "knowledge_question":
+                inject_entity_context(lines, prompt, conn)
 
-        if elapsed_ms(start) < DEADLINE_MS:
-            rows, used_hybrid = search_prompt_chunks(
-                prompt=prompt,
-                db_path=db_path,
-                keywords=keywords,
-                limit=search_limit,
-            )
+            date_from = None
+            label = "auto"
+            if classification == "follow_up":
+                date_from = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                label = "follow_up"
+            elif classification == "hebrew_query":
+                label = "hebrew"
 
-            deduped_rows = []
+            rows = fetch_matching_chunks(conn, fts_query, limit, date_from=date_from)
+            filtered_rows = []
             for row in rows:
-                if row["id"] in already_injected:
-                    continue
-                deduped_rows.append(row)
+                chunk_id = row[0]
+                if chunk_id not in already_injected:
+                    filtered_rows.append(row)
+                if len(filtered_rows) >= base_limit:
+                    break
 
-            if used_hybrid:
-                selected_rows = select_adaptive_injection_rows(
-                    deduped_rows,
-                    entity_count=len(entities) if "entities" in locals() else 0,
-                    light_mode=light_mode,
-                )
-                mode_label = "adaptive"
-            else:
-                selected_rows = deduped_rows[:fallback_limit]
-                mode_label = "deep" if deep else "auto"
+            if classification == "follow_up" and not filtered_rows:
+                rows = fetch_matching_chunks(conn, fts_query, limit)
+                for row in rows:
+                    chunk_id = row[0]
+                    if chunk_id not in already_injected:
+                        filtered_rows.append(row)
+                    if len(filtered_rows) >= base_limit:
+                        break
 
-            if selected_rows:
-                if lines:
-                    lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
-                else:
-                    lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
-                for row in selected_rows:
-                    date = row.get("created_at", "")[:10] if row.get("created_at") else "?"
-                    importance = row.get("importance")
-                    project = row.get("project")
-                    imp = f" imp:{importance:.0f}" if importance else ""
-                    proj = f" ({project})" if project else ""
-                    lines.append(f"- [{date}{imp}{proj}] {truncate(row['content'])}")
-                    new_chunk_ids.append(row["id"])
-                    new_briefs.append(truncate(row["content"], max_chars=80))
-
-                if used_hybrid and selected_rows[0].get("rrf_score") is not None:
-                    lines.append(f"(Adaptive RRF confidence: {selected_rows[0]['rrf_score']:.3f} top score)")
-                elif not deep:
-                    lines.append("(Use brain_search for deeper results.)")
+            new_chunk_ids, new_briefs = inject_search_results(lines, filtered_rows, deep, label=label)
     except sqlite3.Error:
         pass
     finally:
