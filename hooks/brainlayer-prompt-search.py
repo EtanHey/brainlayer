@@ -66,6 +66,19 @@ DEEP_TRIGGERS = {
     "brainlayer",
 }
 
+# Keywords that signal assumption-prone prompts (personal facts, biography, specs)
+# When detected: inject a search-before-assume reminder.
+# Source: Phase 3 session mining — agents assumed M4 Max (wrong), tax history (wrong),
+# Avi Tour (voice transcription error). All would have been caught by brain_search.
+ASSUME_TRIGGERS = {
+    "hardware", "laptop", "macbook", "machine", "specs", "ram", "cpu",
+    "biography", "background", "tax", "salary", "income",
+    "family", "partner", "wife", "girlfriend", "husband",
+    "birthday", "age", "born",
+    "address", "apartment", "city", "neighborhood",
+    "research prompt", "research summary",
+}
+
 # Common English stop words to skip during keyword extraction
 STOP_WORDS = {
     "a", "an", "the", "is", "it", "in", "on", "at", "to", "for", "of",
@@ -87,7 +100,7 @@ STOP_WORDS = {
     "small", "first", "last", "next", "more", "less", "much", "many",
     "each", "every", "other", "same", "different", "own", "still",
     "already", "again", "even", "really", "actually", "probably",
-    "maybe", "file", "code", "thing", "way", "something", "anything",
+    "maybe", "file", "thing", "way", "something", "anything",
 }
 
 _CANONICAL_DB = os.path.expanduser("~/.local/share/brainlayer/brainlayer.db")
@@ -123,7 +136,7 @@ def extract_keywords(prompt):
     keywords = []
     seen = set()
     for w in words:
-        if w not in STOP_WORDS and len(w) > 2 and w not in seen:
+        if w not in STOP_WORDS and len(w) >= 2 and w not in seen:
             keywords.append(w)
             seen.add(w)
 
@@ -153,7 +166,7 @@ def detect_entities_in_prompt(prompt, conn):
     Technology/concept entities are too noisy for automatic injection.
     """
     # Entity types that warrant automatic context injection
-    INJECT_TYPES = {"person", "company", "agent"}
+    INJECT_TYPES = {"person", "company", "agent", "project", "technology", "tool"}
 
     def _clean_word(w):
         """Strip trailing punctuation and possessive suffixes ('s, 's)."""
@@ -225,6 +238,30 @@ def get_entity_chunks(entity_id, conn, limit=3):
         return []
 
 
+def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
+    """Best-effort write of an injection event for BrainBar's live viewer."""
+    if not db_path or not session_id or not chunk_ids:
+        return
+
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path, timeout=2)
+        conn.execute("PRAGMA busy_timeout=2000")
+        conn.execute(
+            """
+            INSERT INTO injection_events (session_id, query, chunk_ids, token_count)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, prompt[:1000], json.dumps(chunk_ids), token_count),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def main():
     start = time.monotonic()
 
@@ -280,8 +317,10 @@ def main():
         pass
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+        # AIDEV-NOTE: Do NOT set journal_mode=WAL on readonly — it requires a write lock.
+        # WAL is already set by the Python writer. Just set query_only for safety.
+        conn.execute("PRAGMA busy_timeout=1000")
         conn.execute("PRAGMA query_only=true")
     except sqlite3.Error:
         sys.exit(0)
@@ -364,15 +403,26 @@ def main():
     finally:
         conn.close()
 
+    # Inject search-before-assume reminder when prompt contains assumption-prone keywords
+    assume_detected = any(
+        re.search(r"\b" + re.escape(trigger) + r"\b", prompt_lower)
+        for trigger in ASSUME_TRIGGERS
+    )
+    if assume_detected:
+        lines.append(
+            "⚠️ SEARCH-BEFORE-ASSUME: This prompt mentions personal/biographical facts. "
+            "Run brain_search() to verify before stating any personal details (hardware, history, names)."
+        )
+
     if lines:
         print("\n".join(lines))
 
     # Register newly injected chunks in coordination file
     if session_id and new_chunk_ids:
+        token_estimate = sum(len(b) // 4 for b in new_briefs)
         try:
             from dedup_coordination import register_chunks
 
-            token_estimate = sum(len(b) // 4 for b in new_briefs)
             register_chunks(
                 session_id=session_id,
                 chunk_ids=new_chunk_ids,
@@ -382,6 +432,14 @@ def main():
             )
         except Exception:
             pass  # Best-effort coordination
+
+        record_injection_event(
+            db_path=db_path,
+            session_id=session_id,
+            prompt=prompt,
+            chunk_ids=new_chunk_ids,
+            token_count=token_estimate,
+        )
 
     sys.exit(0)
 
