@@ -243,6 +243,7 @@ def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
     if not db_path or not session_id or not chunk_ids:
         return
 
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=2)
         conn.execute("PRAGMA busy_timeout=2000")
@@ -254,9 +255,11 @@ def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
             (session_id, prompt[:1000], json.dumps(chunk_ids), token_count),
         )
         conn.commit()
-        conn.close()
     except sqlite3.Error:
         pass
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def main():
@@ -401,7 +404,10 @@ def main():
         conn.close()
 
     # Inject search-before-assume reminder when prompt contains assumption-prone keywords
-    assume_detected = any(trigger in prompt_lower for trigger in ASSUME_TRIGGERS)
+    assume_detected = any(
+        re.search(r"\b" + re.escape(trigger) + r"\b", prompt_lower)
+        for trigger in ASSUME_TRIGGERS
+    )
     if assume_detected:
         lines.append(
             "⚠️ SEARCH-BEFORE-ASSUME: This prompt mentions personal/biographical facts. "

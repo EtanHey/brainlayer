@@ -254,6 +254,27 @@ class TestPromptSearchConditional:
         assert ('PRAGMA busy_timeout=1000', ()) in fake_conn.executed
         assert ('PRAGMA query_only=true', ()) in fake_conn.executed
 
+    def test_main_does_not_trigger_assume_warning_on_substring_matches(self, prompt_search, monkeypatch, capsys):
+        fake_conn = FakeConn()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"How should this package program work in practice?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert "SEARCH-BEFORE-ASSUME" not in output
+
 
 class TestStopIndexConditional:
     def test_default_activates(self, stop_index):
