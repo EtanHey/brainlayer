@@ -15,16 +15,17 @@ def store(tmp_path):
     s.close()
 
 
-def _insert_chunk_with_tags(store, chunk_id, tags):
+def _insert_chunk_with_tags(store, chunk_id, tags, source_file="test.jsonl"):
     cursor = store.conn.cursor()
     cursor.execute(
         """INSERT INTO chunks (
             id, content, metadata, source_file, project, content_type,
             char_count, source, tags, created_at
-        ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'tests', ?, datetime('now'))""",
+        ) VALUES (?, ?, '{}', ?, 'brainlayer', 'assistant_text', ?, 'tests', ?, datetime('now'))""",
         (
             chunk_id,
             f"content for {chunk_id}",
+            source_file,
             len(chunk_id),
             json.dumps(tags),
         ),
@@ -51,7 +52,7 @@ class TestTagPromotionCandidates:
         _insert_chunk_with_tags(store, "chunk-2", ["telegram", "debugging", "existing-topic"])
         store.upsert_entity("existing-topic", "topic", "existing-topic")
 
-        candidates = find_promotion_candidates(store, min_count=2)
+        candidates = find_promotion_candidates(store, min_count=2, min_sessions=1)
 
         assert [candidate["tag"] for candidate in candidates] == ["telegram"]
 
@@ -65,7 +66,7 @@ class TestTagPromotionExecution:
         _insert_chunk_with_tags(store, "chunk-3", ["neuroscience"])
         _insert_chunk_with_tags(store, "chunk-4", ["neuroscience"])
 
-        stats = promote_tag_entities(store, min_count=2)
+        stats = promote_tag_entities(store, min_count=2, min_sessions=1)
 
         assert stats["candidates"] == 2
         assert stats["entities_created"] == 2
@@ -86,6 +87,42 @@ class TestTagPromotionExecution:
         )
         assert len(links) == 4
         assert {row[2] for row in links} == {"tag"}
+
+    def test_temporal_dispersion_blocks_single_session(self, store):
+        from brainlayer.pipeline.tag_entity_promotion import promote_tag_entities
+
+        for idx in range(500):
+            _insert_chunk_with_tags(store, f"chunk-{idx}", ["telegram"], source_file="single.jsonl")
+
+        stats = promote_tag_entities(store, min_count=500)
+
+        assert stats["candidates"] == 0
+        assert stats["entities_created"] == 0
+
+    def test_temporal_dispersion_allows_multi_session(self, store):
+        from brainlayer.pipeline.tag_entity_promotion import promote_tag_entities
+
+        for idx in range(500):
+            session_num = idx % 5
+            _insert_chunk_with_tags(store, f"chunk-{idx}", ["telegram"], source_file=f"session-{session_num}.jsonl")
+
+        stats = promote_tag_entities(store, min_count=500)
+
+        assert stats["candidates"] == 1
+        assert stats["entities_created"] == 1
+        assert stats["promoted_tags"] == ["telegram"]
+
+    def test_temporal_dispersion_default(self, store):
+        from brainlayer.pipeline.tag_entity_promotion import promote_tag_entities
+
+        for idx in range(500):
+            session_num = idx % 2
+            _insert_chunk_with_tags(store, f"chunk-{idx}", ["telegram"], source_file=f"session-{session_num}.jsonl")
+
+        stats = promote_tag_entities(store, min_count=500)
+
+        assert stats["candidates"] == 0
+        assert stats["entities_created"] == 0
 
     def test_vector_store_seeds_new_entity_types(self, store):
         cursor = store._read_cursor()

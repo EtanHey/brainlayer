@@ -126,14 +126,15 @@ def classify_tag_entity_type(tag: str) -> str:
 
 
 def find_promotion_candidates(
-    store: VectorStore, min_count: int = 500, limit: int | None = None
+    store: VectorStore, min_count: int = 500, min_sessions: int = 3, limit: int | None = None
 ) -> list[dict[str, Any]]:
     """Find high-frequency concept tags worth promoting to entities."""
     cursor = store._read_cursor()
     placeholders = ", ".join("?" for _ in ACTIVITY_TAGS)
     query = f"""
-        SELECT ct.tag, COUNT(*) as cnt
+        SELECT ct.tag, COUNT(*) as cnt, COUNT(DISTINCT c.source_file) as session_cnt
         FROM chunk_tags ct
+        JOIN chunks c ON c.id = ct.chunk_id
         LEFT JOIN kg_entities e ON lower(e.name) = lower(ct.tag)
         WHERE e.id IS NULL
           AND ct.tag IS NOT NULL
@@ -143,11 +144,11 @@ def find_promotion_candidates(
           AND ct.tag NOT LIKE 'meta/%'
           AND lower(ct.tag) NOT IN ({placeholders})
         GROUP BY ct.tag
-        HAVING COUNT(*) >= ?
+        HAVING COUNT(*) >= ? AND COUNT(DISTINCT c.source_file) >= ?
         ORDER BY cnt DESC, ct.tag ASC
     """
     params: list[Any] = [tag.lower() for tag in sorted(ACTIVITY_TAGS)]
-    params.append(min_count)
+    params.extend([min_count, min_sessions])
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)
@@ -157,6 +158,7 @@ def find_promotion_candidates(
         {
             "tag": row[0],
             "count": row[1],
+            "session_count": row[2],
             "entity_type": classify_tag_entity_type(row[0]),
         }
         for row in rows
@@ -166,11 +168,12 @@ def find_promotion_candidates(
 def promote_tag_entities(
     store: VectorStore,
     min_count: int = 500,
+    min_sessions: int = 3,
     limit: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Promote high-frequency tags into KG entities and link matching chunks."""
-    candidates = find_promotion_candidates(store, min_count=min_count, limit=limit)
+    candidates = find_promotion_candidates(store, min_count=min_count, min_sessions=min_sessions, limit=limit)
     stats = {
         "candidates": len(candidates),
         "entities_created": 0,
