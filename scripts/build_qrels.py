@@ -8,8 +8,14 @@ import re
 from pathlib import Path
 
 from brainlayer._helpers import _escape_fts5_query
-from brainlayer.eval.benchmark import DEFAULT_QUERY_SUITE, ReadOnlyBenchmarkStore, pipeline_fts5_only
+from brainlayer.eval.benchmark import (
+    DEFAULT_QUERY_SUITE,
+    ReadOnlyBenchmarkStore,
+    pipeline_fts5_only,
+    pipeline_hybrid_rrf,
+)
 from brainlayer.paths import get_db_path
+from brainlayer.vector_store import VectorStore
 
 
 def heuristic_grade(query: str, content: str, summary: str | None, tags: list[str]) -> int:
@@ -66,18 +72,30 @@ def fallback_fts_candidates(store, query: str, n_results: int) -> list[tuple[str
     return []
 
 
-def build_qrels(store, n_results: int = 10) -> dict[str, dict[str, int]]:
+def collect_candidate_ids(store, query_text: str, n_results: int, mode: str) -> list[str]:
+    candidates = pipeline_fts5_only(store, query_text, n_results=n_results)
+    if not candidates:
+        candidates = fallback_fts_candidates(store, query_text, n_results=n_results)
+
+    if mode == "fts-only":
+        return [chunk_id for chunk_id, _score in candidates]
+
+    pooled: list[tuple[str, float]] = list(candidates)
+    pooled.extend(pipeline_hybrid_rrf(store, query_text, n_results=n_results))
+
+    seen: set[str] = set()
+    return [chunk_id for chunk_id, _score in pooled if not (chunk_id in seen or seen.add(chunk_id))]
+
+
+def build_qrels(store, n_results: int = 20, mode: str = "pool") -> dict[str, dict[str, int]]:
     qrels: dict[str, dict[str, int]] = {}
     cursor = store._read_cursor()
     for query_id, query_text in DEFAULT_QUERY_SUITE:
         if query_id in {"q1", "q2"}:
             continue
         print(f"\n# {query_id}: {query_text}")
-        results = pipeline_fts5_only(store, query_text, n_results=n_results)
-        if not results:
-            results = fallback_fts_candidates(store, query_text, n_results=n_results)
         judgments: dict[str, int] = {}
-        for chunk_id, _score in results:
+        for chunk_id in collect_candidate_ids(store, query_text, n_results, mode):
             row = next(
                 cursor.execute(
                     "SELECT content, summary, tags FROM chunks WHERE id = ?",
@@ -107,11 +125,20 @@ def main() -> None:
         default="tests/eval_qrels.json",
         help="Path to write the generated qrels JSON",
     )
-    parser.add_argument("--n-results", type=int, default=10, help="Results to grade per query")
+    parser.add_argument("--n-results", type=int, default=20, help="Results to grade per query from each pipeline")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--pool", dest="mode", action="store_const", const="pool", help="Pool FTS5 and hybrid RRF candidates"
+    )
+    mode_group.add_argument(
+        "--fts-only", dest="mode", action="store_const", const="fts-only", help="Use legacy FTS5-only candidates"
+    )
+    parser.set_defaults(mode="pool")
     args = parser.parse_args()
 
-    with ReadOnlyBenchmarkStore(Path(args.db_path)) as store:
-        qrels = build_qrels(store, n_results=args.n_results)
+    store_factory = VectorStore if args.mode == "pool" else ReadOnlyBenchmarkStore
+    with store_factory(Path(args.db_path)) as store:
+        qrels = build_qrels(store, n_results=args.n_results, mode=args.mode)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

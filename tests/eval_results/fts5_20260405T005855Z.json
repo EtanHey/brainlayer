@@ -1,0 +1,12 @@
+{
+  "metrics": {
+    "map@10": 0.3324796162115407,
+    "mrr": 0.9489795918367347,
+    "ndcg@10": 0.9103932033469656,
+    "recall@20": 0.6706341129847173
+  },
+  "pipeline": "fts5",
+  "qrels_path": "tests/eval_qrels.json",
+  "query_count": 49,
+  "timestamp": "20260405T005855Z"
+}

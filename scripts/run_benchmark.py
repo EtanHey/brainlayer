@@ -29,6 +29,8 @@ def main() -> None:
 
     benchmark = SearchBenchmark(args.qrels_path)
     queries = benchmark.queries_in_qrels(DEFAULT_QUERY_SUITE)
+    if not queries:
+        raise SystemExit("No benchmark queries have both qrels and query text.")
 
     pipeline_name = args.pipeline
     pipeline_fn_map = {
@@ -55,7 +57,7 @@ def main() -> None:
 
     output_dir = Path("tests/eval_results")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"baseline_{timestamp}.json"
+    output_path = output_dir / f"{pipeline_name}_{timestamp}.json"
     output_path.write_text(json.dumps(result_payload, indent=2, sort_keys=True) + "\n")
 
     print(json.dumps(result_payload, indent=2, sort_keys=True))
