@@ -1,0 +1,12 @@
+{
+  "metrics": {
+    "map@10": 0.34083691839214003,
+    "mrr": 1.0,
+    "ndcg@10": 0.9296884214675069,
+    "recall@20": 0.6911952985132
+  },
+  "pipeline": "hybrid_rrf",
+  "qrels_path": "tests/eval_qrels.json",
+  "query_count": 49,
+  "timestamp": "20260405T005847Z"
+}
