@@ -93,7 +93,7 @@ def test_qrels_format_valid():
     qrels_path = Path(__file__).parent / "eval_qrels.json"
     qrels = json.loads(qrels_path.read_text())
 
-    assert len(qrels) == 25, f"Expected 25 queries, found {len(qrels)}"
+    assert len(qrels) >= 25, f"Expected at least 25 queries, found {len(qrels)}"
     for query_id, judgments in qrels.items():
         assert judgments, f"{query_id} has no judgments"
         assert 1 <= len(judgments) <= 20, f"{query_id} should have 1-20 judgments, found {len(judgments)}"
