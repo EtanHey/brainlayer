@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
+
 DEADLINE_MS = 450
 RRF_K = 60
 HIGH_CONFIDENCE_THRESHOLD = 0.015
@@ -29,6 +31,7 @@ MAX_HYBRID_CANDIDATES = 8
 
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
+HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
 
 
 def should_activate():
@@ -370,17 +373,64 @@ def detect_entities_in_prompt(prompt, conn):
         if len(w) >= 4 and w[0].isupper() and not w.isupper():
             candidates.append(w)
 
+    for token in HEBREW_CANDIDATE_RE.findall(prompt):
+        candidates.append(token)
+
     if not candidates:
         return []
 
     matched = []
     seen_ids = set()
     try:
+        alias_table_exists = bool(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kg_entity_aliases' LIMIT 1"
+            ).fetchall()
+        )
         for candidate in candidates:
             rows = conn.execute(
                 "SELECT id, name, entity_type FROM kg_entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
                 (candidate,),
             ).fetchall()
+            if not rows and alias_table_exists:
+                rows = conn.execute(
+                    """
+                    SELECT e.id, e.name, e.entity_type
+                    FROM kg_entity_aliases a
+                    JOIN kg_entities e ON a.entity_id = e.id
+                    WHERE LOWER(a.alias) = LOWER(?)
+                    LIMIT 1
+                    """,
+                    (candidate,),
+                ).fetchall()
+            if not rows and alias_table_exists and looks_hebrew(candidate):
+                query_tokens = phonetic_tokens(candidate)
+                if query_tokens:
+                    phonetic_rows = conn.execute(
+                        """
+                        SELECT e.id, e.name, e.entity_type, a.alias
+                        FROM kg_entity_aliases a
+                        JOIN kg_entities e ON a.entity_id = e.id
+                        WHERE a.alias_type = 'phonetic'
+                        """
+                    ).fetchall()
+                    query_key = phonetic_key(candidate)
+                    best_row = None
+                    best_score = 0.0
+                    for row in phonetic_rows:
+                        alias_tokens = {token for token in str(row[3]).split() if token}
+                        if not alias_tokens:
+                            continue
+                        overlap = query_tokens & alias_tokens
+                        if not overlap:
+                            continue
+                        score = len(overlap) / len(query_tokens | alias_tokens)
+                        if row[3] == query_key:
+                            score = 1.0
+                        if score > best_score:
+                            best_score = score
+                            best_row = row
+                    rows = [best_row[:3]] if best_row else []
             if rows:
                 eid, name, etype = rows[0]
                 if eid not in seen_ids and etype in INJECT_TYPES:

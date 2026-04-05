@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ._helpers import _escape_fts5_query, serialize_f32
+from .phonetic import phonetic_key, phonetic_tokens
 
 
 class KGMixin:
@@ -500,6 +501,68 @@ class KGMixin:
             "updated_at": row[5],
         }
 
+    def get_entity_by_phonetic_alias(
+        self,
+        name: str,
+        entity_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up an entity by stored BMPM phonetic aliases."""
+        query_key = phonetic_key(name)
+        query_tokens = phonetic_tokens(name)
+        if not query_key or not query_tokens:
+            return None
+
+        cursor = self._read_cursor()
+        if entity_type:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at, a.alias
+                    FROM kg_entity_aliases a
+                    JOIN kg_entities e ON a.entity_id = e.id
+                    WHERE a.alias_type = 'phonetic' AND e.entity_type = ?
+                    """,
+                    (entity_type,),
+                )
+            )
+        else:
+            rows = list(
+                cursor.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.name, e.metadata, e.created_at, e.updated_at, a.alias
+                    FROM kg_entity_aliases a
+                    JOIN kg_entities e ON a.entity_id = e.id
+                    WHERE a.alias_type = 'phonetic'
+                    """
+                )
+            )
+
+        best_match = None
+        best_score = 0.0
+        for row in rows:
+            alias_tokens = {token for token in str(row[6]).split() if token}
+            if not alias_tokens:
+                continue
+            overlap = query_tokens & alias_tokens
+            if not overlap:
+                continue
+            score = len(overlap) / len(query_tokens | alias_tokens)
+            if row[6] == query_key:
+                score = 1.0
+            if score <= best_score:
+                continue
+            best_score = score
+            best_match = {
+                "id": row[0],
+                "entity_type": row[1],
+                "name": row[2],
+                "metadata": json.loads(row[3]) if row[3] else {},
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+
+        return best_match
+
     def get_entity_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
         """Get all aliases for an entity."""
         cursor = self._read_cursor()
@@ -638,12 +701,7 @@ class KGMixin:
 
     def resolve_entity(self, name_or_alias: str) -> Optional[Dict[str, Any]]:
         """Resolve a string to a KG entity."""
-        # 1. Exact alias
-        result = self.get_entity_by_alias(name_or_alias)
-        if result:
-            return result
-
-        # 2. Exact name (case-insensitive)
+        # 1. Exact name (case-insensitive)
         cursor = self._read_cursor()
         rows = list(
             cursor.execute(
@@ -671,6 +729,11 @@ class KGMixin:
                 "valid_until": row[11],
                 "group_id": row[12],
             }
+
+        # 2. Exact alias
+        result = self.get_entity_by_alias(name_or_alias)
+        if result:
+            return result
 
         # 3. Canonical name match
         rows = list(
@@ -700,7 +763,12 @@ class KGMixin:
                 "group_id": row[12],
             }
 
-        # 4. FTS5 fuzzy fallback
+        # 4. Stored phonetic alias fallback
+        result = self.get_entity_by_phonetic_alias(name_or_alias)
+        if result:
+            return result
+
+        # 5. FTS5 fuzzy fallback
         results = self.search_entities(name_or_alias, limit=1)
         if results:
             return self.get_entity(results[0]["id"])

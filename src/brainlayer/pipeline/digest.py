@@ -803,16 +803,20 @@ def entity_lookup(
     Returns:
         Dict with name, entity_type, relations, evidence, or None if not found.
     """
-    # Try FTS search first
-    results = store.search_entities(query, entity_type=entity_type, limit=5)
+    resolved = store.resolve_entity(query)
+    if resolved and (entity_type is None or resolved["entity_type"] == entity_type):
+        results = [resolved]
+    else:
+        # Try FTS search first
+        results = store.search_entities(query, entity_type=entity_type, limit=5)
 
-    if not results:
-        # Fall back to semantic search
-        query_embedding = embed_fn(query)
-        results = store.search_entities_semantic(query_embedding, entity_type=entity_type, limit=5)
+        if not results:
+            # Fall back to semantic search
+            query_embedding = embed_fn(query)
+            results = store.search_entities_semantic(query_embedding, entity_type=entity_type, limit=5)
 
-    if not results:
-        return None
+        if not results:
+            return None
 
     # Take best match
     entity = results[0]

@@ -598,6 +598,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_entity ON kg_entity_aliases(entity_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_lookup ON kg_entity_aliases(alias COLLATE NOCASE)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_alias_type ON kg_entity_aliases(alias_type)")
 
         # KG standard spec migrations
         for col, default in [
