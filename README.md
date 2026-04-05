@@ -210,7 +210,7 @@ ruff check src/ && ruff format src/     # Lint + format
 | `BRAINLAYER_ENRICH_BACKEND` | auto-detect | Enrichment backend (`groq`, `gemini`, `mlx`, `ollama`) |
 | `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment |
 | `AXIOM_TOKEN` | (unset) | Axiom telemetry token (optional) |
-| `BRAINLAYER_ENRICH_RATE` | `0.2` | Requests per second (0.2 = 12 RPM) |
+| `BRAINLAYER_ENRICH_RATE` | `5.0` | Requests per second (5.0 = 300 RPM, AI Pro supports 500+) |
 | `BRAINLAYER_SANITIZE_EXTRA_NAMES` | (empty) | Names to redact from indexed content |
 
 See [full configuration reference](https://etanhey.github.io/brainlayer/configuration/) for all options.
