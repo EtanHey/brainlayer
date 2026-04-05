@@ -74,9 +74,7 @@ class TestTagPromotionExecution:
         cursor = store._read_cursor()
         entities = {
             row[0]: row[1]
-            for row in cursor.execute(
-                "SELECT name, entity_type FROM kg_entities WHERE id LIKE 'auto-tag-%'"
-            )
+            for row in cursor.execute("SELECT name, entity_type FROM kg_entities WHERE id LIKE 'auto-tag-%'")
         }
         assert entities["telegram"] == "technology"
         assert entities["neuroscience"] == "topic"

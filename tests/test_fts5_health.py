@@ -164,9 +164,5 @@ class TestFTS5HealthMonitoring:
 
         store.check_fts5_health(cache_ttl_seconds=0)
 
-        rows = list(
-            store.conn.cursor().execute(
-                "SELECT event_type, severity FROM health_events ORDER BY id"
-            )
-        )
+        rows = list(store.conn.cursor().execute("SELECT event_type, severity FROM health_events ORDER BY id"))
         assert ("fts5_desync_warning", "warning") in rows

@@ -125,7 +125,9 @@ def classify_tag_entity_type(tag: str) -> str:
     return "topic"
 
 
-def find_promotion_candidates(store: VectorStore, min_count: int = 500, limit: int | None = None) -> list[dict[str, Any]]:
+def find_promotion_candidates(
+    store: VectorStore, min_count: int = 500, limit: int | None = None
+) -> list[dict[str, Any]]:
     """Find high-frequency concept tags worth promoting to entities."""
     cursor = store._read_cursor()
     placeholders = ", ".join("?" for _ in ACTIVITY_TAGS)

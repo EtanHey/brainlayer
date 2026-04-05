@@ -149,8 +149,8 @@ class TestSessionStartConditional:
 
         output = capsys.readouterr().out
         assert "[Hebrew Style]" in output
-        assert ('PRAGMA busy_timeout=1000', ()) in fake_conn.executed
-        assert ('PRAGMA query_only=true', ()) in fake_conn.executed
+        assert ("PRAGMA busy_timeout=1000", ()) in fake_conn.executed
+        assert ("PRAGMA query_only=true", ()) in fake_conn.executed
 
 
 class TestPromptSearchConditional:
@@ -226,9 +226,11 @@ class TestPromptSearchConditional:
             42,
         )
 
-        rows = sqlite3.connect(db_path).execute(
-            "SELECT session_id, query, chunk_ids, token_count FROM injection_events"
-        ).fetchall()
+        rows = (
+            sqlite3.connect(db_path)
+            .execute("SELECT session_id, query, chunk_ids, token_count FROM injection_events")
+            .fetchall()
+        )
         assert rows == [("session-1", "Prompt text", '["chunk-1", "chunk-2"]', 42)]
 
     def test_main_prints_search_before_assume_warning(self, prompt_search, monkeypatch, capsys):
@@ -251,8 +253,8 @@ class TestPromptSearchConditional:
 
         output = capsys.readouterr().out
         assert "SEARCH-BEFORE-ASSUME" in output
-        assert ('PRAGMA busy_timeout=1000', ()) in fake_conn.executed
-        assert ('PRAGMA query_only=true', ()) in fake_conn.executed
+        assert ("PRAGMA busy_timeout=1000", ()) in fake_conn.executed
+        assert ("PRAGMA query_only=true", ()) in fake_conn.executed
 
     def test_main_does_not_trigger_assume_warning_on_substring_matches(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
