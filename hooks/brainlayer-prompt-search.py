@@ -36,6 +36,7 @@ MAX_HYBRID_CANDIDATES = 8
 MIN_PROMPT_LENGTH = 15
 HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
 
+
 def should_activate():
     """Conditional activation gate — skip hook when not needed.
 
@@ -351,7 +352,13 @@ def truncate(text, max_chars=200):
     text = re.sub(r"\n+", " | ", text.strip())
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rsplit(" ", 1)[0] + "..."
+    candidate = text[:max_chars]
+    search_start = max(0, max_chars - 40)
+    for sep in (". ", "! ", "? ", "| "):
+        idx = candidate.rfind(sep, search_start)
+        if idx > 0:
+            return candidate[: idx + len(sep) - 1] + "..."
+    return candidate.rsplit(" ", 1)[0] + "..."
 
 
 def elapsed_ms(start):
@@ -710,24 +717,61 @@ def search_prompt_chunks(prompt, db_path, keywords, limit):
         return run_fts_search(db_path, keywords, limit), False
 
 
-def record_injection_event(db_path, session_id, prompt, chunk_ids, token_count):
+def _ensure_injection_event_schema(conn):
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(injection_events)").fetchall()}
+    for column_name, definition in (
+        ("latency_ms", "INTEGER NOT NULL DEFAULT 0"),
+        ("mode", "TEXT NOT NULL DEFAULT 'normal'"),
+        ("entities_detected", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column_name in existing_columns:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE injection_events ADD COLUMN {column_name} {definition}")
+        except sqlite3.Error:
+            pass
+
+
+def record_injection_event(
+    db_path,
+    session_id,
+    prompt,
+    chunk_ids,
+    token_count,
+    *,
+    latency_ms=0,
+    mode="normal",
+    entities_detected=0,
+):
     """Best-effort write of an injection event for BrainBar's live viewer."""
-    if not db_path or not session_id or not chunk_ids:
+    if not db_path or not session_id:
         return
 
     conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=2)
         conn.execute("PRAGMA busy_timeout=2000")
+        _ensure_injection_event_schema(conn)
         conn.execute(
             """
-            INSERT INTO injection_events (session_id, query, chunk_ids, token_count)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO injection_events (
+                session_id, query, chunk_ids, token_count, latency_ms, mode, entities_detected
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (session_id, prompt[:1000], json.dumps(chunk_ids), token_count),
+            (
+                session_id,
+                prompt[:1000],
+                json.dumps(chunk_ids or []),
+                token_count,
+                int(latency_ms),
+                mode,
+                int(entities_detected),
+            ),
         )
-        conn.commit()
-    except sqlite3.Error:
+        if hasattr(conn, "commit"):
+            conn.commit()
+    except (sqlite3.Error, AttributeError):
         pass
     finally:
         if conn is not None:
@@ -825,26 +869,50 @@ def inject_search_results(lines, rows, deep, label="auto"):
 
 def main():
     start = time.monotonic()
+    db_path = None
+    prompt = ""
+    session_id = ""
+    telemetry_mode = "skip"
+    new_chunk_ids = []
+    new_briefs = []
+    entities_detected = 0
+
+    def finalize_and_exit(*, mode=None):
+        final_mode = mode or telemetry_mode
+        if session_id and prompt and db_path:
+            token_estimate = sum(len(b) // 4 for b in new_briefs)
+            record_injection_event(
+                db_path=db_path,
+                session_id=session_id,
+                prompt=prompt,
+                chunk_ids=new_chunk_ids,
+                token_count=token_estimate,
+                latency_ms=elapsed_ms(start),
+                mode=final_mode,
+                entities_detected=entities_detected,
+            )
+        sys.exit(0)
 
     try:
         hook_input = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, EOFError):
         sys.exit(0)
 
+    prompt = hook_input.get("prompt", "")
+    session_id = hook_input.get("session_id", "")
+    db_path = get_db_path()
+
     activate, light_mode = should_activate()
     if not activate:
-        sys.exit(0)
+        finalize_and_exit(mode="skip")
 
-    prompt = hook_input.get("prompt", "")
     if not prompt:
-        sys.exit(0)
-
-    session_id = hook_input.get("session_id", "")
+        finalize_and_exit(mode="skip")
 
     classification = classify_prompt(prompt)
     record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)
     if classification in {"command", "casual_chat"}:
-        sys.exit(0)
+        finalize_and_exit(mode="skip")
 
     prompt_lower = prompt.lower()
 
@@ -855,13 +923,12 @@ def main():
 
         if is_handoff_prompt(prompt):
             print("[BrainLayer: Handoff prompt detected. Skipping automatic search to avoid duplicate injection.]")
-            sys.exit(0)
+            finalize_and_exit(mode="skip")
     except ImportError:
         pass
 
-    db_path = get_db_path()
     if not db_path:
-        sys.exit(0)
+        finalize_and_exit(mode="skip")
 
     # Load already-injected chunk IDs from coordination file
     already_injected = set()
@@ -880,15 +947,23 @@ def main():
         conn.execute("PRAGMA busy_timeout=1000")
         conn.execute("PRAGMA query_only=true")
     except sqlite3.Error:
-        sys.exit(0)
+        finalize_and_exit(mode="skip")
 
     detected_entities = []
     if classification == "knowledge_question":
         detected_entities = detect_entities_in_prompt(prompt, conn)
+        entities_detected = len(detected_entities)
         classification = classify_prompt(prompt, detected_entities=detected_entities)
         record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)
 
     deep = is_deep_mode(prompt_lower)
+    if classification == "entity_lookup":
+        telemetry_mode = "entity"
+    elif deep:
+        telemetry_mode = "deep"
+    else:
+        telemetry_mode = "normal"
+
     if classification == "hebrew_query":
         keywords = extract_hebrew_keywords(prompt) or extract_keywords(prompt)
     else:
@@ -896,7 +971,7 @@ def main():
 
     if not keywords and classification != "entity_lookup":
         conn.close()
-        sys.exit(0)
+        finalize_and_exit(mode="skip")
 
     # Over-fetch to compensate for dedup removals
     # Light mode: cap at 2 results to reduce token cost for workers
@@ -909,11 +984,10 @@ def main():
     fts_query = build_fts_query(keywords)
 
     lines = []
-    new_chunk_ids = []
-    new_briefs = []
     try:
         if classification == "entity_lookup" and elapsed_ms(start) < DEADLINE_MS:
             detected_entities = inject_entity_context(lines, prompt, conn)
+            entities_detected = len(detected_entities)
         elif classification in {"knowledge_question", "follow_up", "hebrew_query"} and elapsed_ms(start) < DEADLINE_MS:
             if detected_entities and classification == "knowledge_question":
                 inject_entity_context(lines, prompt, conn)
@@ -963,7 +1037,6 @@ def main():
 
     # Register newly injected chunks in coordination file
     if session_id and new_chunk_ids:
-        token_estimate = sum(len(b) // 4 for b in new_briefs)
         try:
             from dedup_coordination import register_chunks
 
@@ -972,20 +1045,12 @@ def main():
                 chunk_ids=new_chunk_ids,
                 source_hook="UserPromptSubmit",
                 briefs=new_briefs,
-                token_estimate=token_estimate,
+                token_estimate=sum(len(b) // 4 for b in new_briefs),
             )
         except Exception:
             pass  # Best-effort coordination
 
-        record_injection_event(
-            db_path=db_path,
-            session_id=session_id,
-            prompt=prompt,
-            chunk_ids=new_chunk_ids,
-            token_count=token_estimate,
-        )
-
-    sys.exit(0)
+    finalize_and_exit()
 
 
 if __name__ == "__main__":

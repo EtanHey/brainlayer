@@ -233,6 +233,105 @@ class TestPromptSearchConditional:
         )
         assert rows == [("session-1", "Prompt text", '["chunk-1", "chunk-2"]', 42)]
 
+    def test_record_injection_event_records_latency(self, prompt_search, tmp_path):
+        db_path = tmp_path / "hook-events.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE injection_events (
+                session_id TEXT,
+                query TEXT,
+                chunk_ids TEXT,
+                token_count INTEGER
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        prompt_search.record_injection_event(
+            str(db_path),
+            "session-1",
+            "Prompt text",
+            ["chunk-1"],
+            42,
+            latency_ms=123,
+            mode="normal",
+            entities_detected=2,
+        )
+
+        row = (
+            sqlite3.connect(db_path)
+            .execute("SELECT latency_ms, mode, entities_detected FROM injection_events")
+            .fetchone()
+        )
+        assert row == (123, "normal", 2)
+
+    def test_record_injection_event_records_mode(self, prompt_search, tmp_path):
+        db_path = tmp_path / "hook-events.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE injection_events (
+                session_id TEXT,
+                query TEXT,
+                chunk_ids TEXT,
+                token_count INTEGER
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        prompt_search.record_injection_event(
+            str(db_path),
+            "session-1",
+            "Prompt text",
+            ["chunk-1"],
+            42,
+            latency_ms=55,
+            mode="entity",
+            entities_detected=1,
+        )
+
+        row = sqlite3.connect(db_path).execute("SELECT mode FROM injection_events").fetchone()
+        assert row == ("entity",)
+
+    def test_injection_event_skip_logged(self, prompt_search, tmp_path, monkeypatch, capsys):
+        db_path = tmp_path / "hook-events.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE injection_events (
+                session_id TEXT,
+                query TEXT,
+                chunk_ids TEXT,
+                token_count INTEGER
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: str(db_path))
+        monkeypatch.setattr(prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "command")
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"show git status","session_id":"sess-skip"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            prompt_search.main()
+
+        assert capsys.readouterr().out == ""
+        row = (
+            sqlite3.connect(db_path)
+            .execute("SELECT session_id, chunk_ids, token_count, mode FROM injection_events")
+            .fetchone()
+        )
+        assert row == ("sess-skip", "[]", 0, "skip")
+
     def test_main_prints_search_before_assume_warning(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
 
