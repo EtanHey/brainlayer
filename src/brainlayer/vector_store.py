@@ -501,6 +501,23 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_events_severity ON health_events(severity)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_events_created ON health_events(created_at)")
 
+        # ── Correction mining table ───────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS correction_pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                pattern_type TEXT NOT NULL,
+                entity_name TEXT,
+                attribute TEXT,
+                old_value TEXT,
+                new_value TEXT,
+                confidence REAL DEFAULT 0.0,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_correction_pairs_chunk ON correction_pairs(chunk_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_correction_pairs_pattern ON correction_pairs(pattern_type)")
+
         # ── Knowledge Graph tables ──────────────────────────────────────
 
         cursor.execute("""
