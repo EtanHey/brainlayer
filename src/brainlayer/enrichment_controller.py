@@ -382,8 +382,8 @@ def _emit_enrichment_error(mode: str, chunk_id: str, error: str) -> bool:
 
 def enrich_realtime(
     store,
-    limit: int = 25,
-    since_hours: int = 24,
+    limit: int = 500,
+    since_hours: int = 8760,
     rate_per_second: float | None = None,
     max_retries: int = 12,
     chunk_ids: list[str] | None = None,
