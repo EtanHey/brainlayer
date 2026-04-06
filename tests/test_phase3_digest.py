@@ -285,11 +285,9 @@ def test_brain_digest_description_teaches_routing():
     desc = digest.description.lower()
 
     assert "brain_store" in desc
-    assert "after producing large content" in desc
-    assert "after brain_store" in desc
-    assert "on schedule for backfill" in desc
-    assert "faceted tags" in desc
-    assert "sanitizes pii" in desc
+    assert "large" in desc  # "large text content"
+    assert "entities" in desc
+    assert "knowledge graph" in desc
     assert "digest" in desc
     assert "connect" in desc
     assert "enrich" in desc

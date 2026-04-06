@@ -85,15 +85,14 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 3 primary tools:\n"
-        "- brain_recall(query): unified search, entity lookup, and context recall. "
-        "Auto-routes by query or explicit mode (search/entity/context/sessions/stats).\n"
-        "- brain_store(content): persist decisions, learnings, mistakes, ideas, todos. "
-        "Type and importance auto-detected. Immediately searchable.\n"
-        "- brain_digest(content): deeply ingest large content — extracts entities, "
-        "relations, tags, action items. Use for research, audits, transcripts.\n"
-        "brain_search and brain_entity are aliases for brain_recall. "
-        "brain_update/brain_expand/brain_tags are deprecated.\n"
+        "Memory layer for Claude Code. Primary tools:\n"
+        "- brain_search(query): search persistent memory for past decisions, architecture, conventions, preferences.\n"
+        "- brain_store(content): save decisions, learnings, mistakes, corrections. Persists across sessions.\n"
+        "- brain_recall(query): unified search, entity lookup, stats, and session context. "
+        "Auto-routes by query or explicit mode.\n"
+        "- brain_entity(name): look up known entities and their relationships from the knowledge graph.\n"
+        "- brain_digest(content): extract entities and structured knowledge from large content.\n"
+        "brain_update/brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
         'Project scoping: auto-inferred from cwd. Override with project="all".'
     ),
 )
@@ -287,7 +286,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="brain_search",
             title="Search Knowledge Base",
-            description="""Search through past Claude Code conversations and learnings.
+            description="""Search BrainLayer's persistent knowledge base spanning project architecture, coding conventions, debugging insights, user preferences, and past decisions. Use BEFORE answering questions about project history, architecture decisions, user preferences, or how we do things. Returns top results ranked by hybrid FTS5 + vector search with relevance scores. Does NOT search the current conversation — only persistent memory. Use specific descriptive queries, not single keywords.
 
 Auto-routes based on input:
 - chunk_id → expand surrounding context
@@ -295,9 +294,7 @@ Auto-routes based on input:
 - "what am I working on" → current context + relevant memories
 - "how did I implement X" → past decisions, patterns, code
 - "history of X" / "discussed about X" → topic recall
-- Default → hybrid semantic + keyword search
-
-Returns: Markdown text or structured JSON depending on the route taken.""",
+- Default → hybrid semantic + keyword search""",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
@@ -403,7 +400,7 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
                         "type": "string",
                         "enum": ["compact", "full"],
                         "default": "compact",
-                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary — use brain_expand to drill into specific results. 'full': returns full content + all metadata fields.",
+                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary. 'full': returns full content + all metadata fields. Use 'full' when you need the complete text of a result.",
                     },
                 },
                 "required": ["query"],
@@ -412,13 +409,9 @@ Returns: Markdown text or structured JSON depending on the route taken.""",
         Tool(
             name="brain_store",
             title="Store Memory",
-            description="""Persistently store a memory into BrainLayer.
+            description="""Save decisions, learnings, mistakes, corrections, and insights to persistent memory. Use AFTER making a decision, discovering something surprising, hitting a bug, or receiving user correction. Content persists across sessions — future Claude instances find it via brain_search. Include WHAT happened and WHY. Does NOT replace git commits — store the reasoning that commits lack.
 
-Use this to save ideas, mistakes, decisions, learnings, todos, bookmarks, notes, journal entries, or issues. Stored items are embedded at write time and immediately searchable.
-
-Type is auto-detected from content if omitted (e.g., "Always use bun" → decision, "Bug: overflow" → mistake, "TODO: add X" → todo, "Issue: digest fails" → issue).
-
-Issues support lifecycle tracking (status: open→in_progress→done→archived), severity levels, and code references (file_path, function_name, line_number).
+Type is auto-detected from content if omitted (e.g., "Always use bun" → decision, "Bug: overflow" → mistake, "TODO: add X" → todo, "Issue: digest fails" → issue). Issues support lifecycle tracking (status: open→in_progress→done→archived), severity levels, and code references (file_path, function_name, line_number).
 
 Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar existing memories).""",
             annotations=_WRITE,
@@ -557,7 +550,7 @@ Designed for copilot agents that need full person context in a single call.""",
         Tool(
             name="brain_recall",
             title="Recall / Search / Entity Lookup",
-            description="""Unified memory retrieval — search, entity lookup, context, sessions, stats.
+            description="""Get memory system stats (enrichment percentage, chunk counts, top tags) or session context for a conversation. Use stats mode for system health checks, context mode with conversation_id for full session history. Returns structured data with counts and percentages. Does NOT search by topic — use brain_search for that.
 
 Modes (auto-detected from query when omitted):
 - search: hybrid semantic + keyword search (default when query provided)
@@ -573,9 +566,7 @@ Smart routing when mode is omitted:
 - "stats" / "how many" → stats mode
 - "what am I working on" / "right now" → context mode
 - Capitalized proper noun (e.g. "BrainLayer", "Etan Heyman") → entity mode
-- Everything else → search mode
-
-Returns: Structured JSON or Markdown depending on mode.""",
+- Everything else → search mode""",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
@@ -711,23 +702,7 @@ Returns: Structured JSON or Markdown depending on mode.""",
         Tool(
             name="brain_digest",
             title="Digest Content",
-            description="""Deeply ingest and enrich large content such as research dumps, audit output, transcripts, and long documents.
-
-When to use:
-- after producing large content that should become searchable knowledge
-- after brain_store when you want slower, deeper enrichment for a chunk or document
-- on schedule for backfill runs over older content
-
-What it does:
-- creates a new chunk with source="digest"
-- extracts entities and relations into the knowledge graph
-- adds faceted tags (topics + dom:* + act:*)
-- analyzes sentiment and identifies action items, decisions, and questions
-- sanitizes PII before any external API enrichment call
-
-How it differs from brain_store:
-- brain_store = fast write, minimal processing, optimized for immediate capture
-- brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing
+            description="""Extract entities, relations, and key facts from large text content and store them in the knowledge graph. Use when processing research outputs, audit reports, or any content over 500 words that should be permanently indexed. Returns extracted entity and relation counts. Does NOT store content verbatim — it extracts structured knowledge and stores an enriched chunk.
 
 Modes:
 - digest (default): ingest content, extract entities, store as searchable chunk
@@ -736,9 +711,9 @@ Modes:
   Returns a PROPOSAL — does NOT store anything. Caller decides what to accept.
 - enrich: run realtime enrichment on existing DB chunks (backfill)
 
-Returns: Structured JSON with digest_id, summary, tags, entities, relations,
-action_items, decisions, questions, sentiment, enrichment status, and stats.
-For mode=connect: returns proposal with connections, contradictions, supersede proposals.""",
+How it differs from brain_store:
+- brain_store = fast write, minimal processing, optimized for immediate capture
+- brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing""",
             annotations=_WRITE,
             inputSchema={
                 "type": "object",
@@ -779,12 +754,7 @@ For mode=connect: returns proposal with connections, contradictions, supersede p
         Tool(
             name="brain_entity",
             title="Entity Lookup",
-            description="""Look up a known entity in the knowledge graph.
-
-Searches by name (FTS + semantic), returns structured info including
-entity type, relations to other entities, and evidence chunks.
-
-Returns: Structured JSON with name, entity_type, relations[], evidence[], or null if not found.""",
+            description="""Look up a known entity (person, project, technology) and its relationships from the knowledge graph. Use when asked about a specific named entity or to explore connections between entities. Returns entity details plus connected entities via kg_relations. Does NOT do fuzzy topic search — use brain_search for that.""",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
@@ -813,15 +783,7 @@ Returns: Structured JSON with name, entity_type, relations[], evidence[], or nul
         Tool(
             name="brain_expand",
             title="Expand Chunk Context",
-            description="""Expand a specific chunk from a previous brain_search result.
-
-Returns the full content of the target chunk plus N surrounding chunks for context.
-Use this after brain_search returns compact results — pick an interesting chunk_id
-and expand it to see full content and conversation flow.
-
-Example workflow:
-1. brain_search("auth implementation") → compact results with chunk_ids
-2. brain_expand(chunk_id="abc123", context=3) → full content + 3 chunks before/after""",
+            description="Deprecated. Use brain_search with detail='full' to get full chunk content, or brain_recall with conversation_id to get session context.",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
@@ -844,16 +806,7 @@ Example workflow:
         Tool(
             name="brain_update",
             title="Update or Archive Memory",
-            description="""Update, archive, or merge existing memories in BrainLayer.
-
-Actions:
-- **update**: Change content, tags, or importance of an existing memory. If content changes, re-embeds automatically.
-- **archive**: Soft-delete a memory (removes from search results, keeps in DB).
-- **merge**: Combine multiple duplicate memories into one. Keeps the first chunk_id, archives the rest.
-
-Use brain_search first to find the chunk_id(s) you want to modify.
-
-Returns: Structured JSON with action taken and affected chunk IDs.""",
+            description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
             annotations=_WRITE_IDEMPOTENT,
             inputSchema={
                 "type": "object",
@@ -894,14 +847,7 @@ Returns: Structured JSON with action taken and affected chunk IDs.""",
         Tool(
             name="brain_tags",
             title="Tag Discovery",
-            description="""Discover and explore tags across your knowledge base.
-
-Actions:
-- **list**: Return top tags ordered by frequency (most-used first). Optional project filter.
-- **search**: Find tags matching a prefix or pattern (case-insensitive). Useful for autocomplete.
-- **suggest**: Suggest relevant existing tags for a piece of content. Matches content keywords against tag vocabulary.
-
-Returns: JSON with 'tags' (list of {tag, count}) and 'total' count.""",
+            description="Deprecated. Use brain_recall(mode='search', tag='prefix') to find tagged memories, or brain_store(tags=[...]) to tag when storing.",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
