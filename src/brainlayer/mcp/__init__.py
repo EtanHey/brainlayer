@@ -396,6 +396,31 @@ Auto-routes based on input:
                         "type": "string",
                         "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
                     },
+                    "sentiment_filter": {
+                        "type": "string",
+                        "enum": ["positive", "negative", "neutral", "mixed"],
+                        "description": "Filter results by sentiment label. Alias for 'sentiment' with standardized values.",
+                    },
+                    "content_type_filter": {
+                        "type": "string",
+                        "enum": [
+                            "user_message",
+                            "assistant_text",
+                            "ai_code",
+                            "learning",
+                            "decision",
+                            "bug_fix",
+                        ],
+                        "description": "Filter by content type. Alias for 'content_type' with extended value set including enrichment types.",
+                    },
+                    "source_filter": {
+                        "type": "string",
+                        "description": "Filter by source file pattern (SQL LIKE match, e.g. '%youtube%'). More flexible than 'source' enum.",
+                    },
+                    "correction_category": {
+                        "type": "string",
+                        "description": "Filter by correction type tag (e.g. 'correction:preference', 'correction:factual', 'correction:naming'). Matches chunks tagged with the given correction category.",
+                    },
                     "detail": {
                         "type": "string",
                         "enum": ["compact", "full"],
@@ -1098,6 +1123,11 @@ async def call_tool(name: str, arguments: dict[str, Any]):
 
     if name == "brain_search":
         # Thin alias: delegates to brain_recall(mode="search")
+        # Resolve alias parameters: new *_filter names take precedence over legacy names
+        resolved_sentiment = arguments.get("sentiment_filter") or arguments.get("sentiment")
+        resolved_content_type = arguments.get("content_type_filter") or arguments.get("content_type")
+        resolved_source = arguments.get("source")
+        resolved_source_filter = arguments.get("source_filter")
         return await _with_timeout(
             _brain_recall(
                 mode="search",
@@ -1105,20 +1135,22 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 project=arguments.get("project"),
                 file_path=arguments.get("file_path"),
                 chunk_id=arguments.get("chunk_id"),
-                content_type=arguments.get("content_type"),
-                source=arguments.get("source"),
+                content_type=resolved_content_type,
+                source=resolved_source,
                 tag=arguments.get("tag"),
                 intent=arguments.get("intent"),
                 importance_min=arguments.get("importance_min"),
                 date_from=arguments.get("date_from"),
                 date_to=arguments.get("date_to"),
-                sentiment=arguments.get("sentiment"),
+                sentiment=resolved_sentiment,
                 entity_id=arguments.get("entity_id"),
                 num_results=arguments.get("num_results", 5),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
                 max_results=arguments.get("max_results", 10),
                 detail=arguments.get("detail", "compact"),
+                source_filter=resolved_source_filter,
+                correction_category=arguments.get("correction_category"),
             )
         )
 

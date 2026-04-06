@@ -117,6 +117,8 @@ class SearchMixin:
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
         include_archived: bool = False,
+        source_filter_like: Optional[str] = None,
+        correction_category: Optional[str] = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
@@ -172,6 +174,12 @@ class SearchMixin:
             if sentiment_filter:
                 where_clauses.append("c.sentiment_label = ?")
                 filter_params.append(sentiment_filter)
+            if source_filter_like:
+                where_clauses.append("c.source LIKE ?")
+                filter_params.append(source_filter_like)
+            if correction_category:
+                where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
+                filter_params.append(f"correction:{correction_category}%")
             if not include_archived:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
@@ -185,7 +193,12 @@ class SearchMixin:
             # Bump k to over-fetch when post-KNN filters may discard most results:
             # - entity_id: entity filter applied post-KNN, most candidates won't match
             # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
-            needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
+            needs_overfetch = (
+                entity_id
+                or (source_filter and source_filter != "claude_code")
+                or source_filter_like
+                or correction_category
+            )
             effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
             query = f"""
@@ -240,6 +253,12 @@ class SearchMixin:
             if date_to:
                 where_clauses.append("created_at <= ?")
                 params.append(date_to)
+            if source_filter_like:
+                where_clauses.append("source LIKE ?")
+                params.append(source_filter_like)
+            if correction_category:
+                where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
+                params.append(f"correction:{correction_category}%")
             if not include_archived:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
@@ -443,6 +462,8 @@ class SearchMixin:
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
         include_archived: bool = False,
+        source_filter_like: Optional[str] = None,
+        correction_category: Optional[str] = None,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
         cursor = self._read_cursor()
@@ -487,6 +508,12 @@ class SearchMixin:
         if sentiment_filter:
             where_clauses.append("c.sentiment_label = ?")
             filter_params.append(sentiment_filter)
+        if source_filter_like:
+            where_clauses.append("c.source LIKE ?")
+            filter_params.append(source_filter_like)
+        if correction_category:
+            where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
+            filter_params.append(f"correction:{correction_category}%")
         if not include_archived:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
@@ -496,7 +523,9 @@ class SearchMixin:
         if where_clauses:
             where_sql = "AND " + " AND ".join(where_clauses)
 
-        needs_overfetch = entity_id or (source_filter and source_filter != "claude_code")
+        needs_overfetch = (
+            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
+        )
         effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
         params = [query_bytes, effective_k] + filter_params
         results = list(
@@ -635,6 +664,8 @@ class SearchMixin:
         k: int = 60,
         include_archived: bool = False,
         kg_boost: bool = False,
+        source_filter_like: Optional[str] = None,
+        correction_category: Optional[str] = None,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -668,7 +699,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
-        ) + (kg_boost,)
+        ) + (kg_boost, source_filter_like, correction_category)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -697,6 +728,8 @@ class SearchMixin:
                 sentiment_filter=sentiment_filter,
                 entity_id=entity_id,
                 include_archived=include_archived,
+                source_filter_like=source_filter_like,
+                correction_category=correction_category,
             )
             semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
         else:
@@ -716,6 +749,8 @@ class SearchMixin:
                 sentiment_filter=sentiment_filter,
                 entity_id=entity_id,
                 include_archived=include_archived,
+                source_filter_like=source_filter_like,
+                correction_category=correction_category,
             )
 
         # Build semantic rank map: chunk_content -> rank
@@ -763,6 +798,12 @@ class SearchMixin:
             if sentiment_filter:
                 fts_extra.append("AND c.sentiment_label = ?")
                 fts_params.append(sentiment_filter)
+            if source_filter_like:
+                fts_extra.append("AND c.source LIKE ?")
+                fts_params.append(source_filter_like)
+            if correction_category:
+                fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
+                fts_params.append(f"correction:{correction_category}%")
             if not include_archived:
                 fts_extra.append("AND c.superseded_by IS NULL")
                 fts_extra.append("AND c.aggregated_into IS NULL")
