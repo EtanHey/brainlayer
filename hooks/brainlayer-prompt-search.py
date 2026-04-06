@@ -4,7 +4,7 @@ BrainLayer UserPromptSubmit Hook — auto-searches memories relevant to the user
 
 Uses adaptive injection:
   - Hybrid search (FTS5 + vector) when embeddings/sqlite-vec are available
-  - Score-gated injection of 1-5 chunks based on RRF confidence
+  - Score-gated injection of 1-3 chunks based on RRF confidence
   - FTS-only fallback when hybrid search is unavailable
 
 Output: plain text to stdout (injected as Claude context).
@@ -636,7 +636,7 @@ def strategic_reorder(rows):
 
 
 def select_adaptive_injection_rows(rows, entity_count=0, light_mode=False):
-    """Select 0-5 rows based on RRF score thresholds."""
+    """Select 0-3 rows based on RRF score thresholds."""
     del entity_count  # Reserved for future tuning of entity-card budgets.
 
     filtered = filter_pollution_rows(rows)
@@ -940,7 +940,7 @@ def inject_entity_context(lines, prompt, conn):
         for content, created_at, project in entity_chunks:
             date = created_at[:10] if created_at else "?"
             proj = f" ({project})" if project else ""
-            lines.append(f"- [{date}{proj}] {truncate(content)}")
+            lines.append(f"- [{date}{proj}] {truncate(content, max_chars=120)}")
     return entities
 
 
