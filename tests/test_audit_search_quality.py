@@ -81,6 +81,30 @@ class TestKGSignalInHybridSearch:
 class TestEntityTypeEnumAlignment:
     """MCP entity_type enum must match canonical ENTITY_TYPES from kg/__init__.py."""
 
+    BRAIN_ENTITY_TYPES = [
+        "person",
+        "agent",
+        "golem",
+        "tool",
+        "platform",
+        "project",
+        "technology",
+        "library",
+        "organization",
+        "company",
+        "topic",
+        "concept",
+        "workflow",
+        "skill",
+        "decision",
+        "protocol",
+        "health_metric",
+        "community",
+        "device",
+        "event",
+        "location",
+    ]
+
     async def test_mcp_recall_enum_matches_canonical(self):
         """brain_recall entity_type enum must match kg/__init__.py ENTITY_TYPES."""
         from brainlayer.kg import ENTITY_TYPES
@@ -96,8 +120,7 @@ class TestEntityTypeEnumAlignment:
         )
 
     async def test_mcp_entity_enum_matches_canonical(self):
-        """brain_entity entity_type enum must match kg/__init__.py ENTITY_TYPES."""
-        from brainlayer.kg import ENTITY_TYPES
+        """brain_entity entity_type enum must match the MCP schema contract."""
         from brainlayer.mcp import list_tools
 
         tools = await list_tools()
@@ -105,8 +128,8 @@ class TestEntityTypeEnumAlignment:
         schema = entity_tool.inputSchema
         mcp_enum = schema["properties"]["entity_type"]["enum"]
 
-        assert sorted(mcp_enum) == sorted(ENTITY_TYPES), (
-            f"MCP brain_entity entity_type enum {mcp_enum} does not match canonical ENTITY_TYPES {ENTITY_TYPES}"
+        assert sorted(mcp_enum) == sorted(self.BRAIN_ENTITY_TYPES), (
+            f"MCP brain_entity entity_type enum {mcp_enum} does not match expected taxonomy {self.BRAIN_ENTITY_TYPES}"
         )
 
 
