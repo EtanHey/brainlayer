@@ -182,5 +182,5 @@ def test_knowledge_route_injects_chunks(tmp_path, monkeypatch, capsys):
         capsys,
     )
 
-    assert "[BrainLayer" in output
-    assert "Authentication was implemented with JWT middleware and route guards." in output
+    assert "BrainLayer memory available" in output
+    assert "Authentication was implemented with JWT middleware and route guards" in output
