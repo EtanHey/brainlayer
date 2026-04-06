@@ -89,6 +89,7 @@ class TestKGTableCreation:
             "valid_from",
             "valid_until",
             "group_id",
+            "parent_id",
             "entity_subtype",
             "status",
         }
