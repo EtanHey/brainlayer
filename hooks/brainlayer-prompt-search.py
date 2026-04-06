@@ -41,6 +41,48 @@ _ENTITY_CACHE = None
 _ENTITY_CACHE_DB_PATH = None
 
 
+def get_session_context(conn, session_id: str, limit: int = 3) -> list[str]:
+    """Get recent user message content from current session for query augmentation.
+
+    Returns list of content strings from the most recent user messages,
+    ordered newest-first.
+    """
+    if not session_id or not conn:
+        return []
+    try:
+        rows = conn.execute(
+            """SELECT content FROM chunks
+               WHERE source_file LIKE ? AND content_type = 'user_message'
+               ORDER BY created_at DESC LIMIT ?""",
+            (f"%{session_id}%", limit),
+        ).fetchall()
+        return [row[0] for row in rows if row[0]]
+    except Exception:
+        return []
+
+
+def extract_context_keywords(context_messages: list[str], max_keywords: int = 8) -> list[str]:
+    """Extract meaningful keywords from recent session messages for query augmentation."""
+    words = []
+    for msg in context_messages:
+        tokens = re.findall(r"\b[a-zA-Z]{3,}\b", msg)
+        for token in tokens:
+            lowered = token.lower()
+            if lowered not in STOP_WORDS:
+                words.append(lowered)
+
+    seen = set()
+    unique = []
+    for word in words:
+        if word not in seen:
+            seen.add(word)
+            unique.append(word)
+        if len(unique) >= max_keywords:
+            break
+
+    return unique
+
+
 def should_activate():
     """Conditional activation gate — skip hook when not needed.
 
@@ -1045,6 +1087,7 @@ def main():
         finalize_and_exit(mode="skip")
 
     detected_entities = []
+    context_keywords = []
     if classification == "knowledge_question":
         detected_entities = detect_entities_in_prompt(prompt, conn)
         entities_detected = len(detected_entities)
@@ -1063,6 +1106,12 @@ def main():
         keywords = extract_hebrew_keywords(prompt) or extract_keywords(prompt)
     else:
         keywords = extract_keywords(prompt)
+
+    if classification == "follow_up":
+        context_msgs = get_session_context(conn, session_id, limit=3)
+        context_keywords = extract_context_keywords(context_msgs) if context_msgs else []
+        if context_keywords:
+            keywords = context_keywords + [kw for kw in keywords if kw not in context_keywords]
 
     if not keywords and classification != "entity_lookup":
         conn.close()
@@ -1092,6 +1141,9 @@ def main():
             if classification == "follow_up":
                 date_from = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
                 label = "follow_up"
+                if context_keywords:
+                    augmented_keywords = context_keywords + [kw for kw in keywords if kw not in context_keywords]
+                    fts_query = build_fts_query(augmented_keywords)
             elif classification == "hebrew_query":
                 label = "hebrew"
 
