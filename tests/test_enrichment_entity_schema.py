@@ -251,3 +251,41 @@ def test_parse_enrichment_strips_entity_name_whitespace():
     result = parse_enrichment(raw)
     assert result is not None
     assert result["entities"][0]["name"] == "React"
+
+
+def test_parse_enrichment_handles_null_entities():
+    import json
+
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "Some summary",
+            "tags": ["test"],
+            "importance": 5,
+            "intent": "debugging",
+            "entities": None,
+        }
+    )
+    result = parse_enrichment(raw)
+    assert result is not None
+    assert "entities" not in result
+
+
+def test_parse_enrichment_handles_non_list_entities():
+    import json
+
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "Some summary",
+            "tags": ["test"],
+            "importance": 5,
+            "intent": "debugging",
+            "entities": "not a list",
+        }
+    )
+    result = parse_enrichment(raw)
+    assert result is not None
+    assert "entities" not in result

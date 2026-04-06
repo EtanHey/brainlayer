@@ -264,6 +264,10 @@ def _retry_with_backoff(
 
 
 def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+    # AIDEV-TODO: Wire enrichment["entities"] into kg_entities + kg_entity_chunks tables.
+    # Currently entities are extracted by Gemini and validated by parse_enrichment() but not
+    # persisted. Storage will be added in P2 (entity hierarchy + typed relations).
+    # See: ~/Gits/orchestrator/docs.local/research/brainlayer-r75-r78-unimplemented.md items 6-7.
     store.update_enrichment(
         chunk_id=chunk["id"],
         summary=enrichment.get("summary"),
