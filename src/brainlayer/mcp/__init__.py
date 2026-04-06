@@ -85,15 +85,14 @@ async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
 server = Server(
     "brainlayer",
     instructions=(
-        "Memory layer for Claude Code. 3 primary tools:\n"
-        "- brain_recall(query): unified search, entity lookup, and context recall. "
-        "Auto-routes by query or explicit mode (search/entity/context/sessions/stats).\n"
-        "- brain_store(content): persist decisions, learnings, mistakes, ideas, todos. "
-        "Type and importance auto-detected. Immediately searchable.\n"
-        "- brain_digest(content): deeply ingest large content — extracts entities, "
-        "relations, tags, action items. Use for research, audits, transcripts.\n"
-        "brain_search and brain_entity are aliases for brain_recall. "
-        "brain_update/brain_expand/brain_tags are deprecated.\n"
+        "Memory layer for Claude Code. Primary tools:\n"
+        "- brain_search(query): search persistent memory for past decisions, architecture, conventions, preferences.\n"
+        "- brain_store(content): save decisions, learnings, mistakes, corrections. Persists across sessions.\n"
+        "- brain_recall(query): unified search, entity lookup, stats, and session context. "
+        "Auto-routes by query or explicit mode.\n"
+        "- brain_entity(name): look up known entities and their relationships from the knowledge graph.\n"
+        "- brain_digest(content): extract entities and structured knowledge from large content.\n"
+        "brain_update/brain_expand/brain_tags are deprecated — see their descriptions for alternatives.\n"
         'Project scoping: auto-inferred from cwd. Override with project="all".'
     ),
 )
@@ -287,7 +286,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="brain_search",
             title="Search Knowledge Base",
-            description="""Search BrainLayer knowledge base of 300K+ chunks spanning project architecture, coding conventions, debugging insights, user preferences, and past decisions. Use BEFORE answering questions about project history, architecture decisions, user preferences, or how we do things. Returns top results ranked by hybrid FTS5 + vector search with relevance scores. Does NOT search the current conversation — only persistent memory. Use specific descriptive queries, not single keywords.
+            description="""Search BrainLayer's persistent knowledge base spanning project architecture, coding conventions, debugging insights, user preferences, and past decisions. Use BEFORE answering questions about project history, architecture decisions, user preferences, or how we do things. Returns top results ranked by hybrid FTS5 + vector search with relevance scores. Does NOT search the current conversation — only persistent memory. Use specific descriptive queries, not single keywords.
 
 Auto-routes based on input:
 - chunk_id → expand surrounding context
@@ -401,7 +400,7 @@ Auto-routes based on input:
                         "type": "string",
                         "enum": ["compact", "full"],
                         "default": "compact",
-                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary — use brain_expand to drill into specific results. 'full': returns full content + all metadata fields.",
+                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary. 'full': returns full content + all metadata fields. Use 'full' when you need the complete text of a result.",
                     },
                 },
                 "required": ["query"],
@@ -703,7 +702,7 @@ Smart routing when mode is omitted:
         Tool(
             name="brain_digest",
             title="Digest Content",
-            description="""Extract entities, relations, and key facts from large text content and store them in the knowledge graph. Use when processing research outputs, audit reports, or any content over 500 words that should be permanently indexed. Returns extracted entity and relation counts. Does NOT store the raw content — it extracts structured knowledge from it.
+            description="""Extract entities, relations, and key facts from large text content and store them in the knowledge graph. Use when processing research outputs, audit reports, or any content over 500 words that should be permanently indexed. Returns extracted entity and relation counts. Does NOT store content verbatim — it extracts structured knowledge and stores an enriched chunk.
 
 Modes:
 - digest (default): ingest content, extract entities, store as searchable chunk
@@ -784,11 +783,7 @@ How it differs from brain_store:
         Tool(
             name="brain_expand",
             title="Expand Chunk Context",
-            description="""Get a chunk plus its surrounding session context (chunks before and after in the same conversation). Use when a brain_search result needs more context to be useful. Returns the target chunk plus neighboring chunks ordered by position. Does NOT do a new search — it expands an existing result.
-
-Example workflow:
-1. brain_search("auth implementation") → compact results with chunk_ids
-2. brain_expand(chunk_id="abc123", context=3) → full content + 3 chunks before/after""",
+            description="Deprecated. Use brain_search with detail='full' to get full chunk content, or brain_recall with conversation_id to get session context.",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
@@ -811,14 +806,7 @@ Example workflow:
         Tool(
             name="brain_update",
             title="Update or Archive Memory",
-            description="""Update importance score and/or tags on an existing chunk by ID. Use to promote important chunks, add missing tags after review, archive stale memories, or merge duplicates. Returns confirmation of the update with affected chunk IDs. Does NOT modify chunk content directly in update mode — use brain_store with supersedes param to replace content.
-
-Actions:
-- **update**: Change content, tags, or importance of an existing memory. If content changes, re-embeds automatically.
-- **archive**: Soft-delete a memory (removes from search results, keeps in DB).
-- **merge**: Combine multiple duplicate memories into one. Keeps the first chunk_id, archives the rest.
-
-Use brain_search first to find the chunk_id(s) you want to modify.""",
+            description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
             annotations=_WRITE_IDEMPOTENT,
             inputSchema={
                 "type": "object",
@@ -859,12 +847,7 @@ Use brain_search first to find the chunk_id(s) you want to modify.""",
         Tool(
             name="brain_tags",
             title="Tag Discovery",
-            description="""List all unique tags in the knowledge base with their usage counts, optionally filtered by a prefix query. Use to discover what topics are covered, find tag spelling, or audit tag distribution. Returns tag names with counts sorted by frequency. Does NOT search chunk content — only the tag index.
-
-Actions:
-- **list**: Return top tags ordered by frequency (most-used first). Optional project filter.
-- **search**: Find tags matching a prefix or pattern (case-insensitive). Useful for autocomplete.
-- **suggest**: Suggest relevant existing tags for a piece of content. Matches content keywords against tag vocabulary.""",
+            description="Deprecated. Use brain_recall(mode='search', tag='prefix') to find tagged memories, or brain_store(tags=[...]) to tag when storing.",
             annotations=_READ_ONLY,
             inputSchema={
                 "type": "object",
