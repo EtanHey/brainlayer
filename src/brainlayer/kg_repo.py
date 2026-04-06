@@ -451,7 +451,7 @@ class KGMixin:
     ) -> Dict[str, Any]:
         """List entities with optional type filter and pagination."""
         cursor = self._read_cursor()
-        where = "WHERE status = 'active'"
+        where = "WHERE (status = 'active' OR status IS NULL)"
         params: list = []
         if entity_type:
             where += " AND entity_type = ?"

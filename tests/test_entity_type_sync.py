@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 
+from brainlayer.mcp.entity_handler import _format_entity_list
 from brainlayer.vector_store import VectorStore
 
 # ── Fixtures ────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ def _get_brain_entity_tool():
 
     from brainlayer.mcp import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     for tool in tools:
         if tool.name == "brain_entity":
             return tool
@@ -41,7 +42,7 @@ def _get_brain_entity_tool():
 
 # ── Hierarchy Seed Types ────────────────────────────────────────
 
-# These are the 16 types seeded in vector_store.py _init_db()
+# These are the 17 types seeded in vector_store.py _init_db()
 _HIERARCHY_SEED_TYPES = {
     "agent",
     "person",
@@ -165,6 +166,16 @@ class TestListEntities:
         assert len(result["entities"]) == 2
         assert all(e["entity_type"] == "technology" for e in result["entities"])
 
+    def test_list_entities_includes_legacy_null_status_rows(self, store):
+        """list_entities includes pre-migration rows whose status was never backfilled."""
+        entity_id = self._add_entity(store, "Legacy", "topic", importance=0.4)
+        store.conn.cursor().execute("UPDATE kg_entities SET status = NULL WHERE id = ?", (entity_id,))
+
+        result = store.list_entities()
+
+        assert result["total"] == 1
+        assert result["entities"][0]["name"] == "Legacy"
+
     def test_list_entities_pagination(self, store):
         """list_entities respects limit and offset."""
         for i in range(5):
@@ -201,3 +212,22 @@ class TestListEntities:
         assert entity["description"] == "A test tool"
         assert entity["importance"] == 0.6
         assert "created_at" in entity
+
+
+def test_format_entity_list_shows_zero_importance():
+    """importance=0 should render instead of being treated as missing."""
+    formatted = _format_entity_list(
+        {
+            "total": 1,
+            "entities": [
+                {
+                    "entity_type": "topic",
+                    "name": "Zero",
+                    "importance": 0,
+                    "description": "Zero importance still matters for display",
+                }
+            ],
+        }
+    )
+
+    assert "(importance=0)" in formatted

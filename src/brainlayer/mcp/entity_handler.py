@@ -62,7 +62,7 @@ def _format_entity_list(result: dict) -> str:
         type_label = e.get("entity_type", "?")
         name = e.get("name", "?")
         suffix = f" -- {desc}" if desc else ""
-        imp_str = f" (importance={imp})" if imp else ""
+        imp_str = f" (importance={imp})" if imp is not None else ""
         lines.append(f"  [{type_label}] {name}{imp_str}{suffix}")
     return "\n".join(lines)
 
