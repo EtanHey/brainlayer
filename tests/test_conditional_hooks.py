@@ -486,7 +486,12 @@ class TestPromptSearchConditional:
         assert prompt_search.detect_correction("Please don't do that again.") == "preference"
         assert prompt_search.detect_correction("This response is too verbose.") == "style"
         assert prompt_search.detect_correction("לא נכון, תתקן את זה") == "factual"
+        assert prompt_search.detect_correction("טעות") == "factual"
         assert prompt_search.detect_correction("ok") is None
+        assert prompt_search.detect_correction("I want to build auth with bun.") is None
+        assert prompt_search.detect_correction("I like Python for backend work.") is None
+        assert prompt_search.detect_correction("What is CSS style isolation?") is None
+        assert prompt_search.detect_correction("Explain tone mapping in image pipelines.") is None
 
     def test_main_prints_correction_store_nudge(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()

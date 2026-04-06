@@ -14,7 +14,13 @@ CORRECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
-            r"(?:^|\b)(?:don'?t|do\s+not|stop|never|please\s+don'?t|i\s+(?:don'?t\s+)?(?:want|like|prefer))",
+            r"(?:^|\b)(?:"
+            r"don'?t|do\s+not|stop|never|please\s+don'?t|"
+            r"i\s+don'?t\s+(?:want|like)|"
+            r"i\s+prefer\b.+\b(?:instead|rather\s+than)\b|"
+            r"i\s+want\b.+\binstead\b|"
+            r"i\s+like\b.+\bbetter\b"
+            r")",
             re.IGNORECASE,
         ),
         "preference",
@@ -28,7 +34,11 @@ CORRECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
-            r"(?:^|\b)(?:too\s+(?:long|short|verbose|brief)|format|style|tone)",
+            r"(?:^|\b)(?:"
+            r"too\s+(?:long|short|verbose|brief)|"
+            r"(?:change|fix|adjust)\s+(?:the\s+)?(?:format|style|tone)|"
+            r"(?:the\s+)?(?:format|style|tone)\s+(?:is\s+)?(?:wrong|off)"
+            r")",
             re.IGNORECASE,
         ),
         "style",
@@ -43,7 +53,7 @@ CORRECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 def detect_correction(prompt: str) -> str | None:
     """Detect whether text looks like a user correction and return its category."""
     stripped = prompt.strip()
-    if len(stripped) < 5:
+    if len(stripped) < 3:
         return None
     for pattern, category in CORRECTION_PATTERNS:
         if pattern.search(stripped):
