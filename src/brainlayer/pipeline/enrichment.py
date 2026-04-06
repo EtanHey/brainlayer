@@ -305,6 +305,9 @@ Return this exact JSON structure:
   "version_scope": "<version or system state discussed, or null>",
   "debt_impact": "<one of: introduction, resolution, none>",
   "external_deps": ["<libraries or external APIs used>"],
+  "entities": [
+    {{"name": "<entity name>", "type": "<person|company|project|technology|tool|concept>"}}
+  ],
   "sentiment_label": "<one of: frustration, confusion, positive, satisfaction, neutral>",
   "sentiment_score": <float from -1.0 (max frustration) to 1.0 (max positive)>,
   "sentiment_signals": ["<words/phrases that indicate the sentiment>"]
@@ -338,6 +341,12 @@ DEBT_IMPACT:
 - none: Neither introducing nor resolving debt
 
 EXTERNAL_DEPS: Libraries, APIs, services referenced (e.g., "ollama", "supabase", "react-force-graph-3d"). Empty array if none.
+
+ENTITIES: Extract non-code entities only — people, projects, technologies, companies, tools, concepts.
+- DO NOT extract variable names, function names, file paths, or code symbols.
+- Each entity has a "name" (string) and "type" (one of: person, company, project, technology, tool, concept).
+- Examples: {{"name": "React", "type": "technology"}}, {{"name": "Etan Heyman", "type": "person"}}, {{"name": "Supabase", "type": "tool"}}
+- Empty array if no non-code entities are mentioned.
 
 SENTIMENT_LABEL: Detect the emotional tone of the human user in this chunk.
 - frustration: Anger, annoyance, things not working ("damn", "wtf", "broken again")
@@ -742,6 +751,24 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             cleaned = [str(d).strip().lower() for d in external_deps if isinstance(d, str) and d.strip()][:15]
             if cleaned:
                 result["external_deps"] = cleaned
+
+        VALID_ENTITY_TYPES = {"person", "company", "project", "technology", "tool", "concept"}
+        entities = match.get("entities", [])
+        if isinstance(entities, list):
+            cleaned_entities = []
+            for e in entities:
+                if isinstance(e, dict):
+                    name = e.get("name", "")
+                    etype = e.get("type", "")
+                    if (
+                        isinstance(name, str)
+                        and name.strip()
+                        and isinstance(etype, str)
+                        and etype.lower().strip() in VALID_ENTITY_TYPES
+                    ):
+                        cleaned_entities.append({"name": name.strip(), "type": etype.lower().strip()})
+            if cleaned_entities:
+                result["entities"] = cleaned_entities[:20]
 
         # Must have at least summary + tags to be valid
         if "summary" in result and "tags" in result:
