@@ -792,17 +792,50 @@ How it differs from brain_store:
                         "type": "string",
                         "enum": [
                             "person",
-                            "constraint",
-                            "preference",
-                            "life_event",
-                            "meeting",
-                            "location",
+                            "agent",
+                            "golem",
+                            "tool",
+                            "platform",
+                            "project",
+                            "technology",
+                            "library",
                             "organization",
+                            "company",
+                            "topic",
+                            "concept",
+                            "workflow",
+                            "skill",
+                            "decision",
+                            "protocol",
+                            "health_metric",
+                            "community",
+                            "device",
+                            "event",
+                            "location",
                         ],
                         "description": "Optional: filter by entity type",
                     },
+                    "action": {
+                        "type": "string",
+                        "enum": ["lookup", "list"],
+                        "default": "lookup",
+                        "description": "lookup: find specific entity by name (default). list: browse entities by type with pagination.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Max results for list action.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "default": 0,
+                        "minimum": 0,
+                        "description": "Pagination offset for list action.",
+                    },
                 },
-                "required": ["query"],
+                "required": [],
             },
         ),
         Tool(
@@ -1259,11 +1292,28 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         )
 
     elif name == "brain_entity":
-        # Thin alias: delegates to brain_recall(mode="entity")
+        action = arguments.get("action", "lookup")
+        if action == "list":
+            from .entity_handler import _brain_entity_list
+
+            return await _with_timeout(
+                _brain_entity_list(
+                    entity_type=arguments.get("entity_type"),
+                    limit=arguments.get("limit", 20),
+                    offset=arguments.get("offset", 0),
+                )
+            )
+        # Default: lookup — delegates to brain_recall(mode="entity")
+        query = arguments.get("query")
+        if not query:
+            return CallToolResult(
+                content=[TextContent(type="text", text="query is required for lookup action.")],
+                isError=True,
+            )
         return await _with_timeout(
             _brain_recall(
                 mode="entity",
-                query=arguments["query"],
+                query=query,
                 entity_type=arguments.get("entity_type"),
             )
         )
