@@ -388,6 +388,7 @@ def _get_connection_cache_key(conn):
 def _load_entity_cache(conn=None):
     global _ENTITY_CACHE, _ENTITY_CACHE_DB_PATH
 
+    inject_types = ("person", "company", "agent", "project", "technology", "tool")
     cache_key = _get_connection_cache_key(conn)
     if _ENTITY_CACHE is not None and _ENTITY_CACHE_DB_PATH == cache_key:
         return _ENTITY_CACHE
@@ -404,7 +405,12 @@ def _load_entity_cache(conn=None):
         max_alias_tokens = 1
 
         for entity_id, name, entity_type in conn.execute(
-            "SELECT id, name, entity_type FROM kg_entities"
+            """
+            SELECT id, name, entity_type
+            FROM kg_entities
+            WHERE entity_type IN (?, ?, ?, ?, ?, ?)
+            """,
+            inject_types,
         ).fetchall():
             normalized = " ".join(str(name).lower().split())
             if not normalized:
@@ -425,7 +431,9 @@ def _load_entity_cache(conn=None):
                 SELECT a.alias, e.id, e.name, e.entity_type
                 FROM kg_entity_aliases a
                 JOIN kg_entities e ON a.entity_id = e.id
-                """
+                WHERE e.entity_type IN (?, ?, ?, ?, ?, ?)
+                """,
+                inject_types,
             ).fetchall():
                 normalized = " ".join(str(alias).lower().split())
                 if not normalized:
@@ -441,6 +449,7 @@ def _load_entity_cache(conn=None):
             "max_name_tokens": max_name_tokens,
             "max_alias_tokens": max_alias_tokens,
         }
+        _ENTITY_CACHE_DB_PATH = cache_key
     except sqlite3.Error:
         _ENTITY_CACHE = {
             "entities_by_name": {},
@@ -449,7 +458,6 @@ def _load_entity_cache(conn=None):
             "max_alias_tokens": 1,
         }
     finally:
-        _ENTITY_CACHE_DB_PATH = cache_key
         if close_conn:
             conn.close()
 
@@ -519,11 +527,8 @@ def detect_entities_in_prompt(prompt, conn=None):
     )
     matched.extend(alias_matches)
 
-    if matched:
-        return matched
-
     if conn is None:
-        return []
+        return matched
 
     try:
         phonetic_rows = conn.execute(
@@ -535,7 +540,7 @@ def detect_entities_in_prompt(prompt, conn=None):
             """
         ).fetchall()
     except sqlite3.Error:
-        return []
+        return matched
 
     for candidate, _ in tokens:
         if not looks_hebrew(candidate):

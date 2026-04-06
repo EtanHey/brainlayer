@@ -265,6 +265,69 @@ class TestPromptSearchConditional:
 
         assert [(match["id"], match["name"]) for match in matches] == [("person-1", "Etan Heyman")]
 
+    def test_load_entity_cache_retries_after_transient_sqlite_error(self, prompt_search):
+        class ErrorConn:
+            def execute(self, query, params=()):
+                raise sqlite3.OperationalError("database is locked")
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+
+        failed_cache = prompt_search._load_entity_cache(ErrorConn())
+
+        assert failed_cache["entities_by_name"] == {}
+        assert prompt_search._ENTITY_CACHE_DB_PATH is None
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            ("person-1", "Etan Heyman", "person"),
+        )
+        conn.commit()
+
+        recovered_cache = prompt_search._load_entity_cache(conn)
+
+        assert "etan heyman" in recovered_cache["entities_by_name"]
+
+    def test_load_entity_cache_filters_to_supported_injected_types(self, prompt_search):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            """
+            CREATE TABLE kg_entity_aliases (
+                alias TEXT,
+                entity_id TEXT,
+                alias_type TEXT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            [
+                ("project-1", "BrainLayer", "project"),
+                ("library-1", "SQLite", "library"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES (?, ?, ?)",
+            [
+                ("BL", "project-1", "handle"),
+                ("sql", "library-1", "handle"),
+            ],
+        )
+        conn.commit()
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+
+        cache = prompt_search._load_entity_cache(conn)
+
+        assert "brainlayer" in cache["entities_by_name"]
+        assert "sqlite" not in cache["entities_by_name"]
+        assert "bl" in cache["aliases_by_name"]
+        assert "sql" not in cache["aliases_by_name"]
+
     def test_record_injection_event_persists_rows(self, prompt_search, tmp_path):
         db_path = tmp_path / "hook-events.db"
         conn = sqlite3.connect(db_path)
