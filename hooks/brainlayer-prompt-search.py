@@ -24,6 +24,7 @@ from pathlib import Path
 from brainlayer import paths
 from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
+from brainlayer.pipeline.correction_detection import detect_correction
 
 DEADLINE_MS = 450
 RRF_K = 60
@@ -1052,6 +1053,7 @@ def main():
         finalize_and_exit(mode="skip")
 
     prompt_lower = prompt.lower()
+    correction_category = detect_correction(prompt)
 
     # Handoff detection: skip auto-search to avoid duplicate injection
     # (SessionStart already injected handoff context)
@@ -1128,6 +1130,11 @@ def main():
     fts_query = build_fts_query(keywords)
 
     lines = []
+    if correction_category:
+        lines.append(
+            f"[Correction detected: {correction_category}] "
+            f"Store this correction with brain_store(tags=['correction', 'correction:{correction_category}', 'auto-detected'])."
+        )
     try:
         if classification == "entity_lookup" and elapsed_ms(start) < DEADLINE_MS:
             detected_entities = inject_entity_context(lines, prompt, conn)
