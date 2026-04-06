@@ -109,7 +109,7 @@ class TestAdaptiveInjectionGating:
 
         selected = prompt_search.select_adaptive_injection_rows(rows)
 
-        assert len(selected) == 5
+        assert len(selected) == 3  # MAX_ADAPTIVE_INJECTION=3
 
 
 class TestPollutionFiltering:
