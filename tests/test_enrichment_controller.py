@@ -835,7 +835,7 @@ def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
 
     controller.enrich_realtime(store, chunk_ids=["a", "b"])
 
-    store.get_enrichment_candidates.assert_called_once_with(limit=25, since_hours=24, chunk_ids=["a", "b"])
+    store.get_enrichment_candidates.assert_called_once_with(limit=500, since_hours=8760, chunk_ids=["a", "b"])
 
 
 # ── LaunchAgent plist validation ──────────────────────────────────────────────
