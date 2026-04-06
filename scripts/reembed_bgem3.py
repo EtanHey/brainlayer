@@ -18,14 +18,27 @@ from __future__ import annotations
 import argparse
 import json
 import struct
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add src/ to path so we can import brainlayer.paths
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 MODEL_NAME = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024
 DEFAULT_CHECKPOINT = Path.home() / ".local/share/brainlayer/reembed_bgem3_checkpoint.json"
-DEFAULT_DB = Path.home() / ".local/share/brainlayer/brainlayer.db"
+
+
+def _get_default_db() -> Path:
+    """Resolve DB path using brainlayer.paths if available, else fallback."""
+    try:
+        from brainlayer.paths import get_db_path
+
+        return Path(get_db_path())
+    except ImportError:
+        return Path.home() / ".local/share/brainlayer/brainlayer.db"
 
 
 def serialize_f32(vector: list[float]) -> bytes:
@@ -62,7 +75,7 @@ def _open_apsw(db_path: str):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=10000")
         return conn, "apsw"
-    except (ImportError, Exception):
+    except ImportError:
         import sqlite3
 
         conn = sqlite3.connect(db_path)
@@ -108,8 +121,7 @@ def get_chunks_to_process(db_path: str, already_done: set[str], limit: int | Non
             result = result[:limit]
         return result
     finally:
-        if backend == "sqlite3":
-            conn.close()
+        conn.close()
 
 
 def load_model():
@@ -122,6 +134,23 @@ def load_model():
     model = SentenceTransformer(MODEL_NAME, device=device)
     print(f"Model loaded. Embedding dimension: {model.get_sentence_embedding_dimension()}")
     return model
+
+
+def _retry_on_busy(fn, max_attempts: int = 5, base_delay: float = 0.5):
+    """Retry a callable on SQLITE_BUSY with exponential backoff."""
+    import sqlite3 as _sqlite3
+
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except (_sqlite3.OperationalError, Exception) as e:
+            if "database is locked" not in str(e) and "BusyError" not in type(e).__name__:
+                raise
+            if attempt == max_attempts - 1:
+                raise
+            delay = base_delay * (2**attempt)
+            print(f"  SQLITE_BUSY, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_attempts})")
+            time.sleep(delay)
 
 
 def reembed_batch(
@@ -137,6 +166,9 @@ def reembed_batch(
     conn, backend = _open_apsw(db_path)
     use_vec_quantize = backend == "apsw"  # sqlite-vec available
 
+    # WAL checkpoint before bulk work
+    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+
     total = len(chunks)
     processed = 0
     start_time = time.monotonic()
@@ -150,30 +182,31 @@ def reembed_batch(
             # Generate embeddings
             embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-            # Update DB
-            for chunk_id, embedding in zip(ids, embeddings):
-                emb_bytes = serialize_f32(embedding.tolist())
+            # Update DB with retry on SQLITE_BUSY
+            def _write_batch():
+                for chunk_id, embedding in zip(ids, embeddings):
+                    emb_bytes = serialize_f32(embedding.tolist())
 
-                conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
-                conn.execute(
-                    "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
-                    (chunk_id, emb_bytes),
-                )
-                conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
-                if use_vec_quantize:
+                    conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
                     conn.execute(
-                        "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
+                        "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
                         (chunk_id, emb_bytes),
                     )
-                else:
-                    # Fallback for test DBs without sqlite-vec
-                    conn.execute(
-                        "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, ?)",
-                        (chunk_id, quantize_binary(emb_bytes)),
-                    )
+                    conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+                    if use_vec_quantize:
+                        conn.execute(
+                            "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
+                            (chunk_id, emb_bytes),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, ?)",
+                            (chunk_id, quantize_binary(emb_bytes)),
+                        )
+                if backend == "sqlite3":
+                    conn.commit()
 
-            if backend == "sqlite3":
-                conn.commit()
+            _retry_on_busy(_write_batch)
             processed += len(batch)
 
             # Update checkpoint
@@ -191,15 +224,14 @@ def reembed_batch(
                 f"— {rate:.1f} chunks/s, ETA {eta:.0f}s"
             )
     finally:
-        if backend == "sqlite3":
-            conn.close()
+        conn.close()
 
     return processed
 
 
 def main():
     parser = argparse.ArgumentParser(description="Re-embed chunks with BAAI/bge-m3")
-    parser.add_argument("--db", type=str, default=str(DEFAULT_DB), help="Path to brainlayer.db")
+    parser.add_argument("--db", type=str, default=str(_get_default_db()), help="Path to brainlayer.db")
     parser.add_argument("--test", action="store_true", help="Test mode: process only 100 chunks")
     parser.add_argument(
         "--batch-size",

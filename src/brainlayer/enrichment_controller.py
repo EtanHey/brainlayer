@@ -37,7 +37,9 @@ AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not 
 
 # Per-backend rate limits (requests per second). Override via env vars.
 RATE_LIMITS = {
-    "realtime": float(os.environ.get("BRAINLAYER_ENRICH_RATE", "5.0")),  # 300 RPM default (AI Pro verified 500+ RPM Apr 2026)
+    "realtime": float(
+        os.environ.get("BRAINLAYER_ENRICH_RATE", "5.0")
+    ),  # 300 RPM default (AI Pro verified 500+ RPM Apr 2026)
     "local": float(os.environ.get("BRAINLAYER_LOCAL_RATE", "0")),  # no limit
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }

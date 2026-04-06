@@ -105,7 +105,7 @@ class TestReembedScript:
         db_path = _create_test_db(tmp_path)
         checkpoint_path = tmp_path / "checkpoint.json"
 
-        subprocess.run(
+        result = subprocess.run(
             [
                 sys.executable,
                 str(SCRIPT_PATH),
@@ -119,6 +119,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert checkpoint_path.exists(), "Checkpoint file should be created"
 
         import json
@@ -172,7 +173,7 @@ class TestReembedScript:
         db_path = _create_test_db(tmp_path)
         checkpoint_path = tmp_path / "checkpoint.json"
 
-        subprocess.run(
+        result = subprocess.run(
             [
                 sys.executable,
                 str(SCRIPT_PATH),
@@ -186,6 +187,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
 
         conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT embedding FROM chunk_vectors_binary WHERE chunk_id = 'chunk_0'").fetchone()
