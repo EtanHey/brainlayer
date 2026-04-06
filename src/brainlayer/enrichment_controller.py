@@ -103,9 +103,45 @@ def _get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
+GEMINI_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "importance": {"type": "number"},
+        "intent": {"type": "string"},
+        "primary_symbols": {"type": "array", "items": {"type": "string"}},
+        "resolved_query": {"type": "string"},
+        "epistemic_level": {"type": "string"},
+        "version_scope": {"type": "string"},
+        "debt_impact": {"type": "string"},
+        "external_deps": {"type": "array", "items": {"type": "string"}},
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {
+                        "type": "string",
+                        "enum": ["person", "company", "project", "technology", "tool", "concept"],
+                    },
+                },
+                "required": ["name", "type"],
+            },
+        },
+        "sentiment_label": {"type": "string"},
+        "sentiment_score": {"type": "number"},
+        "sentiment_signals": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "tags", "importance", "intent", "entities"],
+}
+
+
 def _build_gemini_config() -> dict[str, Any]:
     return {
         "response_mime_type": "application/json",
+        "response_schema": GEMINI_RESPONSE_SCHEMA,
         "thinking_config": {"thinking_budget": 0},
     }
 
@@ -228,6 +264,10 @@ def _retry_with_backoff(
 
 
 def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+    # AIDEV-TODO: Wire enrichment["entities"] into kg_entities + kg_entity_chunks tables.
+    # Currently entities are extracted by Gemini and validated by parse_enrichment() but not
+    # persisted. Storage will be added in P2 (entity hierarchy + typed relations).
+    # See: ~/Gits/orchestrator/docs.local/research/brainlayer-r75-r78-unimplemented.md items 6-7.
     store.update_enrichment(
         chunk_id=chunk["id"],
         summary=enrichment.get("summary"),
