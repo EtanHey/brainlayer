@@ -721,6 +721,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             cursor.execute("ALTER TABLE kg_entities ADD COLUMN entity_subtype TEXT")
         if "status" not in kg_entity_cols:
             cursor.execute("ALTER TABLE kg_entities ADD COLUMN status TEXT DEFAULT 'active'")
+        if "parent_id" not in kg_entity_cols:
+            cursor.execute("ALTER TABLE kg_entities ADD COLUMN parent_id TEXT")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_parent ON kg_entities(parent_id)")
 
         # R49: ALTER kg_entity_chunks — add relation_tier, weight
         if "relation_tier" not in ec_cols:

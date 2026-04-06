@@ -26,6 +26,7 @@ class KGMixin:
         valid_from: Optional[str] = None,
         valid_until: Optional[str] = None,
         group_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
     ) -> str:
         """Insert or update a KG entity. Returns the entity ID."""
         cursor = self.conn.cursor()
@@ -39,9 +40,9 @@ class KGMixin:
             """
             INSERT INTO kg_entities (id, entity_type, name, metadata, canonical_name,
                                      description, confidence, importance,
-                                     valid_from, valid_until, group_id,
+                                     valid_from, valid_until, group_id, parent_id,
                                      created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(entity_type, name) DO UPDATE SET
                 metadata = excluded.metadata,
                 canonical_name = excluded.canonical_name,
@@ -51,6 +52,7 @@ class KGMixin:
                 valid_from = COALESCE(excluded.valid_from, kg_entities.valid_from),
                 valid_until = COALESCE(excluded.valid_until, kg_entities.valid_until),
                 group_id = COALESCE(excluded.group_id, kg_entities.group_id),
+                parent_id = COALESCE(excluded.parent_id, kg_entities.parent_id),
                 updated_at = excluded.updated_at
             """,
             (
@@ -65,6 +67,7 @@ class KGMixin:
                 valid_from,
                 valid_until,
                 group_id,
+                parent_id,
                 now,
                 now,
             ),
@@ -175,7 +178,7 @@ class KGMixin:
             cursor.execute(
                 """SELECT id, entity_type, name, metadata, created_at, updated_at,
                           canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
+                          valid_from, valid_until, group_id, parent_id
                    FROM kg_entities WHERE id = ?""",
                 (entity_id,),
             )
@@ -197,6 +200,7 @@ class KGMixin:
             "valid_from": row[10],
             "valid_until": row[11],
             "group_id": row[12],
+            "parent_id": row[13],
         }
 
     def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
@@ -206,7 +210,7 @@ class KGMixin:
             cursor.execute(
                 """SELECT id, entity_type, name, metadata, created_at, updated_at,
                           canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
+                          valid_from, valid_until, group_id, parent_id
                    FROM kg_entities WHERE entity_type = ? AND name = ?""",
                 (entity_type, name),
             )
@@ -228,6 +232,7 @@ class KGMixin:
             "valid_from": row[10],
             "valid_until": row[11],
             "group_id": row[12],
+            "parent_id": row[13],
         }
 
     def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
@@ -306,6 +311,46 @@ class KGMixin:
                 )
 
         return results
+
+    def get_entity_children(self, entity_id: str, limit: int = 50) -> list:
+        """Get child entities that have this entity as parent."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """SELECT id, entity_type, name, description, importance
+                   FROM kg_entities
+                   WHERE parent_id = ? AND (status = 'active' OR status IS NULL)
+                   ORDER BY importance DESC, name ASC
+                   LIMIT ?""",
+                (entity_id, limit),
+            )
+        )
+        return [{"id": r[0], "entity_type": r[1], "name": r[2], "description": r[3], "importance": r[4]} for r in rows]
+
+    def get_entity_parent(self, entity_id: str) -> dict | None:
+        """Get the parent entity of a given entity."""
+        cursor = self._read_cursor()
+        row = list(
+            cursor.execute(
+                """SELECT p.id, p.entity_type, p.name, p.description, p.importance
+                   FROM kg_entities c
+                   JOIN kg_entities p ON c.parent_id = p.id
+                   WHERE c.id = ?""",
+                (entity_id,),
+            )
+        )
+        if not row:
+            return None
+        r = row[0]
+        return {"id": r[0], "entity_type": r[1], "name": r[2], "description": r[3], "importance": r[4]}
+
+    def set_entity_parent(self, entity_id: str, parent_id: str) -> None:
+        """Set the parent of an entity."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE kg_entities SET parent_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+            (parent_id, entity_id),
+        )
 
     def get_entity_chunks(self, entity_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Get chunks linked to an entity, ordered by relevance."""

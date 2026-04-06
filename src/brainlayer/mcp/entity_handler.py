@@ -40,6 +40,17 @@ async def _brain_entity(
     if result is None:
         return CallToolResult(content=[TextContent(type="text", text=f"No entity found matching '{query}'.")])
 
+    entity_id = result["id"]
+    entity_record = await loop.run_in_executor(None, lambda: store.get_entity(entity_id))
+    if entity_record and entity_record.get("parent_id"):
+        parent = await loop.run_in_executor(None, lambda: store.get_entity_parent(entity_id))
+        if parent is not None:
+            result["parent"] = parent
+
+    children = await loop.run_in_executor(None, lambda: store.get_entity_children(entity_id))
+    if children:
+        result["children"] = children
+
     # Map 'evidence' to 'chunks' for format_entity_simple
     if "evidence" in result and "chunks" not in result:
         result["chunks"] = result["evidence"]

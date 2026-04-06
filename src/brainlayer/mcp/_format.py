@@ -191,6 +191,17 @@ def format_entity_simple(entity: dict) -> str:
         if co_count:
             lines.append(f"\u251c\u2500 Relations: {co_count} co-occurrence edges (filtered)")
 
+    parent = entity.get("parent")
+    if isinstance(parent, dict):
+        lines.append("\u251c\u2500 Parent")
+        lines.append(f"\u2502   {parent.get('name', '')} ({parent.get('entity_type', 'unknown')})")
+
+    children = entity.get("children", [])
+    if children:
+        lines.append(f"\u251c\u2500 Children ({len(children)})")
+        for child in children[:10]:
+            lines.append(f"\u2502   {child.get('name', '')} ({child.get('entity_type', 'unknown')})")
+
     # Chunks / memories
     chunks = entity.get("chunks", [])
     if chunks:
