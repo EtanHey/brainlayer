@@ -486,6 +486,7 @@ class TestPromptSearchConditional:
         assert prompt_search.detect_correction("Please don't do that again.") == "preference"
         assert prompt_search.detect_correction("This response is too verbose.") == "style"
         assert prompt_search.detect_correction("לא נכון, תתקן את זה") == "factual"
+        assert prompt_search.detect_correction("nope") == "factual"
         assert prompt_search.detect_correction("טעות") == "factual"
         assert prompt_search.detect_correction("ok") is None
         assert prompt_search.detect_correction("I want to build auth with bun.") is None
