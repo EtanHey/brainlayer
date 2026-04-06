@@ -68,7 +68,8 @@ class TestAdaptiveInjectionGating:
 
         selected = prompt_search.select_adaptive_injection_rows(rows)
 
-        assert [row["id"] for row in selected] == ["best", "third", "fourth", "fifth", "second"]
+        # MAX_ADAPTIVE_INJECTION=3, so moderate-confidence returns top 3
+        assert [row["id"] for row in selected] == ["best", "third", "second"]
 
     def test_score_gating_light(self, prompt_search):
         rows = [
@@ -108,7 +109,7 @@ class TestAdaptiveInjectionGating:
 
         selected = prompt_search.select_adaptive_injection_rows(rows)
 
-        assert len(selected) == 5
+        assert len(selected) == 3  # MAX_ADAPTIVE_INJECTION=3
 
 
 class TestPollutionFiltering:

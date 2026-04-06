@@ -123,5 +123,10 @@ brainlayer enrich
 4. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
 5. Never delete from `chunks` while FTS trigger is active on large datasets
 
+## Memory Tools
+- Always `brain_search` before answering questions about project history, architecture, or past decisions
+- `brain_store` after making decisions, hitting bugs, or receiving corrections
+- Don't rely solely on hook-injected context -- it's a hint, not comprehensive
+
 ## Naming
 - BrainLayer (זיכרון) = "memory"

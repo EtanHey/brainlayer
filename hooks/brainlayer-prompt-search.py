@@ -4,7 +4,7 @@ BrainLayer UserPromptSubmit Hook — auto-searches memories relevant to the user
 
 Uses adaptive injection:
   - Hybrid search (FTS5 + vector) when embeddings/sqlite-vec are available
-  - Score-gated injection of 1-5 chunks based on RRF confidence
+  - Score-gated injection of 1-3 chunks based on RRF confidence
   - FTS-only fallback when hybrid search is unavailable
 
 Output: plain text to stdout (injected as Claude context).
@@ -30,7 +30,7 @@ RRF_K = 60
 HIGH_CONFIDENCE_THRESHOLD = 0.015
 MODERATE_CONFIDENCE_THRESHOLD = 0.010
 LIGHT_CONFIDENCE_THRESHOLD = 0.005
-MAX_ADAPTIVE_INJECTION = 5
+MAX_ADAPTIVE_INJECTION = 3
 MAX_HYBRID_CANDIDATES = 8
 
 # Prompts shorter than this are probably greetings/commands — skip search
@@ -351,7 +351,7 @@ def extract_hebrew_keywords(prompt):
     return keywords[:8]
 
 
-def truncate(text, max_chars=200):
+def truncate(text, max_chars=80):
     # Clean up multi-line content for compact display
     text = re.sub(r"\n+", " | ", text.strip())
     if len(text) <= max_chars:
@@ -636,7 +636,7 @@ def strategic_reorder(rows):
 
 
 def select_adaptive_injection_rows(rows, entity_count=0, light_mode=False):
-    """Select 0-5 rows based on RRF score thresholds."""
+    """Select 0-3 rows based on RRF score thresholds."""
     del entity_count  # Reserved for future tuning of entity-card budgets.
 
     filtered = filter_pollution_rows(rows)
@@ -935,12 +935,12 @@ def inject_entity_context(lines, prompt, conn):
     for entity in entities[:2]:
         etype = entity["entity_type"]
         ename = entity["name"]
-        lines.append(f"[Entity: {ename} — {etype}]")
-        entity_chunks = get_entity_chunks(entity["id"], conn, limit=2)
+        lines.append(f"[Entity: {ename} -- {etype}]")
+        entity_chunks = get_entity_chunks(entity["id"], conn, limit=1)
         for content, created_at, project in entity_chunks:
             date = created_at[:10] if created_at else "?"
             proj = f" ({project})" if project else ""
-            lines.append(f"- [{date}{proj}] {truncate(content, max_chars=150)}")
+            lines.append(f"- [{date}{proj}] {truncate(content, max_chars=120)}")
     return entities
 
 
@@ -950,18 +950,14 @@ def inject_search_results(lines, rows, deep, label="auto"):
     if not rows:
         return chunk_ids, briefs
 
-    mode_label = "deep" if deep else label
-    lines.append(f"[BrainLayer {mode_label}] Memories matching your prompt:")
+    lines.append("BrainLayer memory available -- use brain_search before answering domain questions.")
     for chunk_id, content, importance, project, tags, created_at in rows:
         date = created_at[:10] if created_at else "?"
-        imp = f" imp:{importance:.0f}" if importance else ""
         proj = f" ({project})" if project else ""
-        lines.append(f"- [{date}{imp}{proj}] {truncate(content)}")
+        snippet = truncate(content)
+        lines.append(f"- [{date}{proj}] {snippet}")
         chunk_ids.append(chunk_id)
-        briefs.append(truncate(content, max_chars=80))
-
-    if not deep and label in {"auto", "follow_up", "hebrew"}:
-        lines.append("(Use brain_search for deeper results.)")
+        briefs.append(snippet)
 
     return chunk_ids, briefs
 
@@ -1077,7 +1073,7 @@ def main():
     if light_mode:
         base_limit = 2
     else:
-        base_limit = 8 if deep else 3
+        base_limit = 5 if deep else 3
     limit = base_limit + len(already_injected) if already_injected else base_limit
 
     fts_query = build_fts_query(keywords)
