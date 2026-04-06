@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer.pipeline.digest import entity_lookup
 from brainlayer.phonetic import phonetic_key
+from brainlayer.pipeline.digest import entity_lookup
 from brainlayer.vector_store import VectorStore
 
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
