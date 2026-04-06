@@ -202,6 +202,132 @@ class TestPromptSearchConditional:
 
         assert {match["name"] for match in matches} == {"T3 Code", "Claude Code"}
 
+    def test_detect_entities_returns_empty_when_no_match(self, prompt_search):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+
+        matches = prompt_search.detect_entities_in_prompt("nothing relevant here", conn)
+
+        assert matches == []
+
+    def test_detect_entities_uses_db_cache_and_longest_multiword_match(self, prompt_search):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.executemany(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            [
+                ("project-1", "BrainLayer", "project"),
+                ("person-1", "Etan Heyman", "person"),
+                ("project-2", "BrainLayer MCP", "project"),
+            ],
+        )
+        conn.commit()
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+
+        first_matches = prompt_search.detect_entities_in_prompt(
+            "Compare brainlayer mcp with EtAn HeYmAn",
+            conn,
+        )
+        conn.execute("DELETE FROM kg_entities")
+        conn.commit()
+        second_matches = prompt_search.detect_entities_in_prompt(
+            "Compare brainlayer mcp with EtAn HeYmAn",
+            conn,
+        )
+
+        assert [(match["id"], match["name"]) for match in first_matches] == [
+            ("project-2", "BrainLayer MCP"),
+            ("person-1", "Etan Heyman"),
+        ]
+        assert [(match["id"], match["name"]) for match in second_matches] == [
+            ("project-2", "BrainLayer MCP"),
+            ("person-1", "Etan Heyman"),
+        ]
+
+    def test_detect_entities_opens_db_from_paths_when_conn_missing(self, prompt_search, monkeypatch, tmp_path):
+        db_path = tmp_path / "entities.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            ("person-1", "Etan Heyman", "person"),
+        )
+        conn.commit()
+        conn.close()
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+        monkeypatch.setattr(prompt_search.paths, "get_db_path", lambda: db_path)
+
+        matches = prompt_search.detect_entities_in_prompt("What did etan heyman decide?")
+
+        assert [(match["id"], match["name"]) for match in matches] == [("person-1", "Etan Heyman")]
+
+    def test_load_entity_cache_retries_after_transient_sqlite_error(self, prompt_search):
+        class ErrorConn:
+            def execute(self, query, params=()):
+                raise sqlite3.OperationalError("database is locked")
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+
+        failed_cache = prompt_search._load_entity_cache(ErrorConn())
+
+        assert failed_cache["entities_by_name"] == {}
+        assert prompt_search._ENTITY_CACHE_DB_PATH is None
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            ("person-1", "Etan Heyman", "person"),
+        )
+        conn.commit()
+
+        recovered_cache = prompt_search._load_entity_cache(conn)
+
+        assert "etan heyman" in recovered_cache["entities_by_name"]
+
+    def test_load_entity_cache_filters_to_supported_injected_types(self, prompt_search):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE kg_entities (id TEXT, name TEXT, entity_type TEXT)")
+        conn.execute(
+            """
+            CREATE TABLE kg_entity_aliases (
+                alias TEXT,
+                entity_id TEXT,
+                alias_type TEXT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO kg_entities (id, name, entity_type) VALUES (?, ?, ?)",
+            [
+                ("project-1", "BrainLayer", "project"),
+                ("library-1", "SQLite", "library"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES (?, ?, ?)",
+            [
+                ("BL", "project-1", "handle"),
+                ("sql", "library-1", "handle"),
+            ],
+        )
+        conn.commit()
+
+        prompt_search._ENTITY_CACHE = None
+        prompt_search._ENTITY_CACHE_DB_PATH = None
+
+        cache = prompt_search._load_entity_cache(conn)
+
+        assert "brainlayer" in cache["entities_by_name"]
+        assert "sqlite" not in cache["entities_by_name"]
+        assert "bl" in cache["aliases_by_name"]
+        assert "sql" not in cache["aliases_by_name"]
+
     def test_record_injection_event_persists_rows(self, prompt_search, tmp_path):
         db_path = tmp_path / "hook-events.db"
         conn = sqlite3.connect(db_path)

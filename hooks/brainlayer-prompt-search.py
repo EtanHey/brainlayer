@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 
+from brainlayer import paths
 from brainlayer.classify import classify_prompt
 from brainlayer.phonetic import looks_hebrew, phonetic_key, phonetic_tokens
 
@@ -35,6 +36,9 @@ MAX_HYBRID_CANDIDATES = 8
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
 HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
+ENTITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|[\u0590-\u05FF]+")
+_ENTITY_CACHE = None
+_ENTITY_CACHE_DB_PATH = None
 
 
 def should_activate():
@@ -365,113 +369,208 @@ def elapsed_ms(start):
     return (time.monotonic() - start) * 1000
 
 
-def detect_entities_in_prompt(prompt, conn):
-    """Detect known KG entity names in the prompt.
+def _get_connection_cache_key(conn):
+    if conn is None:
+        return str(paths.get_db_path())
 
-    Checks bigrams and single capitalized words (3+ chars) against kg_entities.
-    Returns list of dicts: {id, name, entity_type}.
-    Fast: exact SQL LOWER() match, no FTS5 overhead.
-
-    Only injects context for high-signal entity types (person, company, agent).
-    Technology/concept entities are too noisy for automatic injection.
-    """
-    # Entity types that warrant automatic context injection
-    INJECT_TYPES = {"person", "company", "agent", "project", "technology", "tool"}
-
-    def _clean_word(w):
-        """Strip trailing punctuation and possessive suffixes ('s, 's)."""
-        # Remove all non-alphanumeric except hyphen (for compound words)
-        cleaned = re.sub(r"[^a-zA-Z0-9-]", "", w)
-        # Strip trailing possessive suffix "s" preceded by nothing (was apostrophe)
-        if cleaned.endswith("s") and len(cleaned) > 2:
-            # heuristic: if original had 's or 's before 's, strip the trailing s
-            if re.search(r"'s?$", w):
-                cleaned = cleaned[:-1]
-        return cleaned
-
-    words = prompt.split()
-    cleaned_words = [_clean_word(w) for w in words]
-    candidates = []
-
-    # Bigrams: "Avi Simon", "Fedor Sidorov" etc.
-    for i in range(len(cleaned_words) - 1):
-        w1, w2 = cleaned_words[i], cleaned_words[i + 1]
-        if not w1 or not w2:
-            continue
-        # At least one word must start uppercase (entities are proper nouns)
-        if w1[0].isupper() or w2[0].isupper():
-            candidates.append(f"{w1} {w2}")
-
-    # Single capitalized words (4+ chars to avoid "What", "Tell", etc.)
-    for w in cleaned_words:
-        if len(w) >= 4 and w[0].isupper() and not w.isupper():
-            candidates.append(w)
-
-    for token in HEBREW_CANDIDATE_RE.findall(prompt):
-        candidates.append(token)
-
-    if not candidates:
-        return []
-
-    matched = []
-    seen_ids = set()
     try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+    except sqlite3.Error:
+        rows = []
+
+    for row in rows:
+        if len(row) >= 3 and row[2]:
+            return row[2]
+
+    return f"conn:{id(conn)}"
+
+
+def _load_entity_cache(conn=None):
+    global _ENTITY_CACHE, _ENTITY_CACHE_DB_PATH
+
+    inject_types = ("person", "company", "agent", "project", "technology", "tool")
+    cache_key = _get_connection_cache_key(conn)
+    if _ENTITY_CACHE is not None and _ENTITY_CACHE_DB_PATH == cache_key:
+        return _ENTITY_CACHE
+
+    close_conn = False
+    if conn is None:
+        conn = sqlite3.connect(paths.get_db_path())
+        close_conn = True
+
+    try:
+        entities_by_name = {}
+        aliases_by_name = {}
+        max_name_tokens = 1
+        max_alias_tokens = 1
+
+        for entity_id, name, entity_type in conn.execute(
+            """
+            SELECT id, name, entity_type
+            FROM kg_entities
+            WHERE entity_type IN (?, ?, ?, ?, ?, ?)
+            """,
+            inject_types,
+        ).fetchall():
+            normalized = " ".join(str(name).lower().split())
+            if not normalized:
+                continue
+            entities_by_name.setdefault(normalized, []).append(
+                {"id": entity_id, "name": name, "entity_type": entity_type}
+            )
+            max_name_tokens = max(max_name_tokens, len(normalized.split()))
+
         alias_table_exists = bool(
             conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kg_entity_aliases' LIMIT 1"
             ).fetchall()
         )
-        for candidate in candidates:
-            rows = conn.execute(
-                "SELECT id, name, entity_type FROM kg_entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
-                (candidate,),
-            ).fetchall()
-            if not rows and alias_table_exists:
-                rows = conn.execute(
-                    """
-                    SELECT e.id, e.name, e.entity_type
-                    FROM kg_entity_aliases a
-                    JOIN kg_entities e ON a.entity_id = e.id
-                    WHERE LOWER(a.alias) = LOWER(?)
-                    LIMIT 1
-                    """,
-                    (candidate,),
-                ).fetchall()
-            if not rows and alias_table_exists and looks_hebrew(candidate):
-                query_tokens = phonetic_tokens(candidate)
-                if query_tokens:
-                    phonetic_rows = conn.execute(
-                        """
-                        SELECT e.id, e.name, e.entity_type, a.alias
-                        FROM kg_entity_aliases a
-                        JOIN kg_entities e ON a.entity_id = e.id
-                        WHERE a.alias_type = 'phonetic'
-                        """
-                    ).fetchall()
-                    query_key = phonetic_key(candidate)
-                    best_row = None
-                    best_score = 0.0
-                    for row in phonetic_rows:
-                        alias_tokens = {token for token in str(row[3]).split() if token}
-                        if not alias_tokens:
-                            continue
-                        overlap = query_tokens & alias_tokens
-                        if not overlap:
-                            continue
-                        score = len(overlap) / len(query_tokens | alias_tokens)
-                        if row[3] == query_key:
-                            score = 1.0
-                        if score > best_score:
-                            best_score = score
-                            best_row = row
-                    rows = [best_row[:3]] if best_row else []
-            if rows:
-                eid, name, etype = rows[0]
-                if eid not in seen_ids and etype in INJECT_TYPES:
-                    seen_ids.add(eid)
-                    matched.append({"id": eid, "name": name, "entity_type": etype})
+        if alias_table_exists:
+            for alias, entity_id, name, entity_type in conn.execute(
+                """
+                SELECT a.alias, e.id, e.name, e.entity_type
+                FROM kg_entity_aliases a
+                JOIN kg_entities e ON a.entity_id = e.id
+                WHERE e.entity_type IN (?, ?, ?, ?, ?, ?)
+                """,
+                inject_types,
+            ).fetchall():
+                normalized = " ".join(str(alias).lower().split())
+                if not normalized:
+                    continue
+                aliases_by_name.setdefault(normalized, []).append(
+                    {"id": entity_id, "name": name, "entity_type": entity_type}
+                )
+                max_alias_tokens = max(max_alias_tokens, len(normalized.split()))
+
+        _ENTITY_CACHE = {
+            "entities_by_name": entities_by_name,
+            "aliases_by_name": aliases_by_name,
+            "max_name_tokens": max_name_tokens,
+            "max_alias_tokens": max_alias_tokens,
+        }
+        _ENTITY_CACHE_DB_PATH = cache_key
     except sqlite3.Error:
-        pass
+        _ENTITY_CACHE = {
+            "entities_by_name": {},
+            "aliases_by_name": {},
+            "max_name_tokens": 1,
+            "max_alias_tokens": 1,
+        }
+    finally:
+        if close_conn:
+            conn.close()
+
+    return _ENTITY_CACHE
+
+
+def _iter_prompt_tokens(prompt):
+    return [(match.group(0), match.group(0).lower()) for match in ENTITY_TOKEN_RE.finditer(prompt)]
+
+
+def _match_entity_spans(tokens, candidates_by_name, max_tokens, inject_types, seen_ids):
+    matched = []
+    index = 0
+
+    while index < len(tokens):
+        found = None
+        max_span = min(max_tokens, len(tokens) - index)
+        for span in range(max_span, 0, -1):
+            normalized = " ".join(token[1] for token in tokens[index : index + span])
+            for candidate in candidates_by_name.get(normalized, []):
+                if candidate["entity_type"] not in inject_types or candidate["id"] in seen_ids:
+                    continue
+                found = candidate
+                break
+            if found:
+                index += span
+                break
+
+        if found:
+            seen_ids.add(found["id"])
+            matched.append(found)
+            continue
+
+        index += 1
+
+    return matched
+
+
+def detect_entities_in_prompt(prompt, conn=None):
+    """Detect known KG entity names in the prompt.
+
+    Loads KG entity names into a module-level cache and performs
+    case-insensitive hash-table lookups over contiguous prompt token spans.
+    Multi-word names are matched longest-first.
+    """
+    inject_types = {"person", "company", "agent", "project", "technology", "tool"}
+    tokens = _iter_prompt_tokens(prompt)
+    if not tokens:
+        return []
+
+    cache = _load_entity_cache(conn)
+    seen_ids = set()
+
+    matched = _match_entity_spans(
+        tokens,
+        cache["entities_by_name"],
+        cache["max_name_tokens"],
+        inject_types,
+        seen_ids,
+    )
+    alias_matches = _match_entity_spans(
+        tokens,
+        cache["aliases_by_name"],
+        cache["max_alias_tokens"],
+        inject_types,
+        seen_ids,
+    )
+    matched.extend(alias_matches)
+
+    if conn is None:
+        return matched
+
+    try:
+        phonetic_rows = conn.execute(
+            """
+            SELECT e.id, e.name, e.entity_type, a.alias
+            FROM kg_entity_aliases a
+            JOIN kg_entities e ON a.entity_id = e.id
+            WHERE a.alias_type = 'phonetic'
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return matched
+
+    for candidate, _ in tokens:
+        if not looks_hebrew(candidate):
+            continue
+        query_tokens = phonetic_tokens(candidate)
+        if not query_tokens:
+            continue
+        query_key = phonetic_key(candidate)
+        best_row = None
+        best_score = 0.0
+        for row in phonetic_rows:
+            entity_id, name, entity_type, alias = row
+            if entity_type not in inject_types or entity_id in seen_ids:
+                continue
+            alias_tokens = {token for token in str(alias).split() if token}
+            if not alias_tokens:
+                continue
+            overlap = query_tokens & alias_tokens
+            if not overlap:
+                continue
+            score = len(overlap) / len(query_tokens | alias_tokens)
+            if alias == query_key:
+                score = 1.0
+            if score > best_score:
+                best_score = score
+                best_row = row
+        if best_row:
+            entity_id, name, entity_type, _ = best_row
+            seen_ids.add(entity_id)
+            matched.append({"id": entity_id, "name": name, "entity_type": entity_type})
 
     return matched
 

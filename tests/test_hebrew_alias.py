@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from brainlayer.phonetic import phonetic_key
 from brainlayer.pipeline.digest import entity_lookup
 from brainlayer.vector_store import VectorStore
 
@@ -145,6 +146,21 @@ def test_hook_detects_hebrew_entity(prompt_search, tmp_path):
     conn.close()
 
     assert any(match["id"] == entity_id for match in matches)
+
+
+def test_hook_runs_phonetic_fallback_even_with_exact_match(prompt_search, tmp_path):
+    db_path = tmp_path / "hook-mixed.db"
+    store = VectorStore(db_path)
+    person_id = _upsert_person(store)
+    project_id = store.upsert_entity("project-brainlayer", "project", "BrainLayer", metadata={})
+    store.add_entity_alias(phonetic_key("Etan"), person_id, alias_type="phonetic")
+    store.close()
+
+    conn = sqlite3.connect(db_path)
+    matches = prompt_search.detect_entities_in_prompt("Tell me about BrainLayer and what does איתן think?", conn)
+    conn.close()
+
+    assert {match["id"] for match in matches} == {person_id, project_id}
 
 
 def test_alias_lookup_performance(store):
