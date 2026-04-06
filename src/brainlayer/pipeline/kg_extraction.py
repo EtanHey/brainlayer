@@ -38,10 +38,26 @@ CANONICAL_RELATION_TYPES = {
     "affiliated_with",
     "coaches",
     "related_to",
+    "depends_on",
+    "spawns",
+    "created",
+    "lives_in",
+    "leads",
+    "freelances_for",
 }
 
 # Known agent names (beyond *Claude/*Golem pattern matching)
 _KNOWN_AGENTS = {"ralph", "claudegolem"}
+
+_RELATION_TYPE_ALIASES = {
+    "ceo_of": "leads",
+    "cto_of": "leads",
+    "cfo_of": "leads",
+    "cmo_of": "leads",
+    "worked_at": "works_at",
+    "framework_for": "depends_on",
+    "contact_at": "affiliated_with",
+}
 
 # Relation direction constraints: relation_type → (valid_source_types, valid_target_types)
 # If extracted direction is wrong, we swap source/target.
@@ -51,6 +67,12 @@ _RELATION_DIRECTION_RULES: dict[str, tuple[set[str], set[str]]] = {
     "builds": ({"person", "agent"}, {"project", "tool", "technology"}),
     "uses": ({"person", "agent", "project", "company"}, {"tool", "technology"}),
     "coaches": ({"agent"}, {"person"}),
+    "depends_on": ({"project", "tool", "library"}, {"project", "tool", "library", "technology"}),
+    "spawns": ({"agent"}, {"agent"}),
+    "created": ({"person", "agent"}, {"project", "tool", "technology"}),
+    "lives_in": ({"person"}, {"location"}),
+    "leads": ({"person"}, {"company", "organization"}),
+    "freelances_for": ({"person"}, {"company", "organization"}),
 }
 
 
@@ -97,6 +119,7 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
             continue
 
         # 4. Normalize relation type
+        rel.relation_type = _RELATION_TYPE_ALIASES.get(rel.relation_type, rel.relation_type)
         if rel.relation_type not in CANONICAL_RELATION_TYPES:
             rel.relation_type = "related_to"
 
