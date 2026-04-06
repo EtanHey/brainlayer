@@ -199,6 +199,8 @@ async def _brain_search(
     after: int = 3,
     max_results: int = 10,
     detail: str = "compact",
+    source_filter: str | None = None,
+    correction_category: str | None = None,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -232,6 +234,8 @@ async def _brain_search(
             sentiment=sentiment,
             entity_id=entity_id,
             detail=detail,
+            source_filter_like=source_filter,
+            correction_category=correction_category,
         )
 
     if chunk_id is not None:
@@ -278,6 +282,8 @@ async def _brain_search(
             num_results=num_results,
             max_results=max_results,
             detail=detail,
+            source_filter=source_filter,
+            correction_category=correction_category,
         )
 
     if _query_signals_current_context(query):
@@ -304,7 +310,20 @@ async def _brain_search(
     # Path 1: Pure SQL KG lookup (no embeddings, always works).
     # Path 2: Full kg_hybrid_search with vector similarity (optional, needs embedding model).
     # Skip entity routing when additional filters are active.
-    has_active_filters = any([content_type, source, tag, intent, importance_min, date_from, date_to, sentiment])
+    has_active_filters = any(
+        [
+            content_type,
+            source,
+            tag,
+            intent,
+            importance_min,
+            date_from,
+            date_to,
+            sentiment,
+            source_filter,
+            correction_category,
+        ]
+    )
     store = _get_vector_store()
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
     if detected_entities:
@@ -396,6 +415,8 @@ async def _brain_search(
         date_to=date_to,
         sentiment=sentiment,
         detail=detail,
+        source_filter_like=source_filter,
+        correction_category=correction_category,
     )
 
 
@@ -491,6 +512,9 @@ async def _brain_recall(
     max_results: int = 10,
     detail: str = "compact",
     entity_type: str | None = None,
+    # --- T3 filter additions ---
+    source_filter: str | None = None,
+    correction_category: str | None = None,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -546,6 +570,8 @@ async def _brain_recall(
             after=after,
             max_results=max_results,
             detail=detail,
+            source_filter=source_filter,
+            correction_category=correction_category,
         )
 
     if resolved_mode == "entity":
@@ -602,6 +628,9 @@ async def _search(
     detail: str = "compact",
     # Backward compat: accept old 'format' kwarg
     output_format: str | None = None,
+    # --- T3 filter additions ---
+    source_filter_like: str | None = None,
+    correction_category: str | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -659,6 +688,8 @@ async def _search(
                     date_to=date_to,
                     sentiment_filter=sentiment,
                     entity_id=entity_id,
+                    source_filter_like=source_filter_like,
+                    correction_category=correction_category,
                 )
                 break
             except Exception as e:
