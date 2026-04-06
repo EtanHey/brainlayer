@@ -481,6 +481,36 @@ class TestPromptSearchConditional:
         assert ("PRAGMA busy_timeout=1000", ()) in fake_conn.executed
         assert ("PRAGMA query_only=true", ()) in fake_conn.executed
 
+    def test_detect_correction_categorizes_common_prompts(self, prompt_search):
+        assert prompt_search.detect_correction("No, that's wrong. Avi works at Lightricks.") == "factual"
+        assert prompt_search.detect_correction("Please don't do that again.") == "preference"
+        assert prompt_search.detect_correction("This response is too verbose.") == "style"
+        assert prompt_search.detect_correction("לא נכון, תתקן את זה") == "factual"
+        assert prompt_search.detect_correction("ok") is None
+
+    def test_main_prints_correction_store_nudge(self, prompt_search, monkeypatch, capsys):
+        fake_conn = FakeConn()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"No, that\'s wrong. Avi works at Lightricks.","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert "Correction detected: factual" in output
+        assert "brain_store" in output
+        assert "correction:factual" in output
+
     def test_main_does_not_trigger_assume_warning_on_substring_matches(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
 

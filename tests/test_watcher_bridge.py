@@ -188,6 +188,36 @@ class TestFlushCallback:
         conn.close()
         assert rows[0] == 1
 
+    def test_auto_tags_detected_correction_user_message(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path)
+        entry = _make_jsonl_entry(
+            role="user",
+            text="No, that's wrong. Avi works at Lightricks.",
+            entry_type="user",
+        )
+        entry["_source_file"] = "/tmp/projects/test-project/session.jsonl"
+
+        flush([entry])
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT tags FROM chunks WHERE source = 'realtime_watcher' AND content_type = 'user_message'"
+        ).fetchone()
+        tag_rows = conn.execute(
+            "SELECT tag FROM chunk_tags WHERE chunk_id IN (SELECT id FROM chunks WHERE source = 'realtime_watcher')"
+        ).fetchall()
+        conn.close()
+
+        assert row is not None
+        tags = json.loads(row[0])
+        assert "correction" in tags
+        assert "correction:factual" in tags
+        assert "auto-detected" in tags
+        assert {tag for (tag,) in tag_rows} >= {"correction", "correction:factual", "auto-detected"}
+
 
 # ── Full Pipeline Integration ────────────────────────────────────────────────
 

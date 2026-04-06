@@ -21,6 +21,7 @@ from typing import Any
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
+from .pipeline.correction_detection import build_correction_tags
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -234,14 +235,19 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                     created_at = datetime.now(timezone.utc).isoformat()
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
+                tags = None
+                if chunk.content_type.value == "user_message":
+                    correction_tags = build_correction_tags(clean_content)
+                    if correction_tags:
+                        tags = json.dumps(correction_tags)
 
                 try:
                     cursor.execute(
                         """INSERT OR IGNORE INTO chunks
                            (id, content, metadata, source_file, project,
                             content_type, value_type, char_count, source,
-                            created_at, conversation_id, sender)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            created_at, conversation_id, sender, tags)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             chunk_id,
                             clean_content,
@@ -255,6 +261,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                             created_at,
                             conversation_id,
                             chunk.metadata.get("sender"),
+                            tags,
                         ),
                     )
                     if store.conn.changes() > 0:
