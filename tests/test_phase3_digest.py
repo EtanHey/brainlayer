@@ -308,7 +308,7 @@ def test_brain_entity_tool_exists():
 
 
 def test_brain_entity_schema():
-    """brain_entity requires query parameter."""
+    """brain_entity keeps query in properties even when optional."""
     import asyncio
 
     from brainlayer.mcp import list_tools
@@ -317,7 +317,6 @@ def test_brain_entity_schema():
     entity_tool = next(t for t in tools if t.name == "brain_entity")
     props = entity_tool.inputSchema.get("properties", {})
     assert "query" in props
-    assert "query" in entity_tool.inputSchema.get("required", [])
 
 
 def test_entity_lookup_returns_structured_data(tmp_path):

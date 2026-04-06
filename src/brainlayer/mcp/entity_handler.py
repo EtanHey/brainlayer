@@ -48,6 +48,46 @@ async def _brain_entity(
     return CallToolResult(content=[TextContent(type="text", text=formatted)])
 
 
+def _format_entity_list(result: dict) -> str:
+    """Format list_entities result as a readable text block."""
+    total = result.get("total", 0)
+    entities = result.get("entities", [])
+    lines = [f"Entities ({total} total):"]
+    if not entities:
+        lines.append("  (none)")
+        return "\n".join(lines)
+    for e in entities:
+        desc = (e.get("description") or "")[:80].replace("\n", " ").strip()
+        imp = e.get("importance", "")
+        type_label = e.get("entity_type", "?")
+        name = e.get("name", "?")
+        suffix = f" -- {desc}" if desc else ""
+        imp_str = f" (importance={imp})" if imp is not None else ""
+        lines.append(f"  [{type_label}] {name}{imp_str}{suffix}")
+    return "\n".join(lines)
+
+
+async def _brain_entity_list(
+    entity_type: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> CallToolResult:
+    """Handle brain_entity list action."""
+    store = _get_vector_store()
+    loop = asyncio.get_running_loop()
+
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: store.list_entities(entity_type=entity_type, limit=limit, offset=offset),
+        )
+    except Exception as e:
+        return _error_result(f"Entity listing failed: {e}")
+
+    formatted = _format_entity_list(result)
+    return CallToolResult(content=[TextContent(type="text", text=formatted)])
+
+
 async def _brain_get_person(
     name: str,
     context: str | None = None,

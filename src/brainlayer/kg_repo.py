@@ -443,6 +443,49 @@ class KGMixin:
             for row in rows
         ]
 
+    def list_entities(
+        self,
+        entity_type: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """List entities with optional type filter and pagination."""
+        cursor = self._read_cursor()
+        where = "WHERE (status = 'active' OR status IS NULL)"
+        params: list = []
+        if entity_type:
+            where += " AND entity_type = ?"
+            params.append(entity_type)
+
+        # Get total count
+        total = list(cursor.execute(f"SELECT COUNT(*) FROM kg_entities {where}", params))[0][0]
+
+        # Get page
+        rows = list(
+            cursor.execute(
+                f"""SELECT id, entity_type, name, description, importance, created_at
+                    FROM kg_entities {where}
+                    ORDER BY importance DESC, name ASC
+                    LIMIT ? OFFSET ?""",
+                params + [limit, offset],
+            )
+        )
+
+        return {
+            "total": total,
+            "entities": [
+                {
+                    "id": r[0],
+                    "entity_type": r[1],
+                    "name": r[2],
+                    "description": r[3],
+                    "importance": r[4],
+                    "created_at": r[5],
+                }
+                for r in rows
+            ],
+        }
+
     def kg_stats(self) -> Dict[str, Any]:
         """Get KG statistics."""
         cursor = self._read_cursor()
