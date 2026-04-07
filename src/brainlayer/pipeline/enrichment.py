@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 logger = logging.getLogger(__name__)
+_prompt_signature_emitted = False
 
 from ..vector_store import VectorStore
 
@@ -386,7 +387,23 @@ SUMMARY QUALITY CHECK — before returning, verify your summary:
 ✓ Key decisions include the WHY, not just the WHAT
 ✓ All PR numbers, costs, dates, file paths, and URLs from the chunk appear in either summary or key_facts
 
+EPISTEMIC RUBRIC: hypothesis = proposed or unverified; substantiated = backed by concrete evidence in the chunk; validated = outcome explicitly confirmed by execution, merge, deploy, or user confirmation
+DEBT IMPACT RUBRIC: introduction = creates debt, workaround, TODO, or blocker; resolution = removes debt or closes a blocker; none = no clear debt change
+SENTIMENT RUBRIC: frustration = blocked/annoyed/failing; confusion = uncertainty/questioning; positive = upbeat/encouraging; satisfaction = relief/resolution/completion; neutral = factual/no strong affect
+
 Return ONLY the JSON object, no other text."""
+
+
+def _emit_prompt_signature_once() -> None:
+    """Write a single prompt signature line per process for daemon verification."""
+    global _prompt_signature_emitted
+    if _prompt_signature_emitted:
+        return
+    _prompt_signature_emitted = True
+    os.write(
+        2,
+        b"ENRICHMENT_PROMPT_LOADED truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
+    )
 
 
 def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, Any]]] = None) -> str:
@@ -417,6 +434,8 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
     safe_content = content.replace("{", "{{").replace("}", "}}")
     if context_section:
         context_section = context_section.replace("{", "{{").replace("}", "}}")
+
+    _emit_prompt_signature_once()
 
     return ENRICHMENT_PROMPT.format(
         project=chunk.get("project", "unknown"),
@@ -487,6 +506,7 @@ def build_external_prompt(
         context_section = context_section.replace("{", "{{").replace("}", "}}")
 
     template = prompt_template or ENRICHMENT_PROMPT
+    _emit_prompt_signature_once()
 
     prompt = template.format(
         project=chunk.get("project", "unknown"),

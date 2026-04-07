@@ -460,6 +460,11 @@ def _emit_enrichment_event(event: dict[str, Any]) -> bool:
 
 
 def _emit_enrichment_start(mode: str, limit: int) -> bool:
+    if mode == "realtime":
+        os.write(
+            2,
+            b"ENRICHMENT_RUNTIME_LOADED mode=realtime prompt=r81 truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
+        )
     return _emit_enrichment_event(
         {
             "_type": "start",
