@@ -284,7 +284,50 @@ VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
 VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
 VALID_SENTIMENTS = ["frustration", "confusion", "positive", "satisfaction", "neutral"]
 
-ENRICHMENT_PROMPT = """You are a metadata extraction assistant. Analyze this conversation chunk and return ONLY a JSON object.
+ENRICHMENT_PROMPT = """You are a knowledge extraction engine for a personal knowledge graph. Your summaries will be embedded for vector search AND indexed for full-text keyword search. Write dense, fact-rich extractions — not descriptions.
+
+RULES:
+1. Write as if you ARE the expert stating facts — never as a librarian cataloging a document
+2. Preserve ALL specific values verbatim: names, numbers, dates, PR numbers, costs, file paths, URLs, error messages, version numbers
+3. Summary must be standalone — a reader with no context should learn the key facts
+4. Front-load the most important/unique information
+
+BANNED — never start or include these patterns:
+- "This chunk/message describes/details/outlines/provides/contains..."
+- "The user/assistant is asking/instructing/discussing/explaining..."
+- "This is a conversation/discussion about..."
+- "The conversation covers/revolves around..."
+- Any sentence ABOUT the text rather than FROM the text
+If you catch yourself writing about the source, DELETE it and write the actual facts instead.
+
+SUMMARY STYLE BY CONTENT TYPE:
+- Decisions/conclusions: State the decision verbatim, who made it, when, why, and what was rejected
+- Corrections/instructions: State what changed (old → new), who corrected it, what prior knowledge is now superseded
+- Code/technical: Preserve all symbol names, file paths, config values, error messages verbatim; summarize intent around them
+- Conversation: Identify speakers, key contributions, agreements, open questions
+- Entity/biographical: Full name with aliases, role, relationships to other entities, key facts with dates
+
+FEW-SHOT EXAMPLES:
+
+BAD (score 1/5 — meta-description, no facts):
+  Input: [conversation about storing Mehayom project architecture decisions]
+  Output: "The user is instructing the AI to store specific knowledge about the Mehayom project"
+  WHY BAD: Says nothing about WHAT knowledge. Zero retrievable facts.
+
+BAD (score 2/5 — vague, loses specifics):
+  Input: [message about two /yash missions fixing nativewind and MCP SDK bugs]
+  Output: "This message details two recent /yash missions that fixed issues in nativewind and MCP SDK"
+  WHY BAD: Which missions? What issues? What PRs? No dates, no specifics.
+
+GOOD (score 5/5 — dense, specific, retrievable):
+  Input: [same /yash missions conversation]
+  Output: "Two /yash missions completed (April 5, 2026): (1) nativewind PR #1722 — fixed style resolution bug in CSS property inheritance, (2) MCP SDK — patched auth token refresh race condition causing 401 errors on reconnect. Both PRs merged and deployed."
+  WHY GOOD: Dates, PR numbers, specific bug descriptions, outcomes — all preserved.
+
+GOOD (score 5/5 — decision with rationale):
+  Input: [conversation deciding on database choice]
+  Output: "Database decision (March 12, 2026): Chose SQLite + sqlite-vec over Postgres+pgvector for BrainLayer storage. Rationale: local-first architecture requirement, no server dependency, FTS5 for hybrid search. Rejected: Postgres (requires daemon), Pinecone (cloud-only, latency), ChromaDB (immature FTS)."
+  WHY GOOD: Decision, date, what was chosen, why, what was rejected with reasons.
 
 CHUNK (from project: {project}, type: {content_type}):
 ---
@@ -295,21 +338,26 @@ CHUNK (from project: {project}, type: {content_type}):
 
 Return this exact JSON structure:
 {{
-  "summary": "<one sentence describing what this chunk is about>",
-  "tags": ["<tag1>", "<tag2>", ...],
+  "summary": "<2-4 dense sentences extracting the key facts, decisions, names, numbers, and outcomes from this chunk — NOT a description of what the chunk is about>",
+  "key_facts": ["<extract every specific value: PR numbers, dollar amounts, dates, file paths, entity names, URLs, version numbers, error codes, config values — verbatim strings only>"],
+  "tags": ["<tag1>", "<tag2>"],
   "importance": <1-10 integer>,
   "intent": "<one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing>",
   "primary_symbols": ["<class/function/file names mentioned>"],
-  "resolved_query": "<hypothetical question this chunk answers>",
+  "resolved_queries": [
+    "<natural-language question a user would ask that this chunk answers — use everyday search vocabulary>",
+    "<keyword-dense query optimized for text search — pack in key terms, names, identifiers>",
+    "<hypothetical answer snippet — 1-2 sentences written as if answering the question, preserving key terms for embedding similarity>"
+  ],
   "epistemic_level": "<one of: hypothesis, substantiated, validated>",
   "version_scope": "<version or system state discussed, or null>",
   "debt_impact": "<one of: introduction, resolution, none>",
   "external_deps": ["<libraries or external APIs used>"],
   "entities": [
-    {{"name": "<entity name>", "type": "<person|company|project|technology|tool|concept>"}}
+    {{"name": "<entity name>", "type": "<person|company|project|technology|tool|concept>", "relation": "<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>"}}
   ],
   "sentiment_label": "<one of: frustration, confusion, positive, satisfaction, neutral>",
-  "sentiment_score": <float from -1.0 (max frustration) to 1.0 (max positive)>,
+  "sentiment_score": <float from -1.0 to 1.0>,
   "sentiment_signals": ["<words/phrases that indicate the sentiment>"]
 }}
 
@@ -326,39 +374,17 @@ IMPORTANCE RULES:
 - 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)
 - 10: Critical (security fixes, production incidents, key architectural choices)
 
-PRIMARY_SYMBOLS: Extract class names, function names, file paths, and variable names that are central to this chunk. Empty array if none.
+ENTITIES:
+- Extract non-code entities only — people, projects, technologies, companies, tools, concepts
+- Do NOT extract variable names, function names, file paths, or code symbols as entities
+- Use the "relation" field to capture how the entity connects to other entities in this chunk
 
-RESOLVED_QUERY: Write a natural question that someone would ask to find this chunk. E.g., "How do I fix EADDRINUSE errors in Bun?" or "What's the SQLite busy_timeout fix for concurrent access?"
-
-EPISTEMIC_LEVEL:
-- hypothesis: Exploring ideas, asking questions, speculating
-- substantiated: Implementing with evidence, citing docs, testing
-- validated: Confirmed working, merged, production-tested
-
-DEBT_IMPACT:
-- introduction: Adding workarounds, TODOs, known shortcuts
-- resolution: Fixing tech debt, removing hacks, cleaning up
-- none: Neither introducing nor resolving debt
-
-EXTERNAL_DEPS: Libraries, APIs, services referenced (e.g., "ollama", "supabase", "react-force-graph-3d"). Empty array if none.
-
-ENTITIES: Extract non-code entities only — people, projects, technologies, companies, tools, concepts.
-- DO NOT extract variable names, function names, file paths, or code symbols.
-- Each entity has a "name" (string) and "type" (one of: person, company, project, technology, tool, concept).
-- Examples: {{"name": "React", "type": "technology"}}, {{"name": "Etan Heyman", "type": "person"}}, {{"name": "Supabase", "type": "tool"}}
-- Empty array if no non-code entities are mentioned.
-
-SENTIMENT_LABEL: Detect the emotional tone of the human user in this chunk.
-- frustration: Anger, annoyance, things not working ("damn", "wtf", "broken again")
-- confusion: Not understanding, asking for clarification ("I don't understand", "wait what?")
-- positive: Excitement, praise, amazement ("amazing", "incredible", "wow")
-- satisfaction: Task done, gratitude, approval ("thanks", "perfect", "exactly what I needed")
-- neutral: No strong emotion (most code/config chunks)
-Note: Only user_message chunks have meaningful sentiment. For ai_code/assistant_text, use "neutral".
-
-SENTIMENT_SCORE: -1.0 = maximum frustration, 0.0 = neutral, 1.0 = maximum positive.
-
-SENTIMENT_SIGNALS: List the specific words or phrases that indicate the sentiment. Empty array if neutral.
+SUMMARY QUALITY CHECK — before returning, verify your summary:
+✓ Contains at least one specific name, number, or date from the chunk
+✓ Does NOT start with "This chunk" / "This message" / "The user"
+✓ A person reading ONLY the summary would learn something concrete
+✓ Key decisions include the WHY, not just the WHAT
+✓ All PR numbers, costs, dates, file paths, and URLs from the chunk appear in either summary or key_facts
 
 Return ONLY the JSON object, no other text."""
 
@@ -373,9 +399,11 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
         context_chunks = []
 
     content = chunk["content"]
-    # Truncate very long chunks to stay within GLM context
-    if len(content) > 4000:
-        content = content[:4000] + "\n... [truncated]"
+    # Truncate very long chunks to preserve both early and late facts.
+    if len(content) > 8000:
+        head = content[:4800]
+        tail = content[-3200:]
+        content = head + "\n[...truncated middle...]\n" + tail
 
     context_section = ""
     if context_chunks:
@@ -424,9 +452,11 @@ def build_external_prompt(
         context_chunks = []
 
     content = chunk["content"]
-    # Truncate very long chunks to stay within context
-    if len(content) > 4000:
-        content = content[:4000] + "\n... [truncated]"
+    # Truncate very long chunks to preserve both early and late facts.
+    if len(content) > 8000:
+        head = content[:4800]
+        tail = content[-3200:]
+        content = head + "\n[...truncated middle...]\n" + tail
 
     # Sanitize the main content
     metadata = {
@@ -734,6 +764,18 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
         if isinstance(resolved_query, str) and len(resolved_query) > 10:
             result["resolved_query"] = resolved_query[:500]
 
+        key_facts = match.get("key_facts", [])
+        if isinstance(key_facts, list):
+            cleaned = [str(f).strip() for f in key_facts if isinstance(f, str) and f.strip()][:30]
+            if cleaned:
+                result["key_facts"] = cleaned
+
+        resolved_queries = match.get("resolved_queries", [])
+        if isinstance(resolved_queries, list):
+            cleaned = [str(q).strip() for q in resolved_queries if isinstance(q, str) and len(q.strip()) > 10][:3]
+            if cleaned:
+                result["resolved_queries"] = cleaned
+
         epistemic_level = match.get("epistemic_level", "")
         if isinstance(epistemic_level, str) and epistemic_level.lower().strip() in VALID_EPISTEMIC:
             result["epistemic_level"] = epistemic_level.lower().strip()
@@ -766,7 +808,11 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
                         and isinstance(etype, str)
                         and etype.lower().strip() in VALID_ENTITY_TYPES
                     ):
-                        cleaned_entities.append({"name": name.strip(), "type": etype.lower().strip()})
+                        relation = e.get("relation")
+                        entity = {"name": name.strip(), "type": etype.lower().strip()}
+                        if isinstance(relation, str) and relation.strip() and relation.lower() != "null":
+                            entity["relation"] = relation.strip()
+                        cleaned_entities.append(entity)
             if cleaned_entities:
                 result["entities"] = cleaned_entities[:20]
 
@@ -861,6 +907,11 @@ def _enrich_one(
             sentiment_score = None
             sentiment_signals = None
 
+        resolved_queries = enrichment.get("resolved_queries")
+        legacy_resolved_query = enrichment.get("resolved_query")
+        if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
+            legacy_resolved_query = resolved_queries[0]
+
         store.update_enrichment(
             chunk_id=chunk["id"],
             summary=enrichment.get("summary"),
@@ -868,11 +919,13 @@ def _enrich_one(
             importance=enrichment.get("importance"),
             intent=enrichment.get("intent"),
             primary_symbols=enrichment.get("primary_symbols"),
-            resolved_query=enrichment.get("resolved_query"),
+            resolved_query=legacy_resolved_query,
             epistemic_level=enrichment.get("epistemic_level"),
             version_scope=enrichment.get("version_scope"),
             debt_impact=enrichment.get("debt_impact"),
             external_deps=enrichment.get("external_deps"),
+            key_facts=enrichment.get("key_facts"),
+            resolved_queries=resolved_queries,
             sentiment_label=sentiment_label,
             sentiment_score=sentiment_score,
             sentiment_signals=sentiment_signals,

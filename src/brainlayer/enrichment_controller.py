@@ -15,8 +15,10 @@ import logging
 import os
 import random
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -114,6 +116,8 @@ GEMINI_RESPONSE_SCHEMA = {
         "intent": {"type": "string"},
         "primary_symbols": {"type": "array", "items": {"type": "string"}},
         "resolved_query": {"type": "string"},
+        "key_facts": {"type": "array", "items": {"type": "string"}},
+        "resolved_queries": {"type": "array", "items": {"type": "string"}},
         "epistemic_level": {"type": "string"},
         "version_scope": {"type": "string"},
         "debt_impact": {"type": "string"},
@@ -128,6 +132,7 @@ GEMINI_RESPONSE_SCHEMA = {
                         "type": "string",
                         "enum": ["person", "company", "project", "technology", "tool", "concept"],
                     },
+                    "relation": {"type": "string"},
                 },
                 "required": ["name", "type"],
             },
@@ -266,10 +271,11 @@ def _retry_with_backoff(
 
 
 def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
-    # AIDEV-TODO: Wire enrichment["entities"] into kg_entities + kg_entity_chunks tables.
-    # Currently entities are extracted by Gemini and validated by parse_enrichment() but not
-    # persisted. Storage will be added in P2 (entity hierarchy + typed relations).
-    # See: ~/Gits/orchestrator/docs.local/research/brainlayer-r75-r78-unimplemented.md items 6-7.
+    resolved_queries = enrichment.get("resolved_queries")
+    legacy_resolved_query = enrichment.get("resolved_query")
+    if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
+        legacy_resolved_query = resolved_queries[0]
+
     store.update_enrichment(
         chunk_id=chunk["id"],
         summary=enrichment.get("summary"),
@@ -277,12 +283,39 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         importance=enrichment.get("importance"),
         intent=enrichment.get("intent"),
         primary_symbols=enrichment.get("primary_symbols"),
-        resolved_query=enrichment.get("resolved_query"),
+        resolved_query=legacy_resolved_query,
         epistemic_level=enrichment.get("epistemic_level"),
         version_scope=enrichment.get("version_scope"),
         debt_impact=enrichment.get("debt_impact"),
         external_deps=enrichment.get("external_deps"),
+        key_facts=enrichment.get("key_facts"),
+        resolved_queries=resolved_queries,
     )
+    entities = enrichment.get("entities", [])
+    if entities:
+        cursor = store.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        for ent in entities:
+            name = ent.get("name", "").strip()
+            etype = ent.get("type", "").strip()
+            if not name or not etype:
+                continue
+            entity_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{etype}:{name.lower()}"))
+            try:
+                cursor.execute(
+                    """INSERT INTO kg_entities (id, entity_type, name, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(entity_type, name) DO UPDATE SET updated_at = excluded.updated_at""",
+                    (entity_id, etype, name, now, now),
+                )
+                cursor.execute(
+                    """INSERT INTO kg_entity_chunks (entity_id, chunk_id, context)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(entity_id, chunk_id) DO NOTHING""",
+                    (entity_id, chunk["id"], ent.get("relation")),
+                )
+            except Exception as exc:
+                logger.debug("Entity persistence failed for %s: %s", name, exc)
     # Set content_hash after enrichment so dedup works next time
     content = chunk.get("content", "")
     if content:
