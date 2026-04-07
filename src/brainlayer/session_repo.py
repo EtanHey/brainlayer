@@ -115,6 +115,8 @@ class SessionMixin:
         intent: Optional[str] = None,
         primary_symbols: Optional[List[str]] = None,
         resolved_query: Optional[str] = None,
+        key_facts: Optional[List[str]] = None,
+        resolved_queries: Optional[List[str]] = None,
         epistemic_level: Optional[str] = None,
         version_scope: Optional[str] = None,
         debt_impact: Optional[str] = None,
@@ -147,6 +149,12 @@ class SessionMixin:
         if resolved_query is not None:
             sets.append("resolved_query = ?")
             params.append(resolved_query)
+        if key_facts is not None:
+            sets.append("key_facts = ?")
+            params.append(json.dumps(key_facts))
+        if resolved_queries is not None:
+            sets.append("resolved_queries = ?")
+            params.append(json.dumps(resolved_queries))
         if epistemic_level is not None:
             sets.append("epistemic_level = ?")
             params.append(epistemic_level)

@@ -171,6 +171,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("enriched_at", "TEXT"),
             ("primary_symbols", "TEXT"),
             ("resolved_query", "TEXT"),
+            ("key_facts", "TEXT"),
+            ("resolved_queries", "TEXT"),
             ("epistemic_level", "TEXT"),
             ("version_scope", "TEXT"),
             ("debt_impact", "TEXT"),
@@ -228,14 +230,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         # FTS5 full-text search — indexes content + enrichment metadata
         # for better keyword matches on summaries, tags, and resolved queries.
-        _FTS5_COLUMNS = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
+        _FTS5_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED"
 
         # Detect old single-column FTS5 schema and rebuild if needed.
         # FTS5 virtual tables can't be ALTERed — must drop and recreate.
         _needs_fts_rebuild = False
         try:
             fts_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks_fts)")}
-            if fts_cols and "summary" not in fts_cols:
+            if fts_cols and ("summary" not in fts_cols or "key_facts" not in fts_cols):
                 _needs_fts_rebuild = True
         except Exception:
             pass  # Table doesn't exist yet, will be created below
@@ -256,8 +258,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.id);
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                );
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
@@ -269,10 +279,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_update
-            AFTER UPDATE OF content, summary, tags, resolved_query ON chunks BEGIN
+            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
                 DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.id);
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                );
             END
         """)
 
@@ -754,8 +772,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         chunk_count = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
         if chunk_count > 0 and fts_count == 0:
             cursor.execute("""
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                SELECT content, summary, tags, resolved_query, id FROM chunks
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
             """)
 
         # Thread-local storage for per-thread read connections.
