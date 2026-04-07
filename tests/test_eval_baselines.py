@@ -523,6 +523,7 @@ class TestTemporalQueries:
 
 
 @pytest.mark.live
+@pytest.mark.xfail(reason="Flaky on CI runners — subprocess latency depends on runner speed, not code")
 class TestHookLatency:
     """Prompt hook must respond within budget (<500ms)."""
 
@@ -547,19 +548,16 @@ class TestHookLatency:
         elapsed_ms = (time.monotonic() - start) * 1000
         return result.stdout, elapsed_ms
 
-    @pytest.mark.xfail(reason="Flaky on slow CI runners — latency depends on runner speed")
     def test_simple_query_under_500ms(self):
         """Simple prompt should complete in under 500ms."""
         _, elapsed = self._timed_hook_call("How does authentication work in the brainlayer codebase?")
         assert elapsed < 500, f"Hook took {elapsed:.0f}ms (budget: 500ms)"
 
-    @pytest.mark.xfail(reason="Flaky on slow CI runners — latency depends on runner speed")
     def test_deep_mode_under_500ms(self):
         """Deep mode (memory trigger) should still complete under 500ms."""
         _, elapsed = self._timed_hook_call("Remember when we discussed the brainlayer architecture decisions?")
         assert elapsed < 500, f"Deep mode hook took {elapsed:.0f}ms (budget: 500ms)"
 
-    @pytest.mark.xfail(reason="Flaky on slow CI runners — latency depends on runner speed")
     def test_entity_query_under_500ms(self):
         """Entity detection + FTS should complete under 500ms."""
         _, elapsed = self._timed_hook_call("What did Avi Simon say about the scheduling platform?")
