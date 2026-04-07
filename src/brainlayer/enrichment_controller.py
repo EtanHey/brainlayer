@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -43,6 +44,7 @@ RATE_LIMITS = {
     "local": float(os.environ.get("BRAINLAYER_LOCAL_RATE", "0")),  # no limit
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
+ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
 
 
 @dataclass
@@ -291,6 +293,49 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
             pass  # Non-critical — dedup still works on next index
 
 
+def _enrich_single_chunk(
+    client,
+    model: str,
+    config: dict[str, Any],
+    chunk: dict[str, Any],
+    sanitizer,
+    *,
+    is_duplicate,
+    max_retries: int,
+) -> tuple[dict[str, Any], str, Any]:
+    """Run dedup, prompt build, and API call for one chunk.
+
+    Returns `(chunk, status, data)` where status is one of:
+      - `"skip"`: content hash already enriched
+      - `"error"`: data is an error string
+      - `"ok"`: data is the parsed enrichment dict
+    """
+    if is_duplicate(chunk.get("content", "")):
+        return (chunk, "skip", None)
+
+    try:
+        prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+    except Exception as exc:  # noqa: BLE001
+        return (chunk, "error", f"prompt_build_error: {exc}")
+
+    try:
+        response = _retry_with_backoff(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=config,
+            ),
+            max_retries=max_retries,
+        )
+        raw_response = getattr(response, "text", response)
+        enrichment = parse_enrichment(raw_response)
+        if not enrichment:
+            return (chunk, "error", "invalid_enrichment")
+        return (chunk, "ok", enrichment)
+    except Exception as exc:  # noqa: BLE001
+        return (chunk, "error", str(exc))
+
+
 def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] | None:
     """Enrich a single chunk by ID via Gemini 2.5 Flash Lite.
 
@@ -449,40 +494,42 @@ def enrich_realtime(
     client = _get_gemini_client()
     sanitizer = Sanitizer.from_env()
     per_chunk_delay = (1.0 / rate_per_second) if rate_per_second > 0 else 0.0
+    config = _build_gemini_config()
 
-    for index, chunk in enumerate(candidates):
-        # Content-hash dedup: skip if identical content already enriched
-        if _is_duplicate_content(store, chunk.get("content", "")):
-            result.skipped += 1
-            continue
+    def is_duplicate(content: str) -> bool:
+        return _is_duplicate_content(store, content)
 
-        try:
-            prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
-
-            def _call():
-                response = client.models.generate_content(
-                    model=GEMINI_REALTIME_MODEL,
-                    contents=prompt,
-                    config=_build_gemini_config(),
+    with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
+        futures = []
+        for index, chunk in enumerate(candidates):
+            futures.append(
+                executor.submit(
+                    _enrich_single_chunk,
+                    client,
+                    GEMINI_REALTIME_MODEL,
+                    config,
+                    chunk,
+                    sanitizer,
+                    is_duplicate=is_duplicate,
+                    max_retries=max_retries,
                 )
-                return getattr(response, "text", None)
+            )
+            if per_chunk_delay > 0 and index < len(candidates) - 1:
+                time.sleep(per_chunk_delay)
 
-            raw_response = _retry_with_backoff(_call, max_retries=max_retries)
-            enrichment = parse_enrichment(raw_response)
-            if not enrichment:
+        for future in as_completed(futures):
+            chunk, status, data = future.result()
+            if status == "skip":
+                result.skipped += 1
+                continue
+            if status == "error":
                 result.failed += 1
-                result.errors.append(f"{chunk['id']}: invalid_enrichment")
-                _emit_enrichment_error("realtime", chunk["id"], "invalid_enrichment")
-            else:
-                _apply_enrichment(store, chunk, enrichment)
-                result.enriched += 1
-        except Exception as exc:  # noqa: BLE001
-            result.failed += 1
-            result.errors.append(f"{chunk['id']}: {exc}")
-            _emit_enrichment_error("realtime", chunk["id"], str(exc))
+                result.errors.append(f"{chunk['id']}: {data}")
+                _emit_enrichment_error("realtime", chunk["id"], str(data))
+                continue
 
-        if per_chunk_delay > 0 and index < len(candidates) - 1:
-            time.sleep(per_chunk_delay)
+            _apply_enrichment(store, chunk, data)
+            result.enriched += 1
 
     duration_ms = (time.monotonic() - start_time) * 1000
     _emit_enrichment_complete(result, duration_ms)
