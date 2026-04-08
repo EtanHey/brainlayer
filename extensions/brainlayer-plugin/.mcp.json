@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "brainlayer": {
+      "command": "socat",
+      "args": [
+        "STDIO",
+        "UNIX-CONNECT:/tmp/brainbar.sock"
+      ]
+    }
+  }
+}

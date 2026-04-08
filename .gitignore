@@ -61,6 +61,7 @@ claude.scratchpad.md
 # MCP config (contains secrets)
 .mcp.json
 .mcp.json.bak
+!extensions/brainlayer-plugin/.mcp.json
 
 # Claude Code project settings
 .claude/
