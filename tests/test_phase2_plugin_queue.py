@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import multiprocessing
 import threading
-import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +21,11 @@ def _load_module(path: Path, name: str):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _process_writer(index: int, queue_path: str) -> None:
+    flusher = _load_module(QUEUE_FLUSHER_PATH, f"queue_flusher_process_{index}")
+    flusher.append_queue_event(Path(queue_path), {"hook_event": "PostToolUse", "index": index})
 
 
 def test_append_queue_event_writes_one_json_line(tmp_path):
@@ -49,6 +54,22 @@ def test_append_queue_event_is_safe_under_concurrent_writers(tmp_path):
         thread.start()
     for thread in threads:
         thread.join()
+
+    rows = [json.loads(line) for line in queue_path.read_text().splitlines()]
+    assert len(rows) == 100
+    assert {row["index"] for row in rows} == set(range(100))
+
+
+def test_append_queue_event_is_safe_under_concurrent_process_writers(tmp_path):
+    queue_path = tmp_path / ".memory-queue.jsonl"
+    ctx = multiprocessing.get_context("fork")
+    processes = [ctx.Process(target=_process_writer, args=(index, str(queue_path))) for index in range(100)]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join()
+        assert process.exitcode == 0
 
     rows = [json.loads(line) for line in queue_path.read_text().splitlines()]
     assert len(rows) == 100
@@ -93,20 +114,22 @@ def test_flush_queue_keeps_events_when_sender_fails(tmp_path):
 
 def test_handle_session_start_returns_additional_context_json():
     hook_helper = _load_module(HOOK_HELPER_PATH, "brainbar_hook")
+    observed_calls = []
 
-    started = time.perf_counter()
     output = hook_helper.handle_session_start(
         {"session_id": "sess-123", "cwd": "/tmp/project"},
-        invoke_tool=lambda tool, arguments: {
-            "tool": tool,
-            "arguments": arguments,
-            "summary": "Recent work: decay batch benchmark 2.47s",
-        },
+        invoke_tool=lambda tool, arguments: (
+            observed_calls.append((tool, arguments))
+            or {
+                "tool": tool,
+                "arguments": arguments,
+                "summary": "Recent work: decay batch benchmark 2.47s",
+            }
+        ),
     )
-    duration_ms = (time.perf_counter() - started) * 1000
 
-    assert duration_ms < 200
     assert output["additionalContext"].startswith("Recent work:")
+    assert observed_calls == [("brain_recall", {"mode": "context", "session_id": "sess-123"})]
 
 
 def test_handle_session_start_returns_empty_context_when_invoke_tool_fails():
