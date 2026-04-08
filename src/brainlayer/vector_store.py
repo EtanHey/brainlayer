@@ -70,6 +70,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts5_health_cache: dict[str, Any] = {}
+        self._retrieval_strengthening_pending: dict[str, dict[str, float]] = {}
+        self._retrieval_strengthening_query_count = 0
+        self._retrieval_strengthening_flush_threshold = 100
+        self._retrieval_strengthening_lock = threading.Lock()
         self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
         if self._readonly:
             self._init_readonly_db()
@@ -181,6 +185,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("sentiment_label", "TEXT"),
             ("sentiment_score", "REAL"),
             ("sentiment_signals", "TEXT"),
+            ("half_life_days", "REAL DEFAULT 30.0"),
+            ("last_retrieved", "REAL DEFAULT NULL"),
+            ("retrieval_count", "INTEGER DEFAULT 0"),
+            ("decay_score", "REAL DEFAULT 1.0"),
+            ("pinned", "INTEGER DEFAULT 0"),
+            ("archived", "INTEGER DEFAULT 0"),
             # Lifecycle columns (chunk lifecycle management)
             ("superseded_by", "TEXT"),
             ("aggregated_into", "TEXT"),
@@ -188,6 +198,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
+
+        cursor.execute("""
+            UPDATE chunks
+            SET archived = 1
+            WHERE value_type = 'ARCHIVED' AND COALESCE(archived, 0) = 0
+        """)
 
         # Indexes for filtering
         for idx, col in [
@@ -204,6 +220,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_language", "language"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_decay_score ON chunks(decay_score) WHERE archived = 0")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived = 0"
+        )
 
         # Vector table (1024 dims for bge-large-en-v1.5)
         cursor.execute("""
@@ -1125,7 +1145,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "UPDATE chunks SET value_type = 'ARCHIVED', archived_at = ? WHERE id = ?",
+            "UPDATE chunks SET value_type = 'ARCHIVED', archived = 1, archived_at = ? WHERE id = ?",
             (now, chunk_id),
         )
         self._delete_chunk_vector(cursor, chunk_id)
