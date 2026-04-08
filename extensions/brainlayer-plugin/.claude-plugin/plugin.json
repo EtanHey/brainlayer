@@ -1,0 +1,9 @@
+{
+  "name": "brainlayer",
+  "description": "BrainLayer plugin for Claude Code. Uses BrainBar MCP for recall, queued observations, and session-stop sleep.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Etan Heyman",
+    "url": "https://github.com/EtanHey"
+  }
+}

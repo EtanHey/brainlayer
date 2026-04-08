@@ -1,0 +1,13 @@
+{
+  "name": "brainlayer",
+  "owner": {
+    "name": "Etan Heyman",
+    "url": "https://github.com/EtanHey"
+  },
+  "plugins": [
+    {
+      "name": "brainlayer",
+      "source": "./extensions/brainlayer-plugin"
+    }
+  ]
+}
