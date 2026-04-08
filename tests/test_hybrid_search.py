@@ -226,3 +226,38 @@ class TestHybridSearch:
         )
 
         assert "vec-hit" in results["ids"][0]
+
+    def test_hybrid_search_filters_meta_noise_by_default(self, store):
+        query_embedding = _embed("brain search prompt")
+        _insert_chunk(
+            store,
+            chunk_id="meta-noise",
+            content="brain_search(query='auth') returned a tool transcript block",
+            embedding=query_embedding,
+            importance=5.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="real-hit",
+            content="authentication decision: use sqlite session tokens with refresh rotation",
+            embedding=[v + 0.00005 for v in query_embedding],
+            importance=5.0,
+        )
+        store.build_binary_index()
+        store.conn.cursor().execute("DELETE FROM chunk_vectors")
+
+        filtered = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="brain search prompt",
+            n_results=5,
+        )
+        unfiltered = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="brain search prompt",
+            n_results=5,
+            filter_meta_noise=False,
+        )
+
+        assert "meta-noise" not in filtered["ids"][0]
+        assert "real-hit" in filtered["ids"][0]
+        assert "meta-noise" in unfiltered["ids"][0]

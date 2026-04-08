@@ -301,12 +301,18 @@ BANNED — never start or include these patterns:
 - Any sentence ABOUT the text rather than FROM the text
 If you catch yourself writing about the source, DELETE it and write the actual facts instead.
 
+META-RESEARCH DETECTION:
+- If the chunk contains literal tool invocations such as brain_search(...) or brain_entity(...), treat it as meta-research noise
+- Set importance to 2
+- Add the tag "meta-research"
+
 SUMMARY STYLE BY CONTENT TYPE:
 - Decisions/conclusions: State the decision verbatim, who made it, when, why, and what was rejected
 - Corrections/instructions: State what changed (old → new), who corrected it, what prior knowledge is now superseded
 - Code/technical: Preserve all symbol names, file paths, config values, error messages verbatim; summarize intent around them
 - Conversation: Identify speakers, key contributions, agreements, open questions
 - Entity/biographical: Full name with aliases, role, relationships to other entities, key facts with dates
+- SHORT/CONVERSATIONAL CHUNK: If the chunk is informal conversation, extract ACTIONABLE ITEMS and COMMITMENTS, not discussion flow or filler phrasing
 
 FEW-SHOT EXAMPLES:
 

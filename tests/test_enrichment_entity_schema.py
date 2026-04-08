@@ -97,6 +97,27 @@ def test_enrichment_prompt_lists_entity_types():
         assert etype in lower, f"Prompt must mention entity type '{etype}'"
 
 
+def test_enrichment_prompt_adds_meta_research_and_short_chunk_guidance():
+    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+
+    assert "META-RESEARCH DETECTION" in ENRICHMENT_PROMPT
+    assert '"meta-research"' in ENRICHMENT_PROMPT
+    assert "brain_search" in ENRICHMENT_PROMPT
+    assert "brain_entity" in ENRICHMENT_PROMPT
+    assert "SHORT/CONVERSATIONAL CHUNK" in ENRICHMENT_PROMPT
+    assert "ACTIONABLE ITEMS" in ENRICHMENT_PROMPT
+    assert "COMMITMENTS" in ENRICHMENT_PROMPT
+
+
+def test_enrichment_prompt_keeps_epistemic_debt_and_sentiment_rubrics():
+    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+
+    lower = ENRICHMENT_PROMPT.lower()
+    assert "epistemic rubric" in lower
+    assert "debt impact rubric" in lower
+    assert "sentiment rubric" in lower
+
+
 # ── parse_enrichment entity handling ──────────────────────────────────────────
 
 
