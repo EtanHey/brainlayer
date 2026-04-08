@@ -261,3 +261,31 @@ class TestHybridSearch:
         assert "meta-noise" not in filtered["ids"][0]
         assert "real-hit" in filtered["ids"][0]
         assert "meta-noise" in unfiltered["ids"][0]
+
+    def test_hybrid_search_filters_meta_noise_case_insensitively(self, store):
+        query_embedding = _embed("entity lookup prompt")
+        _insert_chunk(
+            store,
+            chunk_id="meta-noise-upper",
+            content="BRAIN_ENTITY(query='Avi') returned a tool transcript block",
+            embedding=query_embedding,
+            importance=5.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="real-hit-lower",
+            content="avi profile: whatsapp name is aviel and taba is inactive",
+            embedding=[v + 0.00005 for v in query_embedding],
+            importance=5.0,
+        )
+        store.build_binary_index()
+        store.conn.cursor().execute("DELETE FROM chunk_vectors")
+
+        filtered = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="entity lookup prompt",
+            n_results=5,
+        )
+
+        assert "meta-noise-upper" not in filtered["ids"][0]
+        assert "real-hit-lower" in filtered["ids"][0]

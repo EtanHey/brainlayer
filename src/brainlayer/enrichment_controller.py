@@ -305,7 +305,7 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
                 cursor.execute(
                     """INSERT INTO kg_entities (id, entity_type, name, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(entity_type, name) DO UPDATE SET updated_at = excluded.updated_at""",
+                       ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at""",
                     (entity_id, etype, name, now, now),
                 )
                 cursor.execute(
@@ -461,10 +461,13 @@ def _emit_enrichment_event(event: dict[str, Any]) -> bool:
 
 def _emit_enrichment_start(mode: str, limit: int) -> bool:
     if mode == "realtime":
-        os.write(
-            2,
-            b"ENRICHMENT_RUNTIME_LOADED mode=realtime prompt=r81 truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
-        )
+        try:
+            os.write(
+                2,
+                b"ENRICHMENT_RUNTIME_LOADED mode=realtime prompt=r81 truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
+            )
+        except OSError as exc:
+            logger.debug("ENRICHMENT_RUNTIME_LOADED emit failed: %s", exc)
     return _emit_enrichment_event(
         {
             "_type": "start",

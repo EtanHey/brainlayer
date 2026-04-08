@@ -41,6 +41,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 _prompt_signature_emitted = False
+_prompt_signature_lock = threading.Lock()
 
 from ..vector_store import VectorStore
 
@@ -405,11 +406,17 @@ def _emit_prompt_signature_once() -> None:
     global _prompt_signature_emitted
     if _prompt_signature_emitted:
         return
-    _prompt_signature_emitted = True
-    os.write(
-        2,
-        b"ENRICHMENT_PROMPT_LOADED truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
-    )
+    with _prompt_signature_lock:
+        if _prompt_signature_emitted:
+            return
+        _prompt_signature_emitted = True
+        try:
+            os.write(
+                2,
+                b"ENRICHMENT_PROMPT_LOADED truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
+            )
+        except OSError as exc:
+            logger.debug("ENRICHMENT_PROMPT_LOADED emit failed: %s", exc)
 
 
 def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, Any]]] = None) -> str:

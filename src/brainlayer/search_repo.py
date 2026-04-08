@@ -32,6 +32,7 @@ META_NOISE_PATTERNS = [
     "| Summary shown | Tags | Quality |",
     "Grounding Results — Prompt",
 ]
+META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
@@ -107,7 +108,8 @@ def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
 def _contains_meta_noise(content: Optional[str]) -> bool:
     if not content:
         return False
-    return any(pattern in content for pattern in META_NOISE_PATTERNS)
+    content_folded = content.casefold()
+    return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
 
 
 class SearchMixin:
@@ -820,8 +822,8 @@ class SearchMixin:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_params.append(f"correction:{correction_category}%")
             if filter_meta_noise:
-                for pattern in META_NOISE_PATTERNS:
-                    fts_extra.append("AND c.content NOT LIKE ?")
+                for pattern in META_NOISE_PATTERNS_CASEFOLDED:
+                    fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
                     fts_params.append(f"%{pattern}%")
             if not include_archived:
                 fts_extra.append("AND c.superseded_by IS NULL")
