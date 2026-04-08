@@ -11,6 +11,8 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import apsw
+
 from ._helpers import _escape_fts5_query, serialize_f32
 
 # ── hybrid_search result cache ───────────────────────────────────────────────
@@ -114,6 +116,84 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
 
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _queue_retrieval_strengthening(self, chunk_ids: List[str], now: Optional[float] = None) -> None:
+        if getattr(self, "_readonly", False):
+            return
+
+        timestamp = time.time() if now is None else now
+        with self._retrieval_strengthening_lock:
+            for chunk_id in chunk_ids[:10]:
+                pending = self._retrieval_strengthening_pending.setdefault(
+                    chunk_id,
+                    {
+                        "retrieval_count_delta": 0,
+                        "half_life_days_delta": 0.0,
+                        "last_retrieved": timestamp,
+                    },
+                )
+                pending["retrieval_count_delta"] += 1
+                pending["half_life_days_delta"] += 3.0
+                pending["last_retrieved"] = max(float(pending["last_retrieved"]), timestamp)
+            self._retrieval_strengthening_query_count += 1
+            should_flush = self._retrieval_strengthening_query_count >= self._retrieval_strengthening_flush_threshold
+
+        if should_flush:
+            self.flush_retrieval_strengthening_updates(now=timestamp)
+
+    def _apply_retrieval_strengthening_updates(
+        self,
+        pending_updates: Dict[str, Dict[str, float]],
+        now: Optional[float] = None,
+    ) -> None:
+        timestamp = time.time() if now is None else now
+        cursor = self.conn.cursor()
+        for chunk_id, payload in pending_updates.items():
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET last_retrieved = ?,
+                    retrieval_count = retrieval_count + ?,
+                    half_life_days = MIN(COALESCE(half_life_days, 30.0) + ?, 365.0)
+                WHERE id = ?
+                """,
+                (
+                    timestamp,
+                    int(payload["retrieval_count_delta"]),
+                    float(payload["half_life_days_delta"]),
+                    chunk_id,
+                ),
+            )
+
+    def flush_retrieval_strengthening_updates(self, now: Optional[float] = None) -> None:
+        if getattr(self, "_readonly", False):
+            return
+
+        with self._retrieval_strengthening_lock:
+            if not self._retrieval_strengthening_pending:
+                self._retrieval_strengthening_query_count = 0
+                return
+            pending_updates = self._retrieval_strengthening_pending
+            self._retrieval_strengthening_pending = {}
+            self._retrieval_strengthening_query_count = 0
+
+        try:
+            self._apply_retrieval_strengthening_updates(pending_updates, now=now)
+        except apsw.BusyError:
+            with self._retrieval_strengthening_lock:
+                for chunk_id, payload in pending_updates.items():
+                    current = self._retrieval_strengthening_pending.setdefault(
+                        chunk_id,
+                        {
+                            "retrieval_count_delta": 0,
+                            "half_life_days_delta": 0.0,
+                            "last_retrieved": 0.0,
+                        },
+                    )
+                    current["retrieval_count_delta"] += int(payload["retrieval_count_delta"])
+                    current["half_life_days_delta"] += float(payload["half_life_days_delta"])
+                    current["last_retrieved"] = max(float(current["last_retrieved"]), float(payload["last_retrieved"]))
+            return
 
     def search(
         self,
@@ -222,7 +302,7 @@ class SearchMixin:
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source
+                       c.created_at, c.source, c.decay_score
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -287,7 +367,7 @@ class SearchMixin:
                        content_type, value_type, char_count,
                        NULL as distance,
                        summary, tags, importance, intent,
-                       created_at, source
+                       created_at, source, decay_score
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -337,6 +417,8 @@ class SearchMixin:
                 metadata["created_at"] = row[13]
             if row[14]:
                 metadata["source"] = row[14]
+            if row[15] is not None:
+                metadata["decay_score"] = row[15]
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -722,7 +804,9 @@ class SearchMixin:
             cached_result, cached_at = _hybrid_cache[cache_key]
             if now - cached_at < _HYBRID_CACHE_TTL:
                 _hybrid_cache.move_to_end(cache_key)  # LRU touch
-                return _clone_hybrid_result(cached_result)
+                cached_clone = _clone_hybrid_result(cached_result)
+                self._queue_retrieval_strengthening(cached_clone["ids"][0])
+                return cached_clone
             else:
                 del _hybrid_cache[cache_key]
 
@@ -838,7 +922,7 @@ class SearchMixin:
                        c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source
+                       c.created_at, c.source, c.decay_score
                 FROM chunks_fts f
                 JOIN chunks c ON f.chunk_id = c.id
                 {entity_join}
@@ -932,6 +1016,8 @@ class SearchMixin:
                     meta["created_at"] = data["created_at"]
                 if data.get("source"):
                     meta["source"] = data["source"]
+                if data.get("decay_score") is not None:
+                    meta["decay_score"] = data["decay_score"]
                 dist = None
             else:
                 continue
@@ -972,6 +1058,10 @@ class SearchMixin:
                     boost *= 0.7 + 0.3 * recency  # range: 0.7x (old) to 1.0x (fresh)
                 except (ValueError, TypeError):
                     pass
+
+            decay_score = meta.get("decay_score")
+            if isinstance(decay_score, (int, float)):
+                boost *= float(decay_score)
 
             scored[i] = (score * boost, cid, doc, meta, dist)
 
@@ -1023,6 +1113,8 @@ class SearchMixin:
             "metadatas": [metadatas],
             "distances": [distances],
         }
+
+        self._queue_retrieval_strengthening(ids)
 
         # ── Cache store ──────────────────────────────────────────────────────
         _hybrid_cache[cache_key] = (_clone_hybrid_result(result), time.monotonic())
