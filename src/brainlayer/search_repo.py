@@ -24,6 +24,15 @@ from ._helpers import _escape_fts5_query, serialize_f32
 # - Copy-on-read: callers enrich and mutate result metadata after search.
 _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
+META_NOISE_PATTERNS = [
+    "brain_search(",
+    "brain_entity(",
+    "brain_recall(",
+    "| # | Summary | Rating |",
+    "| Summary shown | Tags | Quality |",
+    "Grounding Results — Prompt",
+]
+META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
@@ -94,6 +103,13 @@ def _hybrid_cache_key(
 def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
     """Return a defensive deep copy of cached hybrid_search results."""
     return copy.deepcopy(result)
+
+
+def _contains_meta_noise(content: Optional[str]) -> bool:
+    if not content:
+        return False
+    content_folded = content.casefold()
+    return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
 
 
 class SearchMixin:
@@ -666,6 +682,7 @@ class SearchMixin:
         kg_boost: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
+        filter_meta_noise: bool = True,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -699,7 +716,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
-        ) + (kg_boost, source_filter_like, correction_category)
+        ) + (kg_boost, source_filter_like, correction_category, filter_meta_noise)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -804,6 +821,10 @@ class SearchMixin:
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_params.append(f"correction:{correction_category}%")
+            if filter_meta_noise:
+                for pattern in META_NOISE_PATTERNS_CASEFOLDED:
+                    fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
+                    fts_params.append(f"%{pattern}%")
             if not include_archived:
                 fts_extra.append("AND c.superseded_by IS NULL")
                 fts_extra.append("AND c.aggregated_into IS NULL")
@@ -913,6 +934,9 @@ class SearchMixin:
                     meta["source"] = data["source"]
                 dist = None
             else:
+                continue
+
+            if filter_meta_noise and _contains_meta_noise(doc):
                 continue
 
             # Apply filters to FTS-only results

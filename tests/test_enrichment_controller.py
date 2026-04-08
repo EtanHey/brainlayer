@@ -674,6 +674,22 @@ def test_emit_enrichment_start_fires(monkeypatch):
     assert events[0]["mode"] == "realtime"
 
 
+def test_emit_enrichment_start_swallows_oserror_and_logs_debug(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    events = []
+    debug_logs = []
+    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
+    monkeypatch.setattr(controller.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
+    monkeypatch.setattr(controller.logger, "debug", lambda msg, *args: debug_logs.append(msg % args if args else msg))
+
+    controller._emit_enrichment_start("realtime", 25)
+
+    assert len(events) == 1
+    assert events[0]["_type"] == "start"
+    assert any("ENRICHMENT_RUNTIME_LOADED" in entry for entry in debug_logs)
+
+
 def test_emit_enrichment_complete_fires(monkeypatch):
     from brainlayer import enrichment_controller as controller
     from brainlayer.enrichment_controller import EnrichmentResult

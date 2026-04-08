@@ -40,6 +40,8 @@ from typing import Any, Dict, List, Optional
 import requests
 
 logger = logging.getLogger(__name__)
+_prompt_signature_emitted = False
+_prompt_signature_lock = threading.Lock()
 
 from ..vector_store import VectorStore
 
@@ -300,12 +302,18 @@ BANNED — never start or include these patterns:
 - Any sentence ABOUT the text rather than FROM the text
 If you catch yourself writing about the source, DELETE it and write the actual facts instead.
 
+META-RESEARCH DETECTION:
+- If the chunk contains literal tool invocations such as brain_search(...) or brain_entity(...), treat it as meta-research noise
+- Set importance to 2
+- Add the tag "meta-research"
+
 SUMMARY STYLE BY CONTENT TYPE:
 - Decisions/conclusions: State the decision verbatim, who made it, when, why, and what was rejected
 - Corrections/instructions: State what changed (old → new), who corrected it, what prior knowledge is now superseded
 - Code/technical: Preserve all symbol names, file paths, config values, error messages verbatim; summarize intent around them
 - Conversation: Identify speakers, key contributions, agreements, open questions
 - Entity/biographical: Full name with aliases, role, relationships to other entities, key facts with dates
+- SHORT/CONVERSATIONAL CHUNK: If the chunk is informal conversation, extract ACTIONABLE ITEMS and COMMITMENTS, not discussion flow or filler phrasing
 
 FEW-SHOT EXAMPLES:
 
@@ -386,7 +394,29 @@ SUMMARY QUALITY CHECK — before returning, verify your summary:
 ✓ Key decisions include the WHY, not just the WHAT
 ✓ All PR numbers, costs, dates, file paths, and URLs from the chunk appear in either summary or key_facts
 
+EPISTEMIC RUBRIC: hypothesis = proposed or unverified; substantiated = backed by concrete evidence in the chunk; validated = outcome explicitly confirmed by execution, merge, deploy, or user confirmation
+DEBT IMPACT RUBRIC: introduction = creates debt, workaround, TODO, or blocker; resolution = removes debt or closes a blocker; none = no clear debt change
+SENTIMENT RUBRIC: frustration = blocked/annoyed/failing; confusion = uncertainty/questioning; positive = upbeat/encouraging; satisfaction = relief/resolution/completion; neutral = factual/no strong affect
+
 Return ONLY the JSON object, no other text."""
+
+
+def _emit_prompt_signature_once() -> None:
+    """Write a single prompt signature line per process for daemon verification."""
+    global _prompt_signature_emitted
+    if _prompt_signature_emitted:
+        return
+    with _prompt_signature_lock:
+        if _prompt_signature_emitted:
+            return
+        _prompt_signature_emitted = True
+        try:
+            os.write(
+                2,
+                b"ENRICHMENT_PROMPT_LOADED truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
+            )
+        except OSError as exc:
+            logger.debug("ENRICHMENT_PROMPT_LOADED emit failed: %s", exc)
 
 
 def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, Any]]] = None) -> str:
@@ -417,6 +447,8 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
     safe_content = content.replace("{", "{{").replace("}", "}}")
     if context_section:
         context_section = context_section.replace("{", "{{").replace("}", "}}")
+
+    _emit_prompt_signature_once()
 
     return ENRICHMENT_PROMPT.format(
         project=chunk.get("project", "unknown"),
@@ -487,6 +519,7 @@ def build_external_prompt(
         context_section = context_section.replace("{", "{{").replace("}", "}}")
 
     template = prompt_template or ENRICHMENT_PROMPT
+    _emit_prompt_signature_once()
 
     prompt = template.format(
         project=chunk.get("project", "unknown"),

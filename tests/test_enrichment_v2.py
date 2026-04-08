@@ -1,6 +1,7 @@
 """Regression tests for enrichment prompt v2 fields and persistence."""
 
 import json
+import threading
 from types import SimpleNamespace
 
 from brainlayer.vector_store import VectorStore
@@ -46,6 +47,40 @@ def test_build_prompt_renders_v2_fields_and_60_40_truncation():
     assert tail in prompt
     assert middle not in prompt
     assert "{{" not in prompt
+
+
+def test_prompt_signature_emits_once_across_threads(monkeypatch):
+    from brainlayer.pipeline import enrichment
+
+    writes = []
+    monkeypatch.setattr(enrichment.os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
+    enrichment._prompt_signature_emitted = False
+    enrichment._prompt_signature_lock = threading.Lock()
+
+    threads = [threading.Thread(target=enrichment._emit_prompt_signature_once) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(writes) == 1
+
+
+def test_prompt_signature_swallow_oserror_and_logs_debug(monkeypatch):
+    from brainlayer.pipeline import enrichment
+
+    debug_logs = []
+    monkeypatch.setattr(enrichment.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
+    monkeypatch.setattr(
+        enrichment.logger, "debug", lambda msg, *args, **kwargs: debug_logs.append(msg % args if args else msg)
+    )
+    enrichment._prompt_signature_emitted = False
+    enrichment._prompt_signature_lock = threading.Lock()
+
+    enrichment._emit_prompt_signature_once()
+
+    assert enrichment._prompt_signature_emitted is True
+    assert any("ENRICHMENT_PROMPT_LOADED" in entry for entry in debug_logs)
 
 
 def test_build_external_prompt_uses_v2_truncation():
@@ -150,10 +185,14 @@ def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
             ],
         )
 
-        row = store.conn.cursor().execute(
-            "SELECT key_facts, resolved_queries FROM chunks WHERE id = ?",
-            ("chunk-v2-1",),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT key_facts, resolved_queries FROM chunks WHERE id = ?",
+                ("chunk-v2-1",),
+            )
+            .fetchone()
+        )
         assert json.loads(row[0]) == ["PR #1722", "src/brainlayer/pipeline/enrichment.py"]
         assert len(json.loads(row[1])) == 3
 
@@ -161,10 +200,14 @@ def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
         assert "key_facts" in fts_cols
         assert "resolved_queries" in fts_cols
 
-        fts_row = store.conn.cursor().execute(
-            "SELECT key_facts, resolved_queries FROM chunks_fts WHERE chunk_id = ?",
-            ("chunk-v2-1",),
-        ).fetchone()
+        fts_row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT key_facts, resolved_queries FROM chunks_fts WHERE chunk_id = ?",
+                ("chunk-v2-1",),
+            )
+            .fetchone()
+        )
         assert "PR #1722" in fts_row[0]
         assert "What changed in the enrichment prompt?" in fts_row[1]
     finally:
@@ -197,23 +240,23 @@ def test_apply_enrichment_persists_entities_and_relation_context(tmp_path):
             },
         )
 
-        entity_rows = store.conn.cursor().execute(
-            "SELECT entity_type, name FROM kg_entities ORDER BY name"
-        ).fetchall()
+        entity_rows = store.conn.cursor().execute("SELECT entity_type, name FROM kg_entities ORDER BY name").fetchall()
         assert entity_rows == [("project", "BrainLayer"), ("technology", "SQLite")]
 
-        link_rows = store.conn.cursor().execute(
-            "SELECT context FROM kg_entity_chunks ORDER BY context"
-        ).fetchall()
+        link_rows = store.conn.cursor().execute("SELECT context FROM kg_entity_chunks ORDER BY context").fetchall()
         assert [row[0] for row in link_rows] == [
             "storage engine for BrainLayer",
             "uses SQLite for local-first storage",
         ]
 
-        chunk_row = store.conn.cursor().execute(
-            "SELECT key_facts, resolved_queries FROM chunks WHERE id = ?",
-            ("chunk-v2-entities",),
-        ).fetchone()
+        chunk_row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT key_facts, resolved_queries FROM chunks WHERE id = ?",
+                ("chunk-v2-entities",),
+            )
+            .fetchone()
+        )
         assert json.loads(chunk_row[0]) == ["SQLite", "local-first"]
         assert len(json.loads(chunk_row[1])) == 3
     finally:
