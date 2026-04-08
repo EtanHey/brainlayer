@@ -41,18 +41,25 @@ def flush_queue(queue_path: Path, sender: Callable[[list[dict[str, Any]]], None]
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         raw_lines = [line for line in handle.readlines() if line.strip()]
         events = [json.loads(line) for line in raw_lines]
-        try:
-            for start in range(0, len(events), batch_size):
-                sender(events[start : start + batch_size])
-        except Exception:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            return 0
+        sent_count = 0
+        remaining_events = []
+        for start in range(0, len(events), batch_size):
+            batch = events[start : start + batch_size]
+            try:
+                sender(batch)
+            except Exception:
+                remaining_events = events[start:]
+                break
+            sent_count += len(batch)
+        else:
+            remaining_events = []
 
         handle.seek(0)
-        handle.truncate(0)
+        handle.write("".join(json.dumps(event, ensure_ascii=True) + "\n" for event in remaining_events))
+        handle.truncate()
         handle.flush()
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    return len(events)
+    return sent_count
 
 
 def main() -> int:

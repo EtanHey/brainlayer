@@ -109,6 +109,17 @@ def test_handle_session_start_returns_additional_context_json():
     assert output["additionalContext"].startswith("Recent work:")
 
 
+def test_handle_session_start_returns_empty_context_when_invoke_tool_fails():
+    hook_helper = _load_module(HOOK_HELPER_PATH, "brainbar_hook")
+
+    output = hook_helper.handle_session_start(
+        {"session_id": "sess-123", "cwd": "/tmp/project"},
+        invoke_tool=lambda tool, arguments: (_ for _ in ()).throw(RuntimeError("socket unavailable")),
+    )
+
+    assert output == {}
+
+
 def test_build_queue_event_for_failure_marks_error_importance():
     hook_helper = _load_module(HOOK_HELPER_PATH, "brainbar_hook")
 
@@ -162,3 +173,31 @@ def test_handle_stop_does_not_crash_when_brain_sleep_is_unavailable(tmp_path):
 
     assert "queued 1 memory events" in output["systemMessage"].lower()
     assert "brain_sleep unavailable" in output["systemMessage"].lower()
+
+
+def test_flush_queue_keeps_only_unsent_events_after_partial_failure(tmp_path):
+    flusher = _load_module(QUEUE_FLUSHER_PATH, "queue_flusher")
+    queue_path = tmp_path / ".memory-queue.jsonl"
+
+    for index in range(3):
+        flusher.append_queue_event(queue_path, {"hook_event": "PostToolUse", "index": index})
+
+    seen_batches: list[list[dict]] = []
+
+    def sender(batch):
+        seen_batches.append(batch)
+        if batch[-1]["index"] == 2:
+            raise RuntimeError("second batch failed")
+
+    flushed = flusher.flush_queue(queue_path, sender, batch_size=2)
+
+    assert flushed == 2
+    assert seen_batches == [
+        [
+            {"hook_event": "PostToolUse", "index": 0},
+            {"hook_event": "PostToolUse", "index": 1},
+        ],
+        [{"hook_event": "PostToolUse", "index": 2}],
+    ]
+    rows = [json.loads(line) for line in queue_path.read_text().splitlines()]
+    assert rows == [{"hook_event": "PostToolUse", "index": 2}]

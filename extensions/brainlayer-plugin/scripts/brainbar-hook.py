@@ -164,7 +164,10 @@ def handle_session_start(
     deadline_ms: int = 200,
 ) -> dict[str, str]:
     started = time.perf_counter()
-    result = invoke_tool("brain_recall", {"mode": "context", "session_id": payload.get("session_id")})
+    try:
+        result = invoke_tool("brain_recall", {"mode": "context", "session_id": payload.get("session_id")})
+    except RuntimeError:
+        return {}
     text = _result_text(result).strip()
     if not text:
         return {}
