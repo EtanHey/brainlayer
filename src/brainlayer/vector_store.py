@@ -505,6 +505,87 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_project ON phase_commits(project)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_phase_commits_phase ON phase_commits(phase_name)")
 
+        # Git learning tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS git_memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                author TEXT,
+                committed_at REAL NOT NULL,
+                affected_files TEXT,
+                strength REAL DEFAULT 1.0,
+                half_life_days REAL DEFAULT 30.0,
+                confidence REAL DEFAULT 0.7,
+                retrieval_count INTEGER DEFAULT 0,
+                invalidated_by TEXT,
+                commit_message TEXT,
+                tags TEXT,
+                importance REAL DEFAULT 5.0,
+                UNIQUE(repo, commit_hash)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_git_memories_repo ON git_memories(repo)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_git_memories_type ON git_memories(memory_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_git_memories_commit_time ON git_memories(committed_at)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS migration_events (
+                id TEXT PRIMARY KEY,
+                from_pattern TEXT NOT NULL,
+                to_pattern TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                detected_at REAL NOT NULL,
+                confidence REAL,
+                memories_weakened INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_events_repo ON migration_events(repo)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_migration_events_commit_hash ON migration_events(commit_hash)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_cochanges (
+                file_a TEXT NOT NULL,
+                file_b TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                cochange_count INTEGER DEFAULT 1,
+                last_cochange REAL,
+                PRIMARY KEY (file_a, file_b, repo)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_cochanges_repo ON file_cochanges(repo)")
+
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS git_memories_fts USING fts5(
+                content, commit_message, tags, git_memory_id UNINDEXED
+            )
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS git_memories_fts_insert")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS git_memories_fts_insert AFTER INSERT ON git_memories BEGIN
+                INSERT INTO git_memories_fts(content, commit_message, tags, git_memory_id)
+                VALUES (new.content, new.commit_message, new.tags, new.id);
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS git_memories_fts_delete")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS git_memories_fts_delete AFTER DELETE ON git_memories BEGIN
+                DELETE FROM git_memories_fts WHERE git_memory_id = old.id;
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS git_memories_fts_update")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS git_memories_fts_update
+            AFTER UPDATE OF content, commit_message, tags ON git_memories BEGIN
+                DELETE FROM git_memories_fts WHERE git_memory_id = old.id;
+                INSERT INTO git_memories_fts(content, commit_message, tags, git_memory_id)
+                VALUES (new.content, new.commit_message, new.tags, new.id);
+            END
+        """)
+
         # source_project_id column
         if "source_project_id" not in existing_cols:
             cursor.execute("ALTER TABLE chunks ADD COLUMN source_project_id TEXT")

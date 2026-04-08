@@ -1090,6 +1090,52 @@ def git_overlay(
         store.close()
 
 
+def _run_brain_learn_git(repos_config: Path | None, since: str) -> None:
+    from ..git_learning import learn_git_history, load_repos_config
+    from ..vector_store import VectorStore
+
+    db_path = get_db_path()
+    store = VectorStore(db_path)
+    try:
+        repos = load_repos_config(repos_config)
+        result = learn_git_history(store=store, repos=repos, since=since)
+    finally:
+        store.close()
+
+    console.print(
+        f"[bold green]brain-learn[/] learned={result['learned']} "
+        f"skipped={result['skipped']} invalidations={result['invalidations']}"
+    )
+
+
+@app.command("brain-learn")
+def brain_learn(
+    git_mode: bool = typer.Option(False, "--git", help="Learn from git history"),
+    since: str = typer.Option("30d", "--since", help="Git history window, e.g. 30d"),
+    repos_config: Path = typer.Option(None, "--repos-config", help="Path to repos.json"),
+) -> None:
+    """Continuously learn patterns and migrations from git history."""
+    try:
+        if not git_mode:
+            raise typer.BadParameter("brain-learn currently requires --git")
+        _run_brain_learn_git(repos_config=repos_config, since=since)
+    except typer.BadParameter:
+        raise
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("brain_learn", hidden=True)
+def brain_learn_alias(
+    git_mode: bool = typer.Option(False, "--git", help="Learn from git history"),
+    since: str = typer.Option("30d", "--since", help="Git history window, e.g. 30d"),
+    repos_config: Path = typer.Option(None, "--repos-config", help="Path to repos.json"),
+) -> None:
+    """Alias for brain-learn to match existing plan notation."""
+    brain_learn(git_mode=git_mode, since=since, repos_config=repos_config)
+
+
 @app.command("group-operations")
 def group_operations(
     project: str = typer.Option(None, "--project", "-p", help="Only process specific project name"),
