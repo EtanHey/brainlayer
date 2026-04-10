@@ -40,6 +40,11 @@ HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
 ENTITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|[\u0590-\u05FF]+")
 _ENTITY_CACHE = None
 _ENTITY_CACHE_DB_PATH = None
+LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.30
+LOW_CONFIDENCE_FALLBACK_MESSAGE = (
+    "No high-confidence memories found. Use brain_search() for deeper retrieval."
+)
+_KG_ENTITY_CHUNKS_RELATION_TYPE_CACHE = {}
 
 
 def get_session_context(conn, session_id: str, limit: int = 3) -> list[str]:
@@ -400,11 +405,9 @@ def truncate(text, max_chars=80):
     if len(text) <= max_chars:
         return text
     candidate = text[:max_chars]
-    search_start = max(0, max_chars - 40)
-    for sep in (". ", "! ", "? ", "| "):
-        idx = candidate.rfind(sep, search_start)
-        if idx > 0:
-            return candidate[: idx + len(sep) - 1] + "..."
+    sentence_matches = list(re.finditer(r"[.!?](?=(?:\s|$))", candidate))
+    if sentence_matches:
+        return candidate[: sentence_matches[-1].end()] + "..."
     return candidate.rsplit(" ", 1)[0] + "..."
 
 
@@ -426,6 +429,22 @@ def _get_connection_cache_key(conn):
             return row[2]
 
     return f"conn:{id(conn)}"
+
+
+def _kg_entity_chunks_has_relation_type(conn):
+    cache_key = _get_connection_cache_key(conn)
+    cached = _KG_ENTITY_CHUNKS_RELATION_TYPE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(kg_entity_chunks)").fetchall()}
+    except sqlite3.Error:
+        columns = set()
+
+    has_column = "relation_type" in columns
+    _KG_ENTITY_CHUNKS_RELATION_TYPE_CACHE[cache_key] = has_column
+    return has_column
 
 
 def _load_entity_cache(conn=None):
@@ -621,12 +640,17 @@ def detect_entities_in_prompt(prompt, conn=None):
 def get_entity_chunks(entity_id, conn, limit=3):
     """Get top linked chunk summaries for an entity."""
     try:
+        relation_filter = ""
+        if _kg_entity_chunks_has_relation_type(conn):
+            relation_filter = "AND COALESCE(ec.relation_type, '') != 'co_occurs_with'"
+
         rows = conn.execute(
-            """
+            f"""
             SELECT c.content, c.created_at, c.project
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
             WHERE ec.entity_id = ?
+              {relation_filter}
               AND COALESCE(c.project, '') != 'eval-sandbox'
               AND COALESCE(c.tags, '') NOT LIKE '%"eval-test"%'
             ORDER BY ec.relevance DESC
@@ -708,6 +732,24 @@ def select_adaptive_injection_rows(rows, entity_count=0, light_mode=False):
         selected = selected[:2]
 
     return strategic_reorder(selected[:MAX_ADAPTIVE_INJECTION])
+
+
+def build_low_confidence_fallback(rows):
+    if not rows:
+        return LOW_CONFIDENCE_FALLBACK_MESSAGE
+
+    top_row = rows[0]
+    if isinstance(top_row, dict):
+        relevance = top_row.get("relevance")
+        if relevance is None:
+            relevance = top_row.get("rrf_score")
+    else:
+        relevance = None
+
+    if relevance is not None and relevance < LOW_CONFIDENCE_FALLBACK_THRESHOLD:
+        return LOW_CONFIDENCE_FALLBACK_MESSAGE
+
+    return None
 
 
 def _ensure_src_on_syspath():
@@ -1014,6 +1056,7 @@ def main():
     new_chunk_ids = []
     new_briefs = []
     entities_detected = 0
+    fallback_rows = []
 
     def finalize_and_exit(*, mode=None):
         final_mode = mode or telemetry_mode
@@ -1172,6 +1215,18 @@ def main():
                     if len(filtered_rows) >= base_limit:
                         break
 
+            fallback_rows = [
+                {
+                    "id": chunk_id,
+                    "content": content,
+                    "importance": importance,
+                    "project": project,
+                    "tags": tags,
+                    "created_at": created_at,
+                    "rrf_score": 0.0,
+                }
+                for chunk_id, content, importance, project, tags, created_at in filtered_rows
+            ]
             new_chunk_ids, new_briefs = inject_search_results(lines, filtered_rows, deep, label=label)
     except sqlite3.Error:
         pass
@@ -1185,6 +1240,11 @@ def main():
             "⚠️ SEARCH-BEFORE-ASSUME: This prompt mentions personal/biographical facts. "
             "Run brain_search() to verify before stating any personal details (hardware, history, names)."
         )
+
+    if not lines:
+        fallback = build_low_confidence_fallback(fallback_rows)
+        if fallback:
+            lines.append(fallback)
 
     if lines:
         print("\n".join(lines))

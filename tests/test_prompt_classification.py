@@ -35,7 +35,16 @@ def make_hook_db(db_path: Path) -> None:
     )
     conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, content)")
     conn.execute("CREATE TABLE kg_entities (id TEXT PRIMARY KEY, name TEXT, entity_type TEXT)")
-    conn.execute("CREATE TABLE kg_entity_chunks (entity_id TEXT, chunk_id TEXT, relevance REAL)")
+    conn.execute(
+        """
+        CREATE TABLE kg_entity_chunks (
+            entity_id TEXT,
+            chunk_id TEXT,
+            relevance REAL,
+            relation_type TEXT
+        )
+        """
+    )
 
     conn.execute(
         """
@@ -79,8 +88,26 @@ def make_hook_db(db_path: Path) -> None:
         ("person-theo", "Theo Browne", "person"),
     )
     conn.execute(
-        "INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance) VALUES (?, ?, ?)",
-        ("person-theo", "chunk-theo", 0.9),
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, relation_type) VALUES (?, ?, ?, ?)",
+        ("person-theo", "chunk-theo", 0.9, "mentioned_in"),
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (id, content, importance, project, tags, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "chunk-theo-noise",
+            "Theo Browne appears in low-signal co-occurrence noise that should stay hidden.",
+            5,
+            "brainlayer",
+            '["people"]',
+            "2026-04-03T10:00:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, relation_type) VALUES (?, ?, ?, ?)",
+        ("person-theo", "chunk-theo-noise", 0.99, "co_occurs_with"),
     )
     conn.commit()
     conn.close()
@@ -137,6 +164,7 @@ def test_classify_long_prompt_not_casual():
 
 def test_command_skips_retrieval(monkeypatch, capsys):
     module = load_prompt_search_module()
+    monkeypatch.setattr(module, "get_db_path", lambda: None)
 
     def fail_connect(*args, **kwargs):
         raise AssertionError("sqlite3.connect should not be called for command prompts")
@@ -148,6 +176,7 @@ def test_command_skips_retrieval(monkeypatch, capsys):
 
 def test_casual_skips_retrieval(monkeypatch, capsys):
     module = load_prompt_search_module()
+    monkeypatch.setattr(module, "get_db_path", lambda: None)
 
     def fail_connect(*args, **kwargs):
         raise AssertionError("sqlite3.connect should not be called for casual prompts")
@@ -167,6 +196,7 @@ def test_entity_route_injects_card(tmp_path, monkeypatch, capsys):
 
     assert "[Entity: Theo Browne" in output
     assert "Theo Browne is linked to BrainLayer collaboration notes." in output
+    assert "co-occurrence noise" not in output
 
 
 def test_knowledge_route_injects_chunks(tmp_path, monkeypatch, capsys):

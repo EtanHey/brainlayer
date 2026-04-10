@@ -154,3 +154,22 @@ class TestSearchFallback:
 
         assert used_hybrid is False
         assert [row["id"] for row in rows] == ["fts-best"]
+
+    def test_no_results_falls_back_to_low_confidence_message(self, prompt_search):
+        message = prompt_search.build_low_confidence_fallback([])
+
+        assert message == "No high-confidence memories found. Use brain_search() for deeper retrieval."
+
+    def test_low_relevance_rows_emit_fallback_message(self, prompt_search):
+        rows = [_row("low", 0.29)]
+
+        message = prompt_search.build_low_confidence_fallback(rows)
+
+        assert message == "No high-confidence memories found. Use brain_search() for deeper retrieval."
+
+    def test_high_relevance_rows_do_not_emit_fallback_message(self, prompt_search):
+        rows = [_row("high", 0.30)]
+
+        message = prompt_search.build_low_confidence_fallback(rows)
+
+        assert message is None
