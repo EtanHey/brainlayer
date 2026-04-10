@@ -55,6 +55,16 @@ class TestSnippetTruncation:
         assert result.endswith("...")
         assert len(result) <= 83
 
+    def test_truncate_cuts_at_last_sentence_end_before_limit(self, hook):
+        text = (
+            "Short sentence. Another complete sentence. "
+            "This final sentence extends well beyond the truncation limit and should be omitted."
+        )
+
+        result = hook.truncate(text, max_chars=55)
+
+        assert result == "Short sentence. Another complete sentence...."
+
 
 class TestResultCountCap:
     """Result count must be capped at MAX_ADAPTIVE_INJECTION (3)."""
