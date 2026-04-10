@@ -204,7 +204,7 @@ def _is_duplicate_content(store, content: str) -> bool:
     try:
         cursor = store._read_cursor()
         row = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE content_hash = ? AND enriched_at IS NOT NULL",
+            "SELECT COUNT(*) FROM chunks WHERE content_hash = ? AND enriched_at IS NOT NULL AND summary IS NOT NULL",
             (content_h,),
         ).fetchone()
         return row[0] > 0 if row else False

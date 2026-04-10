@@ -314,6 +314,20 @@ def test_is_duplicate_returns_true_when_hash_exists_enriched():
     assert _is_duplicate_content(store, "content") is True
 
 
+def test_is_duplicate_returns_false_when_summary_cleared():
+    from brainlayer.enrichment_controller import _is_duplicate_content
+
+    store = MagicMock()
+    cursor = MagicMock()
+    cursor.execute.return_value.fetchone.return_value = (0,)
+    store._read_cursor.return_value = cursor
+
+    assert _is_duplicate_content(store, "content") is False
+    query, params = cursor.execute.call_args[0]
+    assert "summary IS NOT NULL" in query
+    assert params == (_is_duplicate_content.__globals__["_content_hash"]("content"),)
+
+
 def test_is_duplicate_returns_false_when_hash_not_found():
     from brainlayer.enrichment_controller import _is_duplicate_content
 
