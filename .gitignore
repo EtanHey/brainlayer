@@ -43,6 +43,8 @@ data/
 *~
 
 # Local working files (audit logs, prompts, scratch)
+.tmp-*
+grill*/
 docs.local/
 
 # Internal planning docs (contain cross-repo references)
@@ -72,3 +74,4 @@ scripts/.kg_rebuild_progress.json
 # Machine-local Claude config
 .claude.local.md
 .vercel
+site/
