@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -30,7 +31,9 @@ from .pipeline.enrichment import (
     build_prompt,
     parse_enrichment,
 )
+from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
+from .pipeline.write_queue import WriteQueue
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,19 @@ RATE_LIMITS = {
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
+WRITE_QUEUE_MAXSIZE = int(os.environ.get("BRAINLAYER_WRITE_QUEUE_MAXSIZE", "1000"))
+RATE_LIMIT_BURST = int(os.environ.get("BRAINLAYER_ENRICH_BURST", "10"))
+
+_WRITE_QUEUE_REGISTRY: dict[str, WriteQueue] = {}
+_WRITE_QUEUE_LOCK = threading.Lock()
+_ENRICHMENT_COLUMN_READY: set[str] = set()
+_ENRICHMENT_COLUMN_LOCK = threading.Lock()
+_RATE_LIMITER_REGISTRY: dict[tuple[str, float, int], TokenBucket] = {}
+_RATE_LIMITER_LOCK = threading.Lock()
+_STORE_OPERATION_COUNTS: dict[str, int] = {}
+_STORE_OPERATION_LOCK = threading.Lock()
+_STORE_OPERATION_CONDITION = threading.Condition(_STORE_OPERATION_LOCK)
+_STORE_CLOSING: set[str] = set()
 
 _META_RESEARCH_PATTERNS = [
     re.compile(r"brain_search\s*\(", re.IGNORECASE),
@@ -97,6 +113,136 @@ def get_unsubmitted_export_files(*args, **kwargs):
 # ── Gemini client ──────────────────────────────────────────────────────────────
 
 
+def _store_queue_key(store) -> str:
+    db_path = getattr(store, "db_path", None)
+    return str(db_path) if db_path is not None else f"store:{id(store)}"
+
+
+def _get_store_write_queue(store) -> WriteQueue:
+    key = _store_queue_key(store)
+    with _WRITE_QUEUE_LOCK:
+        write_queue = _WRITE_QUEUE_REGISTRY.get(key)
+        if write_queue is None:
+            write_queue = WriteQueue(maxsize=WRITE_QUEUE_MAXSIZE)
+            write_queue.start()
+            _WRITE_QUEUE_REGISTRY[key] = write_queue
+        return write_queue
+
+
+def _begin_store_operation(store) -> str:
+    key = _store_queue_key(store)
+    with _STORE_OPERATION_CONDITION:
+        while key in _STORE_CLOSING:
+            _STORE_OPERATION_CONDITION.wait()
+        _STORE_OPERATION_COUNTS[key] = _STORE_OPERATION_COUNTS.get(key, 0) + 1
+    return key
+
+
+def _end_store_operation(store) -> None:
+    key = _store_queue_key(store)
+    cleanup = False
+    with _STORE_OPERATION_CONDITION:
+        remaining = _STORE_OPERATION_COUNTS.get(key, 0) - 1
+        if remaining <= 0:
+            _STORE_OPERATION_COUNTS.pop(key, None)
+            _STORE_CLOSING.add(key)
+            cleanup = True
+        else:
+            _STORE_OPERATION_COUNTS[key] = remaining
+
+    if not cleanup:
+        return
+
+    try:
+        with _WRITE_QUEUE_LOCK:
+            write_queue = _WRITE_QUEUE_REGISTRY.pop(key, None)
+        if write_queue is not None:
+            write_queue.stop(timeout=1.0)
+
+        with _RATE_LIMITER_LOCK:
+            for limiter_key in list(_RATE_LIMITER_REGISTRY):
+                if limiter_key[0] == key:
+                    _RATE_LIMITER_REGISTRY.pop(limiter_key, None)
+
+        with _ENRICHMENT_COLUMN_LOCK:
+            _ENRICHMENT_COLUMN_READY.discard(key)
+    finally:
+        with _STORE_OPERATION_CONDITION:
+            _STORE_CLOSING.discard(key)
+            _STORE_OPERATION_CONDITION.notify_all()
+
+
+def _submit_write(store, name: str, callback) -> Any:
+    return _get_store_write_queue(store).submit(name, callback).result()
+
+
+def _ensure_enrichment_columns(store) -> None:
+    key = _store_queue_key(store)
+    with _ENRICHMENT_COLUMN_LOCK:
+        if key in _ENRICHMENT_COLUMN_READY:
+            return
+
+    def _ensure() -> None:
+        _ensure_content_hash_column(store)
+        _ensure_raw_entities_json_column(store)
+
+    _submit_write(store, "ensure-enrichment-columns", _ensure)
+
+    with _ENRICHMENT_COLUMN_LOCK:
+        _ENRICHMENT_COLUMN_READY.add(key)
+
+
+def _get_store_rate_limiter(store, rate_per_second: float | None = None, burst: int | None = None) -> TokenBucket | None:
+    if rate_per_second is None:
+        rate_per_second = RATE_LIMITS["realtime"]
+    if rate_per_second <= 0:
+        return None
+
+    burst = RATE_LIMIT_BURST if burst is None else burst
+    key = (_store_queue_key(store), rate_per_second, burst)
+    with _RATE_LIMITER_LOCK:
+        limiter = _RATE_LIMITER_REGISTRY.get(key)
+        if limiter is None:
+            limiter = TokenBucket(rate_per_sec=rate_per_second, burst=burst)
+            _RATE_LIMITER_REGISTRY[key] = limiter
+        return limiter
+
+
+def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
+    if not hasattr(store, "_read_cursor"):
+        return store.get_chunk(chunk_id)
+
+    row = (
+        store._read_cursor()
+        .execute(
+            """SELECT id, content, metadata, source_file, project, content_type,
+                      value_type, tags, importance, created_at, summary,
+                      superseded_by, aggregated_into, archived_at
+               FROM chunks WHERE id = ?""",
+            (chunk_id,),
+        )
+        .fetchone()
+    )
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "content": row[1],
+        "metadata": row[2],
+        "source_file": row[3],
+        "project": row[4],
+        "content_type": row[5],
+        "value_type": row[6],
+        "tags": row[7],
+        "importance": row[8],
+        "created_at": row[9],
+        "summary": row[10],
+        "superseded_by": row[11],
+        "aggregated_into": row[12],
+        "archived_at": row[13],
+    }
+
+
 def _get_gemini_client():
     """Create Gemini client. Uses regional endpoint when GOOGLE_CLOUD_REGION is set."""
     try:
@@ -111,12 +257,10 @@ def _get_gemini_client():
     # Regional endpoint reduces latency from 11-12s (global) to 0.7s.
     # Set GOOGLE_CLOUD_REGION=us-central1 (or europe-west1, etc.) to enable.
     region = os.environ.get("GOOGLE_CLOUD_REGION")
+    http_options: dict[str, Any] = {"retry_options": {"attempts": 1}}
     if region:
-        return genai.Client(
-            api_key=api_key,
-            http_options={"api_version": "v1beta", "url": f"https://{region}-aiplatform.googleapis.com"},
-        )
-    return genai.Client(api_key=api_key)
+        http_options.update({"api_version": "v1beta", "url": f"https://{region}-aiplatform.googleapis.com"})
+    return genai.Client(api_key=api_key, http_options=http_options)
 
 
 GEMINI_RESPONSE_SCHEMA = {
@@ -329,7 +473,25 @@ def _retry_with_backoff(
                 raise
             delay = min(base_delay * (2**attempt), max_delay)
             jitter = random.uniform(0, delay * 0.5)
-            time.sleep(min(delay + jitter, max_delay))
+            sleep_for = min(delay + jitter, max_delay)
+            logger.warning(
+                "Retrying enrichment call after error %s (attempt %d/%d) in %.2fs",
+                exc,
+                attempt + 2,
+                max_retries + 1,
+                sleep_for,
+            )
+            time.sleep(sleep_for)
+
+
+def _generate_content_with_rate_limit(client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None):
+    if limiter is not None:
+        limiter.acquire()
+    return client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=config,
+    )
 
 
 def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
@@ -379,6 +541,7 @@ def _enrich_single_chunk(
     sanitizer,
     *,
     is_duplicate,
+    rate_limiter: TokenBucket | None,
     max_retries: int,
 ) -> tuple[dict[str, Any], str, Any]:
     """Run dedup, prompt build, and API call for one chunk.
@@ -401,11 +564,7 @@ def _enrich_single_chunk(
 
     try:
         response = _retry_with_backoff(
-            lambda: client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=config,
-            ),
+            lambda: _generate_content_with_rate_limit(client, model, prompt, config, rate_limiter),
             max_retries=max_retries,
         )
         raw_response = getattr(response, "text", response)
@@ -432,63 +591,66 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
     if not AUTO_ENRICH_ENABLED:
         return None
 
-    chunk = store.get_chunk(chunk_id)
-    if not chunk:
-        logger.warning("enrich_single: chunk not found: %s", chunk_id)
-        return None
-
-    if is_meta_research(chunk.get("content", "")):
-        _mark_meta_research(store, chunk)
-        logger.info("enrich_single: tagged %s as meta-research without Gemini", chunk_id)
-        return None
-
+    _begin_store_operation(store)
     try:
-        client = _get_gemini_client()
-    except RuntimeError:
-        logger.debug("enrich_single: no Gemini API key, skipping enrichment for %s", chunk_id)
-        return None
+        _ensure_enrichment_columns(store)
 
-    sanitizer = Sanitizer.from_env()
-    try:
-        prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
-    except Exception as exc:
-        logger.warning("enrich_single: prompt build failed for %s: %s", chunk_id, exc)
-        return None
+        chunk = _get_chunk_readonly(store, chunk_id)
+        if not chunk:
+            logger.warning("enrich_single: chunk not found: %s", chunk_id)
+            return None
 
-    config = _build_gemini_config()
+        if is_meta_research(chunk.get("content", "")):
+            _submit_write(store, f"mark-meta:{chunk_id}", lambda: _mark_meta_research(store, chunk))
+            logger.info("enrich_single: tagged %s as meta-research without Gemini", chunk_id)
+            return None
 
-    def _call():
-        response = client.models.generate_content(
-            model=GEMINI_REALTIME_MODEL,
-            contents=prompt,
-            config=config,
-        )
-        return getattr(response, "text", None)
+        try:
+            client = _get_gemini_client()
+        except RuntimeError:
+            logger.debug("enrich_single: no Gemini API key, skipping enrichment for %s", chunk_id)
+            return None
 
-    try:
-        raw_response = _retry_with_backoff(
-            _call,
-            max_retries=max_retries,
-            base_delay=0.3,
-            max_delay=5.0,
-        )
-    except Exception as exc:
-        logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
-        return None
+        sanitizer = Sanitizer.from_env()
+        try:
+            prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+        except Exception as exc:
+            logger.warning("enrich_single: prompt build failed for %s: %s", chunk_id, exc)
+            return None
 
-    enrichment = parse_enrichment(raw_response)
-    if not enrichment:
-        logger.warning("enrich_single: invalid enrichment response for %s", chunk_id)
-        return None
+        config = _build_gemini_config()
+        rate_limiter = _get_store_rate_limiter(store)
 
-    try:
-        _apply_enrichment(store, chunk, enrichment)
-    except Exception as exc:
-        logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
-        return None
+        def _call():
+            response = _generate_content_with_rate_limit(client, GEMINI_REALTIME_MODEL, prompt, config, rate_limiter)
+            return getattr(response, "text", None)
 
-    logger.info("enrich_single: enriched %s with %d tags", chunk_id, len(enrichment.get("tags", [])))
-    return enrichment
+        try:
+            raw_response = _retry_with_backoff(
+                _call,
+                max_retries=max_retries,
+                base_delay=0.3,
+                max_delay=5.0,
+            )
+        except Exception as exc:
+            logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
+            return None
+
+        enrichment = parse_enrichment(raw_response)
+        if not enrichment:
+            logger.warning("enrich_single: invalid enrichment response for %s", chunk_id)
+            return None
+
+        try:
+            _submit_write(store, f"apply-enrichment:{chunk_id}", lambda: _apply_enrichment(store, chunk, enrichment))
+        except Exception as exc:
+            logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
+            return None
+
+        logger.info("enrich_single: enriched %s with %d tags", chunk_id, len(enrichment.get("tags", [])))
+        return enrichment
+    finally:
+        _end_store_operation(store)
 
 
 def _call_local_backend(prompt: str, backend: str = "mlx") -> str | None:
@@ -573,66 +735,71 @@ def enrich_realtime(
     if rate_per_second is None:
         rate_per_second = RATE_LIMITS["realtime"]
 
-    start_time = time.monotonic()
-    _emit_enrichment_start("realtime", limit)
+    _begin_store_operation(store)
+    try:
+        start_time = time.monotonic()
+        _emit_enrichment_start("realtime", limit)
 
-    candidates = store.get_enrichment_candidates(limit=limit, since_hours=since_hours, chunk_ids=chunk_ids)
-    result = EnrichmentResult(mode="realtime", attempted=len(candidates), enriched=0, skipped=0, failed=0)
-    if not candidates:
-        _emit_enrichment_complete(result, 0)
-        return result
+        candidates = store.get_enrichment_candidates(limit=limit, since_hours=since_hours, chunk_ids=chunk_ids)
+        result = EnrichmentResult(mode="realtime", attempted=len(candidates), enriched=0, skipped=0, failed=0)
+        if not candidates:
+            _emit_enrichment_complete(result, 0)
+            return result
 
-    # Ensure content_hash column exists for dedup
-    _ensure_content_hash_column(store)
-    _ensure_raw_entities_json_column(store)
+        _ensure_enrichment_columns(store)
 
-    client = _get_gemini_client()
-    sanitizer = Sanitizer.from_env()
-    per_chunk_delay = (1.0 / rate_per_second) if rate_per_second > 0 else 0.0
-    config = _build_gemini_config()
+        client = _get_gemini_client()
+        sanitizer = Sanitizer.from_env()
+        config = _build_gemini_config()
+        rate_limiter = _get_store_rate_limiter(store, rate_per_second=rate_per_second)
 
-    def is_duplicate(content: str) -> bool:
-        return _is_duplicate_content(store, content)
+        def is_duplicate(content: str) -> bool:
+            return _is_duplicate_content(store, content)
 
-    with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
-        futures = []
-        for index, chunk in enumerate(candidates):
-            futures.append(
-                executor.submit(
-                    _enrich_single_chunk,
-                    client,
-                    GEMINI_REALTIME_MODEL,
-                    config,
-                    chunk,
-                    sanitizer,
-                    is_duplicate=is_duplicate,
-                    max_retries=max_retries,
+        with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
+            futures = []
+            for chunk in candidates:
+                futures.append(
+                    executor.submit(
+                        _enrich_single_chunk,
+                        client,
+                        GEMINI_REALTIME_MODEL,
+                        config,
+                        chunk,
+                        sanitizer,
+                        is_duplicate=is_duplicate,
+                        rate_limiter=rate_limiter,
+                        max_retries=max_retries,
+                    )
                 )
-            )
-            if per_chunk_delay > 0 and index < len(candidates) - 1:
-                time.sleep(per_chunk_delay)
 
-        for future in as_completed(futures):
-            chunk, status, data = future.result()
-            if status == "skip":
-                result.skipped += 1
-                continue
-            if status == "meta":
-                _mark_meta_research(store, chunk)
-                result.skipped += 1
-                continue
-            if status == "error":
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: {data}")
-                _emit_enrichment_error("realtime", chunk["id"], str(data))
-                continue
+            for future in as_completed(futures):
+                chunk, status, data = future.result()
+                if status == "skip":
+                    result.skipped += 1
+                    continue
+                if status == "meta":
+                    _submit_write(store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk))
+                    result.skipped += 1
+                    continue
+                if status == "error":
+                    result.failed += 1
+                    result.errors.append(f"{chunk['id']}: {data}")
+                    _emit_enrichment_error("realtime", chunk["id"], str(data))
+                    continue
 
-            _apply_enrichment(store, chunk, data)
-            result.enriched += 1
+                _submit_write(
+                    store,
+                    f"apply-enrichment:{chunk['id']}",
+                    lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
+                )
+                result.enriched += 1
 
-    duration_ms = (time.monotonic() - start_time) * 1000
-    _emit_enrichment_complete(result, duration_ms)
-    return result
+        duration_ms = (time.monotonic() - start_time) * 1000
+        _emit_enrichment_complete(result, duration_ms)
+        return result
+    finally:
+        _end_store_operation(store)
 
 
 def enrich_batch(
@@ -647,76 +814,82 @@ def enrich_batch(
     submit/poll/import workflow is not yet wired. This ensures unenriched
     chunks actually get processed instead of returning enriched=0.
     """
-    start_time = time.monotonic()
-    _emit_enrichment_start("batch", limit)
-
-    candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
-    result = EnrichmentResult(mode="batch", attempted=len(candidates), enriched=0, skipped=0, failed=0, errors=[])
-
-    if not candidates:
-        duration_ms = (time.monotonic() - start_time) * 1000
-        _emit_enrichment_complete(result, duration_ms)
-        return result
-
-    _ensure_content_hash_column(store)
-    _ensure_raw_entities_json_column(store)
-
+    _begin_store_operation(store)
     try:
-        client = _get_gemini_client()
-    except RuntimeError as exc:
-        result.errors.append(f"No Gemini client: {exc}")
+        start_time = time.monotonic()
+        _emit_enrichment_start("batch", limit)
+
+        candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
+        result = EnrichmentResult(mode="batch", attempted=len(candidates), enriched=0, skipped=0, failed=0, errors=[])
+
+        if not candidates:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            _emit_enrichment_complete(result, duration_ms)
+            return result
+
+        _ensure_enrichment_columns(store)
+
+        try:
+            client = _get_gemini_client()
+        except RuntimeError as exc:
+            result.errors.append(f"No Gemini client: {exc}")
+            duration_ms = (time.monotonic() - start_time) * 1000
+            _emit_enrichment_complete(result, duration_ms)
+            return result
+
+        sanitizer = Sanitizer.from_env()
+        config = _build_gemini_config()
+        rate_limiter = _get_store_rate_limiter(store, rate_per_second=RATE_LIMITS.get("realtime", 0.2))
+
+        for chunk in candidates:
+            if is_meta_research(chunk.get("content", "")):
+                _submit_write(store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk))
+                result.skipped += 1
+                continue
+            if _is_duplicate_content(store, chunk.get("content", "")):
+                result.skipped += 1
+                continue
+
+            try:
+                prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+            except Exception as exc:
+                result.failed += 1
+                result.errors.append(f"{chunk['id']}: prompt_build_error: {exc}")
+                continue
+
+            try:
+                response = _retry_with_backoff(
+                    lambda: _generate_content_with_rate_limit(
+                        client,
+                        GEMINI_REALTIME_MODEL,
+                        prompt,
+                        config,
+                        rate_limiter,
+                    ),
+                    max_retries=max_retries,
+                )
+                enrichment = parse_enrichment(response.text)
+                if not enrichment:
+                    result.failed += 1
+                    result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                    _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
+                    continue
+                _submit_write(
+                    store,
+                    f"apply-enrichment:{chunk['id']}",
+                    lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
+                )
+                result.enriched += 1
+            except Exception as exc:
+                result.failed += 1
+                result.errors.append(f"{chunk['id']}: {exc}")
+                _emit_enrichment_error("batch", chunk["id"], str(exc))
+
         duration_ms = (time.monotonic() - start_time) * 1000
         _emit_enrichment_complete(result, duration_ms)
         return result
-
-    sanitizer = Sanitizer.from_env()
-    config = _build_gemini_config()
-    rate_limit = RATE_LIMITS.get("realtime", 0.2)
-
-    for chunk in candidates:
-        if is_meta_research(chunk.get("content", "")):
-            _mark_meta_research(store, chunk)
-            result.skipped += 1
-            continue
-        if _is_duplicate_content(store, chunk.get("content", "")):
-            result.skipped += 1
-            continue
-
-        try:
-            prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
-        except Exception as exc:
-            result.failed += 1
-            result.errors.append(f"{chunk['id']}: prompt_build_error: {exc}")
-            continue
-
-        try:
-            response = _retry_with_backoff(
-                lambda: client.models.generate_content(
-                    model=GEMINI_REALTIME_MODEL,
-                    contents=prompt,
-                    config=config,
-                ),
-                max_retries=max_retries,
-            )
-            enrichment = parse_enrichment(response.text)
-            if not enrichment:
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: invalid_enrichment")
-                _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
-                continue
-            _apply_enrichment(store, chunk, enrichment)
-            result.enriched += 1
-        except Exception as exc:
-            result.failed += 1
-            result.errors.append(f"{chunk['id']}: {exc}")
-            _emit_enrichment_error("batch", chunk["id"], str(exc))
-
-        if rate_limit > 0:
-            time.sleep(1.0 / rate_limit)
-
-    duration_ms = (time.monotonic() - start_time) * 1000
-    _emit_enrichment_complete(result, duration_ms)
-    return result
+    finally:
+        _end_store_operation(store)
 
 
 def enrich_local(
@@ -726,37 +899,44 @@ def enrich_local(
     backend: str = "mlx",
 ) -> EnrichmentResult:
     """Enrich via local MLX/Ollama backend."""
-    start_time = time.monotonic()
-    _emit_enrichment_start("local", limit)
+    _begin_store_operation(store)
+    try:
+        start_time = time.monotonic()
+        _emit_enrichment_start("local", limit)
 
-    candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
-    result = EnrichmentResult(mode="local", attempted=len(candidates), enriched=0, skipped=0, failed=0)
+        candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
+        result = EnrichmentResult(mode="local", attempted=len(candidates), enriched=0, skipped=0, failed=0)
 
-    # Ensure content_hash column exists for dedup
-    _ensure_content_hash_column(store)
+        _ensure_enrichment_columns(store)
 
-    for chunk in candidates:
-        # Content-hash dedup
-        if _is_duplicate_content(store, chunk.get("content", "")):
-            result.skipped += 1
-            continue
-
-        try:
-            prompt = build_prompt(chunk)
-            raw_response = _retry_with_backoff(lambda: _call_local_backend(prompt, backend=backend), max_retries=2)
-            enrichment = parse_enrichment(raw_response)
-            if not enrichment:
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: invalid_enrichment")
-                _emit_enrichment_error("local", chunk["id"], "invalid_enrichment")
+        for chunk in candidates:
+            # Content-hash dedup
+            if _is_duplicate_content(store, chunk.get("content", "")):
+                result.skipped += 1
                 continue
-            _apply_enrichment(store, chunk, enrichment)
-            result.enriched += 1
-        except Exception as exc:  # noqa: BLE001
-            result.failed += 1
-            result.errors.append(f"{chunk['id']}: {exc}")
-            _emit_enrichment_error("local", chunk["id"], str(exc))
 
-    duration_ms = (time.monotonic() - start_time) * 1000
-    _emit_enrichment_complete(result, duration_ms)
-    return result
+            try:
+                prompt = build_prompt(chunk)
+                raw_response = _retry_with_backoff(lambda: _call_local_backend(prompt, backend=backend), max_retries=2)
+                enrichment = parse_enrichment(raw_response)
+                if not enrichment:
+                    result.failed += 1
+                    result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                    _emit_enrichment_error("local", chunk["id"], "invalid_enrichment")
+                    continue
+                _submit_write(
+                    store,
+                    f"apply-enrichment:{chunk['id']}",
+                    lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
+                )
+                result.enriched += 1
+            except Exception as exc:  # noqa: BLE001
+                result.failed += 1
+                result.errors.append(f"{chunk['id']}: {exc}")
+                _emit_enrichment_error("local", chunk["id"], str(exc))
+
+        duration_ms = (time.monotonic() - start_time) * 1000
+        _emit_enrichment_complete(result, duration_ms)
+        return result
+    finally:
+        _end_store_operation(store)
