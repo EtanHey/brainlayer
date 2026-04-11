@@ -7,6 +7,8 @@ LaunchAgent plist, and CLI integration.
 Target: 35+ tests per A-R2 acceptance criteria.
 """
 
+import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -607,6 +609,39 @@ def test_local_counts_failed_on_invalid_parse(monkeypatch):
     assert result.enriched == 0
 
 
+# ── Meta-research filter tests ───────────────────────────────────────────────
+
+
+def test_meta_research_filter_detects_common_patterns():
+    from brainlayer.enrichment_controller import is_meta_research
+
+    samples = [
+        "brain_search(query='crypto trading bot')",
+        'brain_search query="crypto trading bot"',
+        "Search results for 'crypto trading bot Ofir strategy'",
+        "Query 3 for 'crypto trading bot Ofir strategy' degraded from 2.4/5 to 2.2/5",
+        "Eval score: 2.6/5 after ingestion",
+        "Grade: 3/5",
+        "[BrainLayer auto] Memories matching: 5",
+        '{"hookEventName":"search","additionalContext":"tool payload"}',
+    ]
+
+    assert all(is_meta_research(sample) for sample in samples)
+
+
+def test_meta_research_filter_preserves_real_content():
+    from brainlayer.enrichment_controller import is_meta_research
+
+    samples = [
+        "We decided to keep the enrichment controller in a single file until the batch path is stabilized.",
+        "def build_index(query: str) -> list[str]:\n    return [query.strip()]",
+        "Ofir said the strategy should defer position sizing until volatility normalizes.",
+        "Conversation note: Etan wants the daemon restart deferred until after the migration lands.",
+    ]
+
+    assert all(not is_meta_research(sample) for sample in samples)
+
+
 # ── Apply enrichment tests ───────────────────────────────────────────────────
 
 
@@ -668,9 +703,29 @@ def test_apply_enrichment_sets_content_hash():
     _apply_enrichment(store, chunk, {"summary": "s"})
 
     expected_hash = _content_hash("test content")
-    cursor.execute.assert_called_once()
-    args = cursor.execute.call_args[0]
+    args = cursor.execute.call_args_list[-1][0]
     assert args[1] == (expected_hash, "c1")
+
+
+def test_apply_enrichment_persists_raw_entities():
+    from brainlayer.enrichment_controller import _apply_enrichment
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, raw_entities_json TEXT, content_hash TEXT)")
+    conn.execute("INSERT INTO chunks (id, raw_entities_json, content_hash) VALUES (?, NULL, NULL)", ("c1",))
+
+    store = MagicMock()
+    store.conn = conn
+    chunk = _candidate("c1", "test content")
+    entities = [
+        {"name": "Ofir", "type": "person", "relation": "described the strategy"},
+        {"name": "BrainLayer", "type": "project", "relation": "stores the chunk"},
+    ]
+
+    _apply_enrichment(store, chunk, {"summary": "s", "entities": entities})
+
+    row = conn.execute("SELECT raw_entities_json FROM chunks WHERE id = ?", ("c1",)).fetchone()
+    assert row == (json.dumps(entities),)
 
 
 # ── Telemetry tests ──────────────────────────────────────────────────────────

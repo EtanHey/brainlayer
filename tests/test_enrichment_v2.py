@@ -215,6 +215,8 @@ def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
 
 
 def test_apply_enrichment_persists_entities_and_relation_context(tmp_path):
+    import json
+
     from brainlayer.enrichment_controller import _apply_enrichment
 
     store = VectorStore(tmp_path / "test.db")
@@ -240,24 +242,19 @@ def test_apply_enrichment_persists_entities_and_relation_context(tmp_path):
             },
         )
 
-        entity_rows = store.conn.cursor().execute("SELECT entity_type, name FROM kg_entities ORDER BY name").fetchall()
-        assert entity_rows == [("project", "BrainLayer"), ("technology", "SQLite")]
-
-        link_rows = store.conn.cursor().execute("SELECT context FROM kg_entity_chunks ORDER BY context").fetchall()
-        assert [row[0] for row in link_rows] == [
-            "storage engine for BrainLayer",
-            "uses SQLite for local-first storage",
-        ]
-
         chunk_row = (
             store.conn.cursor()
             .execute(
-                "SELECT key_facts, resolved_queries FROM chunks WHERE id = ?",
+                "SELECT key_facts, resolved_queries, raw_entities_json FROM chunks WHERE id = ?",
                 ("chunk-v2-entities",),
             )
             .fetchone()
         )
         assert json.loads(chunk_row[0]) == ["SQLite", "local-first"]
         assert len(json.loads(chunk_row[1])) == 3
+        assert json.loads(chunk_row[2]) == [
+            {"name": "BrainLayer", "type": "project", "relation": "uses SQLite for local-first storage"},
+            {"name": "SQLite", "type": "technology", "relation": "storage engine for BrainLayer"},
+        ]
     finally:
         store.close()
