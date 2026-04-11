@@ -62,7 +62,9 @@ def test_sustained_rate_no_contention(tmp_path, monkeypatch):
         monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: sanitizer))
 
         with ThreadPoolExecutor(max_workers=20) as pool:
-            results = list(pool.map(lambda chunk_id: controller.enrich_single(store, chunk_id, max_retries=0), chunk_ids))
+            results = list(
+                pool.map(lambda chunk_id: controller.enrich_single(store, chunk_id, max_retries=0), chunk_ids)
+            )
 
         assert all(result is not None for result in results)
         assert len(call_times) == 100

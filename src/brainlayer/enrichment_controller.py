@@ -192,7 +192,9 @@ def _ensure_enrichment_columns(store) -> None:
         _ENRICHMENT_COLUMN_READY.add(key)
 
 
-def _get_store_rate_limiter(store, rate_per_second: float | None = None, burst: int | None = None) -> TokenBucket | None:
+def _get_store_rate_limiter(
+    store, rate_per_second: float | None = None, burst: int | None = None
+) -> TokenBucket | None:
     if rate_per_second is None:
         rate_per_second = RATE_LIMITS["realtime"]
     if rate_per_second <= 0:
@@ -484,7 +486,9 @@ def _retry_with_backoff(
             time.sleep(sleep_for)
 
 
-def _generate_content_with_rate_limit(client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None):
+def _generate_content_with_rate_limit(
+    client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None
+):
     if limiter is not None:
         limiter.acquire()
     return client.models.generate_content(
@@ -779,7 +783,9 @@ def enrich_realtime(
                     result.skipped += 1
                     continue
                 if status == "meta":
-                    _submit_write(store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk))
+                    _submit_write(
+                        store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                    )
                     result.skipped += 1
                     continue
                 if status == "error":

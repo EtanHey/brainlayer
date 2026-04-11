@@ -127,10 +127,7 @@ class TestSingleWriterQueue:
             raise_error,
             crash_on_error=True,
         )
-        futures = [
-            write_queue.submit(f"write-{index}", lambda idx=index: persisted.append(idx))
-            for index in range(9)
-        ]
+        futures = [write_queue.submit(f"write-{index}", lambda idx=index: persisted.append(idx)) for index in range(9)]
 
         with pytest.raises(RuntimeError, match="boom"):
             crash_future.result(timeout=2)
