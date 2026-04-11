@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import os
 import random
+import re
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -47,6 +48,17 @@ RATE_LIMITS = {
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
+
+_META_RESEARCH_PATTERNS = [
+    re.compile(r"brain_search\s*\(", re.IGNORECASE),
+    re.compile(r"brain_search query=", re.IGNORECASE),
+    re.compile(r"search results? for ['\"]", re.IGNORECASE),
+    re.compile(r"Query \d+ for ['\"].*['\"] (degraded|scored|returned)", re.IGNORECASE),
+    re.compile(r"(eval|baseline|pilot) score:?\s*\d+(?:[./]\d+)*/5", re.IGNORECASE),
+    re.compile(r"Grade:?\s*\d/5", re.IGNORECASE),
+    re.compile(r"\[BrainLayer (auto|deep)\] Memories matching", re.IGNORECASE),
+    re.compile(r"['\"]?additionalContext['\"]?\s*:", re.IGNORECASE),
+]
 
 
 @dataclass
@@ -194,6 +206,12 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
 
+def is_meta_research(content: str) -> bool:
+    if not content:
+        return False
+    return any(pattern.search(content) for pattern in _META_RESEARCH_PATTERNS)
+
+
 def _is_duplicate_content(store, content: str) -> bool:
     """Check if content with the same hash already exists and is enriched.
 
@@ -225,6 +243,50 @@ def _ensure_content_hash_column(store) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ensure_raw_entities_json_column(store) -> bool:
+    """Ensure the raw_entities_json staging column exists on chunks."""
+    try:
+        store.conn.cursor().execute("SELECT raw_entities_json FROM chunks LIMIT 0")
+        return True
+    except Exception:
+        try:
+            store.conn.cursor().execute("ALTER TABLE chunks ADD COLUMN raw_entities_json TEXT")
+            return True
+        except Exception:
+            return False
+
+
+def _normalize_chunk_tags(tags: Any) -> list[str]:
+    if isinstance(tags, str):
+        try:
+            decoded = json.loads(tags)
+        except json.JSONDecodeError:
+            decoded = [tags]
+        else:
+            tags = decoded
+    if isinstance(tags, list):
+        return [str(tag) for tag in tags if str(tag).strip()]
+    return []
+
+
+def _mark_meta_research(store, chunk: dict[str, Any]) -> None:
+    cursor = store.conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    tags = _normalize_chunk_tags(chunk.get("tags"))
+    if "meta-research" not in tags:
+        tags.append("meta-research")
+    cursor.execute(
+        "UPDATE chunks SET tags = ?, summary = NULL, enriched_at = ? WHERE id = ?",
+        (json.dumps(tags), now, chunk["id"]),
+    )
+    content = chunk.get("content", "")
+    if content:
+        try:
+            cursor.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (_content_hash(content), chunk["id"]))
+        except Exception:
+            pass
 
 
 def _backfill_content_hashes(store, limit: int = 1000) -> int:
@@ -292,30 +354,13 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         resolved_queries=resolved_queries,
     )
     entities = enrichment.get("entities", [])
-    if entities:
-        cursor = store.conn.cursor()
-        now = datetime.now(timezone.utc).isoformat()
-        for ent in entities:
-            name = ent.get("name", "").strip()
-            etype = ent.get("type", "").strip()
-            if not name or not etype:
-                continue
-            entity_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{etype}:{name.lower()}"))
-            try:
-                cursor.execute(
-                    """INSERT INTO kg_entities (id, entity_type, name, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at""",
-                    (entity_id, etype, name, now, now),
-                )
-                cursor.execute(
-                    """INSERT INTO kg_entity_chunks (entity_id, chunk_id, context)
-                       VALUES (?, ?, ?)
-                       ON CONFLICT(entity_id, chunk_id) DO NOTHING""",
-                    (entity_id, chunk["id"], ent.get("relation")),
-                )
-            except Exception as exc:
-                logger.debug("Entity persistence failed for %s: %s", name, exc)
+    # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
+    # R84b canonicalization pipeline will consume and populate kg_entities downstream.
+    if _ensure_raw_entities_json_column(store):
+        store.conn.cursor().execute(
+            "UPDATE chunks SET raw_entities_json = ? WHERE id = ?",
+            (json.dumps(entities), chunk["id"]),
+        )
     # Set content_hash after enrichment so dedup works next time
     content = chunk.get("content", "")
     if content:
@@ -340,9 +385,12 @@ def _enrich_single_chunk(
 
     Returns `(chunk, status, data)` where status is one of:
       - `"skip"`: content hash already enriched
+      - `"meta"`: chunk tagged as meta-research without a Gemini call
       - `"error"`: data is an error string
       - `"ok"`: data is the parsed enrichment dict
     """
+    if is_meta_research(chunk.get("content", "")):
+        return (chunk, "meta", None)
     if is_duplicate(chunk.get("content", "")):
         return (chunk, "skip", None)
 
@@ -387,6 +435,11 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
     chunk = store.get_chunk(chunk_id)
     if not chunk:
         logger.warning("enrich_single: chunk not found: %s", chunk_id)
+        return None
+
+    if is_meta_research(chunk.get("content", "")):
+        _mark_meta_research(store, chunk)
+        logger.info("enrich_single: tagged %s as meta-research without Gemini", chunk_id)
         return None
 
     try:
@@ -531,6 +584,7 @@ def enrich_realtime(
 
     # Ensure content_hash column exists for dedup
     _ensure_content_hash_column(store)
+    _ensure_raw_entities_json_column(store)
 
     client = _get_gemini_client()
     sanitizer = Sanitizer.from_env()
@@ -561,6 +615,10 @@ def enrich_realtime(
         for future in as_completed(futures):
             chunk, status, data = future.result()
             if status == "skip":
+                result.skipped += 1
+                continue
+            if status == "meta":
+                _mark_meta_research(store, chunk)
                 result.skipped += 1
                 continue
             if status == "error":
@@ -601,6 +659,7 @@ def enrich_batch(
         return result
 
     _ensure_content_hash_column(store)
+    _ensure_raw_entities_json_column(store)
 
     try:
         client = _get_gemini_client()
@@ -615,6 +674,10 @@ def enrich_batch(
     rate_limit = RATE_LIMITS.get("realtime", 0.2)
 
     for chunk in candidates:
+        if is_meta_research(chunk.get("content", "")):
+            _mark_meta_research(store, chunk)
+            result.skipped += 1
+            continue
         if _is_duplicate_content(store, chunk.get("content", "")):
             result.skipped += 1
             continue
