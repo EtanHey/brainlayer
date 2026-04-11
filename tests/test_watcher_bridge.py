@@ -116,11 +116,23 @@ class TestProjectExtraction:
         assert _normalize_project_name("-Users-etanheyman-Gits-brainlayer") == "brainlayer"
 
     def test_simple_name(self):
-        assert _normalize_project_name("my-project") == "project"
+        assert _normalize_project_name("my-project") == "my-project"
 
     def test_extract_from_source_file(self):
         path = "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer/abc123.jsonl"
         assert _extract_project_from_source(path) == "brainlayer"
+
+    def test_extract_from_nested_subagent_source_file(self):
+        path = (
+            "/Users/etanheyman/.claude/projects/"
+            "-Users-etanheyman-Gits-brainlayer-grill/"
+            "6ff50d4a-1c98-41f4-aa55-541080c1076f/subagents/agent-acompact-123.jsonl"
+        )
+        assert _extract_project_from_source(path) == "brainlayer-grill"
+
+    def test_extract_from_brainlayer_grill_top_level_file(self):
+        path = "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer-grill/abc123.jsonl"
+        assert _extract_project_from_source(path) == "brainlayer-grill"
 
 
 # ── Flush Callback ───────────────────────────────────────────────────────────
@@ -284,6 +296,38 @@ class TestFullPipeline:
         conn.close()
         assert len(rows) >= 1
         assert "UniqueSearchableToken" in rows[0][0]
+
+    def test_watcher_backfills_existing_nested_subagent_file_with_project(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        project_dir = tmp_path / "projects" / "-Users-test-Gits-brainlayer-grill"
+        subagent_dir = project_dir / "session-123" / "subagents"
+        subagent_dir.mkdir(parents=True)
+        jsonl_file = subagent_dir / "agent-acompact-123.jsonl"
+        entry = _make_jsonl_entry(
+            text="Nested subagent transcript should be discovered on startup and stored under brainlayer-grill",
+            entry_type="assistant",
+        )
+        jsonl_file.write_text(json.dumps(entry) + "\n")
+
+        flush = create_flush_callback(db_path)
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=flush,
+            batch_size=1,
+        )
+
+        watcher.poll_once()
+        watcher.indexer.flush()
+
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute("SELECT project, source_file FROM chunks WHERE source = 'realtime_watcher'").fetchall()
+        conn.close()
+        assert rows
+        assert rows[0][0] == "brainlayer-grill"
+        assert rows[0][1].endswith("subagents/agent-acompact-123.jsonl")
 
 
 # ── Rewind Detection ────────────────────────────────────────────────────────

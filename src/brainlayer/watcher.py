@@ -284,7 +284,7 @@ class JSONLWatcher:
         self._last_registry_flush = time.monotonic()
 
     def _discover_jsonl_files(self) -> list[str]:
-        """Find all .jsonl files under watch_dir."""
+        """Find all .jsonl files under each watched project, including nested session artifacts."""
         files = []
         try:
             dirs = list(self.watch_dir.iterdir())
@@ -294,8 +294,8 @@ class JSONLWatcher:
             if not project_dir.is_dir():
                 continue
             try:
-                for f in project_dir.iterdir():
-                    if f.suffix == ".jsonl" and f.is_file():
+                for f in project_dir.rglob("*.jsonl"):
+                    if f.is_file():
                         files.append(str(f))
             except OSError:
                 continue
