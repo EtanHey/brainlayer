@@ -120,6 +120,7 @@ def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
 
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate()]
+    monkeypatch.delenv("BRAINLAYER_GEMINI_SERVICE_TIER", raising=False)
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
