@@ -7,6 +7,7 @@ All tests use tmp_path fixtures (no real DB contention).
 """
 
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import apsw
@@ -73,6 +74,82 @@ class TestQueueStore:
         # Last item should be the newest
         last_item = json.loads(lines[-1])
         assert last_item["content"] == "item-104"
+
+
+class TestSingleWriterQueue:
+    def test_single_worker_serializes_writes(self):
+        from brainlayer.pipeline.write_queue import WriteQueue
+
+        write_queue = WriteQueue(maxsize=32)
+        write_queue.start()
+
+        submission_order = []
+        persisted_order = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(6)
+        futures = [None] * 5
+
+        def submit_value(index: int) -> None:
+            barrier.wait()
+            with lock:
+                submission_order.append(index)
+                futures[index] = write_queue.submit(
+                    f"write-{index}",
+                    lambda idx=index: persisted_order.append(idx),
+                )
+
+        threads = [threading.Thread(target=submit_value, args=(i,)) for i in range(5)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join()
+        for future in futures:
+            future.result(timeout=2)
+
+        write_queue.stop()
+
+        assert persisted_order == submission_order
+
+    def test_queue_durability_on_crash(self):
+        from brainlayer.pipeline.write_queue import WriteQueue
+
+        write_queue = WriteQueue(maxsize=32)
+        write_queue.start()
+
+        persisted = []
+
+        def raise_error() -> None:
+            raise RuntimeError("boom")
+
+        crash_future = write_queue.submit(
+            "crash-write",
+            raise_error,
+            crash_on_error=True,
+        )
+        futures = [write_queue.submit(f"write-{index}", lambda idx=index: persisted.append(idx)) for index in range(9)]
+
+        with pytest.raises(RuntimeError, match="boom"):
+            crash_future.result(timeout=2)
+
+        write_queue.start()
+        for future in futures:
+            future.result(timeout=2)
+
+        write_queue.stop()
+
+        assert persisted == list(range(9))
+
+    def test_submit_raises_when_queue_is_full(self):
+        from brainlayer.pipeline.write_queue import WriteQueue, WriteQueueFullError
+
+        write_queue = WriteQueue(maxsize=1)
+        write_queue.start = lambda: None
+        first_future = write_queue.submit("write-0", lambda: None)
+
+        with pytest.raises(WriteQueueFullError, match="write queue is full"):
+            write_queue.submit("write-1", lambda: None, timeout=0.01)
+        assert not first_future.done()
 
 
 class TestFlushPendingStores:

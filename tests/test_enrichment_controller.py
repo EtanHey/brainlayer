@@ -9,6 +9,9 @@ Target: 35+ tests per A-R2 acceptance criteria.
 
 import json
 import sqlite3
+import sys
+import threading
+import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -456,6 +459,99 @@ def test_gemini_client_requires_api_key(monkeypatch):
         _get_gemini_client()
 
 
+def test_gemini_sdk_retries_disabled(monkeypatch):
+    from brainlayer.enrichment_controller import _get_gemini_client
+
+    client_ctor = MagicMock(return_value=object())
+    fake_google = types.ModuleType("google")
+    fake_google.genai = SimpleNamespace(Client=client_ctor)
+
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_REGION", raising=False)
+
+    _get_gemini_client()
+
+    _, kwargs = client_ctor.call_args
+    assert kwargs["http_options"]["retry_options"] == {"attempts": 1}
+
+
+def test_store_lifecycle_waits_for_cleanup_before_new_operations():
+    from brainlayer import enrichment_controller as controller
+
+    store = SimpleNamespace(db_path="/tmp/pr-a3-lifecycle.db")
+    key = controller._store_queue_key(store)
+    stop_started = threading.Event()
+    release_stop = threading.Event()
+    begin_finished = threading.Event()
+
+    old_queue = MagicMock()
+
+    def blocking_stop(timeout=1.0):  # noqa: ARG001
+        stop_started.set()
+        release_stop.wait(timeout=2)
+
+    old_queue.stop.side_effect = blocking_stop
+
+    with controller._WRITE_QUEUE_LOCK:
+        controller._WRITE_QUEUE_REGISTRY[key] = old_queue
+    with controller._STORE_OPERATION_CONDITION:
+        controller._STORE_OPERATION_COUNTS[key] = 1
+        controller._STORE_CLOSING.discard(key)
+
+    def cleanup():
+        controller._end_store_operation(store)
+
+    def begin_new_operation():
+        controller._begin_store_operation(store)
+        begin_finished.set()
+
+    cleanup_thread = threading.Thread(target=cleanup)
+    cleanup_thread.start()
+    assert stop_started.wait(timeout=1)
+
+    begin_thread = threading.Thread(target=begin_new_operation)
+    begin_thread.start()
+    assert not begin_finished.wait(timeout=0.05)
+
+    release_stop.set()
+    cleanup_thread.join(timeout=1)
+    begin_thread.join(timeout=1)
+
+    assert begin_finished.is_set()
+    with controller._STORE_OPERATION_CONDITION:
+        assert controller._STORE_OPERATION_COUNTS[key] == 1
+        assert key not in controller._STORE_CLOSING
+
+    controller._end_store_operation(store)
+
+
+def test_rate_limiter_survives_store_cleanup():
+    from brainlayer import enrichment_controller as controller
+
+    store = SimpleNamespace(db_path="/tmp/pr-a3-rate-limiter.db")
+    registry_key = controller._store_queue_key(store)
+    limiter_key = (registry_key, 5.0, 10)
+
+    with controller._RATE_LIMITER_LOCK:
+        controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
+
+    try:
+        controller._begin_store_operation(store)
+        limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
+        controller._end_store_operation(store)
+
+        controller._begin_store_operation(store)
+        same_limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
+        controller._end_store_operation(store)
+
+        assert same_limiter is limiter
+    finally:
+        with controller._RATE_LIMITER_LOCK:
+            controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
+
+
 # ── Rate limiting tests ──────────────────────────────────────────────────────
 
 
@@ -467,7 +563,7 @@ def test_rate_limits_defaults():
     assert RATE_LIMITS["batch"] == 0  # No limit for batch (async)
 
 
-def test_realtime_rate_limit_sleeps_between_chunks(monkeypatch):
+def test_realtime_rate_limit_acquires_token_per_chunk(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
     store = MagicMock()
@@ -477,14 +573,17 @@ def test_realtime_rate_limit_sleeps_between_chunks(monkeypatch):
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
     monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client())
 
-    sleeps = []
-    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+    acquires = []
+
+    class FakeLimiter:
+        def acquire(self, n=1):
+            acquires.append(n)
+
+    monkeypatch.setattr(controller, "_get_store_rate_limiter", lambda *args, **kwargs: FakeLimiter())
 
     controller.enrich_realtime(store, limit=3, rate_per_second=2.0)
 
-    # Should sleep between chunks (not after the last one)
-    assert len(sleeps) == 2
-    assert all(s == 0.5 for s in sleeps)  # 1/2.0 = 0.5s
+    assert acquires == [1, 1, 1]
 
 
 def test_realtime_no_sleep_when_rate_zero(monkeypatch):
