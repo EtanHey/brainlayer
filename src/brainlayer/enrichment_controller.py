@@ -299,10 +299,12 @@ GEMINI_RESPONSE_SCHEMA = {
 
 
 def _build_gemini_config() -> dict[str, Any]:
+    service_tier = os.environ.get("BRAINLAYER_GEMINI_SERVICE_TIER", "flex")
     return {
         "response_mime_type": "application/json",
         "response_schema": GEMINI_RESPONSE_SCHEMA,
         "thinking_config": {"thinking_budget": 0},
+        "service_tier": service_tier,
     }
 
 
@@ -330,6 +332,7 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
             config={
                 "response_mime_type": "application/json",
                 "thinking_config": {"thinking_budget": 0},
+                "service_tier": os.environ.get("BRAINLAYER_GEMINI_SERVICE_TIER", "flex"),
                 "http_options": {"timeout": 30_000},
             },
         )

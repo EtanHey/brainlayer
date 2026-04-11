@@ -115,6 +115,34 @@ def test_enrich_realtime_sets_thinking_budget_zero_in_gemini_config(monkeypatch)
     assert captured["config"]["thinking_config"]["thinking_budget"] == 0
 
 
+def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate()]
+    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
+    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
+    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
+    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+
+    captured = {}
+
+    class FakeClient:
+        class _Models:
+            def generate_content(self, **kwargs):
+                captured.update(kwargs)
+                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
+
+        def __init__(self):
+            self.models = self._Models()
+
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
+
+    controller.enrich_realtime(store)
+
+    assert captured["config"]["service_tier"] == "flex"
+
+
 def test_enrich_realtime_calls_parse_enrichment_on_response(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
@@ -448,6 +476,16 @@ def test_build_gemini_config_disables_thinking():
 
     config = _build_gemini_config()
     assert config["thinking_config"]["thinking_budget"] == 0
+
+
+def test_build_gemini_config_allows_service_tier_override(monkeypatch):
+    from brainlayer.enrichment_controller import _build_gemini_config
+
+    monkeypatch.setenv("BRAINLAYER_GEMINI_SERVICE_TIER", "standard")
+
+    config = _build_gemini_config()
+
+    assert config["service_tier"] == "standard"
 
 
 def test_gemini_client_requires_api_key(monkeypatch):
