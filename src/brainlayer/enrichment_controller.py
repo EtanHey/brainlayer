@@ -159,11 +159,6 @@ def _end_store_operation(store) -> None:
         if write_queue is not None:
             write_queue.stop(timeout=1.0)
 
-        with _RATE_LIMITER_LOCK:
-            for limiter_key in list(_RATE_LIMITER_REGISTRY):
-                if limiter_key[0] == key:
-                    _RATE_LIMITER_REGISTRY.pop(limiter_key, None)
-
         with _ENRICHMENT_COLUMN_LOCK:
             _ENRICHMENT_COLUMN_READY.discard(key)
     finally:

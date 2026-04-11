@@ -527,6 +527,31 @@ def test_store_lifecycle_waits_for_cleanup_before_new_operations():
     controller._end_store_operation(store)
 
 
+def test_rate_limiter_survives_store_cleanup():
+    from brainlayer import enrichment_controller as controller
+
+    store = SimpleNamespace(db_path="/tmp/pr-a3-rate-limiter.db")
+    registry_key = controller._store_queue_key(store)
+    limiter_key = (registry_key, 5.0, 10)
+
+    with controller._RATE_LIMITER_LOCK:
+        controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
+
+    try:
+        controller._begin_store_operation(store)
+        limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
+        controller._end_store_operation(store)
+
+        controller._begin_store_operation(store)
+        same_limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
+        controller._end_store_operation(store)
+
+        assert same_limiter is limiter
+    finally:
+        with controller._RATE_LIMITER_LOCK:
+            controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
+
+
 # ── Rate limiting tests ──────────────────────────────────────────────────────
 
 
