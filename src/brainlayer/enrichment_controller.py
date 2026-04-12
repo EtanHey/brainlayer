@@ -527,6 +527,9 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         external_deps=enrichment.get("external_deps"),
         key_facts=enrichment.get("key_facts"),
         resolved_queries=resolved_queries,
+        sentiment_label=enrichment.get("sentiment_label"),
+        sentiment_score=enrichment.get("sentiment_score"),
+        sentiment_signals=enrichment.get("sentiment_signals"),
     )
     entities = enrichment.get("entities", [])
     # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;

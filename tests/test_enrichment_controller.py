@@ -818,6 +818,9 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
         "version_scope": "v1.0",
         "debt_impact": "low",
         "external_deps": ["pytest"],
+        "sentiment_label": "frustration",
+        "sentiment_score": -0.6,
+        "sentiment_signals": ["damn", "broken"],
     }
 
     _apply_enrichment(store, chunk, enrichment)
@@ -840,6 +843,9 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
         version_scope="v1.0",
         debt_impact="low",
         external_deps=["pytest"],
+        sentiment_label="frustration",
+        sentiment_score=-0.6,
+        sentiment_signals=["damn", "broken"],
     )
 
 
