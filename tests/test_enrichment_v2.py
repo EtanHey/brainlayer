@@ -254,6 +254,25 @@ def test_parse_enrichment_rejects_non_finite_sentiment_score():
     assert "sentiment_score" not in result
 
 
+def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should reject sentiment scores that overflow float conversion.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "neutral",
+            "sentiment_score": 10**1000,
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
 def test_parse_enrichment_normalizes_label_lowercase():
     from brainlayer.pipeline.enrichment import parse_enrichment
 

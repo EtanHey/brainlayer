@@ -827,12 +827,13 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             result["sentiment_label"] = sentiment_label.lower().strip()
 
         sentiment_score = match.get("sentiment_score")
-        if (
-            isinstance(sentiment_score, (int, float))
-            and not isinstance(sentiment_score, bool)
-            and math.isfinite(float(sentiment_score))
-        ):
-            result["sentiment_score"] = max(-1.0, min(1.0, float(sentiment_score)))
+        if isinstance(sentiment_score, (int, float)) and not isinstance(sentiment_score, bool):
+            try:
+                normalized_score = float(sentiment_score)
+            except (OverflowError, ValueError):
+                normalized_score = None
+            if normalized_score is not None and math.isfinite(normalized_score):
+                result["sentiment_score"] = max(-1.0, min(1.0, normalized_score))
 
         sentiment_signals = match.get("sentiment_signals", [])
         if isinstance(sentiment_signals, list):
