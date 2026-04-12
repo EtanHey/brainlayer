@@ -490,14 +490,14 @@ def test_build_gemini_config_allows_service_tier_override(monkeypatch):
 
 
 def test_build_gemini_config_validates_against_sdk(monkeypatch):
-    from google.genai import types as genai_types
+    genai = pytest.importorskip("google.genai")
 
     from brainlayer.enrichment_controller import _build_gemini_config
 
     monkeypatch.setenv("BRAINLAYER_GEMINI_SERVICE_TIER", "flex")
 
     config = _build_gemini_config()
-    validated = genai_types.GenerateContentConfig.model_validate(config)
+    validated = genai.types.GenerateContentConfig.model_validate(config)
 
     assert validated.http_options.extra_body["serviceTier"] == "flex"
 
