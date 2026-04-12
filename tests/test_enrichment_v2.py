@@ -216,6 +216,44 @@ def test_parse_enrichment_skips_missing_sentiment_fields():
     assert "sentiment_signals" not in result
 
 
+def test_parse_enrichment_rejects_boolean_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should reject malformed boolean sentiment scores.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "neutral",
+            "sentiment_score": True,
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
+def test_parse_enrichment_rejects_non_finite_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = """
+    {
+      "summary": "The parser should reject malformed non-finite sentiment scores.",
+      "tags": ["python", "parsing"],
+      "sentiment_label": "neutral",
+      "sentiment_score": NaN
+    }
+    """
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
 def test_gemini_schema_supports_v2_fields():
     from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
 

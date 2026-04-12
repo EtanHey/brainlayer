@@ -28,6 +28,7 @@ AIDEV-NOTE: Two prompt paths exist:
 
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -826,7 +827,11 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             result["sentiment_label"] = sentiment_label.lower().strip()
 
         sentiment_score = match.get("sentiment_score")
-        if isinstance(sentiment_score, (int, float)):
+        if (
+            isinstance(sentiment_score, (int, float))
+            and not isinstance(sentiment_score, bool)
+            and math.isfinite(float(sentiment_score))
+        ):
             result["sentiment_score"] = max(-1.0, min(1.0, float(sentiment_score)))
 
         sentiment_signals = match.get("sentiment_signals", [])
