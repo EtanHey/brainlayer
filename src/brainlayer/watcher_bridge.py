@@ -152,17 +152,43 @@ def _normalize_project_name(raw: str) -> str:
     """Convert encoded project path to human-readable name."""
     if raw in _PROJECT_CACHE:
         return _PROJECT_CACHE[raw]
-    parts = raw.split("-")
-    name = parts[-1] if parts else raw
+
+    if raw.startswith("-Users-") or raw.startswith("-home-"):
+        parts = raw.split("-")
+        markers = {"Gits", "Desktop", "projects", "config"}
+        last_marker_idx = -1
+        for i, part in enumerate(parts):
+            if part in markers:
+                last_marker_idx = i
+
+        if last_marker_idx >= 0 and last_marker_idx < len(parts) - 1:
+            repo_parts = [p for p in parts[last_marker_idx + 1 :] if p]
+            name = "-".join(repo_parts) if repo_parts else raw
+        else:
+            name = raw
+    else:
+        name = raw
+
     _PROJECT_CACHE[raw] = name
     return name
 
 
 def _extract_project_from_source(source_file: str) -> str | None:
-    """Extract project name from the source file path."""
+    """Extract the project root from a watcher source path.
+
+    For Claude Code transcripts the canonical project directory is the segment
+    immediately under `.../projects/`, even when the JSONL lives under nested
+    session folders like `subagents/` or `tool-results/`.
+    """
     p = Path(source_file)
+    parts = p.parts
+    if "projects" in parts:
+        project_index = parts.index("projects") + 1
+        if project_index < len(parts):
+            return _normalize_project_name(parts[project_index])
+
     parent_name = p.parent.name
-    if parent_name and parent_name != "projects":
+    if parent_name:
         return _normalize_project_name(parent_name)
     return None
 

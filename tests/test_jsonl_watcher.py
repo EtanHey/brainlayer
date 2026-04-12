@@ -233,6 +233,24 @@ class TestJSONLWatcher:
         assert len(files) == 2
         assert all(f.endswith(".jsonl") for f in files)
 
+    def test_discover_jsonl_files_includes_nested_subagents(self, tmp_path):
+        project = self._make_project_dir(tmp_path, "-Users-test-Gits-brainlayer-grill")
+        session_dir = project / "session-123"
+        subagents_dir = session_dir / "subagents"
+        subagents_dir.mkdir(parents=True)
+        nested_jsonl = subagents_dir / "agent-acompact-1.jsonl"
+        nested_jsonl.write_text('{"id":"1"}\n')
+
+        watcher = JSONLWatcher(
+            watch_dir=tmp_path / "projects",
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda x: None,
+        )
+
+        files = watcher._discover_jsonl_files()
+
+        assert str(nested_jsonl) in files
+
     def test_poll_once_reads_new_lines(self, tmp_path):
         project = self._make_project_dir(tmp_path)
         (project / "s1.jsonl").write_text('{"type":"msg","text":"hello"}\n')
