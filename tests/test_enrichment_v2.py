@@ -158,6 +158,185 @@ def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
     assert "resolved_queries" not in result
 
 
+def test_parse_enrichment_extracts_sentiment_fields():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The CLI is broken and the current output is unusable for the intended workflow.",
+            "tags": ["debugging", "cli"],
+            "sentiment_label": "frustration",
+            "sentiment_score": -0.6,
+            "sentiment_signals": ["damn", "broken"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "frustration"
+    assert result["sentiment_score"] == -0.6
+    assert result["sentiment_signals"] == ["damn", "broken"]
+
+
+def test_parse_enrichment_rejects_invalid_sentiment_label():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The workflow completed successfully and the user is happy with the outcome.",
+            "tags": ["reviewing"],
+            "sentiment_label": "happy",
+            "sentiment_score": 0.8,
+            "sentiment_signals": ["works great"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert "sentiment_label" not in result
+
+
+def test_parse_enrichment_skips_missing_sentiment_fields():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should still return core enrichment fields when sentiment is omitted.",
+            "tags": ["python", "parsing"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert "sentiment_label" not in result
+    assert "sentiment_score" not in result
+    assert "sentiment_signals" not in result
+
+
+def test_parse_enrichment_rejects_boolean_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should reject malformed boolean sentiment scores.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "neutral",
+            "sentiment_score": True,
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
+def test_parse_enrichment_rejects_non_finite_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = """
+    {
+      "summary": "The parser should reject malformed non-finite sentiment scores.",
+      "tags": ["python", "parsing"],
+      "sentiment_label": "neutral",
+      "sentiment_score": NaN
+    }
+    """
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
+def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should reject sentiment scores that overflow float conversion.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "neutral",
+            "sentiment_score": 10**1000,
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "neutral"
+    assert "sentiment_score" not in result
+
+
+def test_parse_enrichment_normalizes_label_lowercase():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should normalize mixed-case sentiment labels.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "FrUsTraTiOn",
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "frustration"
+
+
+def test_parse_enrichment_clamps_score_bounds():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    high = json.dumps(
+        {
+            "summary": "The parser should clamp scores above one.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "positive",
+            "sentiment_score": 2.5,
+        }
+    )
+    low = json.dumps(
+        {
+            "summary": "The parser should clamp scores below minus one.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "frustration",
+            "sentiment_score": -3.0,
+        }
+    )
+
+    high_result = parse_enrichment(high)
+    low_result = parse_enrichment(low)
+
+    assert high_result is not None
+    assert high_result["sentiment_score"] == 1.0
+    assert low_result is not None
+    assert low_result["sentiment_score"] == -1.0
+
+
+def test_parse_enrichment_deduplicates_signals_order_preserved():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should deduplicate repeated sentiment signals.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "confusion",
+            "sentiment_signals": ["oops", "nah", "oops", "nah2", "nah"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_signals"] == ["oops", "nah", "nah2"]
+
+
 def test_gemini_schema_supports_v2_fields():
     from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
 

@@ -28,6 +28,7 @@ AIDEV-NOTE: Two prompt paths exist:
 
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -820,6 +821,36 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
         debt_impact = match.get("debt_impact", "")
         if isinstance(debt_impact, str) and debt_impact.lower().strip() in VALID_DEBT_IMPACT:
             result["debt_impact"] = debt_impact.lower().strip()
+
+        sentiment_label = match.get("sentiment_label", "")
+        if isinstance(sentiment_label, str) and sentiment_label.lower().strip() in VALID_SENTIMENTS:
+            result["sentiment_label"] = sentiment_label.lower().strip()
+
+        sentiment_score = match.get("sentiment_score")
+        if isinstance(sentiment_score, (int, float)) and not isinstance(sentiment_score, bool):
+            try:
+                normalized_score = float(sentiment_score)
+            except (OverflowError, ValueError):
+                normalized_score = None
+            if normalized_score is not None and math.isfinite(normalized_score):
+                result["sentiment_score"] = max(-1.0, min(1.0, normalized_score))
+
+        sentiment_signals = match.get("sentiment_signals", [])
+        if isinstance(sentiment_signals, list):
+            cleaned = []
+            seen = set()
+            for signal in sentiment_signals:
+                if not isinstance(signal, str):
+                    continue
+                normalized = signal.strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                cleaned.append(normalized)
+                if len(cleaned) == 10:
+                    break
+            if cleaned:
+                result["sentiment_signals"] = cleaned
 
         external_deps = match.get("external_deps", [])
         if isinstance(external_deps, list):
