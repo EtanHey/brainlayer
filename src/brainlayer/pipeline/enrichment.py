@@ -836,7 +836,18 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
 
         sentiment_signals = match.get("sentiment_signals", [])
         if isinstance(sentiment_signals, list):
-            cleaned = [str(s).strip() for s in sentiment_signals if isinstance(s, str) and s.strip()][:10]
+            cleaned = []
+            seen = set()
+            for signal in sentiment_signals:
+                if not isinstance(signal, str):
+                    continue
+                normalized = signal.strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                cleaned.append(normalized)
+                if len(cleaned) == 10:
+                    break
             if cleaned:
                 result["sentiment_signals"] = cleaned
 

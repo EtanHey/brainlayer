@@ -254,6 +254,70 @@ def test_parse_enrichment_rejects_non_finite_sentiment_score():
     assert "sentiment_score" not in result
 
 
+def test_parse_enrichment_normalizes_label_lowercase():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should normalize mixed-case sentiment labels.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "FrUsTraTiOn",
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "frustration"
+
+
+def test_parse_enrichment_clamps_score_bounds():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    high = json.dumps(
+        {
+            "summary": "The parser should clamp scores above one.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "positive",
+            "sentiment_score": 2.5,
+        }
+    )
+    low = json.dumps(
+        {
+            "summary": "The parser should clamp scores below minus one.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "frustration",
+            "sentiment_score": -3.0,
+        }
+    )
+
+    high_result = parse_enrichment(high)
+    low_result = parse_enrichment(low)
+
+    assert high_result is not None
+    assert high_result["sentiment_score"] == 1.0
+    assert low_result is not None
+    assert low_result["sentiment_score"] == -1.0
+
+
+def test_parse_enrichment_deduplicates_signals_order_preserved():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should deduplicate repeated sentiment signals.",
+            "tags": ["python", "parsing"],
+            "sentiment_label": "confusion",
+            "sentiment_signals": ["oops", "nah", "oops", "nah2", "nah"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_signals"] == ["oops", "nah", "nah2"]
+
+
 def test_gemini_schema_supports_v2_fields():
     from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
 
