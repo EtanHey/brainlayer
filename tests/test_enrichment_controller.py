@@ -141,7 +141,7 @@ def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
 
     controller.enrich_realtime(store)
 
-    assert captured["config"]["service_tier"] == "flex"
+    assert captured["config"]["http_options"]["extra_body"]["serviceTier"] == "flex"
 
 
 def test_enrich_realtime_calls_parse_enrichment_on_response(monkeypatch):
@@ -486,7 +486,20 @@ def test_build_gemini_config_allows_service_tier_override(monkeypatch):
 
     config = _build_gemini_config()
 
-    assert config["service_tier"] == "standard"
+    assert config["http_options"]["extra_body"]["serviceTier"] == "standard"
+
+
+def test_build_gemini_config_validates_against_sdk(monkeypatch):
+    from google.genai import types as genai_types
+
+    from brainlayer.enrichment_controller import _build_gemini_config
+
+    monkeypatch.setenv("BRAINLAYER_GEMINI_SERVICE_TIER", "flex")
+
+    config = _build_gemini_config()
+    validated = genai_types.GenerateContentConfig.model_validate(config)
+
+    assert validated.http_options.extra_body["serviceTier"] == "flex"
 
 
 def test_gemini_client_requires_api_key(monkeypatch):

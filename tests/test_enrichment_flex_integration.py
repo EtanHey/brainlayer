@@ -34,9 +34,10 @@ def test_sustained_rate_no_contention(tmp_path, monkeypatch):
 
         class FakeClient:
             class _Models:
-                def generate_content(self, **kwargs):  # noqa: ARG002
-                    with call_lock:
-                        call_times.append(time.monotonic())
+                def generate_content(self, **kwargs):
+                    if "keep writes serialized through one queue." in kwargs["contents"]:
+                        with call_lock:
+                            call_times.append(time.monotonic())
                     time.sleep(0.05)
                     return SimpleNamespace(
                         text=json.dumps(
