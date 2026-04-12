@@ -821,6 +821,20 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
         if isinstance(debt_impact, str) and debt_impact.lower().strip() in VALID_DEBT_IMPACT:
             result["debt_impact"] = debt_impact.lower().strip()
 
+        sentiment_label = match.get("sentiment_label", "")
+        if isinstance(sentiment_label, str) and sentiment_label.lower().strip() in VALID_SENTIMENTS:
+            result["sentiment_label"] = sentiment_label.lower().strip()
+
+        sentiment_score = match.get("sentiment_score")
+        if isinstance(sentiment_score, (int, float)):
+            result["sentiment_score"] = max(-1.0, min(1.0, float(sentiment_score)))
+
+        sentiment_signals = match.get("sentiment_signals", [])
+        if isinstance(sentiment_signals, list):
+            cleaned = [str(s).strip() for s in sentiment_signals if isinstance(s, str) and s.strip()][:10]
+            if cleaned:
+                result["sentiment_signals"] = cleaned
+
         external_deps = match.get("external_deps", [])
         if isinstance(external_deps, list):
             cleaned = [str(d).strip().lower() for d in external_deps if isinstance(d, str) and d.strip()][:15]

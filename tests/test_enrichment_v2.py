@@ -158,6 +158,64 @@ def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
     assert "resolved_queries" not in result
 
 
+def test_parse_enrichment_extracts_sentiment_fields():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The CLI is broken and the current output is unusable for the intended workflow.",
+            "tags": ["debugging", "cli"],
+            "sentiment_label": "frustration",
+            "sentiment_score": -0.6,
+            "sentiment_signals": ["damn", "broken"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert result["sentiment_label"] == "frustration"
+    assert result["sentiment_score"] == -0.6
+    assert result["sentiment_signals"] == ["damn", "broken"]
+
+
+def test_parse_enrichment_rejects_invalid_sentiment_label():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The workflow completed successfully and the user is happy with the outcome.",
+            "tags": ["reviewing"],
+            "sentiment_label": "happy",
+            "sentiment_score": 0.8,
+            "sentiment_signals": ["works great"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert "sentiment_label" not in result
+
+
+def test_parse_enrichment_skips_missing_sentiment_fields():
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "The parser should still return core enrichment fields when sentiment is omitted.",
+            "tags": ["python", "parsing"],
+        }
+    )
+
+    result = parse_enrichment(raw)
+
+    assert result is not None
+    assert "sentiment_label" not in result
+    assert "sentiment_score" not in result
+    assert "sentiment_signals" not in result
+
+
 def test_gemini_schema_supports_v2_fields():
     from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
 
