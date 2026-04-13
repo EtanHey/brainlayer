@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import apsw
@@ -32,13 +33,36 @@ def make_conn(db_path: Path):
     return conn
 
 
-def get_orphan_ids(conn, vec_rowids_table: str) -> list[str]:
-    """Get all chunk IDs in the vec table that don't exist in chunks."""
-    rows = conn.execute(f"""
+def batched(values: Iterable[str], batch_size: int) -> Iterator[list[str]]:
+    batch: list[str] = []
+    for value in values:
+        batch.append(value)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def count_orphan_ids(conn, vec_rowids_table: str) -> int:
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM {vec_rowids_table} vr
+        WHERE vr.id NOT IN (SELECT id FROM chunks)
+        """
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def iter_orphan_ids(conn, vec_rowids_table: str) -> Iterator[str]:
+    """Stream chunk IDs in the vec table that don't exist in chunks."""
+    for row in conn.execute(
+        f"""
         SELECT vr.id FROM {vec_rowids_table} vr
         WHERE vr.id NOT IN (SELECT id FROM chunks)
-    """).fetchall()
-    return [row[0] for row in rows]
+        """
+    ):
+        yield row[0]
 
 
 def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
@@ -47,8 +71,7 @@ def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
     print(f"Purging orphans from {label}")
     print(f"{'='*60}", flush=True)
 
-    orphan_ids = get_orphan_ids(conn, vec_rowids_table)
-    total = len(orphan_ids)
+    total = count_orphan_ids(conn, vec_rowids_table)
     print(f"Found {total:,} orphaned vectors", flush=True)
 
     if total == 0:
@@ -60,8 +83,7 @@ def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
     batch_num = 0
     start = time.time()
 
-    for i in range(0, total, BATCH_SIZE):
-        batch = orphan_ids[i : i + BATCH_SIZE]
+    for batch in batched(iter_orphan_ids(conn, vec_rowids_table), BATCH_SIZE):
         batch_num += 1
 
         for cid in batch:
@@ -92,6 +114,7 @@ def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
     print(f"\nDone: {deleted:,} orphans purged from {label} in {elapsed:.1f}s")
     if errors:
         print(f"  ({errors} errors)")
+        raise RuntimeError(f"Failed to purge {errors} orphaned vectors from {label}")
     return deleted
 
 

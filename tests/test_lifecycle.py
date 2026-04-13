@@ -217,6 +217,57 @@ class TestVectorMaintenanceScripts:
 
         assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
 
+    def test_purge_orphaned_vectors_batches_without_materializing(self):
+        from purge_orphaned_vectors import batched
+
+        assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
+
+    def test_purge_orphaned_vectors_streams_orphan_ids(self):
+        from purge_orphaned_vectors import iter_orphan_ids
+
+        class _Result:
+            def __iter__(self):
+                yield ("chunk-1",)
+                yield ("chunk-2",)
+
+            def fetchall(self):  # pragma: no cover - should never be used
+                raise AssertionError("fetchall should not be used")
+
+        class _Conn:
+            def execute(self, sql):
+                return _Result()
+
+        assert list(iter_orphan_ids(_Conn(), "chunk_vectors_rowids")) == ["chunk-1", "chunk-2"]
+
+    def test_purge_orphaned_vectors_raises_when_delete_errors_occur(self, monkeypatch):
+        import purge_orphaned_vectors
+
+        monkeypatch.setattr(purge_orphaned_vectors.time, "time", lambda: 1_000_000.0)
+
+        class _CountResult:
+            def fetchone(self):
+                return (2,)
+
+        class _IterResult:
+            def __iter__(self):
+                yield ("chunk-1",)
+                yield ("chunk-2",)
+
+        class _Conn:
+            def execute(self, sql, params=None):
+                if sql.lstrip().startswith("SELECT COUNT(*)"):
+                    return _CountResult()
+                if sql.lstrip().startswith("SELECT vr.id"):
+                    return _IterResult()
+                if sql.startswith("DELETE FROM") and params == ("chunk-2",):
+                    raise RuntimeError("busy")
+                return None
+
+        with pytest.raises(RuntimeError, match="Failed to purge 1 orphaned vectors from chunk_vectors"):
+            purge_orphaned_vectors.purge_vec_table(
+                _Conn(), "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors"
+            )
+
     def test_rebuild_vec0_tables_read_embedding_or_raise_returns_embedding(self):
         from rebuild_vec0_tables import read_embedding_or_raise
 
