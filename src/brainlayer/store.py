@@ -36,6 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ def store_memory(
         raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
 
     content = content.strip()
+    if looks_like_system_prompt(content):
+        raise ValueError("system prompt content is not stored in BrainLayer")
 
     # Clamp importance
     if importance is not None:

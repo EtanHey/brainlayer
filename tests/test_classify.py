@@ -4,6 +4,7 @@ from brainlayer.pipeline.classify import (
     ContentType,
     ContentValue,
     classify_content,
+    looks_like_system_prompt,
 )
 
 
@@ -34,6 +35,21 @@ class TestClassifyContent:
         """Long first messages are likely system prompts."""
         long_content = "CLAUDE.md instructions " * 500  # >2000 chars
         entry = {"type": "user", "message": {"role": "user", "content": long_content}}
+        result = classify_content(entry)
+        assert result is not None
+        assert result.metadata.get("is_system_prompt") is True
+
+    def test_detects_system_prompt_markers(self):
+        """Known agent prompt scaffolding should be tagged even when shorter."""
+        content = """# Base Context
+
+You are Codex working inside the golems ecosystem.
+
+## IRON RULES
+- Search first
+- Store results
+"""
+        entry = {"type": "user", "message": {"role": "user", "content": content}}
         result = classify_content(entry)
         assert result is not None
         assert result.metadata.get("is_system_prompt") is True
@@ -100,3 +116,15 @@ class TestContentValue:
     def test_low_value_can_be_masked(self):
         """LOW value content can be summarized or masked."""
         assert ContentValue.LOW.value == "low"
+
+
+class TestSystemPromptDetection:
+    """Test reusable system prompt detection heuristics."""
+
+    def test_detects_base_context_markers(self):
+        content = "> This context contains universal rules\n\nYou are a coding agent."
+        assert looks_like_system_prompt(content) is True
+
+    def test_does_not_flag_normal_user_question(self):
+        content = "You are using SQLite here, right? Why does the lock happen?"
+        assert looks_like_system_prompt(content) is False

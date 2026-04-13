@@ -6,6 +6,7 @@ from typing import Callable, List, Optional
 
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
+from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,21 @@ def index_chunks_to_sqlite(
     if not chunks:
         return 0
 
+    filtered_chunks = [
+        chunk
+        for chunk in chunks
+        if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
+    ]
+
+    filtered_count = len(chunks) - len(filtered_chunks)
+    if filtered_count:
+        logger.info("Skipping %s system prompt chunks from %s", filtered_count, source_file)
+
+    if not filtered_chunks:
+        return 0
+
     # Generate embeddings
-    embedded_chunks = embed_chunks(chunks, on_progress=on_progress)
+    embedded_chunks = embed_chunks(filtered_chunks, on_progress=on_progress)
 
     if not embedded_chunks:
         return 0

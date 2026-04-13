@@ -281,6 +281,19 @@ class TestStoreValidation:
         )
         assert result["id"] is not None
 
+    def test_system_prompt_content_rejected(self, store, mock_embed):
+        """Prompt scaffolding should be rejected instead of polluting memory."""
+        from brainlayer.store import store_memory
+
+        with pytest.raises(ValueError, match="system prompt"):
+            store_memory(
+                store=store,
+                embed_fn=mock_embed,
+                content="# Base Context\n\nYou are a coding agent.\n\n## IRON RULES",
+                memory_type="note",
+                project="test",
+            )
+
 
 class TestStoreMCPIntegration:
     """Test that brain_store is properly wired into the MCP server."""
