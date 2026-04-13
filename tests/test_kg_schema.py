@@ -195,6 +195,27 @@ class TestEntityCRUD:
         assert returned_id == "proj-1"
         assert rows[0][0] == "proj-1"
 
+    def test_upsert_case_variant_preserves_existing_optional_fields(self, store):
+        store.upsert_entity(
+            "proj-1",
+            "project",
+            "brainlayer",
+            metadata={"owner": "etan"},
+            description="Primary memory system",
+            confidence=0.9,
+            importance=0.8,
+        )
+
+        returned_id = store.upsert_entity("proj-2", "project", "BrainLayer")
+
+        entity = store.get_entity(returned_id)
+        assert entity is not None
+        assert entity["id"] == "proj-1"
+        assert entity["metadata"] == {"owner": "etan"}
+        assert entity["description"] == "Primary memory system"
+        assert entity["confidence"] == 0.9
+        assert entity["importance"] == 0.8
+
     def test_upsert_multiple_entity_types(self, store):
         store.upsert_entity("person-1", "person", "Etan")
         store.upsert_entity("company-1", "company", "Cantaloupe")

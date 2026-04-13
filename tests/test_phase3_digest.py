@@ -397,19 +397,13 @@ def test_entity_lookup_merges_case_duplicate_entities(tmp_path):
     assert remaining == [(rich_id,)]
 
 
-def test_entity_lookup_adds_flowbar_voicebar_rename_relation(tmp_path):
-    """Lookup should seed the FlowBar -> VoiceBar rename edge when both entities exist."""
-    from brainlayer.pipeline.digest import entity_lookup
-
+def test_upsert_entity_adds_flowbar_voicebar_rename_relation(tmp_path):
+    """Project upserts should seed the FlowBar -> VoiceBar rename edge."""
     store = VectorStore(tmp_path / "test.db")
     dummy_embed = _dummy_embed
 
     flowbar_id = store.upsert_entity("project-flowbar", "project", "FlowBar", embedding=dummy_embed("FlowBar"))
     voicebar_id = store.upsert_entity("project-voicebar", "project", "VoiceBar", embedding=dummy_embed("VoiceBar"))
-
-    result = entity_lookup("VoiceBar", store, dummy_embed, entity_type="project")
-
-    assert result is not None
     row = (
         store._read_cursor()
         .execute(

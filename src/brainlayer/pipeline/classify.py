@@ -238,9 +238,6 @@ def looks_like_system_prompt(content: str) -> bool:
         return False
 
     lowered = stripped.lower()
-    if len(stripped) > 2000:
-        return True
-
     score = sum(1 for marker in SYSTEM_PROMPT_MARKERS if marker in lowered)
 
     if re.search(r"(?im)^(?:>\s*)?you are (?:codex|claude|[\w-]*(?:codex|claude)|a coding agent)\b", stripped):
@@ -249,7 +246,7 @@ def looks_like_system_prompt(content: str) -> bool:
     if re.search(r"(?im)^##\s*first:\s*load context\b", stripped):
         score += 1
 
-    return score >= 2
+    return score >= 2 or (score >= 1 and len(stripped) > 2000)
 
 
 def _should_keep_user_message(content: str) -> bool:

@@ -57,6 +57,9 @@ def _fake_gemini_response(summary="Auto-enriched summary", tags=None):
             "epistemic_level": "substantiated",
             "debt_impact": "none",
             "entities": [],
+            "sentiment_label": "neutral",
+            "sentiment_score": 0.0,
+            "sentiment_signals": [],
         }
     )
 

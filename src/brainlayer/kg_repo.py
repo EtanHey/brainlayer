@@ -127,6 +127,18 @@ class KGMixin:
             fact=relation_fact,
         )
 
+    def _maybe_seed_known_project_relations(self, entity_type: str, name: str) -> None:
+        if entity_type != "project" or name.lower() not in {"flowbar", "voicebar"}:
+            return
+        self.ensure_named_relation(
+            source_type="project",
+            source_name="FlowBar",
+            target_type="project",
+            target_name="VoiceBar",
+            relation_type="RENAMED_FROM",
+            fact="FlowBar was renamed to VoiceBar.",
+        )
+
     def upsert_entity(
         self,
         entity_id: str,
@@ -147,6 +159,7 @@ class KGMixin:
         """Insert or update a KG entity. Returns the entity ID."""
         cursor = self.conn.cursor()
         meta_json = json.dumps(metadata or {})
+        update_meta_json = json.dumps(metadata) if metadata is not None else None
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         canon = canonical_name or name.lower().replace(" ", "_")
         conf = confidence if confidence is not None else 1.0
@@ -157,11 +170,11 @@ class KGMixin:
             cursor.execute(
                 """
                 UPDATE kg_entities
-                SET metadata = ?,
-                    canonical_name = ?,
-                    description = ?,
-                    confidence = ?,
-                    importance = ?,
+                SET metadata = COALESCE(?, metadata),
+                    canonical_name = COALESCE(?, canonical_name),
+                    description = COALESCE(?, description),
+                    confidence = COALESCE(?, confidence),
+                    importance = COALESCE(?, importance),
                     valid_from = COALESCE(?, valid_from),
                     valid_until = COALESCE(?, valid_until),
                     group_id = COALESCE(?, group_id),
@@ -170,11 +183,11 @@ class KGMixin:
                 WHERE id = ?
                 """,
                 (
-                    meta_json,
-                    canon,
+                    update_meta_json,
+                    canonical_name,
                     description,
-                    conf,
-                    imp,
+                    confidence,
+                    importance,
                     valid_from,
                     valid_until,
                     group_id,
@@ -191,6 +204,7 @@ class KGMixin:
                     (existing["id"], embedding_bytes),
                 )
 
+            self._maybe_seed_known_project_relations(entity_type, existing["name"])
             return existing["id"]
 
         cursor.execute(
@@ -244,6 +258,7 @@ class KGMixin:
                 (stored_id, embedding_bytes),
             )
 
+        self._maybe_seed_known_project_relations(entity_type, name)
         return stored_id
 
     def add_relation(
