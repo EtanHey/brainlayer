@@ -11,6 +11,120 @@ from .phonetic import phonetic_key, phonetic_tokens
 class KGMixin:
     """Knowledge graph methods, mixed into VectorStore."""
 
+    @staticmethod
+    def _entity_row_to_dict(row: Any) -> Dict[str, Any]:
+        return {
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "created_at": row[4],
+            "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+            "valid_from": row[10],
+            "valid_until": row[11],
+            "group_id": row[12],
+            "parent_id": row[13] if len(row) > 13 else None,
+        }
+
+    def _fetch_entities_by_lower_name(self, name: str, entity_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        cursor = self._read_cursor()
+        base_query = """
+            SELECT id, entity_type, name, metadata, created_at, updated_at,
+                   canonical_name, description, confidence, importance,
+                   valid_from, valid_until, group_id, parent_id
+            FROM kg_entities
+            WHERE LOWER(name) = LOWER(?)
+        """
+        params: list[Any] = [name]
+        if entity_type is not None:
+            base_query += " AND entity_type = ?"
+            params.append(entity_type)
+        rows = list(cursor.execute(base_query, params))
+        return [self._entity_row_to_dict(row) for row in rows]
+
+    def _entity_support_score(self, entity_id: str) -> tuple[int, int]:
+        cursor = self._read_cursor()
+        relation_count = list(
+            cursor.execute(
+                "SELECT COUNT(*) FROM kg_relations WHERE source_id = ? OR target_id = ?",
+                (entity_id, entity_id),
+            )
+        )[0][0]
+        chunk_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (entity_id,)))[0][0]
+        return relation_count, chunk_count
+
+    def _select_preferred_entity(self, entities: List[Dict[str, Any]]) -> Dict[str, Any]:
+        def score(entity: Dict[str, Any]) -> tuple[int, int, int, str]:
+            relation_count, chunk_count = self._entity_support_score(entity["id"])
+            display_score = 1 if entity["name"] != entity["name"].lower() else 0
+            return (relation_count, chunk_count, display_score, entity.get("created_at") or "")
+
+        return max(entities, key=score)
+
+    def normalize_case_variants(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
+        """Merge case-only duplicates for one entity type and return the kept entity."""
+        matches = self._fetch_entities_by_lower_name(name, entity_type=entity_type)
+        if not matches:
+            return None
+
+        keep = self._select_preferred_entity(matches)
+        canonical_name = name.lower().replace(" ", "_")
+        now = datetime.now(timezone.utc).isoformat()
+
+        if len(matches) > 1:
+            from .pipeline.entity_resolution import merge_entities
+
+            for match in matches:
+                if match["id"] == keep["id"]:
+                    continue
+                merge_entities(self, keep["id"], match["id"])
+
+        self.conn.cursor().execute(
+            "UPDATE kg_entities SET canonical_name = ?, updated_at = ? WHERE id = ?",
+            (canonical_name, now, keep["id"]),
+        )
+        return self.get_entity(keep["id"])
+
+    def ensure_named_relation(
+        self,
+        source_type: str,
+        source_name: str,
+        target_type: str,
+        target_name: str,
+        relation_type: str,
+        *,
+        fact: Optional[str] = None,
+    ) -> Optional[str]:
+        """Ensure a named relation exists, resolving entities case-insensitively."""
+        source = self.get_entity_by_name(source_type, source_name)
+        target = self.get_entity_by_name(target_type, target_name)
+        if not source or not target:
+            return None
+
+        cursor = self._read_cursor()
+        existing = list(
+            cursor.execute(
+                "SELECT id FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?",
+                (source["id"], target["id"], relation_type),
+            )
+        )
+        if existing:
+            return existing[0][0]
+
+        relation_id = f"rel-{relation_type}:{source['id']}:{target['id']}"
+        relation_fact = fact or f"{source['name']} {relation_type.lower().replace('_', ' ')} {target['name']}"
+        return self.add_relation(
+            relation_id=relation_id,
+            source_id=source["id"],
+            target_id=target["id"],
+            relation_type=relation_type,
+            fact=relation_fact,
+        )
+
     def upsert_entity(
         self,
         entity_id: str,
@@ -35,6 +149,47 @@ class KGMixin:
         canon = canonical_name or name.lower().replace(" ", "_")
         conf = confidence if confidence is not None else 1.0
         imp = importance if importance is not None else 0.5
+
+        existing = self.normalize_case_variants(entity_type, name)
+        if existing is not None:
+            cursor.execute(
+                """
+                UPDATE kg_entities
+                SET metadata = ?,
+                    canonical_name = ?,
+                    description = ?,
+                    confidence = ?,
+                    importance = ?,
+                    valid_from = COALESCE(?, valid_from),
+                    valid_until = COALESCE(?, valid_until),
+                    group_id = COALESCE(?, group_id),
+                    parent_id = COALESCE(?, parent_id),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    meta_json,
+                    canon,
+                    description,
+                    conf,
+                    imp,
+                    valid_from,
+                    valid_until,
+                    group_id,
+                    parent_id,
+                    now,
+                    existing["id"],
+                ),
+            )
+
+            if embedding is not None:
+                embedding_bytes = serialize_f32(embedding)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO kg_vec_entities (entity_id, embedding) VALUES (?, ?)",
+                    (existing["id"], embedding_bytes),
+                )
+
+            return existing["id"]
 
         cursor.execute(
             """
@@ -185,55 +340,11 @@ class KGMixin:
         )
         if not rows:
             return None
-        row = rows[0]
-        return {
-            "id": row[0],
-            "entity_type": row[1],
-            "name": row[2],
-            "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4],
-            "updated_at": row[5],
-            "canonical_name": row[6],
-            "description": row[7],
-            "confidence": row[8],
-            "importance": row[9],
-            "valid_from": row[10],
-            "valid_until": row[11],
-            "group_id": row[12],
-            "parent_id": row[13],
-        }
+        return self._entity_row_to_dict(rows[0])
 
     def get_entity_by_name(self, entity_type: str, name: str) -> Optional[Dict[str, Any]]:
         """Get an entity by type and name."""
-        cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id, parent_id
-                   FROM kg_entities WHERE entity_type = ? AND name = ?""",
-                (entity_type, name),
-            )
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "id": row[0],
-            "entity_type": row[1],
-            "name": row[2],
-            "metadata": json.loads(row[3]) if row[3] else {},
-            "created_at": row[4],
-            "updated_at": row[5],
-            "canonical_name": row[6],
-            "description": row[7],
-            "confidence": row[8],
-            "importance": row[9],
-            "valid_from": row[10],
-            "valid_until": row[11],
-            "group_id": row[12],
-            "parent_id": row[13],
-        }
+        return self.normalize_case_variants(entity_type, name)
 
     def get_entity_relations(self, entity_id: str, direction: str = "both") -> List[Dict[str, Any]]:
         """Get all relations for an entity."""
@@ -791,32 +902,17 @@ class KGMixin:
         """Resolve a string to a KG entity."""
         # 1. Exact name (case-insensitive)
         cursor = self._read_cursor()
-        rows = list(
-            cursor.execute(
-                """SELECT id, entity_type, name, metadata, created_at, updated_at,
-                          canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
-                   FROM kg_entities WHERE LOWER(name) = LOWER(?)""",
-                (name_or_alias,),
-            )
-        )
+        rows = self._fetch_entities_by_lower_name(name_or_alias)
         if rows:
-            row = rows[0]
-            return {
-                "id": row[0],
-                "entity_type": row[1],
-                "name": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "created_at": row[4],
-                "updated_at": row[5],
-                "canonical_name": row[6],
-                "description": row[7],
-                "confidence": row[8],
-                "importance": row[9],
-                "valid_from": row[10],
-                "valid_until": row[11],
-                "group_id": row[12],
-            }
+            normalized: List[Dict[str, Any]] = []
+            for match in rows:
+                if any(candidate["entity_type"] == match["entity_type"] for candidate in normalized):
+                    continue
+                normalized_entity = self.normalize_case_variants(match["entity_type"], name_or_alias)
+                if normalized_entity is not None:
+                    normalized.append(normalized_entity)
+            if normalized:
+                return self._select_preferred_entity(normalized)
 
         # 2. Exact alias
         result = self.get_entity_by_alias(name_or_alias)

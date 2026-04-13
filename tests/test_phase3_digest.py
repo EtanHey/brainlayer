@@ -357,6 +357,69 @@ def test_entity_lookup_not_found(tmp_path):
     assert result is None
 
 
+def test_entity_lookup_merges_case_duplicate_entities(tmp_path):
+    """Lookup should collapse case-only dupes and return the entity with linked evidence."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    rich_id = store.upsert_entity("project-rich", "project", "brainlayer", embedding=dummy_embed("brainlayer"))
+    sparse_id = "project-sparse"
+    store.conn.cursor().execute(
+        """
+        INSERT INTO kg_entities (id, entity_type, name, metadata, canonical_name, created_at, updated_at)
+        VALUES (?, 'project', 'BrainLayer', '{}', NULL, '2026-04-13T00:00:00Z', '2026-04-13T00:00:00Z')
+        """,
+        (sparse_id,),
+    )
+    sqlite_id = store.upsert_entity("tech-sqlite", "technology", "SQLite", embedding=dummy_embed("sqlite"))
+    store.add_relation("rel-uses", rich_id, sqlite_id, "uses")
+    _insert_chunks(
+        store,
+        ["c-rich"],
+        ["brainlayer uses SQLite for local-first search"],
+        [{"source_file": "t.jsonl", "project": "test"}],
+        [dummy_embed("brainlayer uses sqlite")],
+    )
+    store.link_entity_chunk(rich_id, "c-rich", relevance=0.9, context="architecture note")
+
+    result = entity_lookup("BrainLayer", store, dummy_embed, entity_type="project")
+
+    assert result is not None
+    assert len(result["evidence"]) == 1
+    assert any(relation["target_name"] == "SQLite" for relation in result["relations"])
+    remaining = list(
+        store._read_cursor().execute(
+            "SELECT id FROM kg_entities WHERE entity_type = 'project' AND LOWER(name) = 'brainlayer'"
+        )
+    )
+    assert remaining == [(rich_id,)]
+
+
+def test_entity_lookup_adds_flowbar_voicebar_rename_relation(tmp_path):
+    """Lookup should seed the FlowBar -> VoiceBar rename edge when both entities exist."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    flowbar_id = store.upsert_entity("project-flowbar", "project", "FlowBar", embedding=dummy_embed("FlowBar"))
+    voicebar_id = store.upsert_entity("project-voicebar", "project", "VoiceBar", embedding=dummy_embed("VoiceBar"))
+
+    result = entity_lookup("VoiceBar", store, dummy_embed, entity_type="project")
+
+    assert result is not None
+    row = store._read_cursor().execute(
+        """
+        SELECT relation_type FROM kg_relations
+        WHERE source_id = ? AND target_id = ? AND relation_type = 'RENAMED_FROM'
+        """,
+        (flowbar_id, voicebar_id),
+    ).fetchone()
+    assert row == ("RENAMED_FROM",)
+
+
 # --- Task 5: Integration test ---
 
 

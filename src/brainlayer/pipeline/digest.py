@@ -803,6 +803,15 @@ def entity_lookup(
     Returns:
         Dict with name, entity_type, relations, evidence, or None if not found.
     """
+    store.ensure_named_relation(
+        source_type="project",
+        source_name="FlowBar",
+        target_type="project",
+        target_name="VoiceBar",
+        relation_type="RENAMED_FROM",
+        fact="FlowBar was renamed to VoiceBar.",
+    )
+
     resolved = store.resolve_entity(query)
     if resolved and (entity_type is None or resolved["entity_type"] == entity_type):
         results = [resolved]
