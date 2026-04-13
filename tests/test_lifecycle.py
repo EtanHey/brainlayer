@@ -254,6 +254,12 @@ class TestVectorMaintenanceScripts:
         with pytest.raises(RuntimeError, match="Failed to read embedding"):
             read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1")
 
+    def test_rebuild_vec0_tables_ensure_restore_succeeded_raises_when_backup_must_be_kept(self):
+        from rebuild_vec0_tables import ensure_restore_succeeded
+
+        with pytest.raises(RuntimeError, match="_tmp_vec_backup"):
+            ensure_restore_succeeded(1, "_tmp_vec_backup", "chunk_vectors")
+
 
 # ── Session cleanup hook tests ──────────────────────────────────────────────
 

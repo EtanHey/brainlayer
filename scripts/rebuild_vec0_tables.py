@@ -67,6 +67,13 @@ def read_embedding_or_raise(conn, vec_table: str, chunk_id: str):
     return row[0]
 
 
+def ensure_restore_succeeded(errors: int, backup_table: str, label: str) -> None:
+    if errors:
+        raise RuntimeError(
+            f"Failed to restore {label} ({errors} errors); backup preserved in {backup_table}"
+        )
+
+
 def rebuild_float32(conn):
     print("\n" + "=" * 60)
     print("Rebuilding chunk_vectors (float32)")
@@ -148,6 +155,8 @@ def rebuild_float32(conn):
 
     elapsed = time.time() - t0
     print(f"Step 4 done: {reinserted:,} re-inserted in {elapsed:.1f}s ({errors} errors)")
+
+    ensure_restore_succeeded(errors, "_tmp_vec_backup", "chunk_vectors")
 
     # Step 5: Drop backup
     conn.execute("DROP TABLE _tmp_vec_backup")
@@ -238,6 +247,8 @@ def rebuild_binary(conn):
 
     elapsed = time.time() - t0
     print(f"Step 4 done: {reinserted:,} re-inserted in {elapsed:.1f}s ({errors} errors)")
+
+    ensure_restore_succeeded(errors, "_tmp_binvec_backup", "chunk_vectors_binary")
 
     # Step 5: Drop backup
     conn.execute("DROP TABLE _tmp_binvec_backup")
