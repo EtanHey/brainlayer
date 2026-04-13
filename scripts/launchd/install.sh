@@ -110,6 +110,7 @@ case "${1:-all}" in
     enrich)
         # Legacy alias: install the unified enrichment plist
         install_plist enrichment
+        remove_plist enrich 2>/dev/null || true
         ;;
     enrichment)
         install_plist enrichment

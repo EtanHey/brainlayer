@@ -13,6 +13,12 @@ Usage:
 import argparse
 import json
 import sys
+from pathlib import Path
+
+# Allow direct execution from a source checkout without requiring installation.
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from brainlayer.wal_checkpoint import checkpoint, format_size, get_wal_size, resolve_db_path, run_wal_checkpoint
 

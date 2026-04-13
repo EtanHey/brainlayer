@@ -713,14 +713,7 @@ def test_realtime_counts_failed_on_exception(monkeypatch):
     assert "boom" in result.errors[0]
 
 
-def test_local_counts_failed_on_exception(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
-        controller.enrich_local(MagicMock(), limit=1)
-
-
-def test_local_counts_failed_on_invalid_parse(monkeypatch):
+def test_local_counts_failed_on_exception():
     from brainlayer import enrichment_controller as controller
 
     with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
@@ -1128,6 +1121,14 @@ def test_launchd_installer_supports_enrichment_load_and_unload():
     assert "unload)" in install_script
     assert "com.brainlayer.enrichment" in install_script
     assert "install_plist decay" in install_script
+
+
+def test_launchd_installer_enrich_alias_removes_legacy_plist():
+    from pathlib import Path
+
+    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
+    assert "enrich)" in install_script
+    assert "remove_plist enrich 2>/dev/null || true" in install_script
 
 
 def test_launchd_installer_reads_google_api_key_from_zshrc():
