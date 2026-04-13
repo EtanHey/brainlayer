@@ -62,6 +62,15 @@ def test_build_gemini_config_includes_response_schema():
     assert config["response_schema"] is GEMINI_RESPONSE_SCHEMA
 
 
+def test_gemini_response_schema_requires_sentiment_fields():
+    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
+
+    required = set(GEMINI_RESPONSE_SCHEMA.get("required", []))
+    assert "sentiment_label" in required
+    assert "sentiment_score" in required
+    assert "sentiment_signals" in required
+
+
 # ── Prompt tests ──────────────────────────────────────────────────────────────
 
 

@@ -56,6 +56,7 @@ def _fake_gemini_response(summary="Auto-enriched summary", tags=None):
             "resolved_query": "What extraction pattern was chosen?",
             "epistemic_level": "substantiated",
             "debt_impact": "none",
+            "entities": [],
         }
     )
 
@@ -189,6 +190,47 @@ class TestEnrichSingle:
         db_tags = json.loads(rows[0][1])
         assert "architecture" in db_tags
         assert "real-time" in db_tags
+
+    def test_enrich_single_persists_positive_sentiment(self, store, stored_chunk, monkeypatch):
+        """Known-positive chunks should persist sentiment_label from Gemini output."""
+        from brainlayer import enrichment_controller as ctrl
+
+        response = json.dumps(
+            {
+                "summary": "The migration finished cleanly and the user confirmed the CLI now works perfectly.",
+                "tags": ["cli", "migration"],
+                "importance": 7,
+                "intent": "reviewing",
+                "primary_symbols": [],
+                "resolved_query": "Did the CLI migration complete successfully?",
+                "epistemic_level": "validated",
+                "debt_impact": "resolution",
+                "entities": [],
+                "sentiment_label": "positive",
+                "sentiment_score": 0.8,
+                "sentiment_signals": ["works perfectly", "finished cleanly"],
+            }
+        )
+
+        client = _FakeGeminiClient(response_text=response)
+        monkeypatch.setattr(ctrl, "_get_gemini_client", lambda: client)
+        monkeypatch.setattr(ctrl, "AUTO_ENRICH_ENABLED", True)
+        _mock_sanitizer = SimpleNamespace(
+            sanitize=lambda text, metadata=None: SimpleNamespace(sanitized=text, replacements=[], pii_detected=False),
+        )
+        monkeypatch.setattr(ctrl, "Sanitizer", SimpleNamespace(from_env=lambda: _mock_sanitizer))
+
+        result = ctrl.enrich_single(store, stored_chunk)
+
+        assert result is not None
+        assert result["sentiment_label"] == "positive"
+        row = store.conn.cursor().execute(
+            "SELECT sentiment_label, sentiment_score, sentiment_signals FROM chunks WHERE id = ?",
+            (stored_chunk,),
+        ).fetchone()
+        assert row[0] == "positive"
+        assert row[1] == 0.8
+        assert json.loads(row[2]) == ["works perfectly", "finished cleanly"]
 
     def test_uses_low_retry_count(self, store, stored_chunk, monkeypatch):
         """enrich_single uses max_retries=2 by default (fast, not 12)."""
