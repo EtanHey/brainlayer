@@ -1,4 +1,4 @@
-"""Tests for brainlayer enrich CLI routing."""
+"""Tests for brainlayer enrichment and maintenance CLI routing."""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -46,24 +46,11 @@ def test_cli_enrich_mode_batch_routes_to_controller(monkeypatch):
     assert called["limit"] == 50
 
 
-def test_cli_enrich_mode_local_routes_to_controller(monkeypatch):
-    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
-    monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
-    called = {}
+def test_cli_enrich_mode_local_is_rejected():
+    result = runner.invoke(app, ["enrich", "--mode", "local"])
 
-    def fake_local(store, limit=100, parallel=2, backend="mlx"):
-        called.update({"limit": limit, "parallel": parallel, "backend": backend})
-        return SimpleNamespace(mode="local", attempted=1, enriched=1, skipped=0, failed=0, errors=[])
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.enrich_local", fake_local)
-
-    result = runner.invoke(
-        app,
-        ["enrich", "--mode", "local", "--limit", "8", "--parallel", "3", "--backend", "mlx"],
-    )
-
-    assert result.exit_code == 0
-    assert called == {"limit": 8, "parallel": 3, "backend": "mlx"}
+    assert result.exit_code != 0
+    assert "Invalid mode: local" in result.stdout
 
 
 def test_cli_enrich_stats_prints_progress(monkeypatch):
@@ -90,3 +77,53 @@ def test_cli_enrich_invalid_mode_rejected():
     result = runner.invoke(app, ["enrich", "--mode", "wrong"])
 
     assert result.exit_code != 0
+
+
+def test_cli_decay_routes_to_decay_job(monkeypatch):
+    called = {}
+
+    def fake_decay_job(db_path, dry_run=False, batch_size=10_000):
+        called.update({"db_path": str(db_path), "dry_run": dry_run, "batch_size": batch_size})
+        return {
+            "rows_processed": 10,
+            "archived_rows": 3,
+            "pinned_rows": 1,
+            "average_decay": 0.25,
+            "duration_seconds": 2.5,
+            "dry_run": dry_run,
+        }
+
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    monkeypatch.setattr("brainlayer.decay_job.run_decay_job", fake_decay_job)
+
+    result = runner.invoke(app, ["decay", "--dry-run", "--batch-size", "50"])
+
+    assert result.exit_code == 0
+    assert called == {"db_path": "/tmp/test.db", "dry_run": True, "batch_size": 50}
+    assert "Decay job complete" in result.stdout
+
+
+def test_cli_wal_checkpoint_routes_to_helper(monkeypatch):
+    called = {}
+
+    def fake_run(mode):
+        called["mode"] = mode
+        return {
+            "db": "/tmp/test.db",
+            "mode": mode,
+            "wal_before": "1.0MB",
+            "wal_after": "0.0B",
+            "wal_before_bytes": 1024 * 1024,
+            "wal_after_bytes": 0,
+            "busy": 0,
+            "log_pages": 10,
+            "checkpointed_pages": 10,
+        }
+
+    monkeypatch.setattr("brainlayer.wal_checkpoint.run_wal_checkpoint", fake_run)
+
+    result = runner.invoke(app, ["wal-checkpoint", "--mode", "truncate"])
+
+    assert result.exit_code == 0
+    assert called == {"mode": "TRUNCATE"}
+    assert "Checkpoint (TRUNCATE): 10/10 pages" in result.stdout

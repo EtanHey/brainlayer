@@ -1,8 +1,8 @@
-"""Tests for the unified enrichment controller.
+"""Tests for the unified Gemini enrichment controller.
 
-Covers: 3 backends (realtime/batch/local), content-hash dedup, retry logic,
-rate limiting, telemetry, MCP handler, stats, error handling, idempotency,
-LaunchAgent plist, and CLI integration.
+Covers realtime/batch routing, content-hash dedup, retry logic, rate limiting,
+telemetry, MCP handler, stats, error handling, idempotency, LaunchAgent plists,
+and CLI integration.
 
 Target: 35+ tests per A-R2 acceptance criteria.
 """
@@ -264,24 +264,11 @@ def test_retry_with_backoff_respects_max_delay_cap(monkeypatch):
     assert max(sleeps) <= 15
 
 
-def test_enrich_local_does_not_call_build_external_prompt(monkeypatch):
+def test_enrich_local_is_disabled():
     from brainlayer import enrichment_controller as controller
 
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    external_prompt = MagicMock(side_effect=AssertionError("should not be called"))
-    monkeypatch.setattr(controller, "build_external_prompt", external_prompt)
-    monkeypatch.setattr(controller, "build_prompt", MagicMock(return_value="local-prompt"))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kwargs: '{"summary":"sum","tags":["python"]}')
-    monkeypatch.setattr(
-        controller, "_call_local_backend", lambda *args, **kwargs: '{"summary":"sum","tags":["python"]}'
-    )
-
-    result = controller.enrich_local(store, limit=1)
-
-    assert result.mode == "local"
-    external_prompt.assert_not_called()
+    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
+        controller.enrich_local(MagicMock(), limit=1)
 
 
 def test_enrich_batch_returns_early_for_no_candidates(monkeypatch):
@@ -428,19 +415,13 @@ def test_realtime_skips_duplicate_content(monkeypatch):
     assert result.enriched == 1
 
 
-def test_local_skips_duplicate_content(monkeypatch):
+def test_local_enrichment_stays_disabled_even_with_duplicates(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
-    monkeypatch.setattr(controller, "build_prompt", MagicMock(return_value="prompt"))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "s", "tags": ["t"]}))
-    monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kw: '{"summary":"s"}')
-    monkeypatch.setattr(controller, "_call_local_backend", lambda *a, **kw: '{"summary":"s"}')
     monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
 
-    result = controller.enrich_local(store, limit=2)
-    assert result.skipped == 1
+    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
+        controller.enrich_local(MagicMock(), limit=2)
 
 
 # ── EnrichmentResult dataclass tests ─────────────────────────────────────────
@@ -611,7 +592,6 @@ def test_rate_limits_defaults():
     from brainlayer.enrichment_controller import RATE_LIMITS
 
     assert RATE_LIMITS["realtime"] > 0
-    assert RATE_LIMITS["local"] == 0  # No limit for local
     assert RATE_LIMITS["batch"] == 0  # No limit for batch (async)
 
 
@@ -636,6 +616,33 @@ def test_realtime_rate_limit_acquires_token_per_chunk(monkeypatch):
     controller.enrich_realtime(store, limit=3, rate_per_second=2.0)
 
     assert acquires == [1, 1, 1]
+
+
+def test_batch_rate_limit_uses_batch_setting(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1")]
+    _patch_realtime_deps(monkeypatch, controller, store)
+
+    observed = {}
+
+    class FakeLimiter:
+        def acquire(self, n=1):
+            observed.setdefault("acquires", []).append(n)
+
+    monkeypatch.setitem(controller.RATE_LIMITS, "batch", 1.25)
+
+    def fake_get_store_rate_limiter(*args, **kwargs):
+        observed["rate"] = kwargs["rate_per_second"]
+        return FakeLimiter()
+
+    monkeypatch.setattr(controller, "_get_store_rate_limiter", fake_get_store_rate_limiter)
+
+    controller.enrich_batch(store, limit=1)
+
+    assert observed["rate"] == 1.25
+    assert observed["acquires"] == [1]
 
 
 def test_realtime_no_sleep_when_rate_zero(monkeypatch):
@@ -733,31 +740,19 @@ def test_realtime_counts_failed_on_exception(monkeypatch):
     assert "boom" in result.errors[0]
 
 
-def test_local_counts_failed_on_exception(monkeypatch):
+def test_local_counts_failed_on_exception():
     from brainlayer import enrichment_controller as controller
 
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_prompt", MagicMock(side_effect=RuntimeError("local fail")))
-
-    result = controller.enrich_local(store, limit=1)
-    assert result.failed == 1
-    assert "local fail" in result.errors[0]
+    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
+        controller.enrich_local(MagicMock(), limit=1)
 
 
-def test_local_counts_failed_on_invalid_parse(monkeypatch):
+def test_local_preserves_legacy_signature():
+    import inspect
+
     from brainlayer import enrichment_controller as controller
 
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_prompt", MagicMock(return_value="prompt"))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value=None))
-    monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kw: "garbage")
-    monkeypatch.setattr(controller, "_call_local_backend", lambda *a, **kw: "garbage")
-
-    result = controller.enrich_local(store, limit=1)
-    assert result.failed == 1
-    assert result.enriched == 0
+    assert list(inspect.signature(controller.enrich_local).parameters) == ["store", "limit", "parallel", "backend"]
 
 
 # ── Meta-research filter tests ───────────────────────────────────────────────
@@ -1126,20 +1121,21 @@ def test_enrichment_plist_has_start_interval():
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     content = plist_path.read_text()
     assert "StartInterval" in content
-    assert "3600" in content
+    assert "600" in content
 
 
-def test_enrichment_plist_invokes_python_enrich_realtime_entrypoint():
+def test_enrichment_plist_invokes_cli_enrich_entrypoint():
     from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     content = plist_path.read_text()
-    assert "__PYTHON3__" in content
-    assert "brainlayer.enrichment_controller" in content
-    assert "enrich_realtime" in content
+    assert "__BRAINLAYER_BIN__" in content
+    assert "<string>enrich</string>" in content
+    assert "<string>realtime</string>" in content
+    assert "<string>50</string>" in content
 
 
-def test_enrichment_plist_uses_low_priority_and_library_logs():
+def test_enrichment_plist_uses_low_priority_library_logs_and_flex_tier():
     from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
@@ -1147,6 +1143,8 @@ def test_enrichment_plist_uses_low_priority_and_library_logs():
     assert "<key>Nice</key>" in content
     assert "<integer>10</integer>" in content
     assert "__HOME__/Library/Logs/brainlayer-enrichment.log" in content
+    assert "BRAINLAYER_GEMINI_SERVICE_TIER" in content
+    assert "<string>flex</string>" in content
 
 
 def test_launchd_installer_supports_enrichment_load_and_unload():
@@ -1157,6 +1155,15 @@ def test_launchd_installer_supports_enrichment_load_and_unload():
     assert "load)" in install_script
     assert "unload)" in install_script
     assert "com.brainlayer.enrichment" in install_script
+    assert "install_plist decay" in install_script
+
+
+def test_launchd_installer_enrich_alias_removes_legacy_plist():
+    from pathlib import Path
+
+    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
+    assert "enrich)" in install_script
+    assert "remove_plist enrich 2>/dev/null || true" in install_script
 
 
 def test_launchd_installer_reads_google_api_key_from_zshrc():
@@ -1194,13 +1201,20 @@ def test_realtime_returns_zero_counts_for_no_candidates(monkeypatch):
     assert result.failed == 0
 
 
-def test_local_returns_zero_counts_for_no_candidates():
-    from brainlayer import enrichment_controller as controller
+def test_decay_plist_invokes_cli_decay_entrypoint():
+    from pathlib import Path
 
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
+    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.decay.plist"
+    content = plist_path.read_text()
+    assert "__BRAINLAYER_BIN__" in content
+    assert "<string>decay</string>" in content
+    assert "<string>--json</string>" in content
 
-    result = controller.enrich_local(store)
 
-    assert result.attempted == 0
-    assert result.enriched == 0
+def test_wal_checkpoint_plist_invokes_cli_checkpoint_entrypoint():
+    from pathlib import Path
+
+    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.wal-checkpoint.plist"
+    content = plist_path.read_text()
+    assert "__BRAINLAYER_BIN__" in content
+    assert "<string>wal-checkpoint</string>" in content

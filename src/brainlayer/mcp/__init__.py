@@ -1017,12 +1017,11 @@ Modes:
   Use for recently stored chunks or on-demand enrichment.
 - **batch**: Gemini Batch API at 50% cost discount. For large backlog processing.
   Phases: submit, poll, import, run (all-in-one).
-- **local**: MLX or Ollama backend. For offline/privacy mode enrichment.
 
 Features:
 - Content-hash dedup: skips chunks whose content has already been enriched elsewhere
 - Idempotent: re-running on already-enriched chunks is a no-op
-- Per-backend rate limiting (configurable via env vars)
+- Per-mode rate limiting (configurable via env vars)
 - Axiom telemetry for all operations
 
 Pass stats=true to get enrichment progress without running anything.""",
@@ -1032,9 +1031,9 @@ Pass stats=true to get enrichment progress without running anything.""",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["realtime", "batch", "local"],
+                        "enum": ["realtime", "batch"],
                         "default": "realtime",
-                        "description": "Enrichment mode: realtime (Gemini Flash), batch (Gemini Batch API), local (MLX/Ollama).",
+                        "description": "Enrichment mode: realtime (Gemini Flash) or batch (Gemini Batch API).",
                     },
                     "limit": {
                         "type": "integer",
@@ -1048,19 +1047,6 @@ Pass stats=true to get enrichment progress without running anything.""",
                         "default": 24,
                         "minimum": 1,
                         "description": "Only enrich chunks from the last N hours (realtime mode only).",
-                    },
-                    "backend": {
-                        "type": "string",
-                        "enum": ["mlx", "ollama"],
-                        "default": "mlx",
-                        "description": "Local backend to use (local mode only).",
-                    },
-                    "parallel": {
-                        "type": "integer",
-                        "default": 2,
-                        "minimum": 1,
-                        "maximum": 8,
-                        "description": "Number of parallel workers (local mode only).",
                     },
                     "phase": {
                         "type": "string",
@@ -1355,8 +1341,6 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             mode=arguments.get("mode", "realtime"),
             limit=arguments.get("limit", 25),
             since_hours=arguments.get("since_hours", 24),
-            backend=arguments.get("backend", "mlx"),
-            parallel=arguments.get("parallel", 2),
             phase=arguments.get("phase", "run"),
             chunk_ids=arguments.get("chunk_ids"),
             stats=arguments.get("stats", False),

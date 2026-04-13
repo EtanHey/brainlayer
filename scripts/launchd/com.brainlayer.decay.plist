@@ -3,17 +3,16 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.brainlayer.wal-checkpoint</string>
+    <string>com.brainlayer.decay</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>__BRAINLAYER_BIN__</string>
-        <string>wal-checkpoint</string>
-        <string>--mode</string>
-        <string>TRUNCATE</string>
+        <string>decay</string>
+        <string>--json</string>
     </array>
 
-    <!-- Run weekly on Sunday at 4am -->
+    <!-- Run weekly on Sunday at 4:15am, shortly after WAL checkpoint maintenance -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Weekday</key>
@@ -21,13 +20,13 @@
         <key>Hour</key>
         <integer>4</integer>
         <key>Minute</key>
-        <integer>0</integer>
+        <integer>15</integer>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/wal-checkpoint.log</string>
+    <string>__HOME__/.local/share/brainlayer/logs/decay.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/wal-checkpoint.err</string>
+    <string>__HOME__/.local/share/brainlayer/logs/decay.err</string>
 
     <key>Nice</key>
     <integer>15</integer>

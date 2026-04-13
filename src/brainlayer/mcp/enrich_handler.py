@@ -15,8 +15,6 @@ async def _brain_enrich(
     mode: str = "realtime",
     limit: int = 25,
     since_hours: int = 24,
-    backend: str = "mlx",
-    parallel: int = 2,
     phase: str = "run",
     chunk_ids: list[str] | None = None,
     stats: bool = False,
@@ -26,10 +24,9 @@ async def _brain_enrich(
     Modes:
         realtime — Gemini 2.5 Flash-Lite, single-chunk, <600ms target
         batch   — Gemini Batch API, backlog processing
-        local   — MLX/Ollama backend, offline/privacy mode
     """
-    if mode not in ("realtime", "batch", "local"):
-        return _error_result(f"Unknown mode: {mode}. Use realtime, batch, or local.")
+    if mode not in ("realtime", "batch"):
+        return _error_result(f"Unknown mode: {mode}. Use realtime or batch.")
 
     try:
         store = _get_vector_store()
@@ -60,18 +57,6 @@ async def _brain_enrich(
                     store=store,
                     phase=phase,
                     limit=limit,
-                ),
-            )
-        else:  # local
-            from ..enrichment_controller import enrich_local
-
-            result = await loop.run_in_executor(
-                None,
-                lambda: enrich_local(
-                    store=store,
-                    limit=limit,
-                    parallel=parallel,
-                    backend=backend,
                 ),
             )
 

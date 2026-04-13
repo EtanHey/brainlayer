@@ -880,19 +880,17 @@ def consolidate(
 
 @app.command("enrich")
 def enrich(
-    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime, batch, local"),
+    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
     limit: int = typer.Option(25, "--limit", "-n", help="Max chunks to process"),
     since_hours: int = typer.Option(
         24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
     ),
     phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run"),
-    parallel: int = typer.Option(2, "--parallel", help="Local mode: concurrent workers"),
-    backend: str = typer.Option("mlx", "--backend", help="Local mode backend (default: mlx)"),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
 ) -> None:
-    """Enrich chunks via controller-backed realtime, batch, or local modes."""
+    """Enrich chunks via Gemini-backed realtime or batch modes."""
     try:
-        from ..enrichment_controller import enrich_batch, enrich_local, enrich_realtime
+        from ..enrichment_controller import enrich_batch, enrich_realtime
         from ..paths import DEFAULT_DB_PATH
         from ..vector_store import VectorStore
 
@@ -908,7 +906,7 @@ def enrich(
             finally:
                 store.close()
         else:
-            if mode not in ("realtime", "batch", "local"):
+            if mode not in ("realtime", "batch"):
                 raise typer.BadParameter(f"Invalid mode: {mode}")
             store = VectorStore(get_db_path())
             try:
@@ -916,8 +914,6 @@ def enrich(
                     result = enrich_realtime(store, limit=limit, since_hours=since_hours)
                 elif mode == "batch":
                     result = enrich_batch(store, phase=phase, limit=limit)
-                elif mode == "local":
-                    result = enrich_local(store, limit=limit, parallel=parallel, backend=backend)
 
                 console.print(
                     f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
@@ -927,6 +923,81 @@ def enrich(
                 store.close()
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("decay")
+def decay(
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    quiet: bool = typer.Option(False, "--quiet", help="Silent unless error"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Compute changes without writing"),
+    batch_size: int = typer.Option(10_000, "--batch-size", help="Rows per decay batch"),
+) -> None:
+    """Run the decay maintenance job through the BrainLayer CLI."""
+    from ..decay_job import run_decay_job
+
+    db_path = get_db_path()
+
+    try:
+        stats = run_decay_job(db_path, dry_run=dry_run, batch_size=batch_size)
+    except Exception as e:
+        if json_output:
+            console.print_json(data={"error": str(e), "db": str(db_path)})
+        elif not quiet:
+            rprint(f"[bold red]Decay job failed:[/] {e}")
+        raise typer.Exit(1)
+
+    output = {"db": str(db_path), **stats}
+    if json_output:
+        console.print_json(data=output)
+    elif not quiet:
+        console.print(
+            "Decay job complete: "
+            f"rows={stats['rows_processed']} archived={stats['archived_rows']} "
+            f"pinned={stats['pinned_rows']} avg_decay={stats['average_decay']:.4f} "
+            f"duration_s={stats['duration_seconds']:.2f} dry_run={stats['dry_run']}"
+        )
+
+
+@app.command("wal-checkpoint")
+def wal_checkpoint(
+    mode: str = typer.Option("TRUNCATE", "--mode", help="Checkpoint mode"),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    quiet: bool = typer.Option(False, "--quiet", help="Silent unless error"),
+) -> None:
+    """Run a SQLite WAL checkpoint through the BrainLayer CLI."""
+    from ..wal_checkpoint import run_wal_checkpoint
+
+    normalized_mode = mode.upper()
+    if normalized_mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+        raise typer.BadParameter(f"Invalid checkpoint mode: {mode}")
+
+    try:
+        result = run_wal_checkpoint(normalized_mode)
+    except FileNotFoundError as e:
+        if json_output:
+            console.print_json(data={"error": str(e)})
+        elif not quiet:
+            rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        if json_output:
+            console.print_json(data={"error": str(e)})
+        elif not quiet:
+            rprint(f"[bold red]Checkpoint failed:[/] {e}")
+        raise typer.Exit(1)
+
+    if json_output:
+        console.print_json(data=result)
+    elif not quiet:
+        console.print(f"DB: {result['db']}")
+        console.print(f"WAL: {result['wal_before']} -> {result['wal_after']}")
+        suffix = " (busy)" if result["busy"] else ""
+        console.print(
+            f"Checkpoint ({result['mode']}): {result['checkpointed_pages']}/{result['log_pages']} pages{suffix}"
+        )
+
+    if result["busy"]:
         raise typer.Exit(1)
 
 
