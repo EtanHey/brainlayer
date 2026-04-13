@@ -270,6 +270,94 @@ class TestIndexPopulatesContext:
         assert row[0] == "abc-def-123"
         store.close()
 
+    def test_skips_system_prompt_chunks_marked_in_metadata(self, tmp_path):
+        """Chunks already tagged as system prompts should never be stored."""
+        from unittest.mock import patch
+
+        db_path = tmp_path / "test.db"
+        from brainlayer.pipeline.classify import ContentValue
+
+        chunks = [
+            Chunk(
+                content="# Base Context\nYou are Codex.\n## IRON RULES\n- Search first",
+                content_type=ContentType.USER_MESSAGE,
+                value=ContentValue.MEDIUM,
+                metadata={"session_id": "sess-001", "is_system_prompt": True},
+                char_count=63,
+            ),
+            Chunk(
+                content="Actual user question about database locking in enrichment",
+                content_type=ContentType.USER_MESSAGE,
+                value=ContentValue.HIGH,
+                metadata={"session_id": "sess-001"},
+                char_count=56,
+            ),
+        ]
+
+        with patch("brainlayer.index_new.embed_chunks") as mock_embed:
+            from brainlayer.embeddings import EmbeddedChunk
+            from brainlayer.index_new import index_chunks_to_sqlite
+
+            mock_embed.return_value = [EmbeddedChunk(chunk=chunks[1], embedding=[0.1] * 1024)]
+
+            count = index_chunks_to_sqlite(
+                chunks,
+                source_file="test.jsonl",
+                project="test-project",
+                db_path=db_path,
+            )
+
+        assert count == 1
+
+        store = VectorStore(db_path)
+        rows = list(store.conn.execute("SELECT content FROM chunks"))
+        assert rows == [("Actual user question about database locking in enrichment",)]
+        store.close()
+
+    def test_skips_system_prompt_chunks_by_content_pattern(self, tmp_path):
+        """Known prompt scaffolding should be filtered even if metadata was missing."""
+        from unittest.mock import patch
+
+        db_path = tmp_path / "test.db"
+        from brainlayer.pipeline.classify import ContentValue
+
+        chunks = [
+            Chunk(
+                content="> This context contains universal rules\n\nYou are a coding agent.\nFollow AGENTS.md.",
+                content_type=ContentType.USER_MESSAGE,
+                value=ContentValue.MEDIUM,
+                metadata={"session_id": "sess-001"},
+                char_count=86,
+            ),
+            Chunk(
+                content="Need a fix for the sentiment pipeline dropping sentiment_label",
+                content_type=ContentType.USER_MESSAGE,
+                value=ContentValue.HIGH,
+                metadata={"session_id": "sess-001"},
+                char_count=63,
+            ),
+        ]
+
+        with patch("brainlayer.index_new.embed_chunks") as mock_embed:
+            from brainlayer.embeddings import EmbeddedChunk
+            from brainlayer.index_new import index_chunks_to_sqlite
+
+            mock_embed.return_value = [EmbeddedChunk(chunk=chunks[1], embedding=[0.1] * 1024)]
+
+            count = index_chunks_to_sqlite(
+                chunks,
+                source_file="test.jsonl",
+                project="test-project",
+                db_path=db_path,
+            )
+
+        assert count == 1
+
+        store = VectorStore(db_path)
+        rows = list(store.conn.execute("SELECT content FROM chunks"))
+        assert rows == [("Need a fix for the sentiment pipeline dropping sentiment_label",)]
+        store.close()
+
 
 # ── get_context should work with populated fields ──
 

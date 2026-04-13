@@ -287,7 +287,16 @@ GEMINI_RESPONSE_SCHEMA = {
         "sentiment_score": {"type": "number"},
         "sentiment_signals": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["summary", "tags", "importance", "intent", "entities"],
+    "required": [
+        "summary",
+        "tags",
+        "importance",
+        "intent",
+        "entities",
+        "sentiment_label",
+        "sentiment_score",
+        "sentiment_signals",
+    ],
 }
 
 

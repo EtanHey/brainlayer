@@ -172,9 +172,49 @@ class TestEntityCRUD:
         assert result is not None
         assert result["id"] == "proj-1"
 
+    def test_get_entity_by_name_is_case_insensitive(self, store):
+        store.upsert_entity("proj-1", "project", "brainlayer")
+        result = store.get_entity_by_name("project", "BrainLayer")
+        assert result is not None
+        assert result["id"] == "proj-1"
+
     def test_get_entity_by_name_not_found(self, store):
         result = store.get_entity_by_name("project", "nonexistent")
         assert result is None
+
+    def test_upsert_entity_merges_case_variants(self, store):
+        store.upsert_entity("proj-1", "project", "brainlayer")
+        returned_id = store.upsert_entity("proj-2", "project", "BrainLayer", metadata={"source": "manual"})
+
+        rows = list(
+            store._read_cursor().execute(
+                "SELECT id, name FROM kg_entities WHERE entity_type = 'project' AND LOWER(name) = 'brainlayer'"
+            )
+        )
+        assert len(rows) == 1
+        assert returned_id == "proj-1"
+        assert rows[0][0] == "proj-1"
+
+    def test_upsert_case_variant_preserves_existing_optional_fields(self, store):
+        store.upsert_entity(
+            "proj-1",
+            "project",
+            "brainlayer",
+            metadata={"owner": "etan"},
+            description="Primary memory system",
+            confidence=0.9,
+            importance=0.8,
+        )
+
+        returned_id = store.upsert_entity("proj-2", "project", "BrainLayer")
+
+        entity = store.get_entity(returned_id)
+        assert entity is not None
+        assert entity["id"] == "proj-1"
+        assert entity["metadata"] == {"owner": "etan"}
+        assert entity["description"] == "Primary memory system"
+        assert entity["confidence"] == 0.9
+        assert entity["importance"] == 0.8
 
     def test_upsert_multiple_entity_types(self, store):
         store.upsert_entity("person-1", "person", "Etan")

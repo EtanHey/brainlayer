@@ -88,6 +88,16 @@ HIGH_VALUE_PATTERNS = [
     r"(?:todo|fixme|hack|workaround)",  # Code notes
 ]
 
+# Markers that strongly indicate agent/base-context system prompts rather than user content.
+SYSTEM_PROMPT_MARKERS = {
+    "# base context",
+    "## iron rules",
+    "> this context contains universal rules",
+    "claude.md instructions",
+    "agents.md instructions for",
+    "global agent instructions",
+}
+
 
 class ContentType(Enum):
     """Types of content in Claude Code conversations."""
@@ -221,6 +231,24 @@ def _has_high_value_signal(content: str) -> bool:
     return False
 
 
+def looks_like_system_prompt(content: str) -> bool:
+    """Detect agent/base-context prompt scaffolding that should not be indexed."""
+    stripped = content.strip()
+    if not stripped:
+        return False
+
+    lowered = stripped.lower()
+    score = sum(1 for marker in SYSTEM_PROMPT_MARKERS if marker in lowered)
+
+    if re.search(r"(?im)^(?:>\s*)?you are (?:codex|claude|[\w-]*(?:codex|claude)|a coding agent)\b", stripped):
+        score += 2
+
+    if re.search(r"(?im)^##\s*first:\s*load context\b", stripped):
+        score += 1
+
+    return score >= 2 or (score >= 1 and len(stripped) > 2000)
+
+
 def _should_keep_user_message(content: str) -> bool:
     """
     Smart filtering for user messages.
@@ -349,8 +377,7 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
         if not _should_keep_user_message(content):
             return None
 
-        # Check if it's a system prompt (first message, very long)
-        if len(content) > 2000:
+        if looks_like_system_prompt(content):
             return ClassifiedContent(
                 content=content,
                 content_type=ContentType.USER_MESSAGE,
