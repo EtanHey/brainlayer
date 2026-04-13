@@ -844,7 +844,7 @@ def enrich_batch(
 
         sanitizer = Sanitizer.from_env()
         config = _build_gemini_config()
-        rate_limiter = _get_store_rate_limiter(store, rate_per_second=RATE_LIMITS.get("realtime", 0.2))
+        rate_limiter = _get_store_rate_limiter(store, rate_per_second=RATE_LIMITS["batch"])
 
         for chunk in candidates:
             if is_meta_research(chunk.get("content", "")):
@@ -897,6 +897,12 @@ def enrich_batch(
         _end_store_operation(store)
 
 
-def enrich_local(*_args, **_kwargs) -> EnrichmentResult:
+def enrich_local(
+    store,
+    limit: int = 100,
+    parallel: int = 2,
+    backend: str = "mlx",
+) -> EnrichmentResult:
     """Disabled legacy entrypoint kept only to fail loudly for stale callers."""
+    del store, limit, parallel, backend
     raise RuntimeError("Local enrichment has been removed. Use Gemini realtime or batch modes.")

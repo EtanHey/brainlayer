@@ -618,6 +618,33 @@ def test_realtime_rate_limit_acquires_token_per_chunk(monkeypatch):
     assert acquires == [1, 1, 1]
 
 
+def test_batch_rate_limit_uses_batch_setting(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1")]
+    _patch_realtime_deps(monkeypatch, controller, store)
+
+    observed = {}
+
+    class FakeLimiter:
+        def acquire(self, n=1):
+            observed.setdefault("acquires", []).append(n)
+
+    monkeypatch.setitem(controller.RATE_LIMITS, "batch", 1.25)
+
+    def fake_get_store_rate_limiter(*args, **kwargs):
+        observed["rate"] = kwargs["rate_per_second"]
+        return FakeLimiter()
+
+    monkeypatch.setattr(controller, "_get_store_rate_limiter", fake_get_store_rate_limiter)
+
+    controller.enrich_batch(store, limit=1)
+
+    assert observed["rate"] == 1.25
+    assert observed["acquires"] == [1]
+
+
 def test_realtime_no_sleep_when_rate_zero(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
@@ -718,6 +745,14 @@ def test_local_counts_failed_on_exception():
 
     with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
         controller.enrich_local(MagicMock(), limit=1)
+
+
+def test_local_preserves_legacy_signature():
+    import inspect
+
+    from brainlayer import enrichment_controller as controller
+
+    assert list(inspect.signature(controller.enrich_local).parameters) == ["store", "limit", "parallel", "backend"]
 
 
 # ── Meta-research filter tests ───────────────────────────────────────────────
