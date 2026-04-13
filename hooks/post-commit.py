@@ -14,16 +14,22 @@ import subprocess
 
 def main():
     try:
-        commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        commit_hash = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
+            .decode("utf-8", errors="replace")
+            .strip()
+        )
         commit_msg = (
-            subprocess.check_output(["git", "log", "-1", "--pretty=%B"], stderr=subprocess.DEVNULL).decode().strip()
+            subprocess.check_output(["git", "log", "-1", "--pretty=%B"], stderr=subprocess.DEVNULL)
+            .decode("utf-8", errors="replace")
+            .strip()
         )
         files_changed = (
             subprocess.check_output(
                 ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", "HEAD"],
                 stderr=subprocess.DEVNULL,
             )
-            .decode()
+            .decode("utf-8", errors="replace")
             .strip()
             .split("\n")
         )
@@ -34,7 +40,9 @@ def main():
     # Detect project from repo root directory name
     try:
         repo_root = (
-            subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL).decode().strip()
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL)
+            .decode("utf-8", errors="replace")
+            .strip()
         )
         project = os.path.basename(repo_root)
     except (subprocess.CalledProcessError, FileNotFoundError):
