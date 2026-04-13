@@ -264,9 +264,7 @@ class TestVectorMaintenanceScripts:
                 return None
 
         with pytest.raises(RuntimeError, match="Failed to purge 1 orphaned vectors from chunk_vectors"):
-            purge_orphaned_vectors.purge_vec_table(
-                _Conn(), "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors"
-            )
+            purge_orphaned_vectors.purge_vec_table(_Conn(), "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors")
 
     def test_rebuild_vec0_tables_read_embedding_or_raise_returns_embedding(self):
         from rebuild_vec0_tables import read_embedding_or_raise
