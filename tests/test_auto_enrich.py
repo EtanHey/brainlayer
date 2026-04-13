@@ -224,10 +224,14 @@ class TestEnrichSingle:
 
         assert result is not None
         assert result["sentiment_label"] == "positive"
-        row = store.conn.cursor().execute(
-            "SELECT sentiment_label, sentiment_score, sentiment_signals FROM chunks WHERE id = ?",
-            (stored_chunk,),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT sentiment_label, sentiment_score, sentiment_signals FROM chunks WHERE id = ?",
+                (stored_chunk,),
+            )
+            .fetchone()
+        )
         assert row[0] == "positive"
         assert row[1] == 0.8
         assert json.loads(row[2]) == ["works perfectly", "finished cleanly"]

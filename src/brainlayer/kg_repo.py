@@ -54,7 +54,9 @@ class KGMixin:
                 (entity_id, entity_id),
             )
         )[0][0]
-        chunk_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (entity_id,)))[0][0]
+        chunk_count = list(cursor.execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (entity_id,)))[
+            0
+        ][0]
         return relation_count, chunk_count
 
     def _select_preferred_entity(self, entities: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -410,13 +410,17 @@ def test_entity_lookup_adds_flowbar_voicebar_rename_relation(tmp_path):
     result = entity_lookup("VoiceBar", store, dummy_embed, entity_type="project")
 
     assert result is not None
-    row = store._read_cursor().execute(
-        """
+    row = (
+        store._read_cursor()
+        .execute(
+            """
         SELECT relation_type FROM kg_relations
         WHERE source_id = ? AND target_id = ? AND relation_type = 'RENAMED_FROM'
         """,
-        (flowbar_id, voicebar_id),
-    ).fetchone()
+            (flowbar_id, voicebar_id),
+        )
+        .fetchone()
+    )
     assert row == ("RENAMED_FROM",)
 
 
