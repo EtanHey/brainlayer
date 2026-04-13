@@ -6,20 +6,23 @@
     <string>com.brainlayer.enrichment</string>
 
     <!-- Realtime Gemini enrichment LaunchAgent.
-         Runs once at login/load and then hourly. -->
+         Runs once at login/load and then every 10 minutes. -->
 
     <key>ProgramArguments</key>
     <array>
-        <string>__PYTHON3__</string>
-        <string>-c</string>
-        <string>import sys; sys.path.insert(0, "__BRAINLAYER_DIR__/src"); from brainlayer.paths import get_db_path; from brainlayer.vector_store import VectorStore; from brainlayer.enrichment_controller import enrich_realtime; store = VectorStore(get_db_path()); result = enrich_realtime(store=store, limit=50, since_hours=24); print(result); store.close()</string>
+        <string>__BRAINLAYER_BIN__</string>
+        <string>enrich</string>
+        <string>--mode</string>
+        <string>realtime</string>
+        <string>--limit</string>
+        <string>50</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>__BRAINLAYER_DIR__</string>
 
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>600</integer>
 
     <key>StandardOutPath</key>
     <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
@@ -36,6 +39,12 @@
         <string>__BRAINLAYER_DIR__/src</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
+        <key>BRAINLAYER_ENRICH_RATE</key>
+        <string>50</string>
+        <key>BRAINLAYER_ENRICH_CONCURRENCY</key>
+        <string>10</string>
+        <key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
+        <string>flex</string>
         <key>GOOGLE_API_KEY</key>
         <string>__GOOGLE_API_KEY__</string>
     </dict>

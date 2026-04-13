@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Install BrainLayer launchd plists for auto-indexing, enrichment, and WAL checkpoint.
+# Install BrainLayer launchd plists for auto-indexing and maintenance jobs.
 #
 # Usage:
 #   ./scripts/launchd/install.sh              # Install all
 #   ./scripts/launchd/install.sh index        # Install indexing only
 #   ./scripts/launchd/install.sh enrich       # Install enrichment only
+#   ./scripts/launchd/install.sh decay        # Install decay only
 #   ./scripts/launchd/install.sh load enrichment
 #   ./scripts/launchd/install.sh unload enrichment
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
@@ -14,10 +15,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
+BRAINLAYER_LOG_DIR="$HOME/.local/share/brainlayer/logs"
 BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
-PYTHON3="${PYTHON3:-$(which python3 2>/dev/null || echo "/usr/bin/python3")}"
-GROQ_API_KEY="${GROQ_API_KEY:-$(op item get GROQ_API_KEY --reveal --fields credential 2>/dev/null || echo "")}"
 GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
 
 if [ ! -x "$BRAINLAYER_BIN" ]; then
@@ -27,7 +27,7 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
-mkdir -p "$LAUNCH_DIR" "$LOG_DIR"
+mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$BRAINLAYER_LOG_DIR"
 
 resolve_google_api_key() {
     if [ -n "${GOOGLE_API_KEY:-}" ]; then
@@ -86,14 +86,11 @@ install_plist() {
         -e "s|__HOME__|$HOME|g" \
         -e "s|__BRAINLAYER_BIN__|$BRAINLAYER_BIN|g" \
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
-        -e "s|__PYTHON3__|$PYTHON3|g" \
-        -e "s|__GROQ_API_KEY__|$GROQ_API_KEY|g" \
         -e "s|__GOOGLE_API_KEY__|$google_api_key|g" \
         "$src" > "$dst"
 
     echo "Installed: $dst"
-    echo "  Python: $PYTHON3"
-    echo "  Logs: $LOG_DIR/"
+    echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
     load_plist "$name"
 }
@@ -111,12 +108,14 @@ case "${1:-all}" in
         install_plist index
         ;;
     enrich)
-        # Legacy — install old enrich plist
-        install_plist enrich
+        # Legacy alias: install the unified enrichment plist
+        install_plist enrichment
         ;;
     enrichment)
-        # New unified enrichment plist (replaces enrich)
         install_plist enrichment
+        ;;
+    decay)
+        install_plist decay
         ;;
     load)
         load_plist "${2:-enrichment}"
@@ -130,6 +129,7 @@ case "${1:-all}" in
     all)
         install_plist index
         install_plist enrichment
+        install_plist decay
         install_plist wal-checkpoint
         # Remove old enrich plist if present
         remove_plist enrich 2>/dev/null || true
@@ -138,10 +138,11 @@ case "${1:-all}" in
         remove_plist index
         remove_plist enrich 2>/dev/null || true
         remove_plist enrichment 2>/dev/null || true
+        remove_plist decay 2>/dev/null || true
         remove_plist wal-checkpoint
         ;;
     *)
-        echo "Usage: $0 [index|enrich|enrichment|load [name]|unload [name]|checkpoint|all|remove]"
+        echo "Usage: $0 [index|enrich|enrichment|decay|load [name]|unload [name]|checkpoint|all|remove]"
         exit 1
         ;;
 esac

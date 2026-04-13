@@ -1,10 +1,8 @@
-"""Unified enrichment controller for realtime, batch, and local modes.
+"""Unified enrichment controller for Gemini-backed realtime and batch modes.
 
-Replaces scattered scripts (enrichment-window.sh, enrichment-lazy.sh, enrich.sh)
-with a single controller. Three backends:
+Replaces scattered enrichment scripts with a single controller:
   - realtime: Gemini 2.5 Flash-Lite, single chunk, <600ms target
-  - batch: Gemini Batch API, backlog processing, thinkingBudget=0
-  - local: MLX/Ollama backend, offline/privacy mode
+  - batch: Gemini backlog processing, thinkingBudget=0
 """
 
 from __future__ import annotations
@@ -26,11 +24,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from .pipeline.enrichment import (
-    build_external_prompt,
-    build_prompt,
-    parse_enrichment,
-)
+from .pipeline.enrichment import build_external_prompt, parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
 from .pipeline.write_queue import WriteQueue
@@ -42,12 +36,11 @@ GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemi
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
 AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
 
-# Per-backend rate limits (requests per second). Override via env vars.
+# Per-mode rate limits (requests per second). Override via env vars.
 RATE_LIMITS = {
     "realtime": float(
         os.environ.get("BRAINLAYER_ENRICH_RATE", "5.0")
     ),  # 300 RPM default (AI Pro verified 500+ RPM Apr 2026)
-    "local": float(os.environ.get("BRAINLAYER_LOCAL_RATE", "0")),  # no limit
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
@@ -669,12 +662,6 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
         _end_store_operation(store)
 
 
-def _call_local_backend(prompt: str, backend: str = "mlx") -> str | None:
-    from .pipeline.enrichment import call_llm
-
-    return call_llm(prompt, backend=backend)
-
-
 # ── Axiom telemetry ────────────────────────────────────────────────────────────
 
 _DATASET_ENRICHMENT = "brainlayer-enrichment"
@@ -910,51 +897,6 @@ def enrich_batch(
         _end_store_operation(store)
 
 
-def enrich_local(
-    store,
-    limit: int = 100,
-    parallel: int = 2,  # noqa: ARG001
-    backend: str = "mlx",
-) -> EnrichmentResult:
-    """Enrich via local MLX/Ollama backend."""
-    _begin_store_operation(store)
-    try:
-        start_time = time.monotonic()
-        _emit_enrichment_start("local", limit)
-
-        candidates = store.get_enrichment_candidates(limit=limit, chunk_ids=None)
-        result = EnrichmentResult(mode="local", attempted=len(candidates), enriched=0, skipped=0, failed=0)
-
-        _ensure_enrichment_columns(store)
-
-        for chunk in candidates:
-            # Content-hash dedup
-            if _is_duplicate_content(store, chunk.get("content", "")):
-                result.skipped += 1
-                continue
-
-            try:
-                prompt = build_prompt(chunk)
-                raw_response = _retry_with_backoff(lambda: _call_local_backend(prompt, backend=backend), max_retries=2)
-                enrichment = parse_enrichment(raw_response)
-                if not enrichment:
-                    result.failed += 1
-                    result.errors.append(f"{chunk['id']}: invalid_enrichment")
-                    _emit_enrichment_error("local", chunk["id"], "invalid_enrichment")
-                    continue
-                _submit_write(
-                    store,
-                    f"apply-enrichment:{chunk['id']}",
-                    lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
-                )
-                result.enriched += 1
-            except Exception as exc:  # noqa: BLE001
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: {exc}")
-                _emit_enrichment_error("local", chunk["id"], str(exc))
-
-        duration_ms = (time.monotonic() - start_time) * 1000
-        _emit_enrichment_complete(result, duration_ms)
-        return result
-    finally:
-        _end_store_operation(store)
+def enrich_local(*_args, **_kwargs) -> EnrichmentResult:
+    """Disabled legacy entrypoint kept only to fail loudly for stale callers."""
+    raise RuntimeError("Local enrichment has been removed. Use Gemini realtime or batch modes.")
