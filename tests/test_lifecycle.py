@@ -8,7 +8,8 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -217,27 +218,23 @@ class TestVectorMaintenanceScripts:
 
         assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
 
-    def test_purge_orphaned_vectors_batches_without_materializing(self):
-        from purge_orphaned_vectors import batched
+    def test_purge_orphaned_vectors_fetches_bounded_batch(self):
+        from purge_orphaned_vectors import get_orphan_batch
 
-        assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
-
-    def test_purge_orphaned_vectors_streams_orphan_ids(self):
-        from purge_orphaned_vectors import iter_orphan_ids
+        captured = {}
 
         class _Result:
             def __iter__(self):
                 yield ("chunk-1",)
                 yield ("chunk-2",)
 
-            def fetchall(self):  # pragma: no cover - should never be used
-                raise AssertionError("fetchall should not be used")
-
         class _Conn:
-            def execute(self, sql):
+            def execute(self, sql, params):
+                captured["params"] = params
                 return _Result()
 
-        assert list(iter_orphan_ids(_Conn(), "chunk_vectors_rowids")) == ["chunk-1", "chunk-2"]
+        assert get_orphan_batch(_Conn(), "chunk_vectors_rowids", limit=2) == ["chunk-1", "chunk-2"]
+        assert captured["params"] == (2,)
 
     def test_purge_orphaned_vectors_raises_when_delete_errors_occur(self, monkeypatch):
         import purge_orphaned_vectors
@@ -248,23 +245,62 @@ class TestVectorMaintenanceScripts:
             def fetchone(self):
                 return (2,)
 
-        class _IterResult:
-            def __iter__(self):
-                yield ("chunk-1",)
-                yield ("chunk-2",)
-
         class _Conn:
+            def __init__(self):
+                self.remaining = ["chunk-1", "chunk-2"]
+
             def execute(self, sql, params=None):
                 if sql.lstrip().startswith("SELECT COUNT(*)"):
                     return _CountResult()
                 if sql.lstrip().startswith("SELECT vr.id"):
-                    return _IterResult()
+                    limit = params[0]
+                    return ((cid,) for cid in self.remaining[:limit])
                 if sql.startswith("DELETE FROM") and params == ("chunk-2",):
                     raise RuntimeError("busy")
+                if sql.startswith("DELETE FROM"):
+                    self.remaining.remove(params[0])
                 return None
 
         with pytest.raises(RuntimeError, match="Failed to purge 1 orphaned vectors from chunk_vectors"):
             purge_orphaned_vectors.purge_vec_table(_Conn(), "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors")
+
+    def test_purge_orphaned_vectors_main_closes_connection_on_error(self, monkeypatch):
+        import purge_orphaned_vectors
+
+        conn = MagicMock()
+
+        class _CountResult:
+            def __init__(self, value):
+                self.value = value
+
+            def fetchone(self):
+                return (self.value,)
+
+        def fake_execute(sql, params=None):  # noqa: ARG001
+            if "chunk_vectors_rowids" in sql:
+                return _CountResult(1)
+            if "chunk_vectors_binary_rowids" in sql:
+                return _CountResult(1)
+            if "FROM chunks" in sql:
+                return _CountResult(1)
+            return None
+
+        conn.execute.side_effect = fake_execute
+        monkeypatch.setattr(
+            purge_orphaned_vectors.argparse.ArgumentParser, "parse_args", lambda self: SimpleNamespace(db_path=None)
+        )
+        monkeypatch.setattr(purge_orphaned_vectors, "resolve_db_path", lambda db_path=None: Path("/tmp/brainlayer.db"))
+        monkeypatch.setattr(purge_orphaned_vectors, "make_conn", lambda db_path: conn)
+        monkeypatch.setattr(
+            purge_orphaned_vectors,
+            "purge_vec_table",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with pytest.raises(RuntimeError, match="boom"):
+            purge_orphaned_vectors.main()
+
+        conn.close.assert_called_once()
 
     def test_rebuild_vec0_tables_read_embedding_or_raise_returns_embedding(self):
         from rebuild_vec0_tables import read_embedding_or_raise

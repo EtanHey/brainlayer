@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import time
-from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import apsw
@@ -55,15 +54,19 @@ def count_orphan_ids(conn, vec_rowids_table: str) -> int:
     return int(row[0]) if row else 0
 
 
-def iter_orphan_ids(conn, vec_rowids_table: str) -> Iterator[str]:
-    """Stream chunk IDs in the vec table that don't exist in chunks."""
-    for row in conn.execute(
-        f"""
+def get_orphan_batch(conn, vec_rowids_table: str, limit: int = BATCH_SIZE) -> list[str]:
+    """Fetch one bounded batch of orphan IDs from the vec shadow table."""
+    return [
+        row[0]
+        for row in conn.execute(
+            f"""
         SELECT vr.id FROM {vec_rowids_table} vr
         WHERE vr.id NOT IN (SELECT id FROM chunks)
-        """
-    ):
-        yield row[0]
+        LIMIT ?
+        """,
+            (limit,),
+        )
+    ]
 
 
 def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
@@ -83,9 +86,14 @@ def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
     errors = 0
     batch_num = 0
     start = time.time()
+    processed = 0
 
-    for batch in batched(iter_orphan_ids(conn, vec_rowids_table), BATCH_SIZE):
+    while True:
+        batch = get_orphan_batch(conn, vec_rowids_table, BATCH_SIZE)
+        if not batch:
+            break
         batch_num += 1
+        processed += len(batch)
 
         for cid in batch:
             try:
@@ -99,14 +107,17 @@ def purge_vec_table(conn, vec_table: str, vec_rowids_table: str, label: str):
         elapsed = time.time() - start
         rate = deleted / elapsed if elapsed > 0 else 0
         print(
-            f"  Batch {batch_num}: {deleted:,}/{total:,} deleted "
-            f"({deleted * 100 / total:.1f}%) — {rate:.0f}/s" + (f" [{errors} errors]" if errors else ""),
+            f"  Batch {batch_num}: {processed:,}/{total:,} processed, {deleted:,} deleted "
+            f"({processed * 100 / total:.1f}%) — {rate:.0f}/s" + (f" [{errors} errors]" if errors else ""),
             flush=True,
         )
 
         if batch_num % CHECKPOINT_EVERY == 0:
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             print("  [WAL checkpoint]", flush=True)
+
+        if errors:
+            break
 
     elapsed = time.time() - start
     print(f"\nDone: {deleted:,} orphans purged from {label} in {elapsed:.1f}s")
@@ -124,37 +135,37 @@ def main() -> None:
     db_path = resolve_db_path(args.db_path)
     print(f"Database: {db_path}")
     conn = make_conn(db_path)
+    try:
+        # Pre-check
+        total_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors_rowids").fetchone()[0]
+        total_bins = conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary_rowids").fetchone()[0]
+        total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        print(f"chunk_vectors entries: {total_vecs:,}")
+        print(f"chunk_vectors_binary entries: {total_bins:,}")
+        print(f"chunks table rows: {total_chunks:,}")
 
-    # Pre-check
-    total_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors_rowids").fetchone()[0]
-    total_bins = conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary_rowids").fetchone()[0]
-    total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    print(f"chunk_vectors entries: {total_vecs:,}")
-    print(f"chunk_vectors_binary entries: {total_bins:,}")
-    print(f"chunks table rows: {total_chunks:,}")
+        deleted_float = purge_vec_table(conn, "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors (float32)")
+        deleted_binary = purge_vec_table(
+            conn,
+            "chunk_vectors_binary",
+            "chunk_vectors_binary_rowids",
+            "chunk_vectors_binary (bit)",
+        )
 
-    deleted_float = purge_vec_table(conn, "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors (float32)")
-    deleted_binary = purge_vec_table(
-        conn,
-        "chunk_vectors_binary",
-        "chunk_vectors_binary_rowids",
-        "chunk_vectors_binary (bit)",
-    )
+        # Final checkpoint
+        print("\nFinal WAL checkpoint...")
+        conn.execute("PRAGMA wal_checkpoint(FULL)")
 
-    # Final checkpoint
-    print("\nFinal WAL checkpoint...")
-    conn.execute("PRAGMA wal_checkpoint(FULL)")
-
-    # Post-check
-    remaining_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors_rowids").fetchone()[0]
-    remaining_bins = conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary_rowids").fetchone()[0]
-    print("\nPost-purge:")
-    print(f"  chunk_vectors: {remaining_vecs:,} (was {total_vecs:,})")
-    print(f"  chunk_vectors_binary: {remaining_bins:,} (was {total_bins:,})")
-    print(f"  Total deleted: {deleted_float + deleted_binary:,}")
-
-    conn.close()
-    print("\nDone. Run VACUUM separately to reclaim disk space.")
+        # Post-check
+        remaining_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors_rowids").fetchone()[0]
+        remaining_bins = conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary_rowids").fetchone()[0]
+        print("\nPost-purge:")
+        print(f"  chunk_vectors: {remaining_vecs:,} (was {total_vecs:,})")
+        print(f"  chunk_vectors_binary: {remaining_bins:,} (was {total_bins:,})")
+        print(f"  Total deleted: {deleted_float + deleted_binary:,}")
+        print("\nDone. Run VACUUM separately to reclaim disk space.")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
