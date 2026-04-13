@@ -236,6 +236,32 @@ class TestVectorMaintenanceScripts:
         assert get_orphan_batch(_Conn(), "chunk_vectors_rowids", limit=2) == ["chunk-1", "chunk-2"]
         assert captured["params"] == (2,)
 
+    def test_purge_orphaned_vectors_uses_null_safe_orphan_queries(self):
+        from purge_orphaned_vectors import count_orphan_ids, get_orphan_batch
+
+        queries = []
+
+        class _CountResult:
+            def fetchone(self):
+                return (0,)
+
+        class _BatchResult:
+            def __iter__(self):
+                return iter(())
+
+        class _Conn:
+            def execute(self, sql, params=None):  # noqa: ARG002
+                queries.append(sql)
+                if "COUNT(*)" in sql:
+                    return _CountResult()
+                return _BatchResult()
+
+        conn = _Conn()
+        assert count_orphan_ids(conn, "chunk_vectors_rowids") == 0
+        assert get_orphan_batch(conn, "chunk_vectors_rowids", limit=2) == []
+        assert all("NOT EXISTS" in sql for sql in queries)
+        assert all("NOT IN" not in sql for sql in queries)
+
     def test_purge_orphaned_vectors_raises_when_delete_errors_occur(self, monkeypatch):
         import purge_orphaned_vectors
 

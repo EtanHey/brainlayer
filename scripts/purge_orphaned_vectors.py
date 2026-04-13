@@ -33,22 +33,14 @@ def make_conn(db_path: Path):
     return conn
 
 
-def batched(values: Iterable[str], batch_size: int) -> Iterator[list[str]]:
-    batch: list[str] = []
-    for value in values:
-        batch.append(value)
-        if len(batch) >= batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
-
-
 def count_orphan_ids(conn, vec_rowids_table: str) -> int:
     row = conn.execute(
         f"""
         SELECT COUNT(*) FROM {vec_rowids_table} vr
-        WHERE vr.id NOT IN (SELECT id FROM chunks)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM chunks c
+            WHERE c.id = vr.id
+        )
         """
     ).fetchone()
     return int(row[0]) if row else 0
@@ -61,7 +53,10 @@ def get_orphan_batch(conn, vec_rowids_table: str, limit: int = BATCH_SIZE) -> li
         for row in conn.execute(
             f"""
         SELECT vr.id FROM {vec_rowids_table} vr
-        WHERE vr.id NOT IN (SELECT id FROM chunks)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM chunks c
+            WHERE c.id = vr.id
+        )
         LIMIT ?
         """,
             (limit,),
