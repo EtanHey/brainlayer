@@ -6,7 +6,7 @@
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-12%20tools-green.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-1%2C498%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C848%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
 Every architecture decision, every debugging session, every preference you've expressed — **gone between sessions.** You repeat yourself constantly. Your agent rediscovers bugs it already fixed.
@@ -195,7 +195,7 @@ brainlayer dashboard          # Interactive TUI
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/                           # 1,498 Python tests
+pytest tests/                           # 1,848 Python tests
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/ && ruff format src/     # Lint + format
 # BrainBar: 54 Swift tests via Xcode

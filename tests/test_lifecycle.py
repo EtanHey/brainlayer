@@ -8,7 +8,10 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Add scripts to path
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
@@ -185,6 +188,188 @@ class TestWalCheckpoint:
         from wal_checkpoint import get_wal_size
 
         assert get_wal_size(db_path) == 1024
+
+
+class TestVectorMaintenanceScripts:
+    def test_purge_orphaned_vectors_uses_cli_db_path(self, tmp_path):
+        from purge_orphaned_vectors import resolve_db_path
+
+        assert resolve_db_path(str(tmp_path / "custom.db")) == tmp_path / "custom.db"
+
+    def test_purge_orphaned_vectors_uses_default_db_path(self, tmp_path, monkeypatch):
+        import purge_orphaned_vectors
+
+        monkeypatch.setattr(purge_orphaned_vectors, "get_db_path", lambda: tmp_path / "brainlayer.db")
+        assert purge_orphaned_vectors.resolve_db_path() == tmp_path / "brainlayer.db"
+
+    def test_rebuild_vec0_tables_uses_cli_db_path(self, tmp_path):
+        from rebuild_vec0_tables import resolve_db_path
+
+        assert resolve_db_path(str(tmp_path / "custom.db")) == tmp_path / "custom.db"
+
+    def test_rebuild_vec0_tables_uses_default_db_path(self, tmp_path, monkeypatch):
+        import rebuild_vec0_tables
+
+        monkeypatch.setattr(rebuild_vec0_tables, "get_db_path", lambda: tmp_path / "brainlayer.db")
+        assert rebuild_vec0_tables.resolve_db_path() == tmp_path / "brainlayer.db"
+
+    def test_rebuild_vec0_tables_batches_without_materializing(self):
+        from rebuild_vec0_tables import batched
+
+        assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
+
+    def test_purge_orphaned_vectors_fetches_bounded_batch(self):
+        from purge_orphaned_vectors import get_orphan_batch
+
+        captured = {}
+
+        class _Result:
+            def __iter__(self):
+                yield ("chunk-1",)
+                yield ("chunk-2",)
+
+        class _Conn:
+            def execute(self, sql, params):
+                captured["params"] = params
+                return _Result()
+
+        assert get_orphan_batch(_Conn(), "chunk_vectors_rowids", limit=2) == ["chunk-1", "chunk-2"]
+        assert captured["params"] == (2,)
+
+    def test_purge_orphaned_vectors_uses_null_safe_orphan_queries(self):
+        from purge_orphaned_vectors import count_orphan_ids, get_orphan_batch
+
+        queries = []
+
+        class _CountResult:
+            def fetchone(self):
+                return (0,)
+
+        class _BatchResult:
+            def __iter__(self):
+                return iter(())
+
+        class _Conn:
+            def execute(self, sql, params=None):  # noqa: ARG002
+                queries.append(sql)
+                if "COUNT(*)" in sql:
+                    return _CountResult()
+                return _BatchResult()
+
+        conn = _Conn()
+        assert count_orphan_ids(conn, "chunk_vectors_rowids") == 0
+        assert get_orphan_batch(conn, "chunk_vectors_rowids", limit=2) == []
+        assert all("NOT EXISTS" in sql for sql in queries)
+        assert all("NOT IN" not in sql for sql in queries)
+
+    def test_purge_orphaned_vectors_raises_when_delete_errors_occur(self, monkeypatch):
+        import purge_orphaned_vectors
+
+        monkeypatch.setattr(purge_orphaned_vectors.time, "time", lambda: 1_000_000.0)
+
+        class _CountResult:
+            def fetchone(self):
+                return (2,)
+
+        class _Conn:
+            def __init__(self):
+                self.remaining = ["chunk-1", "chunk-2"]
+
+            def execute(self, sql, params=None):
+                if sql.lstrip().startswith("SELECT COUNT(*)"):
+                    return _CountResult()
+                if sql.lstrip().startswith("SELECT vr.id"):
+                    limit = params[0]
+                    return ((cid,) for cid in self.remaining[:limit])
+                if sql.startswith("DELETE FROM") and params == ("chunk-2",):
+                    raise RuntimeError("busy")
+                if sql.startswith("DELETE FROM"):
+                    self.remaining.remove(params[0])
+                return None
+
+        with pytest.raises(RuntimeError, match="Failed to purge 1 orphaned vectors from chunk_vectors"):
+            purge_orphaned_vectors.purge_vec_table(_Conn(), "chunk_vectors", "chunk_vectors_rowids", "chunk_vectors")
+
+    def test_purge_orphaned_vectors_main_closes_connection_on_error(self, monkeypatch):
+        import purge_orphaned_vectors
+
+        conn = MagicMock()
+
+        class _CountResult:
+            def __init__(self, value):
+                self.value = value
+
+            def fetchone(self):
+                return (self.value,)
+
+        def fake_execute(sql, params=None):  # noqa: ARG001
+            if "chunk_vectors_rowids" in sql:
+                return _CountResult(1)
+            if "chunk_vectors_binary_rowids" in sql:
+                return _CountResult(1)
+            if "FROM chunks" in sql:
+                return _CountResult(1)
+            return None
+
+        conn.execute.side_effect = fake_execute
+        monkeypatch.setattr(
+            purge_orphaned_vectors.argparse.ArgumentParser, "parse_args", lambda self: SimpleNamespace(db_path=None)
+        )
+        monkeypatch.setattr(purge_orphaned_vectors, "resolve_db_path", lambda db_path=None: Path("/tmp/brainlayer.db"))
+        monkeypatch.setattr(purge_orphaned_vectors, "make_conn", lambda db_path: conn)
+        monkeypatch.setattr(
+            purge_orphaned_vectors,
+            "purge_vec_table",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with pytest.raises(RuntimeError, match="boom"):
+            purge_orphaned_vectors.main()
+
+        conn.close.assert_called_once()
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_returns_embedding(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Result:
+            def fetchone(self):
+                return (b"embedding",)
+
+        class _Conn:
+            def execute(self, sql, params):
+                return _Result()
+
+        assert read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1") == b"embedding"
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_raises_on_missing_row(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Result:
+            def fetchone(self):
+                return None
+
+        class _Conn:
+            def execute(self, sql, params):
+                return _Result()
+
+        with pytest.raises(RuntimeError, match="Missing embedding"):
+            read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1")
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_raises_on_execute_error(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Conn:
+            def execute(self, sql, params):
+                raise RuntimeError("busy")
+
+        with pytest.raises(RuntimeError, match="Failed to read embedding"):
+            read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1")
+
+    def test_rebuild_vec0_tables_ensure_restore_succeeded_raises_when_backup_must_be_kept(self):
+        from rebuild_vec0_tables import ensure_restore_succeeded
+
+        with pytest.raises(RuntimeError, match="_tmp_vec_backup"):
+            ensure_restore_succeeded(1, "_tmp_vec_backup", "chunk_vectors")
 
 
 # ── Session cleanup hook tests ──────────────────────────────────────────────
