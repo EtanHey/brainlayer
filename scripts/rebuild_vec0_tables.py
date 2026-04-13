@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import apsw
@@ -32,6 +33,38 @@ def make_conn(db_path: Path):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
+
+def batched(values: Iterable[str], batch_size: int) -> Iterator[list[str]]:
+    batch: list[str] = []
+    for value in values:
+        batch.append(value)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def iter_valid_chunk_ids(conn, rowids_table: str) -> Iterator[str]:
+    for row in conn.execute(
+        f"SELECT id FROM {rowids_table} WHERE id IN (SELECT id FROM chunks)"
+    ):
+        yield row[0]
+
+
+def read_embedding_or_raise(conn, vec_table: str, chunk_id: str):
+    try:
+        row = conn.execute(
+            f"SELECT embedding FROM {vec_table} WHERE chunk_id = ?", (chunk_id,)
+        ).fetchone()
+    except Exception as exc:  # pragma: no cover - exercised via tests with fake conn
+        raise RuntimeError(
+            f"Failed to read embedding for {chunk_id} from {vec_table}"
+        ) from exc
+    if row is None:
+        raise RuntimeError(f"Missing embedding for {chunk_id} in {vec_table}")
+    return row[0]
 
 
 def rebuild_float32(conn):
@@ -56,32 +89,22 @@ def rebuild_float32(conn):
         )
     """)
 
-    # Read from vec0 in batches via the rowids table
-    all_ids = conn.execute(
-        "SELECT id FROM chunk_vectors_rowids WHERE id IN (SELECT id FROM chunks)"
-    ).fetchall()
-    all_ids = [r[0] for r in all_ids]
-
     inserted = 0
-    for i in range(0, len(all_ids), BATCH_SIZE):
-        batch_ids = all_ids[i : i + BATCH_SIZE]
+    for batch_ids in batched(iter_valid_chunk_ids(conn, "chunk_vectors_rowids"), BATCH_SIZE):
         for cid in batch_ids:
-            try:
-                row = conn.execute(
-                    "SELECT embedding FROM chunk_vectors WHERE chunk_id = ?", (cid,)
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        "INSERT INTO _tmp_vec_backup (chunk_id, embedding) VALUES (?, ?)",
-                        (cid, row[0]),
-                    )
-                    inserted += 1
-            except Exception as e:
-                print(f"  Warning: skip {cid}: {e}")
+            embedding = read_embedding_or_raise(conn, "chunk_vectors", cid)
+            conn.execute(
+                "INSERT INTO _tmp_vec_backup (chunk_id, embedding) VALUES (?, ?)",
+                (cid, embedding),
+            )
+            inserted += 1
 
         elapsed = time.time() - t0
         rate = inserted / elapsed if elapsed > 0 else 0
         print(f"  Extracted {inserted:,}/{count:,} ({rate:.0f}/s)", flush=True)
+
+    if inserted != count:
+        raise RuntimeError(f"Backed up {inserted} float vectors but expected {count}")
 
     print(f"Step 1 done: {inserted:,} vectors backed up in {time.time()-t0:.1f}s")
 
@@ -106,8 +129,7 @@ def rebuild_float32(conn):
     reinserted = 0
     errors = 0
 
-    rows = conn.execute("SELECT chunk_id, embedding FROM _tmp_vec_backup").fetchall()
-    for cid, emb in rows:
+    for cid, emb in conn.execute("SELECT chunk_id, embedding FROM _tmp_vec_backup"):
         try:
             conn.execute(
                 "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
@@ -155,31 +177,24 @@ def rebuild_binary(conn):
         )
     """)
 
-    all_ids = conn.execute(
-        "SELECT id FROM chunk_vectors_binary_rowids WHERE id IN (SELECT id FROM chunks)"
-    ).fetchall()
-    all_ids = [r[0] for r in all_ids]
-
     inserted = 0
-    for i in range(0, len(all_ids), BATCH_SIZE):
-        batch_ids = all_ids[i : i + BATCH_SIZE]
+    for batch_ids in batched(
+        iter_valid_chunk_ids(conn, "chunk_vectors_binary_rowids"), BATCH_SIZE
+    ):
         for cid in batch_ids:
-            try:
-                row = conn.execute(
-                    "SELECT embedding FROM chunk_vectors_binary WHERE chunk_id = ?", (cid,)
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        "INSERT INTO _tmp_binvec_backup (chunk_id, embedding) VALUES (?, ?)",
-                        (cid, row[0]),
-                    )
-                    inserted += 1
-            except Exception as e:
-                print(f"  Warning: skip {cid}: {e}")
+            embedding = read_embedding_or_raise(conn, "chunk_vectors_binary", cid)
+            conn.execute(
+                "INSERT INTO _tmp_binvec_backup (chunk_id, embedding) VALUES (?, ?)",
+                (cid, embedding),
+            )
+            inserted += 1
 
         elapsed = time.time() - t0
         rate = inserted / elapsed if elapsed > 0 else 0
         print(f"  Extracted {inserted:,}/{count:,} ({rate:.0f}/s)", flush=True)
+
+    if inserted != count:
+        raise RuntimeError(f"Backed up {inserted} binary vectors but expected {count}")
 
     print(f"Step 1 done: {inserted:,} vectors backed up in {time.time()-t0:.1f}s")
 
@@ -204,8 +219,7 @@ def rebuild_binary(conn):
     reinserted = 0
     errors = 0
 
-    rows = conn.execute("SELECT chunk_id, embedding FROM _tmp_binvec_backup").fetchall()
-    for cid, emb in rows:
+    for cid, emb in conn.execute("SELECT chunk_id, embedding FROM _tmp_binvec_backup"):
         try:
             conn.execute(
                 "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, ?)",

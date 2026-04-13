@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # Add scripts to path
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 HOOKS_DIR = Path(__file__).parent.parent / "hooks"
@@ -209,6 +211,48 @@ class TestVectorMaintenanceScripts:
 
         monkeypatch.setattr(rebuild_vec0_tables, "get_db_path", lambda: tmp_path / "brainlayer.db")
         assert rebuild_vec0_tables.resolve_db_path() == tmp_path / "brainlayer.db"
+
+    def test_rebuild_vec0_tables_batches_without_materializing(self):
+        from rebuild_vec0_tables import batched
+
+        assert list(batched((str(i) for i in range(5)), 2)) == [["0", "1"], ["2", "3"], ["4"]]
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_returns_embedding(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Result:
+            def fetchone(self):
+                return (b"embedding",)
+
+        class _Conn:
+            def execute(self, sql, params):
+                return _Result()
+
+        assert read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1") == b"embedding"
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_raises_on_missing_row(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Result:
+            def fetchone(self):
+                return None
+
+        class _Conn:
+            def execute(self, sql, params):
+                return _Result()
+
+        with pytest.raises(RuntimeError, match="Missing embedding"):
+            read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1")
+
+    def test_rebuild_vec0_tables_read_embedding_or_raise_raises_on_execute_error(self):
+        from rebuild_vec0_tables import read_embedding_or_raise
+
+        class _Conn:
+            def execute(self, sql, params):
+                raise RuntimeError("busy")
+
+        with pytest.raises(RuntimeError, match="Failed to read embedding"):
+            read_embedding_or_raise(_Conn(), "chunk_vectors", "chunk-1")
 
 
 # ── Session cleanup hook tests ──────────────────────────────────────────────
