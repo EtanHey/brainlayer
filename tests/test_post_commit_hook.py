@@ -122,6 +122,28 @@ def test_post_commit_handles_non_utf8_file_path(captured_calls, monkeypatch):
     assert "\ufffd" in captured_calls[0]["content"]
 
 
+def test_post_commit_handles_non_utf8_repo_toplevel(captured_calls, monkeypatch):
+    """Non-UTF8 bytes returned by `git rev-parse --show-toplevel` must not
+    crash the hook. Exercises the fourth decode call in the second try block.
+    """
+    hook_mod = _load_hook()
+    monkeypatch.setattr(
+        hook_mod.subprocess,
+        "check_output",
+        _make_fake_check_output(
+            commit_msg_bytes=b"fix: something\n",
+            toplevel_bytes=b"/tmp/repo-\xff\xfe\n",
+        ),
+    )
+
+    hook_mod.main()  # must not raise
+
+    assert len(captured_calls) == 1
+    # The toplevel path decode feeds os.path.basename(...) which becomes the
+    # `project` kwarg passed to store_memory.
+    assert "\ufffd" in captured_calls[0]["project"]
+
+
 def test_post_commit_preserves_valid_utf8(captured_calls, monkeypatch):
     """Sanity: valid UTF-8 (including non-ASCII) flows through unchanged."""
     hook_mod = _load_hook()
