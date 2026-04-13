@@ -68,6 +68,9 @@ claude.scratchpad.md
 # Claude Code project settings
 .claude/
 
+# Local eval outputs (tracked baselines remain tracked)
+tests/eval_results/
+
 # Progress trackers (ephemeral)
 scripts/.kg_rebuild_progress.json
 

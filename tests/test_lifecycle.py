@@ -187,6 +187,30 @@ class TestWalCheckpoint:
         assert get_wal_size(db_path) == 1024
 
 
+class TestVectorMaintenanceScripts:
+    def test_purge_orphaned_vectors_uses_cli_db_path(self, tmp_path):
+        from purge_orphaned_vectors import resolve_db_path
+
+        assert resolve_db_path(str(tmp_path / "custom.db")) == tmp_path / "custom.db"
+
+    def test_purge_orphaned_vectors_uses_default_db_path(self, tmp_path, monkeypatch):
+        import purge_orphaned_vectors
+
+        monkeypatch.setattr(purge_orphaned_vectors, "get_db_path", lambda: tmp_path / "brainlayer.db")
+        assert purge_orphaned_vectors.resolve_db_path() == tmp_path / "brainlayer.db"
+
+    def test_rebuild_vec0_tables_uses_cli_db_path(self, tmp_path):
+        from rebuild_vec0_tables import resolve_db_path
+
+        assert resolve_db_path(str(tmp_path / "custom.db")) == tmp_path / "custom.db"
+
+    def test_rebuild_vec0_tables_uses_default_db_path(self, tmp_path, monkeypatch):
+        import rebuild_vec0_tables
+
+        monkeypatch.setattr(rebuild_vec0_tables, "get_db_path", lambda: tmp_path / "brainlayer.db")
+        assert rebuild_vec0_tables.resolve_db_path() == tmp_path / "brainlayer.db"
+
+
 # ── Session cleanup hook tests ──────────────────────────────────────────────
 
 
