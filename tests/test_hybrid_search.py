@@ -289,3 +289,53 @@ class TestHybridSearch:
 
         assert "meta-noise-upper" not in filtered["ids"][0]
         assert "real-hit-lower" in filtered["ids"][0]
+
+    def test_mmr_rerank_dedupes_near_duplicates(self, store):
+        def embedding(primary: float, secondary: float = 0.0) -> list[float]:
+            vector = [0.0] * 1024
+            vector[0] = primary
+            vector[1] = secondary
+            return vector
+
+        _insert_chunk(
+            store,
+            chunk_id="dup-primary",
+            content="oauth token rotation incident rollback and session repair",
+            embedding=embedding(1.0, 0.0),
+            importance=6.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="dup-secondary",
+            content="oauth token rotation incident rollback and session repair duplicate notes",
+            embedding=embedding(0.999, 0.001),
+            importance=6.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="distinct-relevant",
+            content="oauth token rotation migration checklist and recovery guide",
+            embedding=embedding(0.72, 0.69),
+            importance=5.5,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="distinct-supporting",
+            content="oauth token rotation audit trail and operator runbook",
+            embedding=embedding(0.65, 0.75),
+            importance=5.0,
+        )
+
+        scored = [
+            (0.99, "dup-primary", "oauth token rotation incident rollback and session repair", {}, 0.01),
+            (0.98, "dup-secondary", "oauth token rotation incident rollback and session repair duplicate notes", {}, 0.02),
+            (0.94, "distinct-relevant", "oauth token rotation migration checklist and recovery guide", {}, 0.12),
+            (0.9, "distinct-supporting", "oauth token rotation audit trail and operator runbook", {}, 0.15),
+        ]
+
+        reranked = store._mmr_rerank_scored_results(scored, n_results=3)
+        ids = [item[1] for item in reranked[:3]]
+
+        assert ids[0] == "dup-primary", ids
+        assert "distinct-relevant" in ids[:2], ids
+        assert set(ids[:2]) != {"dup-primary", "dup-secondary"}, ids
