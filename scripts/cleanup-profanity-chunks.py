@@ -9,21 +9,22 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+SRC_DIR = Path(__file__).resolve().parent.parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+from brainlayer.paths import get_db_path
 
-DEFAULT_DB = Path.home() / ".local/share/brainlayer/brainlayer.db"
+DB_PATH = get_db_path()
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z'-]{2,}")
 PROFANITY_RE = re.compile(r"\b(fuck(?:ing|er|ers)?|motherfuck(?:er|ers)?|wtf)\b", re.IGNORECASE)
 STOPWORDS = {
-    "about", "after", "again", "and", "app", "are", "but", "can", "dont", "for", "from", "get", "got",
-    "have", "just", "lets", "like", "need", "not", "now", "our", "out", "really", "still", "that",
-    "the", "their", "them", "then", "this", "tonight", "very", "want", "were", "what", "when", "with", "you",
-    "your",
+    "about", "after", "again", "and", "app", "are", "but", "can", "dont", "for", "from", "get", "got", "have",
+    "just", "lets", "like", "need", "not", "now", "our", "out", "really", "still", "that", "the", "their", "them",
+    "then", "this", "tonight", "very", "want", "were", "what", "when", "with", "you", "your",
 }
-
 
 def log(message):
     print(f"[cleanup-profanity] {message}", file=sys.stderr)
-
 
 def compact(text, limit=96, sanitize=False):
     text = re.sub(r"\s+", " ", text or "").strip()
@@ -31,14 +32,12 @@ def compact(text, limit=96, sanitize=False):
         text = PROFANITY_RE.sub("[redacted]", text)
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "..."
 
-
 def parse_tags(raw):
     try:
         value = json.loads(raw or "[]")
         return [tag for tag in value if isinstance(tag, str)]
     except json.JSONDecodeError:
         return []
-
 
 def tokenize(text, include_profanity=False):
     terms = []
@@ -50,7 +49,6 @@ def tokenize(text, include_profanity=False):
             continue
         terms.append(token)
     return terms
-
 
 def fetch_rows(conn):
     return conn.execute(
@@ -67,15 +65,22 @@ def fetch_rows(conn):
         """
     ).fetchall()
 
+def parse_metadata(raw):
+    try:
+        return json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+def session_id_for_row(row):
+    return row["conversation_id"] or parse_metadata(row["metadata"]).get("session_id") or "unknown"
 
 def cluster_rows(rows):
     grouped = defaultdict(list)
     for row in rows:
         day = (row["created_at"] or "")[:10]
-        session_id = row["conversation_id"] or json.loads(row["metadata"] or "{}").get("session_id") or "unknown"
+        session_id = session_id_for_row(row)
         grouped[(row["project"] or "unknown", day, session_id)].append(row)
     return {key: group for key, group in grouped.items() if len(group) >= 3}
-
 
 def build_doc_freq(rows):
     df = Counter()
@@ -83,7 +88,6 @@ def build_doc_freq(rows):
         for token in set(tokenize(row["content"])):
             df[token] += 1
     return len(rows), df
-
 
 def top_terms(cluster, total_docs, df):
     tf = Counter()
@@ -96,10 +100,9 @@ def top_terms(cluster, total_docs, df):
     )
     return [term for term, _, _ in ranked[:3]] or ["frustration", "repeat", "user"]
 
-
 def build_aggregate(cluster, total_docs, df):
     cluster = sorted(cluster, key=lambda row: (row["created_at"] or "", row["id"]))
-    project, day, session_id = cluster[0]["project"] or "unknown", (cluster[0]["created_at"] or "")[:10], cluster[0]["conversation_id"] or "unknown"
+    project, day, session_id = cluster[0]["project"] or "unknown", (cluster[0]["created_at"] or "")[:10], session_id_for_row(cluster[0])
     keywords = top_terms(cluster, total_docs, df)
     keyword_text = ", ".join(keywords)
     first_raw = compact(cluster[0]["content"])
@@ -137,7 +140,6 @@ def build_aggregate(cluster, total_docs, df):
         "content_hash": hashlib.sha256(f"{agg_id}|{content}".encode()).hexdigest(),
     }
 
-
 def archive_originals(conn, cluster, agg_id, now_iso):
     for row in cluster:
         conn.execute(
@@ -148,7 +150,6 @@ def archive_originals(conn, cluster, agg_id, now_iso):
             """,
             (agg_id, now_iso, row["id"]),
         )
-
 
 def run_cleanup(db_path, dry_run=False):
     conn = sqlite3.connect(db_path)
@@ -183,15 +184,13 @@ def run_cleanup(db_path, dry_run=False):
     conn.close()
     return stats
 
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Aggregate repeated profane raw-user chunks into sanitized frustration summaries.")
-    parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite DB path")
+    parser.add_argument("--db", default=str(DB_PATH), help="SQLite DB path")
     parser.add_argument("--dry-run", action="store_true", help="Report clusters without writing")
     args = parser.parse_args(argv)
     run_cleanup(args.db, dry_run=args.dry_run)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

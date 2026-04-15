@@ -56,13 +56,14 @@ def make_db(tmp_path: Path) -> Path:
         """
     )
     rows = [
-        ("rt-a1", "Mehayom lets fucking ship this build tonight", "mehayom", "2026-04-15T20:27:18.000Z", "sess-1", ["shipping", "build"], 7.0),
+        ("rt-a1", "Mehayom lets fucking ship this build tonight", "mehayom", "2026-04-15T20:27:18.000Z", None, ["shipping", "build"], 7.0),
         ("rt-a2", "Mehayom fix the fucking build and ship", "mehayom", "2026-04-15T20:28:18.000Z", "sess-1", ["shipping", "rtl"], 8.0),
         ("rt-a3", "Mehayom we are fucking shipping after build fix", "mehayom", "2026-04-15T20:29:18.000Z", "sess-1", ["shipping", "android"], 6.0),
         ("rt-b1", "Mini app fucking auth bug", "mini", "2026-04-15T10:00:00.000Z", "sess-2", ["auth"], 5.0),
         ("rt-b2", "Mini app fucking auth still broken", "mini", "2026-04-15T10:01:00.000Z", "sess-2", ["auth"], 5.0),
     ]
     for chunk_id, content, project, created_at, session_id, tags, importance in rows:
+        metadata_session_id = "sess-1" if chunk_id == "rt-a1" else session_id
         conn.execute(
             """
             INSERT INTO chunks (
@@ -73,7 +74,7 @@ def make_db(tmp_path: Path) -> Path:
             (
                 chunk_id,
                 content,
-                json.dumps({"session_id": session_id}),
+                json.dumps({"session_id": metadata_session_id}),
                 f"/tmp/{session_id}.jsonl",
                 project,
                 len(content),
@@ -84,6 +85,27 @@ def make_db(tmp_path: Path) -> Path:
                 session_id,
             ),
         )
+    conn.execute(
+        """
+        INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type, char_count,
+            tags, summary, importance, created_at, conversation_id
+        ) VALUES (?, ?, ?, ?, ?, 'user_message', ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "rt-bad-metadata",
+            "Mini app fucking parser edge case",
+            "{bad json",
+            "/tmp/bad.jsonl",
+            "mini",
+            len("Mini app fucking parser edge case"),
+            json.dumps(["auth"]),
+            "Mini app fucking parser edge case",
+            4.0,
+            "2026-04-15T11:00:00.000Z",
+            None,
+        ),
+    )
     conn.commit()
     conn.close()
     return db_path
@@ -115,7 +137,7 @@ def test_execute_aggregates_cluster_and_preserves_searchability(tmp_path, capsys
     conn = sqlite3.connect(db_path)
     agg = conn.execute(
         """
-        SELECT id, content, tags, importance, created_at, resolved_query, resolved_queries
+        SELECT id, content, tags, importance, created_at, resolved_query, resolved_queries, conversation_id
         FROM chunks
         WHERE id LIKE 'agg-frustration-%'
         """
@@ -127,15 +149,17 @@ def test_execute_aggregates_cluster_and_preserves_searchability(tmp_path, capsys
     assert agg[4] == "2026-04-15T20:27:18.000Z"
     assert "fucking" in (agg[5] or "")
     assert "ship" in (agg[6] or "")
+    assert agg[7] == "sess-1"
     originals = conn.execute(
-        "SELECT COUNT(*) FROM chunks WHERE id IN ('rt-a1','rt-a2','rt-a3') AND aggregated_into = ? AND archived = 1 AND archived_at IS NOT NULL",
+        "SELECT value_type FROM chunks WHERE id IN ('rt-a1','rt-a2','rt-a3') AND aggregated_into = ? AND archived = 1 AND archived_at IS NOT NULL",
         (agg[0],),
-    ).fetchone()[0]
-    assert originals == 3
+    ).fetchall()
+    assert len(originals) == 3
+    assert {row[0] for row in originals} == {"ARCHIVED"}
     untouched = conn.execute(
-        "SELECT COUNT(*) FROM chunks WHERE id IN ('rt-b1','rt-b2') AND aggregated_into IS NULL AND archived = 0"
+        "SELECT COUNT(*) FROM chunks WHERE id IN ('rt-b1','rt-b2','rt-bad-metadata') AND aggregated_into IS NULL AND archived = 0"
     ).fetchone()[0]
-    assert untouched == 2
+    assert untouched == 3
     match = conn.execute(
         """
         SELECT c.id
