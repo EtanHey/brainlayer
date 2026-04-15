@@ -881,7 +881,12 @@ def consolidate(
 @app.command("enrich")
 def enrich(
     mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
-    limit: int = typer.Option(25, "--limit", "-n", help="Max chunks to process"),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        "-n",
+        help="Realtime: max chunks to process. Batch submit/run: optional sample size; defaults to all.",
+    ),
     since_hours: int = typer.Option(
         24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
     ),
@@ -923,7 +928,7 @@ def enrich(
         if mode == "realtime":
             store = VectorStore(db_path)
             try:
-                result = enrich_realtime(store, limit=limit, since_hours=since_hours)
+                result = enrich_realtime(store, limit=limit or 25, since_hours=since_hours)
                 console.print(
                     f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
                     f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
@@ -936,19 +941,19 @@ def enrich(
             cloud_backfill.run_full_backfill(
                 db_path,
                 model=model,
-                sample=limit,
+                sample=limit or 0,
                 submit_only=True,
             )
-            console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit} model={model}")
+            console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit or 0} model={model}")
             return
         if phase == "run":
             cloud_backfill.run_full_backfill(
                 db_path,
                 model=model,
-                sample=limit,
+                sample=limit or 0,
                 submit_only=False,
             )
-            console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit} model={model}")
+            console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit or 0} model={model}")
             return
         if phase in {"poll", "import"}:
             summary = cloud_backfill.process_pending_jobs_once(db_path)
