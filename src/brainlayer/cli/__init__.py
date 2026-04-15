@@ -896,7 +896,6 @@ def enrich(
     """Enrich chunks via Gemini-backed realtime or batch modes."""
     try:
         from .. import cloud_backfill
-
         from ..enrichment_controller import enrich_realtime
         from ..vector_store import VectorStore
 

@@ -9,8 +9,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from brainlayer.cloud_backfill import *  # noqa: F401,F403
-from brainlayer.cloud_backfill import main
+import brainlayer.cloud_backfill as _cloud_backfill
+
+main = _cloud_backfill.main
+
+
+def __getattr__(name: str):
+    return getattr(_cloud_backfill, name)
 
 
 if __name__ == "__main__":
