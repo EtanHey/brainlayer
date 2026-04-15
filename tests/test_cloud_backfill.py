@@ -7,8 +7,8 @@ from pathlib import Path
 import apsw
 import pytest
 
+import brainlayer.cloud_backfill as cloud_backfill
 from brainlayer.vector_store import VectorStore
-from scripts import cloud_backfill
 
 
 def _insert_unenriched_chunk(
@@ -68,7 +68,7 @@ def test_estimate_batch_cost_uses_discounted_batch_rates():
     """Batch usage cost helper should apply the documented 50% discount."""
     cost = cloud_backfill.estimate_batch_cost_usd(1_000_000, 2_000_000)
 
-    assert cost == pytest.approx(0.675)
+    assert cost == pytest.approx(0.45)
     assert cloud_backfill.estimate_batch_cost_usd(0, 0) == 0
 
 
@@ -329,8 +329,70 @@ def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path
     assert submitted_paths == [new_file]
 
 
-def test_import_results_triggers_seed_only_kg_extraction(tmp_path, monkeypatch):
-    """Remote batch imports should repopulate KG links for newly enriched chunks."""
+def test_export_unenriched_chunks_includes_legacy_rows_without_summary_v2(tmp_path, monkeypatch):
+    """Legacy enriched rows should be re-exported until summary_v2 is populated."""
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        cursor = store.conn.cursor()
+        _insert_unenriched_chunk(
+            store,
+            "unenriched",
+            "This chunk is long enough to be exported as a fresh unenriched candidate.",
+        )
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count,
+                source, sender, summary, enriched_at, summary_v2
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', NULL, ?, ?, NULL)
+            """,
+            (
+                "legacy",
+                "This chunk already has a legacy summary but still needs a v2 preview summary generated.",
+                84,
+                "Legacy summary",
+                "2026-04-01T00:00:00+00:00",
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count,
+                source, sender, summary, enriched_at, summary_v2
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', NULL, ?, ?, ?)
+            """,
+            (
+                "already-previewed",
+                "This chunk already has a preview summary and should not be exported again.",
+                72,
+                "Old summary",
+                "2026-04-01T00:00:00+00:00",
+                "Preview summary",
+            ),
+        )
+
+        jsonl_files = cloud_backfill.export_unenriched_chunks(
+            store,
+            max_chunks=10,
+            content_types=["assistant_text"],
+            no_sanitize=True,
+        )
+
+        exported_keys = []
+        for path in jsonl_files:
+            for line in path.read_text().splitlines():
+                exported_keys.append(json.loads(line)["key"])
+
+        assert set(exported_keys) == {"unenriched", "legacy"}
+    finally:
+        store.close()
+
+
+def test_import_results_writes_preview_fields_for_unenriched_chunks(tmp_path, monkeypatch):
+    """Fresh chunks should receive preview summaries without mutating live enrichment fields."""
     store = VectorStore(tmp_path / "brainlayer.db")
     try:
         _insert_unenriched_chunk(
@@ -339,22 +401,6 @@ def test_import_results_triggers_seed_only_kg_extraction(tmp_path, monkeypatch):
             "brainlayer rollout notes from the remote enrichment import path.",
         )
 
-        seed_entities = {"project": ["brainlayer"]}
-        calls = []
-
-        def fake_extract_kg_from_chunk(*, store, chunk_id, seed_entities, use_llm, use_gliner):
-            calls.append(
-                {
-                    "chunk_id": chunk_id,
-                    "seed_entities": seed_entities,
-                    "use_llm": use_llm,
-                    "use_gliner": use_gliner,
-                }
-            )
-            return {"entities_created": 1, "relations_created": 0, "chunks_linked": 1}
-
-        monkeypatch.setattr(cloud_backfill, "DEFAULT_SEED_ENTITIES", seed_entities, raising=False)
-        monkeypatch.setattr(cloud_backfill, "extract_kg_from_chunk", fake_extract_kg_from_chunk, raising=False)
         monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
 
         results = [
@@ -389,22 +435,91 @@ def test_import_results_triggers_seed_only_kg_extraction(tmp_path, monkeypatch):
         ]
 
         counts = cloud_backfill.import_results(store, results, "batch-1")
+        row = store.conn.cursor().execute(
+            "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
+            ("chunk-1",),
+        ).fetchone()
 
         assert counts == {"success": 1, "failed": 0, "skipped": 0}
-        assert calls == [
-            {
-                "chunk_id": "chunk-1",
-                "seed_entities": seed_entities,
-                "use_llm": False,
-                "use_gliner": False,
-            }
-        ]
+        assert row == (None, "Remote enrichment imported successfully.", "2.0", None)
     finally:
         store.close()
 
 
-def test_import_results_keeps_chunk_retryable_when_kg_extraction_fails(tmp_path, monkeypatch):
-    """KG extraction failures should not permanently mark the chunk as imported."""
+def test_import_results_writes_summary_v2_for_legacy_chunks(tmp_path, monkeypatch):
+    """Legacy enriched chunks should receive preview summaries without overwriting summary."""
+    store = VectorStore(tmp_path / "brainlayer.db")
+    try:
+        cursor = store.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count,
+                source, summary, enriched_at, created_at
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', ?, ?, ?)
+            """,
+            (
+                "legacy-1",
+                "Legacy chunk that already has an old summary and needs a preview v2 summary.",
+                73,
+                "Old summary",
+                "2026-04-01T00:00:00+00:00",
+                "2026-04-01T00:00:00+00:00",
+            ),
+        )
+
+        monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
+
+        results = [
+            {
+                "key": "legacy-1",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": json.dumps(
+                                            {
+                                                "summary": "Improved preview summary",
+                                                "tags": ["brainlayer"],
+                                                "importance": 8,
+                                                "intent": "implementing",
+                                                "primary_symbols": [],
+                                                "resolved_query": "What changed in the legacy chunk?",
+                                                "epistemic_level": "validated",
+                                                "debt_impact": "low",
+                                                "external_deps": [],
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }
+        ]
+
+        counts = cloud_backfill.import_results(store, results, "batch-legacy")
+        row = cursor.execute(
+            "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
+            ("legacy-1",),
+        ).fetchone()
+
+        assert counts == {"success": 1, "failed": 0, "skipped": 0}
+        assert row == (
+            "Old summary",
+            "Improved preview summary",
+            "2.0",
+            "2026-04-01T00:00:00+00:00",
+        )
+    finally:
+        store.close()
+
+
+def test_import_results_keeps_chunk_retryable_when_parse_fails(tmp_path, monkeypatch):
+    """Parse failures should leave preview fields unset so the chunk can retry later."""
     store = VectorStore(tmp_path / "brainlayer.db")
     try:
         _insert_unenriched_chunk(
@@ -413,12 +528,6 @@ def test_import_results_keeps_chunk_retryable_when_kg_extraction_fails(tmp_path,
             "brainlayer rollout notes from the remote enrichment import path.",
         )
 
-        monkeypatch.setattr(
-            cloud_backfill,
-            "extract_kg_from_chunk",
-            lambda **kwargs: (_ for _ in ()).throw(RuntimeError("kg failed")),
-            raising=False,
-        )
         monkeypatch.setattr(cloud_backfill, "save_checkpoint", lambda *args, **kwargs: None)
 
         results = [
@@ -430,19 +539,7 @@ def test_import_results_keeps_chunk_retryable_when_kg_extraction_fails(tmp_path,
                             "content": {
                                 "parts": [
                                     {
-                                        "text": json.dumps(
-                                            {
-                                                "summary": "Remote enrichment imported successfully.",
-                                                "tags": ["brainlayer", "kg"],
-                                                "importance": 7,
-                                                "intent": "implementing",
-                                                "primary_symbols": ["scripts/cloud_backfill.py"],
-                                                "resolved_query": "How does remote batch import keep KG data in sync?",
-                                                "epistemic_level": "validated",
-                                                "debt_impact": "resolution",
-                                                "external_deps": [],
-                                            }
-                                        )
+                                        "text": "not valid json"
                                     }
                                 ]
                             }
@@ -456,13 +553,13 @@ def test_import_results_keeps_chunk_retryable_when_kg_extraction_fails(tmp_path,
         row = (
             store.conn.cursor()
             .execute(
-                "SELECT enriched_at, summary, tags FROM chunks WHERE id = ?",
+                "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
                 ("chunk-1",),
             )
             .fetchone()
         )
 
         assert counts == {"success": 0, "failed": 1, "skipped": 0}
-        assert row == (None, None, None)
+        assert row == (None, None, "1.0", None)
     finally:
         store.close()

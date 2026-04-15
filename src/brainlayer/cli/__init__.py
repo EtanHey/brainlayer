@@ -885,42 +885,90 @@ def enrich(
     since_hours: int = typer.Option(
         24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
     ),
-    phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run"),
+    phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run, status"),
+    model: str = typer.Option(
+        "models/gemini-2.5-flash-lite",
+        "--model",
+        help="Batch mode Gemini model override",
+    ),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
 ) -> None:
     """Enrich chunks via Gemini-backed realtime or batch modes."""
     try:
-        from ..enrichment_controller import enrich_batch, enrich_realtime
-        from ..paths import DEFAULT_DB_PATH
+        from .. import cloud_backfill
+
+        from ..enrichment_controller import enrich_realtime
         from ..vector_store import VectorStore
 
-        if stats_only:
-            store = VectorStore(DEFAULT_DB_PATH)
-            try:
-                s = store.get_enrichment_stats()
-                console.print(f"[bold]Total:[/] {s['total_chunks']}")
-                console.print(f"[bold]Enriched:[/] {s['enriched']} ({s['percent']}%)")
-                console.print(f"[bold]Remaining:[/] {s['remaining']}")
-                if s["by_intent"]:
-                    console.print(f"[bold]Intent distribution:[/] {s['by_intent']}")
-            finally:
-                store.close()
-        else:
-            if mode not in ("realtime", "batch"):
-                raise typer.BadParameter(f"Invalid mode: {mode}")
-            store = VectorStore(get_db_path())
-            try:
-                if mode == "realtime":
-                    result = enrich_realtime(store, limit=limit, since_hours=since_hours)
-                elif mode == "batch":
-                    result = enrich_batch(store, phase=phase, limit=limit)
+        if mode not in ("realtime", "batch"):
+            raise typer.BadParameter(f"Invalid mode: {mode}")
 
+        db_path = get_db_path()
+
+        if stats_only:
+            if mode == "batch":
+                cloud_backfill.show_status(db_path)
+            else:
+                store = VectorStore(db_path)
+                try:
+                    s = store.get_enrichment_stats()
+                    console.print(f"[bold]Total:[/] {s['total_chunks']}")
+                    console.print(f"[bold]Enriched:[/] {s['enriched']} ({s['percent']}%)")
+                    console.print(f"[bold]Remaining:[/] {s['remaining']}")
+                    if s["by_intent"]:
+                        console.print(f"[bold]Intent distribution:[/] {s['by_intent']}")
+                finally:
+                    store.close()
+            return
+
+        if mode == "realtime":
+            store = VectorStore(db_path)
+            try:
+                result = enrich_realtime(store, limit=limit, since_hours=since_hours)
                 console.print(
                     f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
                     f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
                 )
             finally:
                 store.close()
+            return
+
+        if phase == "submit":
+            cloud_backfill.run_full_backfill(
+                db_path,
+                model=model,
+                sample=limit,
+                submit_only=True,
+            )
+            console.print(
+                f"[bold green]Done![/] mode=batch phase=submit sample={limit} model={model}"
+            )
+            return
+        if phase == "run":
+            cloud_backfill.run_full_backfill(
+                db_path,
+                model=model,
+                sample=limit,
+                submit_only=False,
+            )
+            console.print(
+                f"[bold green]Done![/] mode=batch phase=run sample={limit} model={model}"
+            )
+            return
+        if phase in {"poll", "import"}:
+            summary = cloud_backfill.process_pending_jobs_once(db_path)
+            console.print(
+                "[bold green]Done![/] "
+                f"mode=batch phase={phase} checked={summary['checked']} "
+                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
+                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
+            )
+            return
+        if phase == "status":
+            cloud_backfill.show_status(db_path)
+            return
+
+        raise typer.BadParameter(f"Invalid batch phase: {phase}")
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

@@ -28,22 +28,30 @@ def test_cli_enrich_mode_realtime_routes_to_controller(monkeypatch):
     assert called["since_hours"] == 12
 
 
-def test_cli_enrich_mode_batch_routes_to_controller(monkeypatch):
+def test_cli_enrich_mode_batch_submit_routes_to_cloud_backfill(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
-    monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
     called = {}
 
-    def fake_batch(store, phase="run", limit=5000, **kwargs):
-        called.update({"phase": phase, "limit": limit, **kwargs})
-        return SimpleNamespace(mode="batch", attempted=0, enriched=0, skipped=0, failed=0, errors=[])
+    def fake_backfill(db_path, model, dry_run=False, sample=0, no_sanitize=False, submit_only=False):
+        called.update(
+            {
+                "db_path": str(db_path),
+                "model": model,
+                "dry_run": dry_run,
+                "sample": sample,
+                "no_sanitize": no_sanitize,
+                "submit_only": submit_only,
+            }
+        )
 
-    monkeypatch.setattr("brainlayer.enrichment_controller.enrich_batch", fake_batch)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
 
-    result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "poll", "--limit", "50"])
+    result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "submit", "--limit", "50"])
 
     assert result.exit_code == 0
-    assert called["phase"] == "poll"
-    assert called["limit"] == 50
+    assert called["db_path"] == "/tmp/test.db"
+    assert called["sample"] == 50
+    assert called["submit_only"] is True
 
 
 def test_cli_enrich_mode_local_is_rejected():
