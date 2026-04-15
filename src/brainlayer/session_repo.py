@@ -191,6 +191,42 @@ class SessionMixin:
                 else:
                     raise
 
+    def update_reenrichment_preview(
+        self,
+        chunk_id: str,
+        summary_v2: Optional[str] = None,
+        enrichment_version: Optional[str] = None,
+    ) -> None:
+        """Persist preview re-enrichment fields without mutating the live summary."""
+        cursor = self.conn.cursor()
+
+        sets: list[str] = []
+        params: list[Any] = []
+
+        if summary_v2 is not None:
+            sets.append("summary_v2 = ?")
+            params.append(summary_v2)
+        if enrichment_version is not None:
+            sets.append("enrichment_version = ?")
+            params.append(enrichment_version)
+
+        if not sets:
+            return
+
+        params.append(chunk_id)
+        for attempt in range(3):
+            try:
+                cursor.execute(f"UPDATE chunks SET {', '.join(sets)} WHERE id = ?", params)
+                from .search_repo import clear_hybrid_search_cache
+
+                clear_hybrid_search_cache(getattr(self, "db_path", None))
+                return
+            except apsw.BusyError:
+                if attempt < 2:
+                    _time.sleep(0.5 * (attempt + 1))
+                else:
+                    raise
+
     def update_sentiment(
         self,
         chunk_id: str,
