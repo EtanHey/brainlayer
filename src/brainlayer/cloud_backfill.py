@@ -80,14 +80,32 @@ ENRICHMENT_SCHEMA = {
             "type": "string",
             "enum": ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"],
         },
-        "primary_symbols": {"type": "array", "items": {"type": "string"}, "description": "Classes, functions, files mentioned"},
+        "primary_symbols": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Classes, functions, files mentioned",
+        },
         "resolved_query": {"type": "string", "description": "Hypothetical question this chunk answers"},
         "epistemic_level": {"type": "string", "enum": ["hypothesis", "substantiated", "validated"]},
         "version_scope": {"type": "string", "description": "Version or system state discussed, or null"},
         "debt_impact": {"type": "string", "enum": ["introduction", "resolution", "none"]},
-        "external_deps": {"type": "array", "items": {"type": "string"}, "description": "Libraries or external APIs used"},
+        "external_deps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Libraries or external APIs used",
+        },
     },
-    "required": ["summary", "tags", "importance", "intent", "primary_symbols", "resolved_query", "epistemic_level", "debt_impact", "external_deps"],
+    "required": [
+        "summary",
+        "tags",
+        "importance",
+        "intent",
+        "primary_symbols",
+        "resolved_query",
+        "epistemic_level",
+        "debt_impact",
+        "external_deps",
+    ],
 }
 
 CHECKPOINT_COLUMNS = (
@@ -127,12 +145,11 @@ def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
 
 def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
     """Estimate Gemini 2.5 Flash-Lite Batch API cost using the 50% batch discount."""
-    return (
-        input_tokens * BATCH_INPUT_COST_PER_MILLION + output_tokens * BATCH_OUTPUT_COST_PER_MILLION
-    ) / 1_000_000
+    return (input_tokens * BATCH_INPUT_COST_PER_MILLION + output_tokens * BATCH_OUTPUT_COST_PER_MILLION) / 1_000_000
 
 
 # ── DB helpers ──────────────────────────────────────────────────────────
+
 
 def get_checkpoint_db_path(db_path: Path | str | None = None) -> Path:
     """Resolve the checkpoint sidecar path for a selected main DB."""
@@ -211,7 +228,7 @@ def _migrate_checkpoints_from_main_db(store: Optional[VectorStore], conn: apsw.C
     placeholders = ", ".join("?" for _ in CHECKPOINT_COLUMNS)
     conn.cursor().executemany(
         f"""
-        INSERT OR REPLACE INTO {CHECKPOINT_TABLE} ({', '.join(CHECKPOINT_COLUMNS)})
+        INSERT OR REPLACE INTO {CHECKPOINT_TABLE} ({", ".join(CHECKPOINT_COLUMNS)})
         VALUES ({placeholders})
         """,
         rows,
@@ -344,9 +361,7 @@ class ReadOnlyBackfillStore:
         enriched = cursor.execute(
             "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
         ).fetchone()[0]
-        skipped = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"
-        ).fetchone()[0]
+        skipped = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'").fetchone()[0]
         remaining = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0]
         enrichable = total - skipped
         by_intent = cursor.execute(
@@ -455,6 +470,7 @@ def get_reenrichment_stats(
 
 # ── Export ──────────────────────────────────────────────────────────────
 
+
 def _init_sanitizer(store: VectorStore) -> Sanitizer:
     """Initialize the sanitizer with name dictionary from the DB.
 
@@ -548,7 +564,7 @@ def export_unenriched_chunks(
     total_pii_found = 0
 
     for i in range(0, len(rows), CHUNKS_PER_JOB):
-        batch = rows[i:i + CHUNKS_PER_JOB]
+        batch = rows[i : i + CHUNKS_PER_JOB]
         batch_num += 1
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = EXPORT_DIR / f"batch_{ts}_{batch_num:03d}.jsonl"
@@ -564,9 +580,7 @@ def export_unenriched_chunks(
                 }
 
                 if sanitizer is not None:
-                    prompt, sanitize_result = build_external_prompt(
-                        chunk_dict, sanitizer
-                    )
+                    prompt, sanitize_result = build_external_prompt(chunk_dict, sanitizer)
                     if sanitize_result.pii_detected:
                         total_pii_found += 1
                 else:
@@ -591,6 +605,7 @@ def export_unenriched_chunks(
 
 
 # ── Gemini Batch API (google.genai SDK) ────────────────────────────────
+
 
 def _get_genai_client():
     """Get a google.genai Client configured with API key."""
@@ -660,7 +675,7 @@ def submit_gemini_batch(
         except Exception as e:
             err = str(e)
             if "429" in err and attempt < max_retries - 1:
-                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
+                wait = 30 * (2**attempt)  # 30s, 60s, 120s
                 print(f"  429 RESOURCE_EXHAUSTED — waiting {wait}s before retry...")
                 time.sleep(wait)
             else:
@@ -800,6 +815,7 @@ def download_gemini_results(batch_job) -> List[Dict[str, Any]]:
 
 # ── Import results ──────────────────────────────────────────────────────
 
+
 def _clear_imported_preview(store: VectorStore, chunk_id: str) -> None:
     """Remove preview fields written by a failed remote import so the chunk can retry."""
     store.conn.cursor().execute(
@@ -896,12 +912,14 @@ def import_results(
 
 # ── Usage logging ───────────────────────────────────────────────────────
 
+
 def log_batch_usage(batch_id: str, model: str, input_tokens: int, output_tokens: int, cost_usd: float) -> None:
     """Log batch usage to Supabase. Best-effort."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
         import requests
+
         requests.post(
             f"{SUPABASE_URL}/rest/v1/llm_usage",
             headers={
@@ -925,6 +943,7 @@ def log_batch_usage(batch_id: str, model: str, input_tokens: int, output_tokens:
 
 
 # ── Main workflows ──────────────────────────────────────────────────────
+
 
 def run_full_backfill(
     db_path: Path,
@@ -951,10 +970,7 @@ def run_full_backfill(
         if submit_only and sample == 0:
             jsonl_files = get_unsubmitted_export_files(db_path=db_path)
             if jsonl_files:
-                print(
-                    f"Reusing {len(jsonl_files)} existing JSONL batch files not yet checkpointed "
-                    f"from {EXPORT_DIR}"
-                )
+                print(f"Reusing {len(jsonl_files)} existing JSONL batch files not yet checkpointed from {EXPORT_DIR}")
             else:
                 jsonl_files = export_unenriched_chunks(store, max_chunks=max_chunks, no_sanitize=no_sanitize)
                 if not jsonl_files:
@@ -1041,17 +1057,14 @@ def run_full_backfill(
 
         # Final stats
         final_stats = get_reenrichment_stats(store)
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("BACKFILL COMPLETE")
         print(
             f"  Imported: {total_imported['success']} ok, "
             f"{total_imported['failed']} fail, {total_imported['skipped']} skip"
         )
-        print(
-            f"  Preview progress: {final_stats['previewed']}/{final_stats['eligible']} "
-            f"({final_stats['percent']}%)"
-        )
-        print(f"{'='*60}")
+        print(f"  Preview progress: {final_stats['previewed']}/{final_stats['eligible']} ({final_stats['percent']}%)")
+        print(f"{'=' * 60}")
 
     finally:
         store.close()
@@ -1132,14 +1145,18 @@ def resume_backfill(db_path: Path) -> None:
         imported_count = 0
         failed_count = 0
         for i, job in enumerate(pending):
-            print(f"\nResuming [{i+1}/{len(pending)}]: {job['batch_id']}")
+            print(f"\nResuming [{i + 1}/{len(pending)}]: {job['batch_id']}")
             try:
                 result = poll_gemini_batch(job["batch_id"])
             except Exception as exc:
                 print(f"  ERROR polling job: {exc}")
-                save_checkpoint(store, batch_id=job["batch_id"], status="failed",
-                                error=str(exc)[:500],
-                                completed_at=datetime.now(timezone.utc).isoformat())
+                save_checkpoint(
+                    store,
+                    batch_id=job["batch_id"],
+                    status="failed",
+                    error=str(exc)[:500],
+                    completed_at=datetime.now(timezone.utc).isoformat(),
+                )
                 failed_count += 1
                 continue
 
@@ -1178,10 +1195,7 @@ def resume_backfill(db_path: Path) -> None:
 
         final_stats = get_reenrichment_stats(store)
         print(f"\nImported {imported_count} jobs, {failed_count} failed")
-        print(
-            f"Preview progress: {final_stats['previewed']}/{final_stats['eligible']} "
-            f"({final_stats['percent']}%)"
-        )
+        print(f"Preview progress: {final_stats['previewed']}/{final_stats['eligible']} ({final_stats['percent']}%)")
 
     finally:
         store.close()
@@ -1216,7 +1230,9 @@ def show_status(db_path: Path) -> None:
         print("-" * 100)
         for batch_id, backend, model, status, chunk_count, submitted, completed, error in rows:
             err_str = (error or "")[:30]
-            print(f"{status:<12} {chunk_count or 0:<8} {backend:<10} {(submitted or '')[:19]:<22} {(completed or '')[:19]:<22} {err_str}")
+            print(
+                f"{status:<12} {chunk_count or 0:<8} {backend:<10} {(submitted or '')[:19]:<22} {(completed or '')[:19]:<22} {err_str}"
+            )
 
         stats = get_reenrichment_stats(store)
         print(
@@ -1229,6 +1245,7 @@ def show_status(db_path: Path) -> None:
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cloud backfill for BrainLayer enrichment")
@@ -1243,10 +1260,16 @@ def main() -> int:
     parser.add_argument("--sample", type=int, default=0, help="Run N-chunk validation sample")
     parser.add_argument("--resume", action="store_true", help="Resume pending batch jobs")
     parser.add_argument("--status", action="store_true", help="Show batch job status")
-    parser.add_argument("--no-sanitize", action="store_true",
-                        help="Skip PII sanitization (local testing only — NEVER use for external APIs)")
-    parser.add_argument("--submit-only", action="store_true",
-                        help="Submit batch jobs and exit — don't poll. Use --resume later to import.")
+    parser.add_argument(
+        "--no-sanitize",
+        action="store_true",
+        help="Skip PII sanitization (local testing only — NEVER use for external APIs)",
+    )
+    parser.add_argument(
+        "--submit-only",
+        action="store_true",
+        help="Submit batch jobs and exit — don't poll. Use --resume later to import.",
+    )
 
     args = parser.parse_args()
     db = Path(args.db) if args.db else DEFAULT_DB_PATH
@@ -1256,8 +1279,14 @@ def main() -> int:
     elif args.resume:
         resume_backfill(db)
     else:
-        run_full_backfill(db, model=args.model, dry_run=args.dry_run, sample=args.sample,
-                          no_sanitize=args.no_sanitize, submit_only=args.submit_only)
+        run_full_backfill(
+            db,
+            model=args.model,
+            dry_run=args.dry_run,
+            sample=args.sample,
+            no_sanitize=args.no_sanitize,
+            submit_only=args.submit_only,
+        )
     return 0
 
 

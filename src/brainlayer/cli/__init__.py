@@ -939,9 +939,7 @@ def enrich(
                 sample=limit,
                 submit_only=True,
             )
-            console.print(
-                f"[bold green]Done![/] mode=batch phase=submit sample={limit} model={model}"
-            )
+            console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit} model={model}")
             return
         if phase == "run":
             cloud_backfill.run_full_backfill(
@@ -950,9 +948,7 @@ def enrich(
                 sample=limit,
                 submit_only=False,
             )
-            console.print(
-                f"[bold green]Done![/] mode=batch phase=run sample={limit} model={model}"
-            )
+            console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit} model={model}")
             return
         if phase in {"poll", "import"}:
             summary = cloud_backfill.process_pending_jobs_once(db_path)

@@ -435,10 +435,14 @@ def test_import_results_writes_preview_fields_for_unenriched_chunks(tmp_path, mo
         ]
 
         counts = cloud_backfill.import_results(store, results, "batch-1")
-        row = store.conn.cursor().execute(
-            "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
-            ("chunk-1",),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT summary, summary_v2, enrichment_version, enriched_at FROM chunks WHERE id = ?",
+                ("chunk-1",),
+            )
+            .fetchone()
+        )
 
         assert counts == {"success": 1, "failed": 0, "skipped": 0}
         assert row == (None, "Remote enrichment imported successfully.", "2.0", None)
@@ -533,19 +537,7 @@ def test_import_results_keeps_chunk_retryable_when_parse_fails(tmp_path, monkeyp
         results = [
             {
                 "key": "chunk-1",
-                "response": {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {
-                                        "text": "not valid json"
-                                    }
-                                ]
-                            }
-                        }
-                    ]
-                },
+                "response": {"candidates": [{"content": {"parts": [{"text": "not valid json"}]}}]},
             }
         ]
 
