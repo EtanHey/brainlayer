@@ -56,9 +56,33 @@ def make_db(tmp_path: Path) -> Path:
         """
     )
     rows = [
-        ("rt-a1", "Mehayom lets fucking ship this build tonight", "mehayom", "2026-04-15T20:27:18.000Z", None, ["shipping", "build"], 7.0),
-        ("rt-a2", "Mehayom fix the fucking build and ship", "mehayom", "2026-04-15T20:28:18.000Z", "sess-1", ["shipping", "rtl"], 8.0),
-        ("rt-a3", "Mehayom we are fucking shipping after build fix", "mehayom", "2026-04-15T20:29:18.000Z", "sess-1", ["shipping", "android"], 6.0),
+        (
+            "rt-a1",
+            "Mehayom lets fucking ship this build tonight",
+            "mehayom",
+            "2026-04-15T20:27:18.000Z",
+            None,
+            ["shipping", "build"],
+            7.0,
+        ),
+        (
+            "rt-a2",
+            "Mehayom fix the fucking build and ship",
+            "mehayom",
+            "2026-04-15T20:28:18.000Z",
+            "sess-1",
+            ["shipping", "rtl"],
+            8.0,
+        ),
+        (
+            "rt-a3",
+            "Mehayom we are fucking shipping after build fix",
+            "mehayom",
+            "2026-04-15T20:29:18.000Z",
+            "sess-1",
+            ["shipping", "android"],
+            6.0,
+        ),
         ("rt-b1", "Mini app fucking auth bug", "mini", "2026-04-15T10:00:00.000Z", "sess-2", ["auth"], 5.0),
         ("rt-b2", "Mini app fucking auth still broken", "mini", "2026-04-15T10:01:00.000Z", "sess-2", ["auth"], 5.0),
     ]
