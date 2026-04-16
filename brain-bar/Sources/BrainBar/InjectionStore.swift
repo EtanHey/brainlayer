@@ -65,15 +65,13 @@ final class InjectionStore: ObservableObject {
 
     deinit {
         pollTask?.cancel()
-        if isRunning {
-            let center = CFNotificationCenterGetDarwinNotifyCenter()
-            CFNotificationCenterRemoveObserver(
-                center,
-                Unmanaged.passUnretained(self).toOpaque(),
-                CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
-                nil
-            )
-        }
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterRemoveObserver(
+            center,
+            Unmanaged.passUnretained(self).toOpaque(),
+            CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
+            nil
+        )
         database.close()
     }
 

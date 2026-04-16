@@ -11,7 +11,9 @@ enum DashboardMetricFormatter {
     }
 
     static func speedDisplay(ratePerMinute: Double) -> RateDisplay {
-        let clampedRate = max(ratePerMinute, 0)
+        guard let clampedRate = sanitizedRatePerMinute(ratePerMinute) else {
+            return RateDisplay(valueText: "0", unitText: "/min")
+        }
         if clampedRate == 0 {
             return RateDisplay(valueText: "0", unitText: "/min")
         }
@@ -31,8 +33,16 @@ enum DashboardMetricFormatter {
     }
 
     static func rateDetailString(ratePerMinute: Double) -> String {
-        let perSecond = max(ratePerMinute, 0) / 60.0
+        guard let clampedRate = sanitizedRatePerMinute(ratePerMinute) else {
+            return "0/s"
+        }
+        let perSecond = clampedRate / 60.0
         return "\(formattedRateValue(perSecond))/s"
+    }
+
+    private static func sanitizedRatePerMinute(_ ratePerMinute: Double) -> Double? {
+        guard ratePerMinute.isFinite else { return nil }
+        return max(ratePerMinute, 0)
     }
 
     private static func formattedRateValue(_ value: Double) -> String {

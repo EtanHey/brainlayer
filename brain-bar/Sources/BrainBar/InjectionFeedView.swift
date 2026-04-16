@@ -5,6 +5,7 @@ struct InjectionFeedView: View {
     @Binding var filterText: String
     @State private var expandedEventIDs: Set<Int64> = []
     @State private var selectedConversation: BrainDatabase.ExpandedConversation?
+    @State private var conversationErrorMessage: String?
 
     private var filteredEvents: [InjectionEvent] {
         let trimmed = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,7 +54,12 @@ struct InjectionFeedView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(event.chunkIDs, id: \.self) { chunkID in
                                     Button {
-                                        selectedConversation = try? store.expandedConversation(chunkID: chunkID)
+                                        do {
+                                            selectedConversation = try store.expandedConversation(chunkID: chunkID)
+                                            conversationErrorMessage = nil
+                                        } catch {
+                                            conversationErrorMessage = error.localizedDescription
+                                        }
                                     } label: {
                                         HStack {
                                             Text(chunkID)
@@ -79,6 +85,23 @@ struct InjectionFeedView: View {
         }
         .sheet(item: $selectedConversation) { conversation in
             ChunkConversationSheet(conversation: conversation)
+        }
+        .alert(
+            "Failed to load conversation",
+            isPresented: Binding(
+                get: { conversationErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        conversationErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK") {
+                conversationErrorMessage = nil
+            }
+        } message: {
+            Text(conversationErrorMessage ?? "Unknown error")
         }
     }
 

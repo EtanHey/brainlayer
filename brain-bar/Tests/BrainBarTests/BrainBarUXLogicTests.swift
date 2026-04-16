@@ -165,6 +165,17 @@ final class BrainBarUXLogicTests: XCTestCase {
         )
     }
 
+    func testDashboardMetricFormatterGuardsAgainstNonFiniteRates() {
+        XCTAssertEqual(
+            DashboardMetricFormatter.speedString(ratePerMinute: .infinity),
+            "0/min"
+        )
+        XCTAssertEqual(
+            DashboardMetricFormatter.rateDetailString(ratePerMinute: .infinity),
+            "0/s"
+        )
+    }
+
     func testIncomingRelationDisplayPutsEntityNameBeforeRelationVerb() {
         let relation = EntityCard.Relation(
             relationType: "coaches",

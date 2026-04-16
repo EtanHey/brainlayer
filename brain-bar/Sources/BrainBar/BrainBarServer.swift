@@ -79,9 +79,9 @@ final class BrainBarServer: @unchecked Sendable {
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     /// Max time to wait for a backpressured client to become writable again.
     /// Temporary bursts should survive; truly dead peers still get disconnected.
-    static let writeStallTimeoutMilliseconds: Int32 = 2_000
-    static let writeChunkSize = 512
-    static let writeRetrySleepMicroseconds: useconds_t = 10_000
+    static let writeStallTimeoutMilliseconds: Int32 = 250
+    static let writeChunkSize = 4_096
+    static let writeRetrySleepMicroseconds: useconds_t = 2_000
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {

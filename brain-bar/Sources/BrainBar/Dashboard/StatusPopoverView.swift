@@ -408,14 +408,6 @@ final class StatusPopoverView: NSViewController {
         NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
     }
 
-    private func enrichmentActivitySummary(_ stats: DashboardStats) -> String {
-        let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
-        if recentCompletions == 0 {
-            return "No completions in the last 30m"
-        }
-        return "\(recentCompletions) completions in the last 30m"
-    }
-
     private func makePlaceholder(_ text: String) -> NSView {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13)

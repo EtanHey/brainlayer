@@ -1928,9 +1928,12 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(chunkJSON, to: stmt, index: 4)
         sqlite3_bind_int(stmt, 5, Int32(tokenCount))
         let stepRC = sqlite3_step(stmt)
-        let rowID = sqlite3_last_insert_rowid(db)
+        let rowID: Int64
         if stepRC == SQLITE_DONE {
+            rowID = sqlite3_last_insert_rowid(db)
             Self.postDashboardChangeNotification()
+        } else {
+            rowID = 0
         }
         return InjectionEvent(id: rowID, sessionID: sessionID, timestamp: ts, query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
     }
