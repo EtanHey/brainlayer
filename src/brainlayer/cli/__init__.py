@@ -1,6 +1,5 @@
 """BrainLayer CLI - Command line interface for the knowledge pipeline."""
 
-import os
 import re as _re
 import sys
 import time
@@ -22,9 +21,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
-
-DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760"))
 
 app = typer.Typer(
     name="brainlayer",
