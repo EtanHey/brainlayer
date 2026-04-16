@@ -392,10 +392,7 @@ def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
 
     assert _ensure_content_hash_column(store) is True
 
-    indexes = {
-        row[1]: bool(row[2])
-        for row in conn.execute("PRAGMA index_list(chunks)")
-    }
+    indexes = {row[1]: bool(row[2]) for row in conn.execute("PRAGMA index_list(chunks)")}
     assert "idx_content_hash_unique" not in indexes
     assert indexes.get("idx_content_hash") is False
 
