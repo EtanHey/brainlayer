@@ -390,16 +390,36 @@ def _is_duplicate_content(store, content: str) -> bool:
 
 def _ensure_content_hash_column(store) -> bool:
     """Ensure the content_hash column exists on chunks table. Returns True if it exists."""
+    cursor = store.conn.cursor()
     try:
-        cursor = store.conn.cursor()
         cursor.execute("SELECT content_hash FROM chunks LIMIT 0")
-        return True
     except Exception:
         try:
             cursor.execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
-            return True
         except Exception:
             return False
+
+    try:
+        indexes = list(cursor.execute("PRAGMA index_list(chunks)"))
+        has_content_hash_index = False
+        for row in indexes:
+            index_name = row[1]
+            is_unique = bool(row[2])
+            quoted_name = index_name.replace('"', '""')
+            columns = [info[2] for info in cursor.execute(f'PRAGMA index_info("{quoted_name}")')]
+            if "content_hash" not in columns:
+                continue
+            if is_unique:
+                cursor.execute(f'DROP INDEX IF EXISTS "{quoted_name}"')
+                continue
+            has_content_hash_index = True
+
+        if not has_content_hash_index:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_hash ON chunks(content_hash)")
+    except Exception:
+        pass
+
+    return True
 
 
 def _ensure_raw_entities_json_column(store) -> bool:
