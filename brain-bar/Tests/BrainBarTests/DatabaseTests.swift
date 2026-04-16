@@ -283,6 +283,30 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(filtered.map(\.query), ["newer event", "older event"])
     }
 
+    func testListInjectionEventsUsesIDAsTieBreakerForMatchingTimestamps() throws {
+        db.recordInjectionEvent(
+            sessionID: "session-a",
+            query: "first same-second event",
+            chunkIDs: ["chunk-1"],
+            tokenCount: 10,
+            timestamp: "2026-03-31T04:02:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "session-a",
+            query: "second same-second event",
+            chunkIDs: ["chunk-2"],
+            tokenCount: 20,
+            timestamp: "2026-03-31T04:02:00.000Z"
+        )
+
+        let events = try db.listInjectionEvents(sessionID: "session-a", limit: 10)
+
+        XCTAssertEqual(
+            events.map(\.query),
+            ["second same-second event", "first same-second event"]
+        )
+    }
+
     // MARK: - Filter: project
 
     func testSearchFiltersByProject() throws {

@@ -20,7 +20,7 @@ final class InjectionStoreTests: XCTestCase {
     }
 
     func testStartPublishesExistingEventsImmediately() async throws {
-        try db.recordInjectionEvent(
+        db.recordInjectionEvent(
             sessionID: "session-1",
             query: "existing event",
             chunkIDs: ["chunk-1"],
@@ -43,7 +43,7 @@ final class InjectionStoreTests: XCTestCase {
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
         await MainActor.run { store.start() }
 
-        try db.recordInjectionEvent(
+        db.recordInjectionEvent(
             sessionID: "session-2",
             query: "new event",
             chunkIDs: ["chunk-a", "chunk-b"],
@@ -93,7 +93,7 @@ final class InjectionStoreTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         await MainActor.run { store.stop() }
 
-        try db.recordInjectionEvent(
+        db.recordInjectionEvent(
             sessionID: "session-3",
             query: "restart event",
             chunkIDs: ["chunk-restart"],
@@ -106,5 +106,14 @@ final class InjectionStoreTests: XCTestCase {
         let queries = await MainActor.run { store.events.map(\.query) }
         XCTAssertEqual(queries, ["restart event"])
         await MainActor.run { store.stop() }
+    }
+
+    @MainActor
+    func testInitThrowsWhenDatabaseCannotOpen() throws {
+        let directoryPath = NSTemporaryDirectory() + "brainbar-injection-store-dir-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: directoryPath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: directoryPath) }
+
+        XCTAssertThrowsError(try InjectionStore(databasePath: directoryPath))
     }
 }

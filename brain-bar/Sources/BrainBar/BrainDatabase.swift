@@ -1944,7 +1944,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
         if sessionID != nil { sql += " WHERE session_id = ?" }
-        sql += " ORDER BY timestamp DESC LIMIT ?"
+        sql += " ORDER BY timestamp DESC, id DESC LIMIT ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))

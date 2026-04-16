@@ -28,6 +28,9 @@ final class InjectionStore: ObservableObject {
 
     init(databasePath: String) throws {
         self.database = BrainDatabase(path: databasePath)
+        guard database.isOpen else {
+            throw BrainDatabase.DBError.notOpen
+        }
     }
 
     func start(sessionID: String? = nil, limit: Int = 50) {
