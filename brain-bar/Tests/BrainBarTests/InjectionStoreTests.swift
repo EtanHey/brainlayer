@@ -116,4 +116,23 @@ final class InjectionStoreTests: XCTestCase {
 
         XCTAssertThrowsError(try InjectionStore(databasePath: directoryPath))
     }
+
+    @MainActor
+    func testScheduledDarwinRefreshDoesNotRetainStoreAfterRelease() throws {
+        weak var weakStore: InjectionStore?
+        var observerBox: InjectionStoreObserverBox?
+
+        do {
+            let store = try InjectionStore(databasePath: tempDBPath)
+            observerBox = store.observerBoxForTesting
+            InjectionStoreDarwinObserver.scheduleRefresh(observerBox: observerBox!)
+            weakStore = store
+        }
+
+        XCTAssertNotNil(observerBox)
+        XCTAssertNil(
+            weakStore,
+            "Darwin notification refresh should capture the store weakly so teardown cannot hold it alive"
+        )
+    }
 }
