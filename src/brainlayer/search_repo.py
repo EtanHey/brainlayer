@@ -165,7 +165,9 @@ class SearchMixin:
         else:
             normalized_relevance = np.ones_like(relevance)
 
-        matrix = np.stack([embeddings_by_id[candidate[1]] for candidate in mmr_candidates]).astype(np.float32, copy=False)
+        matrix = np.stack([embeddings_by_id[candidate[1]] for candidate in mmr_candidates]).astype(
+            np.float32, copy=False
+        )
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         norms = np.maximum(norms, 1e-12)
         cosine = np.clip((matrix / norms) @ (matrix / norms).T, -1.0, 1.0)

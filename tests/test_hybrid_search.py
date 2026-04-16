@@ -328,7 +328,13 @@ class TestHybridSearch:
 
         scored = [
             (0.99, "dup-primary", "oauth token rotation incident rollback and session repair", {}, 0.01),
-            (0.98, "dup-secondary", "oauth token rotation incident rollback and session repair duplicate notes", {}, 0.02),
+            (
+                0.98,
+                "dup-secondary",
+                "oauth token rotation incident rollback and session repair duplicate notes",
+                {},
+                0.02,
+            ),
             (0.94, "distinct-relevant", "oauth token rotation migration checklist and recovery guide", {}, 0.12),
             (0.9, "distinct-supporting", "oauth token rotation audit trail and operator runbook", {}, 0.15),
         ]
