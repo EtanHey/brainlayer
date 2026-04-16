@@ -102,6 +102,7 @@ struct PipelineActivityTracks: Sendable, Equatable {
         trailingBucketCount: Int = 2
     ) -> PipelineActivityTracks {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats)
+        let activityWindowLabel = windowLabel(activityWindowMinutes)
 
         let indexingRatePerMinute = recentRatePerMinute(
             values: stats.recentActivityBuckets,
@@ -113,8 +114,8 @@ struct PipelineActivityTracks: Sendable, Equatable {
             ? DashboardMetricFormatter.speedString(ratePerMinute: indexingRatePerMinute)
             : "idle"
         let indexingDetailText = recentWrites > 0
-            ? "\(recentWrites) chunks in last 30m"
-            : "No new chunks in last 30m"
+            ? "\(recentWrites) chunks in last \(activityWindowLabel)"
+            : "No new chunks in last \(activityWindowLabel)"
 
         let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
         let enrichmentDisplayRatePerMinute = displayedRatePerMinute(
@@ -134,13 +135,13 @@ struct PipelineActivityTracks: Sendable, Equatable {
 
         let enrichingDetailText: String
         if stats.pendingEnrichmentCount > 0, recentCompletions > 0 {
-            enrichingDetailText = "\(stats.pendingEnrichmentCount) pending · \(recentCompletions) done in last 30m"
+            enrichingDetailText = "\(stats.pendingEnrichmentCount) pending · \(recentCompletions) done in last \(activityWindowLabel)"
         } else if stats.pendingEnrichmentCount > 0 {
             enrichingDetailText = "\(stats.pendingEnrichmentCount) pending"
         } else if recentCompletions > 0 {
-            enrichingDetailText = "\(recentCompletions) done in last 30m"
+            enrichingDetailText = "\(recentCompletions) done in last \(activityWindowLabel)"
         } else {
-            enrichingDetailText = "No completions in last 30m"
+            enrichingDetailText = "No completions in last \(activityWindowLabel)"
         }
 
         return PipelineActivityTracks(
@@ -190,6 +191,17 @@ struct PipelineActivityTracks: Sendable, Equatable {
         let recentWindowMinutes = bucketWidthMinutes * Double(recentBucketCount)
         guard recentWindowMinutes > 0 else { return 0 }
         return Double(recentCount) / recentWindowMinutes
+    }
+
+    private static func windowLabel(_ activityWindowMinutes: Double) -> String {
+        guard activityWindowMinutes.isFinite, activityWindowMinutes > 0 else {
+            return "0m"
+        }
+        let roundedMinutes = activityWindowMinutes.rounded()
+        if roundedMinutes == activityWindowMinutes {
+            return "\(Int(roundedMinutes))m"
+        }
+        return "\(String(format: "%.1f", activityWindowMinutes))m"
     }
 }
 

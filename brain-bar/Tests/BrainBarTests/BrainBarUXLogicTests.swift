@@ -158,6 +158,36 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(tracks.enriching.rateText, "2/min")
     }
 
+    func testPipelineActivityTracksDetailTextUsesConfiguredActivityWindow() {
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 100,
+            pendingEnrichmentCount: 20,
+            enrichmentPercent: 83.3,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 4, 6],
+            recentEnrichmentBuckets: [0, 0, 1, 3]
+        )
+        let daemon = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: Date()
+        )
+
+        let tracks = PipelineActivityTracks.derive(
+            daemon: daemon,
+            stats: stats,
+            activityWindowMinutes: 15
+        )
+
+        XCTAssertEqual(tracks.indexing.detailText, "10 chunks in last 15m")
+        XCTAssertEqual(tracks.enriching.detailText, "20 pending · 4 done in last 15m")
+    }
+
     func testDashboardMetricFormatterSummarizesSecondaryRateUnits() {
         XCTAssertEqual(
             DashboardMetricFormatter.rateDetailString(ratePerMinute: 18),
