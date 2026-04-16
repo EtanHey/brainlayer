@@ -157,7 +157,6 @@ class SearchMixin:
         if len(mmr_candidates) < 2:
             return scored
 
-        fallback_candidates = [candidate for candidate in top_candidates if candidate[1] not in embeddings_by_id]
         relevance = np.array([candidate[0] for candidate in mmr_candidates], dtype=np.float32)
         rel_max = float(relevance.max())
         if rel_max > 0.0:
@@ -175,8 +174,9 @@ class SearchMixin:
 
         selected: list[int] = [int(np.argmax(normalized_relevance))]
         remaining = set(range(len(mmr_candidates))) - set(selected)
+        target_count = min(len(mmr_candidates), max(n_results, 1))
 
-        while remaining:
+        while remaining and len(selected) < target_count:
             remaining_indices = sorted(remaining)
             diversity_penalty = cosine[remaining_indices][:, selected].max(axis=1)
             mmr_scores = (_MMR_LAMBDA * normalized_relevance[remaining_indices]) - (
@@ -186,8 +186,15 @@ class SearchMixin:
             selected.append(best_idx)
             remaining.remove(best_idx)
 
+        reranked_ids = {mmr_candidates[idx][1] for idx in selected}
         reranked = [mmr_candidates[idx] for idx in selected]
-        return reranked + fallback_candidates + tail_candidates
+        reranked.extend(candidate for candidate in mmr_candidates if candidate[1] not in reranked_ids)
+
+        reranked_iter = iter(reranked)
+        recombined = [
+            next(reranked_iter) if candidate[1] in embeddings_by_id else candidate for candidate in top_candidates
+        ]
+        return recombined + tail_candidates
 
     def _queue_retrieval_strengthening(self, chunk_ids: List[str], now: Optional[float] = None) -> None:
         if getattr(self, "_readonly", False):

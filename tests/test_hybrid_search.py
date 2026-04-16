@@ -345,3 +345,66 @@ class TestHybridSearch:
         assert ids[0] == "dup-primary", ids
         assert "distinct-relevant" in ids[:2], ids
         assert set(ids[:2]) != {"dup-primary", "dup-secondary"}, ids
+
+    def test_mmr_rerank_keeps_nonvector_hits_in_original_score_slots(self, store):
+        def embedding(primary: float, secondary: float = 0.0) -> list[float]:
+            vector = [0.0] * 1024
+            vector[0] = primary
+            vector[1] = secondary
+            return vector
+
+        cursor = store.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                char_count, source, created_at
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'hybrid-test', 'assistant_text', ?, 'claude_code', ?)
+            """,
+            (
+                "lexical-only",
+                "oauth token rotation troubleshooting transcript from a manual note",
+                60,
+                "2026-04-05T00:00:00Z",
+            ),
+        )
+        _insert_chunk(
+            store,
+            chunk_id="dup-primary",
+            content="oauth token rotation incident rollback and session repair",
+            embedding=embedding(1.0, 0.0),
+            importance=6.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="dup-secondary",
+            content="oauth token rotation incident rollback and session repair duplicate notes",
+            embedding=embedding(0.999, 0.001),
+            importance=6.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="distinct-relevant",
+            content="oauth token rotation migration checklist and recovery guide",
+            embedding=embedding(0.72, 0.69),
+            importance=5.5,
+        )
+
+        scored = [
+            (1.0, "lexical-only", "oauth token rotation troubleshooting transcript from a manual note", {}, 0.0),
+            (0.99, "dup-primary", "oauth token rotation incident rollback and session repair", {}, 0.01),
+            (
+                0.98,
+                "dup-secondary",
+                "oauth token rotation incident rollback and session repair duplicate notes",
+                {},
+                0.02,
+            ),
+            (0.94, "distinct-relevant", "oauth token rotation migration checklist and recovery guide", {}, 0.12),
+        ]
+
+        reranked = store._mmr_rerank_scored_results(scored, n_results=2)
+        ids = [item[1] for item in reranked[:2]]
+
+        assert ids[0] == "lexical-only", ids
+        assert "dup-secondary" not in ids, ids
