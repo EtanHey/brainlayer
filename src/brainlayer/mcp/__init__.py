@@ -1,8 +1,8 @@
 """BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
-import os
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)

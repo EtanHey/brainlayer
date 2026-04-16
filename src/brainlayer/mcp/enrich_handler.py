@@ -1,8 +1,8 @@
 """brain_enrich MCP handler — unified enrichment through a single tool."""
 
 import asyncio
-import os
 import logging
+import os
 
 from mcp.types import CallToolResult, TextContent
 
