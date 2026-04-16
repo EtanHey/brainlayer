@@ -29,6 +29,7 @@ final class InjectionStoreTests: XCTestCase {
 
         let databasePath = tempDBPath!
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+        defer { Task { @MainActor in store.stop() } }
         await MainActor.run { store.start() }
 
         try await Task.sleep(for: .milliseconds(150))
@@ -40,6 +41,7 @@ final class InjectionStoreTests: XCTestCase {
     func testObservationPublishesNewEventsAfterInsert() async throws {
         let databasePath = tempDBPath!
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+        defer { Task { @MainActor in store.stop() } }
         await MainActor.run { store.start() }
 
         try db.recordInjectionEvent(
@@ -55,5 +57,31 @@ final class InjectionStoreTests: XCTestCase {
         let firstChunkIDs = await MainActor.run { store.events.first?.chunkIDs }
         XCTAssertEqual(firstQuery, "new event")
         XCTAssertEqual(firstChunkIDs, ["chunk-a", "chunk-b"])
+    }
+
+    func testExpandedConversationLoadsTargetChunkAndContext() async throws {
+        for index in 1...4 {
+            try db.insertChunk(
+                id: "inject-\(index)",
+                content: "Injection conversation \(index)",
+                sessionId: "inject-session",
+                project: "brainlayer",
+                contentType: index.isMultiple(of: 2) ? "assistant_text" : "user_message",
+                importance: 5
+            )
+        }
+
+        let databasePath = tempDBPath!
+        let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+        defer { Task { @MainActor in store.stop() } }
+        let conversation = try await MainActor.run {
+            try store.expandedConversation(chunkID: "inject-2")
+        }
+
+        XCTAssertEqual(conversation.target.chunkID, "inject-2")
+        XCTAssertEqual(
+            conversation.entries.map(\.chunkID),
+            ["inject-1", "inject-2", "inject-3", "inject-4"]
+        )
     }
 }

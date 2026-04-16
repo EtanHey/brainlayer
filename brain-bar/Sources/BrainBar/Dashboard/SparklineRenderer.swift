@@ -6,6 +6,7 @@ enum SparklineRenderer {
     static func render(state: PipelineState, values: [Int], size: NSSize = NSSize(width: 44, height: 18)) -> NSImage {
         let width = max(Int(size.width.rounded(.up)), 1)
         let height = max(Int(size.height.rounded(.up)), 1)
+        let isCompact = height <= 20 || width <= 52
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
         guard let context = CGContext(
@@ -27,24 +28,40 @@ enum SparklineRenderer {
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
-        let indicatorRect = CGRect(x: 1, y: CGFloat(height) - 7, width: 5, height: 5)
-        context.setFillColor(state.color.cgColor)
-        context.fillEllipse(in: indicatorRect)
-
         guard values.count > 1 else {
             return image(from: context, size: size)
         }
 
         let maxValue = max(values.max() ?? 0, 1)
-        let chartRect = CGRect(x: 8, y: 2, width: CGFloat(width) - 10, height: CGFloat(height) - 4)
+        let horizontalInset: CGFloat = isCompact ? 2 : 10
+        let verticalInset: CGFloat = isCompact ? 2 : 10
+        let chartRect = CGRect(
+            x: horizontalInset,
+            y: verticalInset,
+            width: max(CGFloat(width) - (horizontalInset * 2), 1),
+            height: max(CGFloat(height) - (verticalInset * 2), 1)
+        )
         let step = chartRect.width / CGFloat(max(values.count - 1, 1))
         let path = CGMutablePath()
+        var points: [CGPoint] = []
+
+        if !isCompact {
+            context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(0.55).cgColor)
+            context.setLineWidth(1)
+            for fraction in [0.25, 0.5, 0.75] {
+                let y = chartRect.minY + chartRect.height * CGFloat(fraction)
+                context.move(to: CGPoint(x: chartRect.minX, y: y))
+                context.addLine(to: CGPoint(x: chartRect.maxX, y: y))
+            }
+            context.strokePath()
+        }
 
         for (index, value) in values.enumerated() {
             let x = chartRect.minX + CGFloat(index) * step
             let normalized = CGFloat(value) / CGFloat(maxValue)
             let y = chartRect.minY + normalized * chartRect.height
             let point = CGPoint(x: x, y: y)
+            points.append(point)
             if index == 0 {
                 path.move(to: point)
             } else {
@@ -52,9 +69,22 @@ enum SparklineRenderer {
             }
         }
 
+        if !isCompact, let first = points.first, let last = points.last {
+            let fill = CGMutablePath()
+            fill.move(to: CGPoint(x: first.x, y: chartRect.minY))
+            for point in points {
+                fill.addLine(to: point)
+            }
+            fill.addLine(to: CGPoint(x: last.x, y: chartRect.minY))
+            fill.closeSubpath()
+            context.addPath(fill)
+            context.setFillColor(state.color.withAlphaComponent(0.10).cgColor)
+            context.fillPath()
+        }
+
         context.addPath(path)
-        context.setStrokeColor(state.color.cgColor)
-        context.setLineWidth(1.6)
+        context.setStrokeColor(state.color.withAlphaComponent(0.85).cgColor)
+        context.setLineWidth(isCompact ? 1.6 : 2)
         context.setLineCap(.round)
         context.setLineJoin(.round)
         context.strokePath()

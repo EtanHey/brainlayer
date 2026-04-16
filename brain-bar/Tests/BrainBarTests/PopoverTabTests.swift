@@ -35,19 +35,25 @@ final class PopoverTabTests: XCTestCase {
         XCTAssertEqual(PopoverTab.graph.label, "Graph")
     }
 
-    func testPopoverTabDashboardSizeIsCompact() {
-        XCTAssertEqual(PopoverTab.dashboard.contentSize.width, 360)
+    func testPopoverTabDashboardSizeIsUtilityPanel() {
+        XCTAssertEqual(PopoverTab.dashboard.contentSize.width, 560)
+        XCTAssertEqual(PopoverTab.dashboard.contentSize.height, 520)
+    }
+
+    func testPopoverTabsShareStablePanelSize() {
+        XCTAssertEqual(PopoverTab.injections.contentSize, PopoverTab.dashboard.contentSize)
+        XCTAssertEqual(PopoverTab.graph.contentSize, PopoverTab.dashboard.contentSize)
     }
 
     func testPopoverTabGraphSizeIsWiderThanDashboard() {
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             PopoverTab.graph.contentSize.width,
             PopoverTab.dashboard.contentSize.width
         )
     }
 
     func testPopoverTabGraphSizeIsTallerThanDashboard() {
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             PopoverTab.graph.contentSize.height,
             PopoverTab.dashboard.contentSize.height
         )

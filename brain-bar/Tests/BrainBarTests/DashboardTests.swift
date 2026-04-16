@@ -46,7 +46,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingEnrichmentCount, 1)
         XCTAssertEqual(stats.enrichmentPercent, 50.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets.count, 6)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.count, 6)
         XCTAssertGreaterThanOrEqual(stats.recentActivityBuckets.reduce(0, +), 2)
+        XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
@@ -58,6 +60,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
         XCTAssertEqual(stats.enrichmentPercent, 0.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets, [0, 0, 0, 0])
+        XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
     }
 
     func testDashboardStatsCountsRecentISO8601Timestamps() throws {
@@ -78,6 +81,50 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
 
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
+    }
+
+    func testDashboardStatsTracksRecentEnrichmentSeparatelyFromIncomingWrites() throws {
+        try db.insertChunk(
+            id: "dash-enrichment-only",
+            content: "Older chunk enriched just now",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET created_at = datetime('now', '-45 minutes'),
+                enriched_at = datetime('now')
+            WHERE id = 'dash-enrichment-only'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertGreaterThan(stats.enrichmentRatePerMinute, 0)
+    }
+
+    func testDashboardStatsCurrentEnrichmentRateDropsToZeroWhenPipelineIsIdle() throws {
+        try db.insertChunk(
+            id: "dash-stale-enrichment",
+            content: "Enriched earlier but not currently moving",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = datetime('now', '-6 minutes')
+            WHERE id = 'dash-stale-enrichment'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
     }
 
     func testDashboardDataVersionChangesAfterExternalWrite() throws {
@@ -134,8 +181,10 @@ final class DashboardTests: XCTestCase {
             enrichedChunkCount: 10,
             pendingEnrichmentCount: 0,
             enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
             databaseSizeBytes: 4096,
-            recentActivityBuckets: [0, 0, 0, 0]
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0]
         )
 
         let state = PipelineState.derive(daemon: nil, stats: stats)
@@ -149,8 +198,10 @@ final class DashboardTests: XCTestCase {
             enrichedChunkCount: 10,
             pendingEnrichmentCount: 10,
             enrichmentPercent: 50,
+            enrichmentRatePerMinute: 0,
             databaseSizeBytes: 8192,
-            recentActivityBuckets: [0, 2, 3, 0]
+            recentActivityBuckets: [0, 2, 3, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0]
         )
         let daemon = DaemonHealthSnapshot(
             pid: 4242,
@@ -172,8 +223,10 @@ final class DashboardTests: XCTestCase {
             enrichedChunkCount: 20,
             pendingEnrichmentCount: 0,
             enrichmentPercent: 100,
+            enrichmentRatePerMinute: 2.5,
             databaseSizeBytes: 8192,
-            recentActivityBuckets: [0, 0, 4, 6]
+            recentActivityBuckets: [0, 0, 4, 6],
+            recentEnrichmentBuckets: [0, 0, 1, 2]
         )
         let daemon = DaemonHealthSnapshot(
             pid: 4242,
@@ -195,8 +248,10 @@ final class DashboardTests: XCTestCase {
             enrichedChunkCount: 12,
             pendingEnrichmentCount: 8,
             enrichmentPercent: 60,
+            enrichmentRatePerMinute: 0,
             databaseSizeBytes: 8192,
-            recentActivityBuckets: [0, 0, 0, 0]
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0]
         )
         let daemon = DaemonHealthSnapshot(
             pid: 4242,
@@ -218,8 +273,10 @@ final class DashboardTests: XCTestCase {
             enrichedChunkCount: 20,
             pendingEnrichmentCount: 0,
             enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
             databaseSizeBytes: 8192,
-            recentActivityBuckets: [0, 0, 0, 0]
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0]
         )
         let daemon = DaemonHealthSnapshot(
             pid: 4242,

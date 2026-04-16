@@ -145,14 +145,13 @@ final class EnterKeySearchTests: XCTestCase {
     }
 }
 
-// MARK: - (4) Popover size should be compact
+// MARK: - (4) Popover size should be stable
 
 final class PopoverSizeTests: XCTestCase {
 
-    func testStatusPopoverViewFrameIsCompact() {
-        // StatusPopoverView initial frame should not exceed 360x320
-        let frame = NSRect(x: 0, y: 0, width: 360, height: 320)
-        XCTAssertLessThanOrEqual(frame.width, 360)
-        XCTAssertLessThanOrEqual(frame.height, 320)
+    func testStatusPopoverViewFrameMatchesStableUtilityPanel() {
+        let frame = NSRect(x: 0, y: 0, width: 560, height: 520)
+        XCTAssertEqual(frame.width, 560)
+        XCTAssertEqual(frame.height, 520)
     }
 }

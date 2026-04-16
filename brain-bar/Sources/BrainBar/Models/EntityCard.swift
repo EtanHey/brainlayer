@@ -5,6 +5,19 @@ struct EntityCard: Equatable {
         let relationType: String
         let targetName: String
         let direction: String  // "outgoing" or "incoming"
+
+        init(relationType: String, targetName: String, direction: String = "outgoing") {
+            self.relationType = relationType
+            self.targetName = targetName
+            self.direction = direction
+        }
+
+        var displayText: String {
+            if direction == "incoming" {
+                return "\(targetName) \(relationType)"
+            }
+            return "\(relationType) \(targetName)"
+        }
     }
 
     struct Memory: Equatable {

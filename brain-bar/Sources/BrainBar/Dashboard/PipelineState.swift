@@ -12,6 +12,76 @@ struct DaemonHealthSnapshot: Sendable, Equatable {
     let lastSeenAt: Date
 }
 
+enum PipelineIndicatorStatus: Sendable, Equatable {
+    case live
+    case queued
+    case idle
+    case unavailable
+
+    var label: String {
+        switch self {
+        case .live:
+            return "live"
+        case .queued:
+            return "queued"
+        case .idle:
+            return "idle"
+        case .unavailable:
+            return "offline"
+        }
+    }
+
+    var color: NSColor {
+        switch self {
+        case .live:
+            return .systemGreen
+        case .queued:
+            return .systemOrange
+        case .idle:
+            return .secondaryLabelColor
+        case .unavailable:
+            return .systemRed
+        }
+    }
+}
+
+struct PipelineIndicator: Sendable, Equatable {
+    let name: String
+    let status: PipelineIndicatorStatus
+}
+
+struct PipelineIndicators: Sendable, Equatable {
+    let indexing: PipelineIndicator
+    let enriching: PipelineIndicator
+
+    static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats) -> PipelineIndicators {
+        let indexingStatus: PipelineIndicatorStatus
+        let enrichingStatus: PipelineIndicatorStatus
+
+        if daemon?.isResponsive != true {
+            indexingStatus = .unavailable
+            enrichingStatus = .unavailable
+        } else {
+            let recentWrites = stats.recentActivityBuckets.suffix(2).reduce(0, +)
+            let recentEnrichments = stats.recentEnrichmentBuckets.suffix(2).reduce(0, +)
+
+            indexingStatus = recentWrites > 0 ? .live : .idle
+            if recentEnrichments > 0 {
+                enrichingStatus = .live
+            } else if stats.pendingEnrichmentCount > 0 {
+                enrichingStatus = .queued
+            } else {
+                enrichingStatus = .idle
+            }
+        }
+
+        return PipelineIndicators(
+            indexing: PipelineIndicator(name: "Indexing", status: indexingStatus),
+            enriching: PipelineIndicator(name: "Enriching", status: enrichingStatus)
+        )
+    }
+}
+
 enum PipelineState: String, Sendable, Equatable {
     case degraded
     case indexing

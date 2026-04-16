@@ -3,6 +3,7 @@ import SwiftUI
 struct KGSidebarView: View {
     let entity: EntityCard?
     let chunks: [BrainDatabase.KGChunkRow]
+    let onOpenConversation: (String) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -24,7 +25,7 @@ struct KGSidebarView: View {
                     }
                     if !chunks.isEmpty {
                         Divider()
-                        chunksSection
+                        chunksSection()
                     }
                 } else {
                     Text("Select a node")
@@ -74,10 +75,7 @@ struct KGSidebarView: View {
                     Text(rel.direction == "incoming" ? "←" : "→")
                         .font(.caption)
                         .foregroundColor(.secondary.opacity(0.6))
-                    Text(rel.relationType)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(rel.targetName)
+                    Text(rel.displayText)
                         .font(.caption.bold())
                         .lineLimit(1)
                 }
@@ -101,25 +99,46 @@ struct KGSidebarView: View {
         }
     }
 
-    @ViewBuilder
-    private var chunksSection: some View {
-        Text("Linked Chunks (\(chunks.count))")
-            .font(.subheadline.bold())
-        ForEach(Array(chunks.prefix(10).enumerated()), id: \.offset) { _, chunk in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(chunk.snippet)
-                    .font(.caption)
-                    .lineLimit(4)
-                HStack(spacing: 8) {
-                    Label("\(chunk.importance)", systemImage: "star.fill")
-                    Label(String(format: "%.0f%%", chunk.relevance * 100), systemImage: "link")
+    private func chunksSection() -> some View {
+        let previewIndices = Array(0..<min(chunks.count, 10))
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Linked Chunks (\(chunks.count))")
+                .font(.subheadline.bold())
+            ForEach(previewIndices, id: \.self) { (index: Int) in
+                let chunk = chunks[index]
+                Button {
+                    onOpenConversation(chunk.chunkID)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(chunk.snippet)
+                            .font(.caption)
+                            .lineLimit(4)
+                            .multilineTextAlignment(.leading)
+                        HStack(spacing: 8) {
+                            Text(importanceText(for: chunk))
+                            Text(relevanceText(for: chunk))
+                            Spacer()
+                            Text("Open")
+                                .font(.caption.bold())
+                                .foregroundColor(.accentColor)
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
                 }
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .buttonStyle(.plain)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary))
         }
+    }
+
+    private func importanceText(for chunk: BrainDatabase.KGChunkRow) -> String {
+        "★ \(chunk.importance)"
+    }
+
+    private func relevanceText(for chunk: BrainDatabase.KGChunkRow) -> String {
+        "↳ \(Int((chunk.relevance * 100).rounded()))%"
     }
 }

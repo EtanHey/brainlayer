@@ -232,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] stats, state in
                 self?.statusItem?.button?.image = SparklineRenderer.render(
                     state: state,
-                    values: stats.recentActivityBuckets
+                    values: stats.recentEnrichmentBuckets
                 )
                 self?.statusItem?.button?.contentTintColor = state.color
             }

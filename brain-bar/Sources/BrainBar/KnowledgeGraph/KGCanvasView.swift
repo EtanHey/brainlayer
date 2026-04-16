@@ -18,9 +18,13 @@ struct KGCanvasView: View {
                 KGSidebarView(
                     entity: viewModel.selectedEntity,
                     chunks: viewModel.selectedEntityChunks,
+                    onOpenConversation: { viewModel.openConversation(chunkID: $0) },
                     onClose: { viewModel.selectNode(id: nil) }
                 )
             }
+        }
+        .sheet(item: $viewModel.selectedConversation) { conversation in
+            ChunkConversationSheet(conversation: conversation)
         }
         .onAppear {
             viewModel.loadGraph()
