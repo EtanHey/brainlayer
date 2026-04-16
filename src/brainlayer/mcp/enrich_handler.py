@@ -2,11 +2,14 @@
 
 import asyncio
 import logging
+import os
 
 from mcp.types import CallToolResult, TextContent
 
 from ._format import format_digest_result
 from ._shared import _error_result, _get_vector_store
+
+DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760"))
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def _brain_enrich(
     mode: str = "realtime",
     limit: int = 25,
-    since_hours: int = 24,
+    since_hours: int = DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
     phase: str = "run",
     chunk_ids: list[str] | None = None,
     stats: bool = False,

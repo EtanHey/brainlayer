@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import apsw
+import numpy as np
 
 from ._helpers import _escape_fts5_query, serialize_f32
 
@@ -26,6 +27,8 @@ from ._helpers import _escape_fts5_query, serialize_f32
 # - Copy-on-read: callers enrich and mutate result metadata after search.
 _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
+_MMR_CANDIDATE_LIMIT = 50
+_MMR_LAMBDA = 0.65
 META_NOISE_PATTERNS = [
     "brain_search(",
     "brain_entity(",
@@ -116,6 +119,75 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
 
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
+        """Fetch float embeddings for the provided chunk IDs."""
+        if not chunk_ids:
+            return {}
+
+        cursor = self._read_cursor()
+        placeholders = ",".join("?" for _ in chunk_ids)
+        rows = list(
+            cursor.execute(
+                f"SELECT chunk_id, embedding FROM chunk_vectors WHERE chunk_id IN ({placeholders})",
+                chunk_ids,
+            )
+        )
+        return {
+            chunk_id: np.frombuffer(embedding_blob, dtype=np.float32).copy()
+            for chunk_id, embedding_blob in rows
+            if embedding_blob
+        }
+
+    def _mmr_rerank_scored_results(
+        self,
+        scored: List[tuple[float, str, str, Dict[str, Any], Any]],
+        n_results: int,
+    ) -> List[tuple[float, str, str, Dict[str, Any], Any]]:
+        """Diversify the top candidate pool with MMR while preserving overall recall."""
+        if len(scored) < 2:
+            return scored
+
+        candidate_limit = min(len(scored), _MMR_CANDIDATE_LIMIT)
+        top_candidates = scored[:candidate_limit]
+        tail_candidates = scored[candidate_limit:]
+
+        embeddings_by_id = self._load_chunk_embeddings([candidate[1] for candidate in top_candidates])
+        mmr_candidates = [candidate for candidate in top_candidates if candidate[1] in embeddings_by_id]
+        if len(mmr_candidates) < 2:
+            return scored
+
+        fallback_candidates = [candidate for candidate in top_candidates if candidate[1] not in embeddings_by_id]
+        relevance = np.array([candidate[0] for candidate in mmr_candidates], dtype=np.float32)
+        rel_max = float(relevance.max())
+        if rel_max > 0.0:
+            normalized_relevance = relevance / rel_max
+        else:
+            normalized_relevance = np.ones_like(relevance)
+
+        matrix = np.stack([embeddings_by_id[candidate[1]] for candidate in mmr_candidates]).astype(
+            np.float32, copy=False
+        )
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        cosine = np.clip((matrix / norms) @ (matrix / norms).T, -1.0, 1.0)
+        np.fill_diagonal(cosine, 0.0)
+
+        selected: list[int] = [int(np.argmax(normalized_relevance))]
+        remaining = set(range(len(mmr_candidates))) - set(selected)
+
+        while remaining:
+            remaining_indices = sorted(remaining)
+            diversity_penalty = cosine[remaining_indices][:, selected].max(axis=1)
+            mmr_scores = (_MMR_LAMBDA * normalized_relevance[remaining_indices]) - (
+                (1.0 - _MMR_LAMBDA) * diversity_penalty
+            )
+            best_idx = remaining_indices[int(np.argmax(mmr_scores))]
+            selected.append(best_idx)
+            remaining.remove(best_idx)
+
+        reranked = [mmr_candidates[idx] for idx in selected]
+        return reranked + fallback_candidates + tail_candidates
 
     def _queue_retrieval_strengthening(self, chunk_ids: List[str], now: Optional[float] = None) -> None:
         if getattr(self, "_readonly", False):
@@ -812,10 +884,11 @@ class SearchMixin:
 
         # 1. Semantic search leg — prefer binary vectors, fall back to float vectors
         # when the binary index is unavailable (for example readonly live DBs).
+        candidate_fetch_count = max(n_results * 3, _MMR_CANDIDATE_LIMIT)
         if getattr(self, "_binary_index_available", False):
             semantic = self._binary_search(
                 query_embedding=query_embedding,
-                n_results=n_results * 3,
+                n_results=candidate_fetch_count,
                 project_filter=project_filter,
                 content_type_filter=content_type_filter,
                 source_filter=source_filter,
@@ -836,7 +909,7 @@ class SearchMixin:
         else:
             semantic = self.search(
                 query_embedding=query_embedding,
-                n_results=n_results * 3,
+                n_results=candidate_fetch_count,
                 project_filter=project_filter,
                 content_type_filter=content_type_filter,
                 source_filter=source_filter,
@@ -913,7 +986,7 @@ class SearchMixin:
                 fts_extra.append("AND c.superseded_by IS NULL")
                 fts_extra.append("AND c.aggregated_into IS NULL")
                 fts_extra.append("AND c.archived_at IS NULL")
-            fts_params.append(n_results * 3)
+            fts_params.append(candidate_fetch_count)
 
             fts_results = list(
                 cursor.execute(
@@ -1101,6 +1174,7 @@ class SearchMixin:
 
         # Sort by boosted RRF score descending
         scored.sort(key=lambda x: x[0], reverse=True)
+        scored = self._mmr_rerank_scored_results(scored, n_results=n_results)
 
         ids = [s[1] for s in scored[:n_results]]
         documents = [s[2] for s in scored[:n_results]]
