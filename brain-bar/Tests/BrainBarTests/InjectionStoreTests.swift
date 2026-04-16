@@ -29,19 +29,18 @@ final class InjectionStoreTests: XCTestCase {
 
         let databasePath = tempDBPath!
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
-        defer { Task { @MainActor in store.stop() } }
         await MainActor.run { store.start() }
 
         try await Task.sleep(for: .milliseconds(150))
 
         let queries = await MainActor.run { store.events.map(\.query) }
         XCTAssertEqual(queries, ["existing event"])
+        await MainActor.run { store.stop() }
     }
 
     func testObservationPublishesNewEventsAfterInsert() async throws {
         let databasePath = tempDBPath!
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
-        defer { Task { @MainActor in store.stop() } }
         await MainActor.run { store.start() }
 
         try db.recordInjectionEvent(
@@ -57,6 +56,7 @@ final class InjectionStoreTests: XCTestCase {
         let firstChunkIDs = await MainActor.run { store.events.first?.chunkIDs }
         XCTAssertEqual(firstQuery, "new event")
         XCTAssertEqual(firstChunkIDs, ["chunk-a", "chunk-b"])
+        await MainActor.run { store.stop() }
     }
 
     func testExpandedConversationLoadsTargetChunkAndContext() async throws {
@@ -73,7 +73,6 @@ final class InjectionStoreTests: XCTestCase {
 
         let databasePath = tempDBPath!
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
-        defer { Task { @MainActor in store.stop() } }
         let conversation = try await MainActor.run {
             try store.expandedConversation(chunkID: "inject-2")
         }
@@ -83,5 +82,29 @@ final class InjectionStoreTests: XCTestCase {
             conversation.entries.map(\.chunkID),
             ["inject-1", "inject-2", "inject-3", "inject-4"]
         )
+        await MainActor.run { store.stop() }
+    }
+
+    func testStoreCanRestartAfterStop() async throws {
+        let databasePath = tempDBPath!
+        let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+
+        await MainActor.run { store.start() }
+        try await Task.sleep(for: .milliseconds(100))
+        await MainActor.run { store.stop() }
+
+        try db.recordInjectionEvent(
+            sessionID: "session-3",
+            query: "restart event",
+            chunkIDs: ["chunk-restart"],
+            tokenCount: 9
+        )
+
+        await MainActor.run { store.start() }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let queries = await MainActor.run { store.events.map(\.query) }
+        XCTAssertEqual(queries, ["restart event"])
+        await MainActor.run { store.stop() }
     }
 }

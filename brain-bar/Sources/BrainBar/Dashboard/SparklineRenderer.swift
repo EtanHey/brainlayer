@@ -4,6 +4,10 @@ import Foundation
 
 enum SparklineRenderer {
     static func render(state: PipelineState, values: [Int], size: NSSize = NSSize(width: 44, height: 18)) -> NSImage {
+        render(color: state.color, values: values, size: size)
+    }
+
+    static func render(color: NSColor, values: [Int], size: NSSize = NSSize(width: 44, height: 18)) -> NSImage {
         let width = max(Int(size.width.rounded(.up)), 1)
         let height = max(Int(size.height.rounded(.up)), 1)
         let isCompact = height <= 20 || width <= 52
@@ -78,12 +82,12 @@ enum SparklineRenderer {
             fill.addLine(to: CGPoint(x: last.x, y: chartRect.minY))
             fill.closeSubpath()
             context.addPath(fill)
-            context.setFillColor(state.color.withAlphaComponent(0.10).cgColor)
+            context.setFillColor(color.withAlphaComponent(0.10).cgColor)
             context.fillPath()
         }
 
         context.addPath(path)
-        context.setStrokeColor(state.color.withAlphaComponent(0.85).cgColor)
+        context.setStrokeColor(color.withAlphaComponent(0.85).cgColor)
         context.setLineWidth(isCompact ? 1.6 : 2)
         context.setLineCap(.round)
         context.setLineJoin(.round)

@@ -6,6 +6,7 @@
 // - JSON-RPC router
 // - SQLite database (single-writer)
 
+import Darwin
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
@@ -76,9 +77,11 @@ final class BrainBarServer: @unchecked Sendable {
     private var router: MCPRouter!
     private var database: BrainDatabase!
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
-    /// Maximum EAGAIN retries before disconnecting a stalled client.
-    /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
-    static let maxWriteRetries = 10
+    /// Max time to wait for a backpressured client to become writable again.
+    /// Temporary bursts should survive; truly dead peers still get disconnected.
+    static let writeStallTimeoutMilliseconds: Int32 = 2_000
+    static let writeChunkSize = 512
+    static let writeRetrySleepMicroseconds: useconds_t = 10_000
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -340,18 +343,29 @@ final class BrainBarServer: @unchecked Sendable {
         }
         return framed.withUnsafeBytes { ptr in
             var totalWritten = 0
-            var eagainRetries = 0
+            var lastProgressAt = DispatchTime.now().uptimeNanoseconds
             while totalWritten < framed.count {
-                let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), framed.count - totalWritten)
+                let remaining = framed.count - totalWritten
+                let nextChunkSize = min(remaining, Self.writeChunkSize)
+                let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), nextChunkSize)
                 if n < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
                     if errno == EAGAIN || errno == EWOULDBLOCK {
-                        eagainRetries += 1
-                        if eagainRetries > Self.maxWriteRetries {
-                            NSLog("[BrainBar] ⚠️ Write stalled on fd %d after %d EAGAIN retries (%d ms) — disconnecting dead client", fd, eagainRetries, eagainRetries - 1)
+                        let now = DispatchTime.now().uptimeNanoseconds
+                        let stallDeadline = lastProgressAt
+                            + UInt64(Self.writeStallTimeoutMilliseconds) * 1_000_000
+                        guard now < stallDeadline else {
+                            NSLog(
+                                "[BrainBar] ⚠️ Write stalled on fd %d for %d ms — disconnecting dead client",
+                                fd,
+                                Self.writeStallTimeoutMilliseconds
+                            )
                             disconnectClient(fd: fd)
                             return false
                         }
-                        usleep(1000) // 1 ms
+                        usleep(Self.writeRetrySleepMicroseconds)
                         continue
                     }
                     NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
@@ -364,7 +378,7 @@ final class BrainBarServer: @unchecked Sendable {
                     return false
                 }
                 totalWritten += n
-                eagainRetries = 0 // reset on successful partial write
+                lastProgressAt = DispatchTime.now().uptimeNanoseconds
             }
             return true
         }

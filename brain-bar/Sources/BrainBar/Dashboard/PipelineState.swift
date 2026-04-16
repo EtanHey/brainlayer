@@ -82,6 +82,117 @@ struct PipelineIndicators: Sendable, Equatable {
     }
 }
 
+struct PipelineActivityTrack: Sendable, Equatable {
+    let name: String
+    let symbolName: String
+    let status: PipelineIndicatorStatus
+    let rateText: String
+    let detailText: String
+    let values: [Int]
+}
+
+struct PipelineActivityTracks: Sendable, Equatable {
+    let indexing: PipelineActivityTrack
+    let enriching: PipelineActivityTrack
+
+    static func derive(
+        daemon: DaemonHealthSnapshot?,
+        stats: DashboardStats,
+        activityWindowMinutes: Double = 30,
+        trailingBucketCount: Int = 2
+    ) -> PipelineActivityTracks {
+        let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats)
+
+        let indexingRatePerMinute = recentRatePerMinute(
+            values: stats.recentActivityBuckets,
+            activityWindowMinutes: activityWindowMinutes,
+            trailingBucketCount: trailingBucketCount
+        )
+        let recentWrites = stats.recentActivityBuckets.reduce(0, +)
+        let indexingRateText = recentWrites > 0
+            ? DashboardMetricFormatter.speedString(ratePerMinute: indexingRatePerMinute)
+            : "idle"
+        let indexingDetailText = recentWrites > 0
+            ? "\(recentWrites) chunks in last 30m"
+            : "No new chunks in last 30m"
+
+        let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
+        let enrichmentDisplayRatePerMinute = displayedRatePerMinute(
+            primaryRatePerMinute: stats.enrichmentRatePerMinute,
+            values: stats.recentEnrichmentBuckets,
+            activityWindowMinutes: activityWindowMinutes,
+            trailingBucketCount: trailingBucketCount
+        )
+        let enrichingRateText: String
+        if enrichmentDisplayRatePerMinute > 0 {
+            enrichingRateText = DashboardMetricFormatter.speedString(ratePerMinute: enrichmentDisplayRatePerMinute)
+        } else if indicators.enriching.status == .queued {
+            enrichingRateText = "queued"
+        } else {
+            enrichingRateText = "idle"
+        }
+
+        let enrichingDetailText: String
+        if stats.pendingEnrichmentCount > 0, recentCompletions > 0 {
+            enrichingDetailText = "\(stats.pendingEnrichmentCount) pending · \(recentCompletions) done in last 30m"
+        } else if stats.pendingEnrichmentCount > 0 {
+            enrichingDetailText = "\(stats.pendingEnrichmentCount) pending"
+        } else if recentCompletions > 0 {
+            enrichingDetailText = "\(recentCompletions) done in last 30m"
+        } else {
+            enrichingDetailText = "No completions in last 30m"
+        }
+
+        return PipelineActivityTracks(
+            indexing: PipelineActivityTrack(
+                name: "Indexing",
+                symbolName: "server.rack",
+                status: indicators.indexing.status,
+                rateText: indexingRateText,
+                detailText: indexingDetailText,
+                values: stats.recentActivityBuckets
+            ),
+            enriching: PipelineActivityTrack(
+                name: "Enriching",
+                symbolName: "sparkles",
+                status: indicators.enriching.status,
+                rateText: enrichingRateText,
+                detailText: enrichingDetailText,
+                values: stats.recentEnrichmentBuckets
+            )
+        )
+    }
+
+    static func displayedRatePerMinute(
+        primaryRatePerMinute: Double,
+        values: [Int],
+        activityWindowMinutes: Double = 30,
+        trailingBucketCount: Int = 2
+    ) -> Double {
+        let instantaneousRate = max(primaryRatePerMinute, 0)
+        guard instantaneousRate == 0 else { return instantaneousRate }
+        return recentRatePerMinute(
+            values: values,
+            activityWindowMinutes: activityWindowMinutes,
+            trailingBucketCount: trailingBucketCount
+        )
+    }
+
+    static func recentRatePerMinute(
+        values: [Int],
+        activityWindowMinutes: Double,
+        trailingBucketCount: Int
+    ) -> Double {
+        guard !values.isEmpty, activityWindowMinutes > 0 else { return 0 }
+        let recentBucketCount = max(1, min(trailingBucketCount, values.count))
+        let recentCount = values.suffix(recentBucketCount).reduce(0, +)
+        let bucketWidthMinutes = activityWindowMinutes / Double(values.count)
+        let recentWindowMinutes = bucketWidthMinutes * Double(recentBucketCount)
+        guard recentWindowMinutes > 0 else { return 0 }
+        return Double(recentCount) / recentWindowMinutes
+    }
+}
+
 enum PipelineState: String, Sendable, Equatable {
     case degraded
     case indexing

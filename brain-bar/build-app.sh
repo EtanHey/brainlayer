@@ -110,15 +110,13 @@ if [ -f "$PLIST_SRC" ]; then
     launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DST"
     launchctl kickstart -k "$LAUNCH_DOMAIN/$PLIST_LABEL"
     echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"
-fi
+    if ! wait_for_socket "$SOCKET_PATH"; then
+        echo "[build-app] ERROR: BrainBar did not recreate $SOCKET_PATH"
+        pgrep -fl BrainBar || true
+        exit 1
+    fi
 
-if ! wait_for_socket "$SOCKET_PATH"; then
-    echo "[build-app] ERROR: BrainBar did not recreate $SOCKET_PATH"
-    pgrep -fl BrainBar || true
-    exit 1
-fi
-
-python3 - <<'PY' "$SOCKET_PATH"
+    python3 - <<'PY' "$SOCKET_PATH"
 import os
 import socket
 import sys
@@ -133,6 +131,9 @@ except OSError as exc:
 finally:
     s.close()
 PY
+else
+    echo "[build-app] LaunchAgent plist missing at $PLIST_SRC — skipping auto-launch and socket verification"
+fi
 
 echo "[build-app] Done: $APP_DIR"
 echo "[build-app] Socket: $SOCKET_PATH"

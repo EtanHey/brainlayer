@@ -223,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             database: sharedDatabase
         )
         statusVC.onPreferredSizeChange = { [weak popover] size in
+            guard popover?.contentSize != size else { return }
             popover?.contentSize = size
         }
         popover.contentViewController = statusVC
