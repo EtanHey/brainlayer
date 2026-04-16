@@ -24,6 +24,10 @@ from rich.table import Table
 
 from ..paths import get_db_path
 
+DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(
+    os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760")
+)
+
 app = typer.Typer(
     name="brainlayer",
     help="זיכרון - Local knowledge pipeline for Claude Code conversations",
@@ -883,7 +887,12 @@ def enrich(
     mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
     limit: int = typer.Option(25, "--limit", "-n", help="Max chunks to process"),
     since_hours: int = typer.Option(
-        24, "--since-hours", help="Realtime mode: only enrich chunks from the last N hours"
+        DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
+        "--since-hours",
+        help=(
+            "Realtime mode: only enrich chunks from the last N hours. "
+            f"Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
+        ),
     ),
     phase: str = typer.Option("run", "--phase", help="Batch mode phase: submit, poll, import, run"),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),

@@ -1,6 +1,7 @@
 """BrainLayer MCP Server - Model Context Protocol interface for Claude Code."""
 
 import asyncio
+import os
 import logging
 from typing import Any
 
@@ -56,6 +57,10 @@ from .search_handler import (
 from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _store, _store_new
 from .store_handler import _brain_update as _brain_update
 from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
+
+DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(
+    os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760")
+)
 
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
 MCP_QUERY_TIMEOUT = 15  # seconds — fail fast, return error instead of hanging
@@ -1044,9 +1049,12 @@ Pass stats=true to get enrichment progress without running anything.""",
                     },
                     "since_hours": {
                         "type": "integer",
-                        "default": 24,
+                        "default": DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
                         "minimum": 1,
-                        "description": "Only enrich chunks from the last N hours (realtime mode only).",
+                        "description": (
+                            "Only enrich chunks from the last N hours (realtime mode only). "
+                            f"Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h."
+                        ),
                     },
                     "phase": {
                         "type": "string",
@@ -1340,7 +1348,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
         return await _brain_enrich(
             mode=arguments.get("mode", "realtime"),
             limit=arguments.get("limit", 25),
-            since_hours=arguments.get("since_hours", 24),
+            since_hours=arguments.get("since_hours", DEFAULT_REALTIME_ENRICH_SINCE_HOURS),
             phase=arguments.get("phase", "run"),
             chunk_ids=arguments.get("chunk_ids"),
             stats=arguments.get("stats", False),
