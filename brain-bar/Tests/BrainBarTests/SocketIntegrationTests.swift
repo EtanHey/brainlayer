@@ -467,6 +467,30 @@ final class SocketIntegrationTests: XCTestCase {
         )
     }
 
+    func testBackpressuredClientDoesNotDelayHealthyClientBeforeTimeout() throws {
+        let stalledClientFD = try connectClient()
+        defer { close(stalledClientFD) }
+        configureBackpressuredClient(fd: stalledClientFD, receiveBufferSize: 1)
+
+        try sendMCPRequest(on: stalledClientFD, request: initializeRequest(id: 1, name: "blocked-client"))
+        for id in 2...80 {
+            try sendMCPRequest(on: stalledClientFD, request: toolsListRequest(id: id))
+        }
+
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let startedAt = Date()
+        let healthyResponse = try sendMCPRequest(initializeRequest(id: 300, name: "healthy-before-timeout"))
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertNotNil(healthyResponse["result"])
+        XCTAssertLessThan(
+            elapsed,
+            Double(BrainBarServer.writeStallTimeoutMilliseconds) / 1000.0 * 0.7,
+            "A stalled client should not monopolize the serial queue before its timeout expires"
+        )
+    }
+
     func testStdioAdapterBridgesInitializeAndSubscribe() throws {
         let adapterPath = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
