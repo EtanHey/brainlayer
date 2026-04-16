@@ -868,46 +868,32 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
-        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
-        guard let db else { throw DBError.notOpen }
-
-        let bucketWidthSeconds = max(1, Double(activityWindowMinutes * 60) / Double(bucketCount))
-        let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
-
-        var stmt: OpaquePointer?
-        let sql = """
-            SELECT datetime(created_at)
-            FROM chunks
-            WHERE datetime(created_at) >= datetime('now', ?)
-            ORDER BY datetime(created_at) ASC
-        """
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-        bindText("-\(activityWindowMinutes) minutes", to: stmt, index: 1)
-
-        var buckets = Array(repeating: 0, count: bucketCount)
-        let formatter = Self.sqliteDateFormatter
-
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let createdAtText = columnText(stmt, 0),
-                  let createdAt = formatter.date(from: createdAtText) else {
-                continue
-            }
-
-            let offset = createdAt.timeIntervalSince(windowStart)
-            if offset < 0 { continue }
-            if offset > Double(activityWindowMinutes * 60) { continue }
-
-            let rawIndex = Int(offset / bucketWidthSeconds)
-            let clampedIndex = min(max(rawIndex, 0), bucketCount - 1)
-            buckets[clampedIndex] += 1
-        }
-
-        return buckets
+        try recentBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            timestampExpression: "datetime(created_at)",
+            additionalWhereClause: ""
+        )
     }
 
     private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+        return try recentBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            timestampExpression: "datetime(enriched_at)",
+            additionalWhereClause: """
+                AND enriched_at IS NOT NULL
+                  AND TRIM(enriched_at) != ''
+            """
+        )
+    }
+
+    private func recentBuckets(
+        activityWindowMinutes: Int,
+        bucketCount: Int,
+        timestampExpression: String,
+        additionalWhereClause: String
+    ) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
         guard let db else { throw DBError.notOpen }
 
@@ -916,12 +902,11 @@ final class BrainDatabase: @unchecked Sendable {
 
         var stmt: OpaquePointer?
         let sql = """
-            SELECT datetime(enriched_at)
+            SELECT \(timestampExpression)
             FROM chunks
-            WHERE enriched_at IS NOT NULL
-              AND TRIM(enriched_at) != ''
-              AND datetime(enriched_at) >= datetime('now', ?)
-            ORDER BY datetime(enriched_at) ASC
+            WHERE \(timestampExpression) >= datetime('now', ?)
+              \(additionalWhereClause)
+            ORDER BY \(timestampExpression) ASC
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -932,12 +917,12 @@ final class BrainDatabase: @unchecked Sendable {
         let formatter = Self.sqliteDateFormatter
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let enrichedAtText = columnText(stmt, 0),
-                  let enrichedAt = formatter.date(from: enrichedAtText) else {
+            guard let timestampText = columnText(stmt, 0),
+                  let timestamp = formatter.date(from: timestampText) else {
                 continue
             }
 
-            let offset = enrichedAt.timeIntervalSince(windowStart)
+            let offset = timestamp.timeIntervalSince(windowStart)
             if offset < 0 { continue }
             if offset > Double(activityWindowMinutes * 60) { continue }
 

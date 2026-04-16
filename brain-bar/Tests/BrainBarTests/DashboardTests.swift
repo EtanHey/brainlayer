@@ -106,6 +106,28 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.enrichmentRatePerMinute, 0)
     }
 
+    func testDashboardStatsCountsRecentISO8601EnrichmentTimestamps() throws {
+        try db.insertChunk(
+            id: "dash-enrichment-iso",
+            content: "Older chunk enriched by Python with ISO timestamp",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET created_at = datetime('now', '-45 minutes'),
+                enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 'dash-enrichment-iso'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
+
+        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+    }
+
     func testDashboardStatsCurrentEnrichmentRateDropsToZeroWhenPipelineIsIdle() throws {
         try db.insertChunk(
             id: "dash-stale-enrichment",
