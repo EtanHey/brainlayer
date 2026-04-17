@@ -362,6 +362,40 @@ final class QuickCapturePanelTests: XCTestCase {
         )
     }
 
+    func testReturningToSearchModeReRunsSearchWhenInputPreserved() throws {
+        let (db, path) = try makeDatabase(name: "search-capture-search-roundtrip")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "roundtrip-1",
+            content: "tests passed with flying colors",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.handleInputChange("tests")
+        XCTAssertGreaterThan(model.results.count, 0, "Initial search must populate results")
+
+        // Leave search mode → results get cleared (existing contract).
+        model.setMode(.capture)
+        XCTAssertTrue(model.results.isEmpty)
+
+        // Return to search mode — inputText is still "tests" (we preserve the
+        // query), so the results MUST re-populate automatically. Without this,
+        // the overlay shows "No matches yet" until the user edits a character.
+        model.setMode(.search)
+
+        XCTAssertGreaterThan(
+            model.results.count,
+            0,
+            "Returning to search mode with a preserved query must re-run submitSearch — otherwise the overlay lies ('no matches yet') for a query that clearly has matches."
+        )
+    }
+
     func testHandleInputChangeClearsOverlayDismissedFlag() throws {
         let (db, path) = try makeDatabase(name: "dismiss-reshow")
         defer { cleanupDatabase(db, path: path) }

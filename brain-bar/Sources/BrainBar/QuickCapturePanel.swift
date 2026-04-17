@@ -190,6 +190,11 @@ final class QuickCaptureViewModel: ObservableObject {
         if newMode == .capture {
             results = []
             selectedResultIndex = nil
+        } else if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Entering search mode with a preserved query — re-run the search
+            // so the overlay doesn't lie ("no matches yet") for a query that
+            // already had real hits before the mode round-trip.
+            submitSearch()
         }
         focusRequestCount += 1
     }

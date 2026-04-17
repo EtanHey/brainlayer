@@ -330,7 +330,7 @@ private struct BrainBarCommandBarResultsOverlayGate: View {
                 BrainBarCommandBarResultsOverlayReady(viewModel: viewModel)
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.18), value: shouldShow)
