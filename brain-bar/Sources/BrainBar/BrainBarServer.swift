@@ -6,6 +6,7 @@
 // - JSON-RPC router
 // - SQLite database (single-writer)
 
+import Darwin
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
@@ -66,6 +67,13 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private struct PendingWrite {
+        let data: Data
+        var totalWritten: Int
+        var lastProgressAt: UInt64
+        let onDelivered: (() -> Void)?
+    }
+
     private let socketPath: String
     private let dbPath: String
     private let providedDatabase: BrainDatabase?
@@ -76,9 +84,11 @@ final class BrainBarServer: @unchecked Sendable {
     private var router: MCPRouter!
     private var database: BrainDatabase!
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
-    /// Maximum EAGAIN retries before disconnecting a stalled client.
-    /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
-    static let maxWriteRetries = 10
+    /// Max time to wait for a backpressured client to become writable again.
+    /// Temporary bursts should survive; truly dead peers still get disconnected.
+    static let writeStallTimeoutMilliseconds: Int32 = 250
+    static let writeChunkSize = 4_096
+    static let writeRetrySleepMicroseconds: useconds_t = 2_000
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -99,7 +109,7 @@ final class BrainBarServer: @unchecked Sendable {
         debugLog("\(label) (\(data.count) bytes)\n  HEX: \(hex)\n  TEXT: \(text)")
     }
 
-    struct ClientState {
+    private struct ClientState {
         var source: DispatchSourceRead
         var framing: MCPFraming
         /// Whether this client uses Content-Length framing (LSP-style).
@@ -107,6 +117,8 @@ final class BrainBarServer: @unchecked Sendable {
         var usesContentLengthFraming: Bool = true
         var agentID: String?
         var subscribedTags: Set<String> = []
+        var pendingWrites: [PendingWrite] = []
+        var hasScheduledWriteRetry = false
     }
 
     init(socketPath: String? = nil, dbPath: String? = nil, database: BrainDatabase? = nil) {
@@ -326,7 +338,12 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     @discardableResult
-    private func sendResponse(fd: Int32, response: [String: Any], useContentLength: Bool = true) -> Bool {
+    private func sendResponse(
+        fd: Int32,
+        response: [String: Any],
+        useContentLength: Bool = true,
+        onDelivered: (() -> Void)? = nil
+    ) -> Bool {
         let framed: Data
         if useContentLength {
             guard let data = try? MCPFraming.encode(response) else { return false }
@@ -338,35 +355,94 @@ final class BrainBarServer: @unchecked Sendable {
             data.append(0x0A) // trailing \n
             framed = data
         }
-        return framed.withUnsafeBytes { ptr in
-            var totalWritten = 0
-            var eagainRetries = 0
-            while totalWritten < framed.count {
-                let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), framed.count - totalWritten)
-                if n < 0 {
-                    if errno == EAGAIN || errno == EWOULDBLOCK {
-                        eagainRetries += 1
-                        if eagainRetries > Self.maxWriteRetries {
-                            NSLog("[BrainBar] ⚠️ Write stalled on fd %d after %d EAGAIN retries (%d ms) — disconnecting dead client", fd, eagainRetries, eagainRetries - 1)
-                            disconnectClient(fd: fd)
-                            return false
-                        }
-                        usleep(1000) // 1 ms
-                        continue
-                    }
-                    NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
-                    disconnectClient(fd: fd)
-                    return false
-                }
-                if n == 0 {
-                    NSLog("[BrainBar] Write returned 0 on fd %d — peer closed", fd)
-                    disconnectClient(fd: fd)
-                    return false
-                }
-                totalWritten += n
-                eagainRetries = 0 // reset on successful partial write
+        return enqueueWrite(fd: fd, data: framed, onDelivered: onDelivered)
+    }
+
+    @discardableResult
+    private func enqueueWrite(fd: Int32, data: Data, onDelivered: (() -> Void)? = nil) -> Bool {
+        guard var state = clients[fd] else { return false }
+        state.pendingWrites.append(
+            PendingWrite(
+                data: data,
+                totalWritten: 0,
+                lastProgressAt: DispatchTime.now().uptimeNanoseconds,
+                onDelivered: onDelivered
+            )
+        )
+        clients[fd] = state
+        return flushPendingWrites(fd: fd)
+    }
+
+    @discardableResult
+    private func flushPendingWrites(fd: Int32) -> Bool {
+        guard var state = clients[fd] else { return false }
+        state.hasScheduledWriteRetry = false
+        clients[fd] = state
+
+        while var pending = clients[fd]?.pendingWrites.first {
+            let remaining = pending.data.count - pending.totalWritten
+            let nextChunkSize = min(remaining, Self.writeChunkSize)
+            let n = pending.data.withUnsafeBytes { ptr in
+                write(fd, ptr.baseAddress!.advanced(by: pending.totalWritten), nextChunkSize)
             }
-            return true
+            if n < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    let stallDeadline = pending.lastProgressAt
+                        + UInt64(Self.writeStallTimeoutMilliseconds) * 1_000_000
+                    guard now < stallDeadline else {
+                        NSLog(
+                            "[BrainBar] ⚠️ Write stalled on fd %d for %d ms — disconnecting dead client",
+                            fd,
+                            Self.writeStallTimeoutMilliseconds
+                        )
+                        disconnectClient(fd: fd)
+                        return false
+                    }
+                    scheduleWriteRetryIfNeeded(fd: fd)
+                    return true
+                }
+                NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
+                disconnectClient(fd: fd)
+                return false
+            }
+            if n == 0 {
+                NSLog("[BrainBar] Write returned 0 on fd %d — peer closed", fd)
+                disconnectClient(fd: fd)
+                return false
+            }
+
+            pending.totalWritten += n
+            pending.lastProgressAt = DispatchTime.now().uptimeNanoseconds
+
+            guard var latest = clients[fd] else { return false }
+            latest.pendingWrites[0] = pending
+
+            if pending.totalWritten == pending.data.count {
+                let delivered = pending.onDelivered
+                latest.pendingWrites.removeFirst()
+                clients[fd] = latest
+                delivered?()
+            } else {
+                clients[fd] = latest
+            }
+        }
+
+        return clients[fd] != nil
+    }
+
+    private func scheduleWriteRetryIfNeeded(fd: Int32) {
+        guard var state = clients[fd], !state.hasScheduledWriteRetry else { return }
+        state.hasScheduledWriteRetry = true
+        clients[fd] = state
+
+        let retryDelay = DispatchTimeInterval.microseconds(Int(Self.writeRetrySleepMicroseconds))
+        queue.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
+            guard let self, self.clients[fd] != nil else { return }
+            _ = self.flushPendingWrites(fd: fd)
         }
     }
 
@@ -593,10 +669,13 @@ final class BrainBarServer: @unchecked Sendable {
                 let delivered = sendResponse(
                     fd: clientFD,
                     response: notificationObject,
-                    useContentLength: client.usesContentLengthFraming
+                    useContentLength: client.usesContentLengthFraming,
+                    onDelivered: { [weak database] in
+                        try? database?.markDelivered(agentID: agentID, seq: stored.rowID)
+                    }
                 )
-                if delivered {
-                    try? database?.markDelivered(agentID: agentID, seq: stored.rowID)
+                if !delivered {
+                    continue
                 }
             }
         }
