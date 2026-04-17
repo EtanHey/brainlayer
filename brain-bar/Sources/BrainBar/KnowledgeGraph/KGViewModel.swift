@@ -96,8 +96,8 @@ final class KGViewModel: ObservableObject {
 
     // MARK: - Force-Directed Layout
 
-    func tick() {
-        guard nodes.count > 1 else { return }
+    func tick() -> CGFloat {
+        guard nodes.count > 1 else { return 0 }
 
         var forces = Array(repeating: CGVector.zero, count: nodes.count)
         let center = canvasCenter
@@ -142,12 +142,18 @@ final class KGViewModel: ObservableObject {
         }
 
         // Apply forces with damping
+        var totalKineticEnergy: CGFloat = 0
         for i in 0..<nodes.count {
             nodes[i].velocity.dx = (nodes[i].velocity.dx + forces[i].dx) * damping
             nodes[i].velocity.dy = (nodes[i].velocity.dy + forces[i].dy) * damping
             nodes[i].position.x += nodes[i].velocity.dx
             nodes[i].position.y += nodes[i].velocity.dy
+
+            let speedSq = (nodes[i].velocity.dx * nodes[i].velocity.dx) + (nodes[i].velocity.dy * nodes[i].velocity.dy)
+            totalKineticEnergy += 0.5 * speedSq
         }
+
+        return totalKineticEnergy
     }
 
     // MARK: - Helpers

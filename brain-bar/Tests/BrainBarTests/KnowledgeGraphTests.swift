@@ -315,3 +315,115 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertTrue(vm.selectedEntityChunks.first?.snippet.contains("Alice") ?? false)
     }
 }
+
+@MainActor
+final class KGCanvasSimulationTests: XCTestCase {
+    var db: BrainDatabase!
+    var tempDBPath: String!
+
+    override func setUp() {
+        super.setUp()
+        tempDBPath = NSTemporaryDirectory() + "brainbar-kgcanvas-test-\(UUID().uuidString).db"
+        db = BrainDatabase(path: tempDBPath)
+    }
+
+    override func tearDown() {
+        db.close()
+        try? FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        super.tearDown()
+    }
+
+    func testStableGraphStopsWithinTwoSecondsWorthOfFrames() async {
+        let vm = KGViewModel(database: db)
+        vm.canvasCenter = CGPoint(x: 300, y: 250)
+        vm.nodes = makeStableFixture(center: vm.canvasCenter)
+        vm.edges = []
+
+        let controller = KGSimulationController(
+            frameDuration: .milliseconds(33),
+            sleep: { _ in await Task.yield() }
+        )
+
+        var tickCount = 0
+        controller.start {
+            tickCount += 1
+            return vm.tick()
+        }
+
+        await waitForSimulationToStop(controller)
+
+        XCTAssertFalse(controller.timerActive, "Stable graph should auto-stop once kinetic energy is low")
+        XCTAssertLessThanOrEqual(
+            tickCount,
+            60,
+            "Stopping within 60 frames matches ~2s on the real 30fps timer"
+        )
+    }
+
+    func testRestartAfterIdleStartsSimulationAgain() async {
+        let controller = KGSimulationController(
+            frameDuration: .milliseconds(33),
+            sleep: { _ in await Task.yield() }
+        )
+
+        var tickCount = 0
+        let tick: @MainActor () -> CGFloat = {
+            tickCount += 1
+            return 0
+        }
+
+        controller.start(tick: tick)
+        await waitForSimulationToStop(controller)
+
+        XCTAssertFalse(controller.timerActive, "Controller should go idle after crossing the energy threshold")
+
+        controller.start(tick: tick)
+        await waitForSimulationToStop(controller)
+
+        XCTAssertEqual(tickCount, 2, "A previously idle simulation should restart on the next appearance")
+    }
+
+    private func waitForSimulationToStop(_ controller: KGSimulationController, iterations: Int = 200) async {
+        for _ in 0..<iterations where controller.timerActive {
+            await Task.yield()
+        }
+    }
+
+    private func makeStableFixture(center: CGPoint) -> [KGNode] {
+        let radius: CGFloat = 66.0
+        return [
+            KGNode(
+                id: "a",
+                name: "Alice",
+                entityType: "person",
+                importance: 5,
+                position: CGPoint(x: center.x + radius, y: center.y),
+                velocity: .zero
+            ),
+            KGNode(
+                id: "b",
+                name: "BrainLayer",
+                entityType: "project",
+                importance: 5,
+                position: CGPoint(
+                    x: center.x - radius / 2,
+                    y: center.y + (sqrt(3) * radius / 2)
+                ),
+                velocity: .zero
+            ),
+            KGNode(
+                id: "c",
+                name: "Codex",
+                entityType: "agent",
+                importance: 5,
+                position: CGPoint(
+                    x: center.x - radius / 2,
+                    y: center.y - (sqrt(3) * radius / 2)
+                ),
+                velocity: .zero
+            ),
+        ]
+    }
+}

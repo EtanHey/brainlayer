@@ -8,7 +8,7 @@ struct KGCanvasView: View {
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var draggedNodeId: String?
-    @State private var timerActive = true
+    @State private var simulation = KGSimulationController()
     @State private var canvasSize: CGSize = .zero
 
     var body: some View {
@@ -30,7 +30,7 @@ struct KGCanvasView: View {
             viewModel.loadGraph()
             startSimulation()
         }
-        .onDisappear { timerActive = false }
+        .onDisappear { simulation.stop() }
     }
 
     private var graphCanvas: some View {
@@ -136,12 +136,8 @@ struct KGCanvasView: View {
     // MARK: - Simulation timer
 
     private func startSimulation() {
-        Task { @MainActor in
-            while timerActive {
-                try? await Task.sleep(for: .milliseconds(33)) // ~30fps
-                viewModel.tick()
-            }
-        }
+        guard !simulation.timerActive else { return }
+        simulation.start { viewModel.tick() }
     }
 
     // MARK: - Stats overlay
