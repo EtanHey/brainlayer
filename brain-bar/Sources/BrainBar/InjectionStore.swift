@@ -64,6 +64,23 @@ final class InjectionStore: ObservableObject {
         database.close()
     }
 
+    deinit {
+        // The Darwin observer is registered with `Unmanaged.passUnretained(self)`.
+        // If the store is released without an explicit `stop()` call (e.g. a
+        // test fixture that skips teardown, or a mid-refactor owner swap),
+        // the CF center will happily keep firing the callback on freed memory
+        // and crash on the next dashboard mutation notification. Always
+        // remove — CFNotificationCenterRemoveObserver is a no-op on a
+        // never-registered observer, so this is safe regardless of state.
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterRemoveObserver(
+            center,
+            Unmanaged.passUnretained(self).toOpaque(),
+            CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
+            nil
+        )
+    }
+
     func expandedConversation(chunkID: String, before: Int = 3, after: Int = 3) throws -> BrainDatabase.ExpandedConversation {
         try database.expandedConversation(id: chunkID, before: before, after: after)
     }

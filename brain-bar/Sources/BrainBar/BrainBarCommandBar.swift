@@ -141,18 +141,28 @@ final class KeyHandlingCommandBarField: NSTextField {
     var onCommandReturn: (() -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              event.keyCode == 36, // Return / Enter
-              let currentEditor = currentEditor(),
-              window?.firstResponder === currentEditor else {
-            return super.performKeyEquivalent(with: event)
-        }
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if modifiers.contains(.command) {
-            onCommandReturn?()
+        let isFocused = currentEditor() != nil && window?.firstResponder === currentEditor()
+        if handleKeyEquivalent(event: event, isFieldEditorFirstResponder: isFocused) {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Pure routing logic, exposed for bridge-layer testing. Returns true iff
+    /// the event was Cmd+Return with the field editor focused — which is the
+    /// exact regression site that was dropped by the default delegate chain.
+    func handleKeyEquivalent(event: NSEvent, isFieldEditorFirstResponder: Bool) -> Bool {
+        guard event.type == .keyDown,
+              event.keyCode == 36,
+              isFieldEditorFirstResponder else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command) else {
+            return false
+        }
+        onCommandReturn?()
+        return true
     }
 }
 
@@ -276,7 +286,7 @@ private struct CommandBarTrailingHint: View {
     private var keyboardHint: String {
         switch viewModel.mode {
         case .capture: return "⏎ Store · ⌘⏎ Store · ⇥ Search"
-        case .search: return "⏎ Open · ⌘⏎ Capture · ⇥ Capture"
+        case .search: return "⏎ Copy · ⌘⏎ Capture · ⇥ Capture"
         }
     }
 }

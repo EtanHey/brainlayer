@@ -38,6 +38,11 @@ struct BrainBarWindowRootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Click-outside-the-overlay: hide results without clearing the query.
+                commandBarViewModel?.dismissSearchOverlay()
+            }
             .overlay(alignment: .top) {
                 BrainBarCommandBarResultsOverlay(viewModel: commandBarViewModel)
                     .padding(.horizontal, 20)
@@ -45,6 +50,7 @@ struct BrainBarWindowRootView: View {
                     .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.results.count)
                     .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.mode)
                     .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.inputText.isEmpty)
+                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.isSearchOverlayDismissed)
             }
         }
         .frame(
@@ -68,6 +74,11 @@ struct BrainBarWindowRootView: View {
         }
         .onReceive(runtime.$database) { _ in
             ensureCommandBarViewModel()
+            // DB just became available — replay any pending request that was
+            // left in runtime.requestedQuickAction while we were still warming.
+            if let action = runtime.requestedQuickAction {
+                handleRequestedQuickAction(action)
+            }
         }
         .onReceive(runtime.$requestedQuickAction.compactMap { $0 }) { action in
             handleRequestedQuickAction(action)
@@ -111,9 +122,12 @@ struct BrainBarWindowRootView: View {
 
     private func handleRequestedQuickAction(_ action: BrainBarQuickAction) {
         ensureCommandBarViewModel()
+        // If the DB isn't ready yet, leave the request in flight and replay
+        // when `onReceive(runtime.$database)` fires.
+        guard let vm = commandBarViewModel else { return }
         selectedTab = .dashboard
-        commandBarViewModel?.setMode(action == .capture ? .capture : .search)
-        commandBarViewModel?.panelDidAppear()
+        vm.setMode(action == .capture ? .capture : .search)
+        vm.panelDidAppear()
         runtime.clearQuickActionRequest()
     }
 }

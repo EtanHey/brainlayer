@@ -290,7 +290,7 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             searchRequests,
             2,
-            "Header Search button must route through runtime.showSearchPanel → onSearchRequested so AppDelegate can drive the detached QuickCapturePanelController."
+            "Runtime.showSearchPanel must fire onSearchRequested so AppDelegate can route to the integrated command bar (menuBarWindow mode) or the legacy floating panel (legacyStatusItem mode)."
         )
     }
 
@@ -305,7 +305,7 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             captureRequests,
             1,
-            "Header Capture button must route through runtime.showQuickCapturePanel → onQuickCaptureRequested so AppDelegate can drive the detached QuickCapturePanelController."
+            "Runtime.showQuickCapturePanel must fire onQuickCaptureRequested so AppDelegate can route to the integrated command bar (menuBarWindow mode) or the legacy floating panel (legacyStatusItem mode)."
         )
     }
 }

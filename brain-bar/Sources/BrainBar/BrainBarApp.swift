@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     injectionStore: injectionStore,
                     database: sharedDatabase
                 )
+                flushPendingBrainBarURLs()
 
                 if launchMode == .legacyStatusItem {
                     installLegacyMenuBarSurface(with: collector)
@@ -789,7 +790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ingestBrainBarURLs(_ urls: [URL]) {
         for url in urls {
             guard BrainBarURLAction.parse(url: url) != nil else { continue }
-            if quickCapturePanel != nil {
+            if isReadyToHandleBrainBarURL() {
                 handleBrainBarURL(url)
             } else {
                 pendingBrainBarURLs.append(url)
@@ -798,11 +799,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func flushPendingBrainBarURLs() {
-        guard quickCapturePanel != nil, !pendingBrainBarURLs.isEmpty else { return }
+        guard isReadyToHandleBrainBarURL(), !pendingBrainBarURLs.isEmpty else { return }
         let batch = pendingBrainBarURLs
         pendingBrainBarURLs.removeAll()
         for url in batch {
             handleBrainBarURL(url)
+        }
+    }
+
+    /// URL actions are dispatched once the backing surface is ready. In
+    /// menuBarWindow mode the command bar is driven by `runtime.database` +
+    /// the MenuBarExtra window, so readiness means the database has been
+    /// installed into the runtime. In legacy mode the floating panel still
+    /// drives routing.
+    private func isReadyToHandleBrainBarURL() -> Bool {
+        switch launchMode {
+        case .menuBarWindow:
+            return runtime.database != nil
+        case .legacyStatusItem:
+            return quickCapturePanel != nil
         }
     }
 

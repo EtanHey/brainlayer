@@ -96,6 +96,9 @@ final class QuickCaptureViewModel: ObservableObject {
     @Published private(set) var copiedResultID: String?
     @Published private(set) var copyFeedbackFlashCount = 0
     @Published private(set) var focusRequestCount = 0
+    /// Click-outside-dismiss flag for the search results overlay. Preserves
+    /// `inputText` so the next keystroke can reinstate the overlay.
+    @Published private(set) var isSearchOverlayDismissed: Bool = false
 
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
@@ -119,11 +122,13 @@ final class QuickCaptureViewModel: ObservableObject {
         self.clipboard = clipboard
         self.feedbackAutoClearDelay = feedbackAutoClearDelay
         mode = panelState.mode
-        // Warm the DB search path so the first real keystroke in search mode
-        // doesn't eat the cold-cache / sqlite-vec init cost. Fire-and-forget.
-        Task.detached { [db] in
-            _ = try? db.search(query: "warm", limit: 1)
-        }
+    }
+
+    /// Called when the user clicks outside the overlay. Preserves `inputText`
+    /// so a subsequent keystroke re-shows the overlay — see
+    /// `handleInputChange`, which clears the dismissed flag.
+    func dismissSearchOverlay() {
+        isSearchOverlayDismissed = true
     }
 
     private func scheduleFeedbackAutoClear() {
@@ -181,6 +186,7 @@ final class QuickCaptureViewModel: ObservableObject {
         panelState.switchMode(newMode)
         feedback = .idle
         copiedResultID = nil
+        isSearchOverlayDismissed = false
         if newMode == .capture {
             results = []
             selectedResultIndex = nil
@@ -230,6 +236,7 @@ final class QuickCaptureViewModel: ObservableObject {
         if inputText != newValue {
             inputText = newValue
         }
+        isSearchOverlayDismissed = false
 
         guard mode == .search else { return }
         submitSearch()
@@ -901,7 +908,6 @@ struct QuickCapturePanelView: View {
                 flashOpacity = 0
             }
         }
-        .frame(width: 540, height: 360)
         .animation(.easeInOut(duration: 0.18), value: viewModel.mode)
     }
 
