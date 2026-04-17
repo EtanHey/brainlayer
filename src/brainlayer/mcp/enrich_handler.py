@@ -2,14 +2,12 @@
 
 import asyncio
 import logging
-import os
 
 from mcp.types import CallToolResult, TextContent
 
+from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ._format import format_digest_result
 from ._shared import _error_result, _get_vector_store
-
-DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760"))
 
 logger = logging.getLogger(__name__)
 

@@ -378,6 +378,25 @@ def test_ensure_content_hash_column_noop_if_exists():
     assert _ensure_content_hash_column(store) is True
 
 
+def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
+    from brainlayer.enrichment_controller import _ensure_content_hash_column
+
+    db_path = tmp_path / "legacy-content-hash.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT NOT NULL, content_hash TEXT)")
+    conn.execute("CREATE UNIQUE INDEX idx_content_hash_unique ON chunks(content_hash)")
+    conn.commit()
+
+    store = MagicMock()
+    store.conn = conn
+
+    assert _ensure_content_hash_column(store) is True
+
+    indexes = {row[1]: bool(row[2]) for row in conn.execute("PRAGMA index_list(chunks)")}
+    assert "idx_content_hash_unique" not in indexes
+    assert indexes.get("idx_content_hash") is False
+
+
 def test_backfill_content_hashes_processes_null_rows():
     from brainlayer.enrichment_controller import _backfill_content_hashes
 
@@ -400,6 +419,32 @@ def test_backfill_content_hashes_skips_empty_content():
 
     count = _backfill_content_hashes(store, limit=10)
     assert count == 0
+
+
+def test_backfill_content_hashes_handles_legacy_unique_index(tmp_path):
+    from brainlayer.enrichment_controller import _backfill_content_hashes, _content_hash, _ensure_content_hash_column
+
+    db_path = tmp_path / "legacy-backfill.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT NOT NULL, content_hash TEXT)")
+    conn.execute("CREATE UNIQUE INDEX idx_content_hash_unique ON chunks(content_hash)")
+    conn.executemany(
+        "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, NULL)",
+        [("c1", "duplicate content"), ("c2", "duplicate content")],
+    )
+    conn.commit()
+
+    store = MagicMock()
+    store.conn = conn
+
+    assert _ensure_content_hash_column(store) is True
+
+    count = _backfill_content_hashes(store, limit=10)
+
+    expected_hash = _content_hash("duplicate content")
+    rows = conn.execute("SELECT id, content_hash FROM chunks ORDER BY id").fetchall()
+    assert count == 2
+    assert rows == [("c1", expected_hash), ("c2", expected_hash)]
 
 
 def test_realtime_skips_duplicate_content(monkeypatch):

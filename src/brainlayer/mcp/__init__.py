@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -18,6 +17,7 @@ from mcp.types import (
     ToolAnnotations,
 )
 
+from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ._shared import (  # noqa: I001
     _auto_importance as _auto_importance,
 )
@@ -57,8 +57,6 @@ from .search_handler import (
 from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _store, _store_new
 from .store_handler import _brain_update as _brain_update
 from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
-
-DEFAULT_REALTIME_ENRICH_SINCE_HOURS = int(os.environ.get("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", "8760"))
 
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
 MCP_QUERY_TIMEOUT = 15  # seconds — fail fast, return error instead of hanging

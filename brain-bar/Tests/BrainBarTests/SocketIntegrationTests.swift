@@ -414,7 +414,7 @@ final class SocketIntegrationTests: XCTestCase {
 
     // MARK: - C1: Socket backpressure handling
 
-    func testServerSurvivesBriefClientBackpressure() throws {
+    func testInitializeHandshakeSurvivesBriefBackpressureBurst() throws {
         let clientFD = try connectClient()
         defer { close(clientFD) }
         configureBackpressuredClient(fd: clientFD, receiveBufferSize: 1_024)
