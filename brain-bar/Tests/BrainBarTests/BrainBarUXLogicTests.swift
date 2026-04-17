@@ -54,155 +54,47 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(indicators.enriching.status, .queued)
     }
 
-    func testDashboardMetricFormatterUsesPerSecondForFastRates() {
+    func testDashboardMetricFormatterUsesChunksPerMinute() {
         XCTAssertEqual(
-            DashboardMetricFormatter.speedString(ratePerMinute: 90),
-            "1.5/s"
+            DashboardMetricFormatter.speedString(ratePerMinute: 22.2),
+            "22.2/min"
         )
     }
 
-    func testDashboardMetricFormatterUsesPerMinuteForSubSecondRates() {
+    func testDashboardMetricFormatterMakesIndexingLabelExplicit() {
         XCTAssertEqual(
-            DashboardMetricFormatter.speedString(ratePerMinute: 18),
-            "18/min"
+            DashboardMetricFormatter.indexingString(
+                recentActivityBuckets: [0, 0, 6, 9],
+                activityWindowMinutes: 30
+            ),
+            "0.5/min"
         )
     }
 
-    func testDashboardMetricFormatterUsesPerHourForVerySlowRates() {
+    func testDashboardMetricFormatterSummarizesRecentWritesWithoutRepeatingRateUnits() {
         XCTAssertEqual(
-            DashboardMetricFormatter.speedString(ratePerMinute: 0.5),
-            "30/hr"
+            DashboardMetricFormatter.activitySummaryString(
+                recentActivityBuckets: [0, 0, 6, 9],
+                activityWindowMinutes: 30
+            ),
+            "15 in 30m"
         )
     }
 
-    func testPipelineActivityTracksSplitIndexingFromEnrichment() {
-        let stats = DashboardStats(
-            chunkCount: 120,
-            enrichedChunkCount: 100,
-            pendingEnrichmentCount: 20,
-            enrichmentPercent: 83.3,
-            enrichmentRatePerMinute: 18,
-            databaseSizeBytes: 4_096,
-            recentActivityBuckets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 6],
-            recentEnrichmentBuckets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3]
-        )
-        let daemon = DaemonHealthSnapshot(
-            pid: 4242,
-            isResponsive: true,
-            rssBytes: 1_024,
-            uptime: 60,
-            openConnections: 1,
-            lastSeenAt: Date()
-        )
-
-        let tracks = PipelineActivityTracks.derive(daemon: daemon, stats: stats)
-
-        XCTAssertEqual(tracks.indexing.symbolName, "server.rack")
-        XCTAssertEqual(tracks.indexing.rateText, "2/min")
-        XCTAssertEqual(tracks.enriching.symbolName, "sparkles")
-        XCTAssertEqual(tracks.enriching.rateText, "18/min")
-        XCTAssertEqual(tracks.enriching.status, .live)
-        XCTAssertEqual(tracks.indexing.status, .live)
-    }
-
-    func testPipelineActivityTracksShowQueuedEnrichmentWithNoRecentThroughput() {
-        let stats = DashboardStats(
-            chunkCount: 120,
-            enrichedChunkCount: 90,
-            pendingEnrichmentCount: 30,
-            enrichmentPercent: 75,
-            enrichmentRatePerMinute: 0,
-            databaseSizeBytes: 4_096,
-            recentActivityBuckets: Array(repeating: 0, count: 12),
-            recentEnrichmentBuckets: Array(repeating: 0, count: 12)
-        )
-        let daemon = DaemonHealthSnapshot(
-            pid: 4242,
-            isResponsive: true,
-            rssBytes: 1_024,
-            uptime: 60,
-            openConnections: 1,
-            lastSeenAt: Date()
-        )
-
-        let tracks = PipelineActivityTracks.derive(daemon: daemon, stats: stats)
-
-        XCTAssertEqual(tracks.enriching.status, .queued)
-        XCTAssertEqual(tracks.enriching.rateText, "queued")
-        XCTAssertEqual(tracks.indexing.rateText, "idle")
-    }
-
-    func testPipelineActivityTracksUseRecentEnrichmentThroughputWhenInstantaneousRateDropsToZero() {
-        let stats = DashboardStats(
-            chunkCount: 120,
-            enrichedChunkCount: 100,
-            pendingEnrichmentCount: 20,
-            enrichmentPercent: 83.3,
-            enrichmentRatePerMinute: 0,
-            databaseSizeBytes: 4_096,
-            recentActivityBuckets: Array(repeating: 0, count: 12),
-            recentEnrichmentBuckets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 6]
-        )
-        let daemon = DaemonHealthSnapshot(
-            pid: 4242,
-            isResponsive: true,
-            rssBytes: 1_024,
-            uptime: 60,
-            openConnections: 1,
-            lastSeenAt: Date()
-        )
-
-        let tracks = PipelineActivityTracks.derive(daemon: daemon, stats: stats)
-
-        XCTAssertEqual(tracks.enriching.status, .live)
-        XCTAssertEqual(tracks.enriching.rateText, "2/min")
-    }
-
-    func testPipelineActivityTracksDetailTextUsesConfiguredActivityWindow() {
-        let stats = DashboardStats(
-            chunkCount: 120,
-            enrichedChunkCount: 100,
-            pendingEnrichmentCount: 20,
-            enrichmentPercent: 83.3,
-            enrichmentRatePerMinute: 0,
-            databaseSizeBytes: 4_096,
-            recentActivityBuckets: [0, 0, 4, 6],
-            recentEnrichmentBuckets: [0, 0, 1, 3]
-        )
-        let daemon = DaemonHealthSnapshot(
-            pid: 4242,
-            isResponsive: true,
-            rssBytes: 1_024,
-            uptime: 60,
-            openConnections: 1,
-            lastSeenAt: Date()
-        )
-
-        let tracks = PipelineActivityTracks.derive(
-            daemon: daemon,
-            stats: stats,
-            activityWindowMinutes: 15
-        )
-
-        XCTAssertEqual(tracks.indexing.detailText, "10 chunks in last 15m")
-        XCTAssertEqual(tracks.enriching.detailText, "20 pending · 4 done in last 15m")
-    }
-
-    func testDashboardMetricFormatterSummarizesSecondaryRateUnits() {
+    func testDashboardMetricFormatterReportsApproximateLastCompletionAge() {
         XCTAssertEqual(
-            DashboardMetricFormatter.rateDetailString(ratePerMinute: 18),
-            "0.3/s"
-        )
-    }
-
-    func testDashboardMetricFormatterGuardsAgainstNonFiniteRates() {
-        XCTAssertEqual(
-            DashboardMetricFormatter.speedString(ratePerMinute: .infinity),
-            "0/min"
+            DashboardMetricFormatter.lastCompletionString(
+                recentEnrichmentBuckets: [0, 0, 0, 0, 1, 2],
+                activityWindowMinutes: 30
+            ),
+            "Just now"
         )
         XCTAssertEqual(
-            DashboardMetricFormatter.rateDetailString(ratePerMinute: .infinity),
-            "0/s"
+            DashboardMetricFormatter.lastCompletionString(
+                recentEnrichmentBuckets: [0, 1, 0, 0, 0, 0],
+                activityWindowMinutes: 30
+            ),
+            "20m ago"
         )
     }
 
@@ -224,5 +116,69 @@ final class BrainBarUXLogicTests: XCTestCase {
         )
 
         XCTAssertEqual(relation.displayText, "owns brainlayer")
+    }
+
+    func testLivePulseTriggersWhenSparklineBucketsChange() {
+        XCTAssertTrue(
+            BrainBarLivePulse.shouldPulse(
+                previous: [0, 0, 0, 0, 0, 0],
+                current: [0, 0, 0, 0, 1, 0]
+            )
+        )
+    }
+
+    func testLivePulseDoesNotTriggerWhenSparklineBucketsStayTheSame() {
+        XCTAssertFalse(
+            BrainBarLivePulse.shouldPulse(
+                previous: [0, 0, 0, 1, 2, 3],
+                current: [0, 0, 0, 1, 2, 3]
+            )
+        )
+    }
+
+    func testLivePresentationUsesExplicitActiveAndIdleStatusText() {
+        let activeStats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 100,
+            pendingEnrichmentCount: 20,
+            enrichmentPercent: 83.3,
+            enrichmentRatePerMinute: 24,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 2, 4],
+            recentEnrichmentBuckets: [0, 0, 0, 1, 3]
+        )
+        let idleStats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0, 0]
+        )
+
+        XCTAssertEqual(
+            BrainBarLivePresentation.derive(stats: activeStats).statusText,
+            "Live enrichment stream"
+        )
+        XCTAssertEqual(
+            BrainBarLivePresentation.derive(stats: idleStats).statusText,
+            "Idle — no enrichment in last 60s"
+        )
+    }
+
+    func testDashboardLayoutCompactsForShortDashboardHeights() {
+        let layout = BrainBarDashboardLayout(containerSize: CGSize(width: 900, height: 500))
+
+        XCTAssertEqual(layout.outerPadding, 14)
+        XCTAssertLessThan(layout.scale, 1)
+    }
+
+    func testDashboardLayoutUsesCompactTokensForNarrowWindowWidths() {
+        let layout = BrainBarDashboardLayout(containerSize: CGSize(width: 820, height: 640))
+
+        XCTAssertEqual(layout.metricValueFontSize, 20)
+        XCTAssertEqual(layout.sparklineWidth, 280)
     }
 }

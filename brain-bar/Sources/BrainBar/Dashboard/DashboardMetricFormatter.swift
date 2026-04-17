@@ -1,62 +1,56 @@
 import Foundation
 
 enum DashboardMetricFormatter {
-    struct RateDisplay: Equatable {
-        let valueText: String
-        let unitText: String
-
-        var text: String {
-            "\(valueText)\(unitText)"
-        }
-    }
-
-    static func speedDisplay(ratePerMinute: Double) -> RateDisplay {
-        guard let clampedRate = sanitizedRatePerMinute(ratePerMinute) else {
-            return RateDisplay(valueText: "0", unitText: "/min")
-        }
-        if clampedRate == 0 {
-            return RateDisplay(valueText: "0", unitText: "/min")
-        }
-        let perSecond = clampedRate / 60.0
-
-        if perSecond >= 1 {
-            return RateDisplay(valueText: formattedRateValue(perSecond), unitText: "/s")
-        }
-        if clampedRate >= 1 {
-            return RateDisplay(valueText: formattedRateValue(clampedRate), unitText: "/min")
-        }
-        return RateDisplay(valueText: formattedRateValue(clampedRate * 60.0), unitText: "/hr")
-    }
-
     static func speedString(ratePerMinute: Double) -> String {
-        speedDisplay(ratePerMinute: ratePerMinute).text
+        liveBadgeString(ratePerMinute: ratePerMinute)
     }
 
-    static func rateDetailString(ratePerMinute: Double) -> String {
-        guard let clampedRate = sanitizedRatePerMinute(ratePerMinute) else {
-            return "0/s"
+    static func indexingString(
+        recentActivityBuckets: [Int],
+        activityWindowMinutes: Int = 30
+    ) -> String {
+        guard activityWindowMinutes > 0 else { return "0/min" }
+        let perMinute = Double(recentActivityBuckets.reduce(0, +)) / Double(activityWindowMinutes)
+        let clamped = max(perMinute, 0)
+        if clamped >= 1 {
+            return "\(Int(clamped.rounded()))/min"
         }
-        let perSecond = clampedRate / 60.0
-        return "\(formattedRateValue(perSecond))/s"
+        return String(format: "%.1f/min", clamped)
     }
 
-    private static func sanitizedRatePerMinute(_ ratePerMinute: Double) -> Double? {
-        guard ratePerMinute.isFinite else { return nil }
-        return max(ratePerMinute, 0)
+    static func activitySummaryString(
+        recentActivityBuckets: [Int],
+        activityWindowMinutes: Int = 30
+    ) -> String {
+        let totalWrites = max(recentActivityBuckets.reduce(0, +), 0)
+        return "\(totalWrites) in \(activityWindowMinutes)m"
     }
 
-    private static func formattedRateValue(_ value: Double) -> String {
-        if value == 0 {
-            return "0"
-        }
-        if value >= 10 {
-            return String(Int(value.rounded()))
+    static func lastCompletionString(
+        recentEnrichmentBuckets: [Int],
+        activityWindowMinutes: Int = 30
+    ) -> String {
+        guard !recentEnrichmentBuckets.isEmpty else { return "30m+" }
+        guard let lastIndex = recentEnrichmentBuckets.lastIndex(where: { $0 > 0 }) else {
+            return "\(activityWindowMinutes)m+"
         }
 
-        let string = String(format: "%.1f", value)
-        if string.hasSuffix(".0") {
-            return String(string.dropLast(2))
+        let bucketWidthMinutes = Double(activityWindowMinutes) / Double(recentEnrichmentBuckets.count)
+        let bucketsAgo = recentEnrichmentBuckets.count - 1 - lastIndex
+        let minutesAgo = Double(bucketsAgo) * bucketWidthMinutes
+
+        if minutesAgo < bucketWidthMinutes {
+            return "Just now"
         }
-        return string
+
+        return "\(Int(minutesAgo.rounded()))m ago"
+    }
+
+    static func liveBadgeString(ratePerMinute: Double) -> String {
+        let clamped = max(ratePerMinute, 0)
+        if clamped.rounded(.towardZero) == clamped {
+            return "\(Int(clamped))/min"
+        }
+        return String(format: "%.1f/min", clamped)
     }
 }

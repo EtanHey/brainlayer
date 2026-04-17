@@ -222,6 +222,221 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
     }
 
+    func testHandleInputReturnCommandEnterInCaptureModeStoresAndPreservesMode() async throws {
+        let (db, path) = try makeDatabase(name: "cmd-enter-capture-mode")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(db: db, panelState: QuickCapturePanelState())
+        model.inputText = "Cmd-enter in capture mode must still store"
+
+        model.handleInputReturn(modifiers: [.command])
+        await model._pendingStoreTask?.value
+
+        XCTAssertEqual(model.mode, .capture, "Cmd+Enter in capture mode must preserve capture mode")
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+        XCTAssertEqual(model.inputText, "")
+        let results = try db.search(query: "Cmd-enter in capture mode", limit: 5)
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testKeyHandlingCommandBarFieldRoutesCmdReturnWhenFieldEditorIsFirstResponder() {
+        let field = KeyHandlingCommandBarField(frame: .zero)
+        var commandReturnCount = 0
+        field.onCommandReturn = { commandReturnCount += 1 }
+
+        let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        )!
+
+        let handled = field.handleKeyEquivalent(
+            event: event,
+            isFieldEditorFirstResponder: true
+        )
+
+        XCTAssertTrue(
+            handled,
+            "Cmd+Return must be consumed at the NSTextField bridge (performKeyEquivalent), not dropped — this is the regression site that broke Cmd+Enter in the live UI even though the view-model contract was green."
+        )
+        XCTAssertEqual(commandReturnCount, 1)
+    }
+
+    func testKeyHandlingCommandBarFieldIgnoresCmdReturnWhenFieldEditorNotFocused() {
+        let field = KeyHandlingCommandBarField(frame: .zero)
+        var commandReturnCount = 0
+        field.onCommandReturn = { commandReturnCount += 1 }
+
+        let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        )!
+
+        let handled = field.handleKeyEquivalent(
+            event: event,
+            isFieldEditorFirstResponder: false
+        )
+
+        XCTAssertFalse(
+            handled,
+            "Cmd+Return must only be consumed while the field editor has focus, otherwise the bar would steal shortcuts from other windows."
+        )
+        XCTAssertEqual(commandReturnCount, 0)
+    }
+
+    func testKeyHandlingCommandBarFieldIgnoresPlainReturn() {
+        let field = KeyHandlingCommandBarField(frame: .zero)
+        var commandReturnCount = 0
+        field.onCommandReturn = { commandReturnCount += 1 }
+
+        let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        )!
+
+        let handled = field.handleKeyEquivalent(
+            event: event,
+            isFieldEditorFirstResponder: true
+        )
+
+        XCTAssertFalse(
+            handled,
+            "Plain Return is handled by the NSTextFieldDelegate doCommandBy: path — performKeyEquivalent must NOT consume it or the delegate chain breaks."
+        )
+        XCTAssertEqual(commandReturnCount, 0)
+    }
+
+    func testDismissSearchOverlayHidesResultsWithoutClearingInput() throws {
+        let (db, path) = try makeDatabase(name: "dismiss-overlay")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "dismiss-1",
+            content: "Dismiss test chunk content",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.handleInputChange("dismiss test")
+
+        XCTAssertFalse(model.isSearchOverlayDismissed)
+        XCTAssertGreaterThan(model.results.count, 0)
+
+        model.dismissSearchOverlay()
+
+        XCTAssertTrue(
+            model.isSearchOverlayDismissed,
+            "Click-outside must mark the overlay as dismissed so BrainBarCommandBarResultsOverlayGate.shouldShow returns false."
+        )
+        XCTAssertEqual(
+            model.inputText,
+            "dismiss test",
+            "Dismissing the overlay must preserve the user's query — typing further will re-show it."
+        )
+    }
+
+    func testReturningToSearchModeReRunsSearchWhenInputPreserved() throws {
+        let (db, path) = try makeDatabase(name: "search-capture-search-roundtrip")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "roundtrip-1",
+            content: "tests passed with flying colors",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.handleInputChange("tests")
+        XCTAssertGreaterThan(model.results.count, 0, "Initial search must populate results")
+
+        // Leave search mode → results get cleared (existing contract).
+        model.setMode(.capture)
+        XCTAssertTrue(model.results.isEmpty)
+
+        // Return to search mode — inputText is still "tests" (we preserve the
+        // query), so the results MUST re-populate automatically. Without this,
+        // the overlay shows "No matches yet" until the user edits a character.
+        model.setMode(.search)
+
+        XCTAssertGreaterThan(
+            model.results.count,
+            0,
+            "Returning to search mode with a preserved query must re-run submitSearch — otherwise the overlay lies ('no matches yet') for a query that clearly has matches."
+        )
+    }
+
+    func testHandleInputChangeClearsOverlayDismissedFlag() throws {
+        let (db, path) = try makeDatabase(name: "dismiss-reshow")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        model.dismissSearchOverlay()
+        XCTAssertTrue(model.isSearchOverlayDismissed)
+
+        model.handleInputChange("any further typing")
+
+        XCTAssertFalse(
+            model.isSearchOverlayDismissed,
+            "Typing into the input must re-show the overlay — the dismissed flag only lives until the next keystroke."
+        )
+    }
+
+    func testFeedbackAutoClearsToIdleAfterSuccessWindow() async throws {
+        let (db, path) = try makeDatabase(name: "feedback-auto-clear")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: QuickCapturePanelState(),
+            feedbackAutoClearDelay: .milliseconds(30)
+        )
+        model.inputText = "Auto-clearing feedback makes capture legible"
+
+        model.submit()
+        await model._pendingStoreTask?.value
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+
+        // Wait for the auto-clear task to fire (30ms delay + buffer).
+        try? await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(
+            model.feedback.isIdle,
+            "Feedback must auto-clear to idle after the success window so the trailing hint returns to its keyboard-shortcut legend."
+        )
+    }
+
     func testHandleInputReturnWithCommandStoresWhileRemainingInSearchMode() async throws {
         let (db, path) = try makeDatabase(name: "handle-command-return-search-mode")
         defer { cleanupDatabase(db, path: path) }

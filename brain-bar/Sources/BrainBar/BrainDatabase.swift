@@ -783,7 +783,7 @@ final class BrainDatabase: @unchecked Sendable {
         let enrichedChunkCount = counts.enrichedChunkCount
         let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
         let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
-        let enrichmentRateWindowMinutes = min(max(activityWindowMinutes, 1), 2)
+        let enrichmentRateWindowMinutes = 1
         let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: enrichmentRateWindowMinutes)
         let recentActivityBuckets = try recentActivityBuckets(
             activityWindowMinutes: activityWindowMinutes,
@@ -868,32 +868,6 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
-        try recentBuckets(
-            activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount,
-            timestampExpression: "datetime(created_at)",
-            additionalWhereClause: ""
-        )
-    }
-
-    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
-        return try recentBuckets(
-            activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount,
-            timestampExpression: "datetime(enriched_at)",
-            additionalWhereClause: """
-                AND enriched_at IS NOT NULL
-                  AND TRIM(enriched_at) != ''
-            """
-        )
-    }
-
-    private func recentBuckets(
-        activityWindowMinutes: Int,
-        bucketCount: Int,
-        timestampExpression: String,
-        additionalWhereClause: String
-    ) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
         guard let db else { throw DBError.notOpen }
 
@@ -902,11 +876,10 @@ final class BrainDatabase: @unchecked Sendable {
 
         var stmt: OpaquePointer?
         let sql = """
-            SELECT \(timestampExpression)
+            SELECT datetime(created_at)
             FROM chunks
-            WHERE \(timestampExpression) >= datetime('now', ?)
-              \(additionalWhereClause)
-            ORDER BY \(timestampExpression) ASC
+            WHERE datetime(created_at) >= datetime('now', ?)
+            ORDER BY datetime(created_at) ASC
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -917,12 +890,54 @@ final class BrainDatabase: @unchecked Sendable {
         let formatter = Self.sqliteDateFormatter
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let timestampText = columnText(stmt, 0),
-                  let timestamp = formatter.date(from: timestampText) else {
+            guard let createdAtText = columnText(stmt, 0),
+                  let createdAt = formatter.date(from: createdAtText) else {
                 continue
             }
 
-            let offset = timestamp.timeIntervalSince(windowStart)
+            let offset = createdAt.timeIntervalSince(windowStart)
+            if offset < 0 { continue }
+            if offset > Double(activityWindowMinutes * 60) { continue }
+
+            let rawIndex = Int(offset / bucketWidthSeconds)
+            let clampedIndex = min(max(rawIndex, 0), bucketCount - 1)
+            buckets[clampedIndex] += 1
+        }
+
+        return buckets
+    }
+
+    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
+        guard let db else { throw DBError.notOpen }
+
+        let bucketWidthSeconds = max(1, Double(activityWindowMinutes * 60) / Double(bucketCount))
+        let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT datetime(enriched_at)
+            FROM chunks
+            WHERE enriched_at IS NOT NULL
+              AND TRIM(enriched_at) != ''
+              AND datetime(enriched_at) >= datetime('now', ?)
+            ORDER BY datetime(enriched_at) ASC
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText("-\(activityWindowMinutes) minutes", to: stmt, index: 1)
+
+        var buckets = Array(repeating: 0, count: bucketCount)
+        let formatter = Self.sqliteDateFormatter
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let enrichedAtText = columnText(stmt, 0),
+                  let enrichedAt = formatter.date(from: enrichedAtText) else {
+                continue
+            }
+
+            let offset = enrichedAt.timeIntervalSince(windowStart)
             if offset < 0 { continue }
             if offset > Double(activityWindowMinutes * 60) { continue }
 
@@ -1913,12 +1928,9 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(chunkJSON, to: stmt, index: 4)
         sqlite3_bind_int(stmt, 5, Int32(tokenCount))
         let stepRC = sqlite3_step(stmt)
-        let rowID: Int64
+        let rowID = sqlite3_last_insert_rowid(db)
         if stepRC == SQLITE_DONE {
-            rowID = sqlite3_last_insert_rowid(db)
             Self.postDashboardChangeNotification()
-        } else {
-            rowID = 0
         }
         return InjectionEvent(id: rowID, sessionID: sessionID, timestamp: ts, query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
     }
@@ -1929,7 +1941,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
         if sessionID != nil { sql += " WHERE session_id = ?" }
-        sql += " ORDER BY timestamp DESC, id DESC LIMIT ?"
+        sql += " ORDER BY timestamp DESC LIMIT ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))

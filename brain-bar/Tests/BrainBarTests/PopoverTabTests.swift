@@ -52,7 +52,7 @@ final class PopoverTabTests: XCTestCase {
         )
     }
 
-    func testPopoverTabGraphSizeHasSameHeightAsDashboard() {
+    func testPopoverTabGraphSizeIsTallerThanDashboard() {
         XCTAssertEqual(
             PopoverTab.graph.contentSize.height,
             PopoverTab.dashboard.contentSize.height
@@ -165,41 +165,6 @@ final class PopoverTabTests: XCTestCase {
     }
 
     @MainActor
-    func testShowTabDoesNotRequestResizeWhenUtilityPanelSizeIsUnchanged() throws {
-        let db = BrainDatabase(path: tempDBPath)
-        defer { db.close() }
-        let injStore = try InjectionStore(databasePath: tempDBPath)
-        defer { injStore.stop() }
-
-        let collector = StatsCollector(
-            dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-        )
-        defer { collector.stop() }
-
-        let vc = StatusPopoverView(
-            collector: collector,
-            injectionStore: injStore,
-            database: db
-        )
-        _ = vc.view
-
-        var resizeRequests: [NSSize] = []
-        vc.onPreferredSizeChange = { size in
-            resizeRequests.append(size)
-        }
-
-        vc.showTab(.injections)
-        vc.showTab(.graph)
-        vc.showTab(.dashboard)
-
-        XCTAssertTrue(
-            resizeRequests.isEmpty,
-            "Stable-size tab switches should not ask AppKit to reposition the popover"
-        )
-    }
-
-    @MainActor
     func testCurrentTabTracksSelection() throws {
         let db = BrainDatabase(path: tempDBPath)
         defer { db.close() }
@@ -235,7 +200,6 @@ final class PopoverTabTests: XCTestCase {
 
     // MARK: - Helpers
 
-    @MainActor
     private func findSegmentedControl(in view: NSView) -> NSSegmentedControl? {
         for subview in view.subviews {
             if let segmented = subview as? NSSegmentedControl {

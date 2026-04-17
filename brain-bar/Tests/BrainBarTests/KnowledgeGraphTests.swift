@@ -39,6 +39,7 @@ final class KGDatabaseTests: XCTestCase {
     func testFetchKGEntitiesReturnsInsertedEntities() throws {
         try db.insertEntity(id: "person-abc", type: "person", name: "Alice")
         try db.insertEntity(id: "project-xyz", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "person-abc", targetId: "project-xyz", relationType: "builds")
 
         let entities = try db.fetchKGEntities()
         XCTAssertEqual(entities.count, 2)
@@ -49,8 +50,10 @@ final class KGDatabaseTests: XCTestCase {
     }
 
     func testFetchKGEntitiesRespectsLimit() throws {
+        try db.insertEntity(id: "project-root", type: "project", name: "Root")
         for i in 0..<10 {
             try db.insertEntity(id: "e-\(i)", type: "person", name: "Entity \(i)")
+            try db.insertRelation(sourceId: "e-\(i)", targetId: "project-root", relationType: "builds")
         }
         let entities = try db.fetchKGEntities(limit: 5)
         XCTAssertEqual(entities.count, 5)
@@ -58,6 +61,8 @@ final class KGDatabaseTests: XCTestCase {
 
     func testFetchKGEntitiesReturnsTypeAndDescription() throws {
         try db.insertEntity(id: "tool-vim", type: "tool", name: "Vim", metadata: "{\"desc\":\"editor\"}")
+        try db.insertEntity(id: "project-editor", type: "project", name: "Editor")
+        try db.insertRelation(sourceId: "tool-vim", targetId: "project-editor", relationType: "supports")
         let entities = try db.fetchKGEntities()
         XCTAssertEqual(entities.first?.entityType, "tool")
         XCTAssertEqual(entities.first?.name, "Vim")
@@ -234,6 +239,8 @@ final class KGViewModelTests: XCTestCase {
 
     func testSelectNodeUpdatesSelectedEntity() throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
         vm.loadGraph()
 
@@ -245,6 +252,8 @@ final class KGViewModelTests: XCTestCase {
 
     func testSelectNodeNilDeselects() throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
         vm.loadGraph()
 
@@ -273,6 +282,8 @@ final class KGViewModelTests: XCTestCase {
 
     func testNodeHitTestFindsCorrectNode() throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
         vm.loadGraph()
 
@@ -288,6 +299,8 @@ final class KGViewModelTests: XCTestCase {
 
     func testSelectedEntityChunksPopulated() throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "builds")
         try db.insertChunk(
             id: "c1", content: "Alice built BrainLayer",
             sessionId: "s1", project: "test", contentType: "ai_code", importance: 7

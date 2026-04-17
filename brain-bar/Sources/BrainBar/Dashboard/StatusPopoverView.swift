@@ -46,24 +46,16 @@ final class StatusPopoverView: NSViewController {
     private let statusLabel = NSTextField(labelWithString: "")
     private let pipelineValueLabel = NSTextField(labelWithString: "")
     private let databaseSizeLabel = NSTextField(labelWithString: "")
-    private let chunkMetric = MetricTileView(title: "Chunks")
-    private let enrichedMetric = MetricTileView(title: "Enriched")
-    private let pendingMetric = MetricTileView(title: "Backlog")
-    private let rateMetric = MetricTileView(title: "Speed")
+    private let chunkMetric = MetricTileView(title: "Chunks", accentColor: .systemBlue)
+    private let enrichedMetric = MetricTileView(title: "Enriched", accentColor: .systemGreen)
+    private let pendingMetric = MetricTileView(title: "Backlog", accentColor: .systemOrange)
+    private let rateMetric = MetricTileView(title: "Speed", accentColor: .systemPink)
     private let indexingIndicator = PipelineIndicatorBadgeView(name: "Indexing")
     private let enrichingIndicator = PipelineIndicatorBadgeView(name: "Enriching")
-    private let activityLabel = NSTextField(labelWithString: "Pipeline Throughput")
+    private let activityLabel = NSTextField(labelWithString: "Enrichment Throughput")
+    private let activityDetailLabel = NSTextField(labelWithString: "")
     private let enrichmentLabel = NSTextField(labelWithString: "")
-    private let indexingActivityView = PipelineActivityRowView(
-        title: "Indexing",
-        symbolName: "server.rack",
-        accentColor: .systemBlue
-    )
-    private let enrichingActivityView = PipelineActivityRowView(
-        title: "Enriching",
-        symbolName: "sparkles",
-        accentColor: .systemPurple
-    )
+    private let sparklineImageView = NSImageView(frame: .zero)
     private let daemonLabel = NSTextField(labelWithString: "")
     private let hotkeyLabel = NSTextField(labelWithString: "")
     private let headerPanel = SurfacePanelView(cornerRadius: 14)
@@ -134,10 +126,8 @@ final class StatusPopoverView: NSViewController {
             content.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
         ])
 
-        if preferredContentSize != tab.contentSize {
-            preferredContentSize = tab.contentSize
-            onPreferredSizeChange?(tab.contentSize)
-        }
+        preferredContentSize = tab.contentSize
+        onPreferredSizeChange?(tab.contentSize)
     }
 
     // MARK: - Segmented Control
@@ -193,14 +183,14 @@ final class StatusPopoverView: NSViewController {
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         statusLabel.textColor = .secondaryLabelColor
         pipelineValueLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        databaseSizeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        databaseSizeLabel.alignment = .right
+        databaseSizeLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         databaseSizeLabel.textColor = .tertiaryLabelColor
         activityLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        enrichmentLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        enrichmentLabel.alignment = .right
+        activityDetailLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        activityDetailLabel.textColor = .secondaryLabelColor
+        enrichmentLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         enrichmentLabel.textColor = .tertiaryLabelColor
-        daemonLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        daemonLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         daemonLabel.textColor = .secondaryLabelColor
         daemonLabel.maximumNumberOfLines = 2
         daemonLabel.lineBreakMode = .byTruncatingTail
@@ -208,6 +198,11 @@ final class StatusPopoverView: NSViewController {
         hotkeyLabel.textColor = .secondaryLabelColor
         hotkeyLabel.maximumNumberOfLines = 2
         hotkeyLabel.lineBreakMode = .byWordWrapping
+
+        sparklineImageView.imageScaling = .scaleAxesIndependently
+        sparklineImageView.wantsLayer = true
+        sparklineImageView.layer?.cornerRadius = 4
+        sparklineImageView.layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     private func makeDashboardContent() -> NSView {
@@ -252,13 +247,19 @@ final class StatusPopoverView: NSViewController {
             edgeInsets: NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         )
 
-        let activityStack = NSStackView(views: [activityLabel, indexingActivityView, enrichingActivityView])
+        let activityHeader = NSStackView(views: [activityLabel, NSView(), activityDetailLabel])
+        activityHeader.orientation = .horizontal
+        activityHeader.alignment = .centerY
+
+        let activityStack = NSStackView(views: [activityHeader, sparklineImageView])
         activityStack.orientation = .vertical
         activityStack.spacing = 10
         let activityCard = activityPanel.wrap(
             activityStack,
             edgeInsets: NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         )
+
+        sparklineImageView.translatesAutoresizingMaskIntoConstraints = false
         hotkeyLabel.isHidden = hotkeyStatus == nil
 
         for row in [headerCard, activityCard] as [NSView] {
@@ -271,6 +272,11 @@ final class StatusPopoverView: NSViewController {
         content.alignment = .width
         content.spacing = 10
         content.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 14, right: 14)
+
+        NSLayoutConstraint.activate([
+            sparklineImageView.heightAnchor.constraint(equalToConstant: 188),
+        ])
+
         dashboardContent = content
         return content
     }
@@ -345,36 +351,20 @@ final class StatusPopoverView: NSViewController {
         databaseSizeLabel.stringValue = "\(byteString(collector.stats.databaseSizeBytes)) db"
 
         let indicators = PipelineIndicators.derive(daemon: collector.daemon, stats: collector.stats)
-        let enrichmentDisplayRatePerMinute = PipelineActivityTracks.displayedRatePerMinute(
-            primaryRatePerMinute: collector.stats.enrichmentRatePerMinute,
-            values: collector.stats.recentEnrichmentBuckets
-        )
-        let indexingRatePerMinute = PipelineActivityTracks.recentRatePerMinute(
-            values: collector.stats.recentActivityBuckets,
-            activityWindowMinutes: 30,
-            trailingBucketCount: 2
-        )
         indexingIndicator.setStatus(indicators.indexing.status)
         enrichingIndicator.setStatus(indicators.enriching.status)
 
-        chunkMetric.value = integerString(collector.stats.chunkCount)
-        enrichedMetric.value = integerString(collector.stats.enrichedChunkCount)
-        pendingMetric.value = integerString(collector.stats.pendingEnrichmentCount)
-        rateMetric.value = DashboardMetricFormatter.speedString(ratePerMinute: enrichmentDisplayRatePerMinute)
+        chunkMetric.value = "\(collector.stats.chunkCount)"
+        enrichedMetric.value = "\(collector.stats.enrichedChunkCount)"
+        pendingMetric.value = "\(collector.stats.pendingEnrichmentCount)"
+        rateMetric.value = DashboardMetricFormatter.speedString(ratePerMinute: collector.stats.enrichmentRatePerMinute)
 
         enrichmentLabel.stringValue = "\(Int(collector.stats.enrichmentPercent.rounded()))% enriched"
-        let activityTracks = PipelineActivityTracks.derive(daemon: collector.daemon, stats: collector.stats)
-        indexingActivityView.update(
-            track: activityTracks.indexing,
-            detailRateText: DashboardMetricFormatter.rateDetailString(
-                ratePerMinute: indexingRatePerMinute
-            )
-        )
-        enrichingActivityView.update(
-            track: activityTracks.enriching,
-            detailRateText: DashboardMetricFormatter.rateDetailString(
-                ratePerMinute: enrichmentDisplayRatePerMinute
-            )
+        activityDetailLabel.stringValue = enrichmentActivitySummary(collector.stats)
+        sparklineImageView.image = SparklineRenderer.render(
+            state: collector.state,
+            values: collector.stats.recentEnrichmentBuckets,
+            size: NSSize(width: 500, height: 188)
         )
 
         if let daemon = collector.daemon {
@@ -404,8 +394,20 @@ final class StatusPopoverView: NSViewController {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 
-    private func integerString(_ value: Int) -> String {
-        NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    private func enrichmentActivitySummary(_ stats: DashboardStats) -> String {
+        let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
+        if recentCompletions == 0 {
+            return "No completions in the last 30m"
+        }
+        return "\(recentCompletions) completions in the last 30m"
+    }
+
+    private func verticalStack(_ views: [NSView]) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        return stack
     }
 
     private func makePlaceholder(_ text: String) -> NSView {
@@ -465,7 +467,7 @@ private final class MetricTileView: NSView {
         layer?.borderWidth = 0.8
     }
 
-    init(title: String) {
+    init(title: String, accentColor: NSColor) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -474,14 +476,13 @@ private final class MetricTileView: NSView {
         titleLabel.font = .systemFont(ofSize: 10, weight: .medium)
         titleLabel.textColor = .secondaryLabelColor
         valueLabel.font = .monospacedDigitSystemFont(ofSize: 20, weight: .semibold)
-        valueLabel.alignment = .right
         valueLabel.textColor = .labelColor
         valueLabel.lineBreakMode = .byClipping
         valueLabel.maximumNumberOfLines = 1
 
         let stack = NSStackView(views: [titleLabel, valueLabel])
         stack.orientation = .vertical
-        stack.alignment = .width
+        stack.alignment = .leading
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -493,108 +494,6 @@ private final class MetricTileView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             heightAnchor.constraint(equalToConstant: 60),
         ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-private final class PipelineActivityRowView: NSView {
-    private let iconView = NSImageView(frame: .zero)
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let rateLabel = NSTextField(labelWithString: "")
-    private let detailLabel = NSTextField(labelWithString: "")
-    private let sparklineImageView = NSImageView(frame: .zero)
-    private let accentColor: NSColor
-
-    init(title: String, symbolName: String, accentColor: NSColor) {
-        self.accentColor = accentColor
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.05).cgColor
-
-        titleLabel.stringValue = title
-        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
-
-        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title) {
-            iconView.image = image
-        }
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        iconView.contentTintColor = accentColor
-
-        rateLabel.font = .monospacedDigitSystemFont(ofSize: 16, weight: .semibold)
-        rateLabel.alignment = .right
-        rateLabel.textColor = .labelColor
-
-        detailLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        detailLabel.alignment = .right
-        detailLabel.textColor = .tertiaryLabelColor
-        detailLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-
-        sparklineImageView.imageScaling = .scaleAxesIndependently
-        sparklineImageView.wantsLayer = true
-        sparklineImageView.layer?.cornerRadius = 4
-        sparklineImageView.layer?.backgroundColor = NSColor.clear.cgColor
-
-        let titleRow = NSStackView(views: [iconView, titleLabel, NSView(), rateLabel])
-        titleRow.orientation = .horizontal
-        titleRow.alignment = .centerY
-        titleRow.spacing = 6
-
-        let stack = NSStackView(views: [titleRow, sparklineImageView, detailLabel])
-        stack.orientation = .vertical
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
-            sparklineImageView.heightAnchor.constraint(equalToConstant: 56),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
-        ])
-    }
-
-    func update(track: PipelineActivityTrack, detailRateText: String) {
-        rateLabel.stringValue = track.rateText
-
-        if track.rateText == "idle" || track.rateText == "queued" {
-            detailLabel.stringValue = track.detailText
-        } else if track.rateText.contains("/s") {
-            detailLabel.stringValue = track.detailText
-        } else {
-            detailLabel.stringValue = "\(detailRateText) · \(track.detailText)"
-        }
-
-        let color = statusColor(for: track.status)
-        iconView.contentTintColor = color
-        sparklineImageView.image = SparklineRenderer.render(
-            color: color,
-            values: track.values,
-            size: NSSize(width: 500, height: 56)
-        )
-    }
-
-    private func statusColor(for status: PipelineIndicatorStatus) -> NSColor {
-        switch status {
-        case .live:
-            return accentColor
-        case .queued:
-            return .systemOrange
-        case .idle:
-            return .secondaryLabelColor
-        case .unavailable:
-            return .systemRed
-        }
     }
 
     @available(*, unavailable)

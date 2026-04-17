@@ -1,18 +1,6 @@
 import CoreFoundation
 import Foundation
 
-final class InjectionStoreObserverBox: @unchecked Sendable {
-    weak var store: InjectionStore?
-}
-
-enum InjectionStoreDarwinObserver {
-    static func scheduleRefresh(observerBox: InjectionStoreObserverBox) {
-        Task { @MainActor [weak store = observerBox.store] in
-            store?.handleDatabaseMutationNotification()
-        }
-    }
-}
-
 private func injectionStoreDarwinNotificationCallback(
     center: CFNotificationCenter?,
     observer: UnsafeMutableRawPointer?,
@@ -21,8 +9,10 @@ private func injectionStoreDarwinNotificationCallback(
     userInfo: CFDictionary?
 ) {
     guard let observer else { return }
-    let observerBox = Unmanaged<InjectionStoreObserverBox>.fromOpaque(observer).takeUnretainedValue()
-    InjectionStoreDarwinObserver.scheduleRefresh(observerBox: observerBox)
+    let store = Unmanaged<InjectionStore>.fromOpaque(observer).takeUnretainedValue()
+    Task { @MainActor in
+        store.handleDatabaseMutationNotification()
+    }
 }
 
 @MainActor
@@ -30,7 +20,6 @@ final class InjectionStore: ObservableObject {
     @Published private(set) var events: [InjectionEvent] = []
 
     private let database: BrainDatabase
-    private let observerBox: InjectionStoreObserverBox
     private var pollTask: Task<Void, Never>?
     private var isRunning = false
     private var lastDataVersion: Int?
@@ -39,11 +28,6 @@ final class InjectionStore: ObservableObject {
 
     init(databasePath: String) throws {
         self.database = BrainDatabase(path: databasePath)
-        self.observerBox = InjectionStoreObserverBox()
-        guard database.isOpen else {
-            throw BrainDatabase.DBError.notOpen
-        }
-        observerBox.store = self
     }
 
     func start(sessionID: String? = nil, limit: Int = 50) {
@@ -77,17 +61,25 @@ final class InjectionStore: ObservableObject {
         }
 
         isRunning = false
-    }
-
-    deinit {
-        pollTask?.cancel()
-        if isRunning {
-            Self.removeDarwinObserver(observerBox: observerBox)
-        }
         database.close()
     }
 
-    var observerBoxForTesting: InjectionStoreObserverBox { observerBox }
+    deinit {
+        // The Darwin observer is registered with `Unmanaged.passUnretained(self)`.
+        // If the store is released without an explicit `stop()` call (e.g. a
+        // test fixture that skips teardown, or a mid-refactor owner swap),
+        // the CF center will happily keep firing the callback on freed memory
+        // and crash on the next dashboard mutation notification. Always
+        // remove — CFNotificationCenterRemoveObserver is a no-op on a
+        // never-registered observer, so this is safe regardless of state.
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterRemoveObserver(
+            center,
+            Unmanaged.passUnretained(self).toOpaque(),
+            CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
+            nil
+        )
+    }
 
     func expandedConversation(chunkID: String, before: Int = 3, after: Int = 3) throws -> BrainDatabase.ExpandedConversation {
         try database.expandedConversation(id: chunkID, before: before, after: after)
@@ -113,18 +105,10 @@ final class InjectionStore: ObservableObject {
     }
 
     private func installDarwinObserver() {
-        Self.addDarwinObserver(observerBox: observerBox)
-    }
-
-    private func removeDarwinObserver() {
-        Self.removeDarwinObserver(observerBox: observerBox)
-    }
-
-    nonisolated private static func addDarwinObserver(observerBox: InjectionStoreObserverBox) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterAddObserver(
             center,
-            Unmanaged.passUnretained(observerBox).toOpaque(),
+            Unmanaged.passUnretained(self).toOpaque(),
             injectionStoreDarwinNotificationCallback,
             BrainDatabase.dashboardDidChangeNotification as CFString,
             nil,
@@ -132,11 +116,11 @@ final class InjectionStore: ObservableObject {
         )
     }
 
-    nonisolated private static func removeDarwinObserver(observerBox: InjectionStoreObserverBox) {
+    private func removeDarwinObserver() {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterRemoveObserver(
             center,
-            Unmanaged.passUnretained(observerBox).toOpaque(),
+            Unmanaged.passUnretained(self).toOpaque(),
             CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
             nil
         )

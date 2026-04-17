@@ -96,23 +96,51 @@ final class QuickCaptureViewModel: ObservableObject {
     @Published private(set) var copiedResultID: String?
     @Published private(set) var copyFeedbackFlashCount = 0
     @Published private(set) var focusRequestCount = 0
+    /// Click-outside-dismiss flag for the search results overlay. Preserves
+    /// `inputText` so the next keystroke can reinstate the overlay.
+    @Published private(set) var isSearchOverlayDismissed: Bool = false
 
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
     private let clipboard: QuickCaptureClipboard
     private var copyResetTask: Task<Void, Never>?
+    private var feedbackResetTask: Task<Void, Never>?
     /// Exposed for test awaiting — set when an async store is in flight.
     var _pendingStoreTask: Task<Void, Never>?
+    /// Feedback state clears back to `.idle` after this delay on success.
+    /// Injectable so tests can collapse the wait window.
+    private let feedbackAutoClearDelay: Duration
 
     init(
         db: BrainDatabase,
         panelState: QuickCapturePanelState,
-        clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard()
+        clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard(),
+        feedbackAutoClearDelay: Duration = .milliseconds(2000)
     ) {
         self.db = db
         self.panelState = panelState
         self.clipboard = clipboard
+        self.feedbackAutoClearDelay = feedbackAutoClearDelay
         mode = panelState.mode
+    }
+
+    /// Called when the user clicks outside the overlay. Preserves `inputText`
+    /// so a subsequent keystroke re-shows the overlay — see
+    /// `handleInputChange`, which clears the dismissed flag.
+    func dismissSearchOverlay() {
+        isSearchOverlayDismissed = true
+    }
+
+    private func scheduleFeedbackAutoClear() {
+        feedbackResetTask?.cancel()
+        feedbackResetTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: feedbackAutoClearDelay)
+            guard !Task.isCancelled else { return }
+            if case .success = feedback {
+                feedback = .idle
+            }
+        }
     }
 
     var placeholderText: String {
@@ -158,9 +186,15 @@ final class QuickCaptureViewModel: ObservableObject {
         panelState.switchMode(newMode)
         feedback = .idle
         copiedResultID = nil
+        isSearchOverlayDismissed = false
         if newMode == .capture {
             results = []
             selectedResultIndex = nil
+        } else if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Entering search mode with a preserved query — re-run the search
+            // so the overlay doesn't lie ("no matches yet") for a query that
+            // already had real hits before the mode round-trip.
+            submitSearch()
         }
         focusRequestCount += 1
     }
@@ -207,6 +241,7 @@ final class QuickCaptureViewModel: ObservableObject {
         if inputText != newValue {
             inputText = newValue
         }
+        isSearchOverlayDismissed = false
 
         guard mode == .search else { return }
         submitSearch()
@@ -299,6 +334,7 @@ final class QuickCaptureViewModel: ObservableObject {
                 }
                 feedback = .success("Stored in BrainLayer")
                 confirmationFlashCount += 1
+                scheduleFeedbackAutoClear()
             } catch {
                 feedback = .error(error.localizedDescription)
             }
@@ -426,7 +462,7 @@ enum QuickCaptureInputFactory {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainerInset = NSSize(width: 0, height: 8)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.heightTracksTextView = false
@@ -774,8 +810,8 @@ struct QuickCapturePanelView: View {
                         Text(viewModel.placeholderText)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.tertiary)
-                            .padding(.top, 10)
-                            .padding(.leading, 12)
+                            .padding(.top, 8)
+                            .padding(.leading, 4)
                             .allowsHitTesting(false)
                     }
 
@@ -821,7 +857,7 @@ struct QuickCapturePanelView: View {
                         )
                     }
                 }
-                    .frame(minHeight: viewModel.mode == .search ? 44 : 44, maxHeight: viewModel.mode == .search ? 44 : 64)
+                    .frame(minHeight: 44, maxHeight: viewModel.mode == .search ? 44 : 120)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
