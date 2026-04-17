@@ -8,40 +8,44 @@ enum TextFormatter {
     }
 
     static func formatSearchResults(query: String, results: [SearchResult], total: Int) -> String {
+        let truncatedQuery = truncate(query, maxLen: 50)
+
         if total == 0 {
-            return "<brain_search query=\"\(escapeXML(query))\" returned=\"0\" tool=\"brain_search\">\n\nNo results found.\n\n</brain_search>"
+            return [
+                "┌─ brain_search: \"\(truncatedQuery)\"",
+                "│ No results found.",
+                "└─",
+            ].joined(separator: "\n")
         }
 
-        var lines = ["<brain_search query=\"\(escapeXML(query))\" returned=\"\(total)\" tool=\"brain_search\">"]
-        lines.append("")
-        lines.append("## Search: \"\(truncate(query, maxLen: 60))\"")
-        lines.append("\(total) result\(total == 1 ? "" : "s") │ sorted by relevance")
-        lines.append("")
+        var lines = ["┌─ brain_search: \"\(truncatedQuery)\" ─ \(total) result\(total == 1 ? "" : "s")"]
+        lines.append("│")
 
         for (index, result) in results.enumerated() {
-            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            lines.append("")
-
-            let displayText = smartTruncate(result.summary.isEmpty ? result.snippet : result.summary, maxLen: 120)
+            let displayText = truncate(result.summary.isEmpty ? result.snippet : result.summary, maxLen: 150)
             let datePart = String(result.date.prefix(10))
-            let projectPart = result.project.isEmpty ? "" : result.project
-
-            // Metadata line: relevance │ source │ date │ project
-            var meta: [String] = [result.relevanceTier]
-            if !result.sourceLabel.isEmpty { meta.append("from: \(result.sourceLabel)") }
-            if !datePart.isEmpty { meta.append(datePart) }
-            if !projectPart.isEmpty { meta.append("project: \(projectPart)") }
-
-            lines.append("### ◇ [\(index + 1)] \(displayText)")
-            lines.append(meta.joined(separator: " │ "))
+            let importancePart: String
+            if let importance = result.importance {
+                importancePart = String(format: "%2d", importance)
+            } else {
+                importancePart = " ─"
+            }
+            lines.append("├─ [\(index + 1)] \(String(result.chunkID.prefix(12)))  score:\(scoreString(result.score))  imp:\(importancePart)  \(datePart)")
+            lines.append("│  \(pad(truncate(result.project, maxLen: 16), width: 16)) │ \(displayText)")
 
             if !result.tags.isEmpty {
-                lines.append("tags: \(result.tags.prefix(4).joined(separator: ", "))")
+                lines.append("│  tags: \(result.tags.prefix(4).joined(separator: ", "))")
             }
-            lines.append("")
+
+            if index < results.count - 1 {
+                lines.append("│")
+            }
         }
 
-        lines.append("</brain_search>")
+        if !results.isEmpty {
+            lines.append("│")
+        }
+        lines.append("└─")
         return lines.joined(separator: "\n")
     }
 
@@ -132,55 +136,34 @@ enum TextFormatter {
     }
 
     static func formatEntitySimple(_ entity: EntityCard) -> String {
-        let typePart = entity.entityType.isEmpty ? "unknown" : entity.entityType
-        var lines = ["<brain_entity name=\"\(escapeXML(entity.name))\" type=\"\(typePart)\" tool=\"brain_entity\">"]
-        lines.append("")
-        lines.append("## ◆ \(entity.name) [\(typePart.capitalized)]")
+        var lines = [
+            "┌─ Entity: \(entity.name)",
+            "│ id: \(entity.id)  type: \(entity.entityType.isEmpty ? "unknown" : entity.entityType)"
+        ]
 
-        if !entity.description.isEmpty {
-            lines.append(truncate(entity.description, maxLen: 120))
-        }
-
-        lines.append("")
-
-        // Grouped relations: outgoing then incoming, grouped by type, uppercase labels
-        let outgoing = entity.relations.filter { $0.direction != "incoming" }
-        let incoming = entity.relations.filter { $0.direction == "incoming" }
-
-        if !outgoing.isEmpty {
-            lines.append("### Outgoing relationships (\(outgoing.count))")
-            let grouped = Dictionary(grouping: outgoing) { $0.relationType }
-            for (relType, group) in grouped.sorted(by: { $0.key < $1.key }) {
-                let targets = group.map(\.targetName).joined(separator: ", ")
-                lines.append("→ \(relType.uppercased()): \(targets)")
+        if !entity.relations.isEmpty {
+            lines.append("├─ Relations (\(entity.relations.count))")
+            for relation in entity.relations.prefix(8) {
+                let arrow = relation.direction == "incoming" ? "←" : "→"
+                lines.append("│   \(arrow) \(relation.relationType): \(relation.targetName)")
             }
-            lines.append("")
         }
 
-        if !incoming.isEmpty {
-            lines.append("### Incoming relationships (\(incoming.count))")
-            let grouped = Dictionary(grouping: incoming) { $0.relationType }
-            for (relType, group) in grouped.sorted(by: { $0.key < $1.key }) {
-                let targets = group.map(\.targetName).joined(separator: ", ")
-                lines.append("← \(relType.uppercased()): \(targets)")
+        if !entity.chunks.isEmpty {
+            lines.append("├─ Associated memories (\(entity.chunks.count))")
+            for chunk in entity.chunks.prefix(5) {
+                lines.append("│   \(truncate(chunk, maxLen: 60))")
             }
-            lines.append("")
-        }
-
-        if entity.relations.isEmpty {
-            lines.append("No relationships found.")
-            lines.append("")
         }
 
         if !entity.metadata.isEmpty {
-            lines.append("### Metadata")
-            for (key, value) in entity.metadata.sorted(by: { $0.key < $1.key }).prefix(6) {
-                lines.append("- \(key): \(truncate(value, maxLen: 60))")
+            lines.append("├─ Metadata")
+            for (key, value) in entity.metadata.sorted(by: { $0.key < $1.key }).prefix(5) {
+                lines.append("│   \(key): \(truncate(value, maxLen: 50))")
             }
-            lines.append("")
         }
 
-        lines.append("</brain_entity>")
+        lines.append("└─")
         return lines.joined(separator: "\n")
     }
 
@@ -245,33 +228,6 @@ enum TextFormatter {
 
         lines.append("└─")
         return lines.joined(separator: "\n")
-    }
-
-    private static func escapeXML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-    }
-
-    /// Truncate at sentence boundary when possible. Falls back to word boundary.
-    private static func smartTruncate(_ text: String, maxLen: Int) -> String {
-        let clean = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard clean.count > maxLen else { return clean }
-
-        let cutoff = String(clean.prefix(maxLen))
-        // Try sentence boundary (. ! ?)
-        if let lastSentence = cutoff.range(of: "[.!?]\\s", options: .regularExpression, range: cutoff.startIndex..<cutoff.endIndex, locale: nil)?.upperBound {
-            let trimmed = String(cutoff[cutoff.startIndex..<lastSentence]).trimmingCharacters(in: .whitespaces)
-            if trimmed.count > maxLen / 3 {
-                return trimmed
-            }
-        }
-        // Fall back to word boundary
-        if let lastSpace = cutoff.lastIndex(of: " ") {
-            return String(cutoff[cutoff.startIndex..<lastSpace]) + "…"
-        }
-        return cutoff + "…"
     }
 
     private static func truncate(_ text: String, maxLen: Int = 80) -> String {

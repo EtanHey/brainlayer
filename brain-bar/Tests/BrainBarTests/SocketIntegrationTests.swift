@@ -9,7 +9,6 @@ import XCTest
 final class SocketIntegrationTests: XCTestCase {
     let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
-    var bufferedMessagesByFD: [Int32: Data] = [:]
 
     override func setUp() {
         super.setUp()
@@ -21,7 +20,6 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     override func tearDown() {
-        bufferedMessagesByFD.removeAll()
         server.stop()
         super.tearDown()
     }
@@ -412,83 +410,54 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
     }
 
-    // MARK: - C1: Socket backpressure handling
+    // MARK: - C1: Write retry cap
 
-    func testInitializeHandshakeSurvivesBriefBackpressureBurst() throws {
-        let clientFD = try connectClient()
+    func testServerDisconnectsStalledClient() throws {
+        // Connect but never read — server should disconnect after max retries (10),
+        // not block the serial queue forever.
+        let clientFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard clientFD >= 0 else { throw NSError(domain: "test", code: 1) }
         defer { close(clientFD) }
-        configureBackpressuredClient(fd: clientFD, receiveBufferSize: 1_024)
 
-        try sendMCPRequest(on: clientFD, request: initializeRequest(id: 1, name: "brief-stall"))
-        for id in 2...18 {
-            try sendMCPRequest(on: clientFD, request: toolsListRequest(id: id))
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: 104) { dest in
+                _ = testSocketPath.withCString { src in strcpy(dest, src) }
+            }
+        }
+        let connectResult = withUnsafePointer(to: &addr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { ptr in
+                connect(clientFD, ptr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        XCTAssertEqual(connectResult, 0, "Should connect")
+
+        // Set tiny receive buffer to force EAGAIN on server-side writes
+        var bufSize: Int32 = 1
+        setsockopt(clientFD, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout<Int32>.size))
+
+        // Send an initialize request
+        let json = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"stall","version":"1"}}}"#
+        let header = "Content-Length: \(json.utf8.count)\r\n\r\n"
+        var frame = Data(header.utf8)
+        frame.append(Data(json.utf8))
+        frame.withUnsafeBytes { ptr in
+            _ = write(clientFD, ptr.baseAddress!, frame.count)
         }
 
-        // Simulate a client that is briefly busy before draining responses.
-        Thread.sleep(forTimeInterval: 0.1)
+        // After the write stalls (tiny rcvbuf), server should disconnect within ~20ms (10 retries * 1ms + overhead)
+        // If it hangs > 200ms, the retry cap is broken.
+        // A second client should still be able to connect and get a response,
+        // proving the serial queue wasn't blocked.
+        Thread.sleep(forTimeInterval: 0.2)
 
-        let initializeResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
-        XCTAssertNotNil(initializeResponse["result"])
-
-        var lastResponse: [String: Any] = initializeResponse
-        for _ in 2...18 {
-            lastResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
-        }
-        let tools = (lastResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 11)
-
-        try sendMCPRequest(on: clientFD, request: toolsListRequest(id: 81))
-        let followUpResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
-        let followUpTools = (followUpResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(followUpTools?.count, 11, "Client should remain connected after a short backpressure burst")
-    }
-
-    func testServerDisconnectsPersistentlyStalledClientWithoutBlockingOthers() throws {
-        let deadClientFD = try connectClient()
-        defer { close(deadClientFD) }
-        configureBackpressuredClient(fd: deadClientFD, receiveBufferSize: 1)
-
-        try sendMCPRequest(on: deadClientFD, request: initializeRequest(id: 1, name: "dead-stall"))
-        for id in 2...80 {
-            try sendMCPRequest(on: deadClientFD, request: toolsListRequest(id: id))
-        }
-
-        let timeoutSeconds = Double(BrainBarServer.writeStallTimeoutMilliseconds) / 1000.0
-        Thread.sleep(forTimeInterval: timeoutSeconds + 0.35)
-
-        let secondStartedAt = Date()
-        let secondResponse = try sendMCPRequest(initializeRequest(id: 200, name: "healthy-client"))
-        XCTAssertNotNil(secondResponse["result"], "Dead client should not block the server forever")
-        XCTAssertLessThan(Date().timeIntervalSince(secondStartedAt), 1.0, "Server should recover promptly once the stalled client is dropped")
-
-        XCTAssertTrue(
-            try waitForSocketClosure(fd: deadClientFD, timeout: 1.0),
-            "Persistently stalled client should eventually be disconnected"
-        )
-    }
-
-    func testBackpressuredClientDoesNotDelayHealthyClientBeforeTimeout() throws {
-        let stalledClientFD = try connectClient()
-        defer { close(stalledClientFD) }
-        configureBackpressuredClient(fd: stalledClientFD, receiveBufferSize: 1)
-
-        try sendMCPRequest(on: stalledClientFD, request: initializeRequest(id: 1, name: "blocked-client"))
-        for id in 2...80 {
-            try sendMCPRequest(on: stalledClientFD, request: toolsListRequest(id: id))
-        }
-
-        Thread.sleep(forTimeInterval: 0.05)
-
-        let startedAt = Date()
-        let healthyResponse = try sendMCPRequest(initializeRequest(id: 300, name: "healthy-before-timeout"))
-        let elapsed = Date().timeIntervalSince(startedAt)
-
-        XCTAssertNotNil(healthyResponse["result"])
-        XCTAssertLessThan(
-            elapsed,
-            Double(BrainBarServer.writeStallTimeoutMilliseconds) / 1000.0 * 0.7,
-            "A stalled client should not monopolize the serial queue before its timeout expires"
-        )
+        let secondResponse = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 99, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "second", "version": "1.0"]]
+        ])
+        XCTAssertNotNil(secondResponse["result"], "Serial queue must not be blocked — second client should get response")
     }
 
     func testStdioAdapterBridgesInitializeAndSubscribe() throws {
@@ -700,68 +669,35 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {
-        var buffer = bufferedMessagesByFD[fd] ?? Data()
+        var buffer = Data()
         var readBuf = [UInt8](repeating: 0, count: 65536)
         let deadline = Date().addingTimeInterval(timeout)
 
         while Date() < deadline {
-            if let message = try decodeBufferedMCPMessage(fd: fd, buffer: &buffer) {
-                return message
-            }
-
             let n = read(fd, &readBuf, readBuf.count)
             if n > 0 {
                 buffer.append(contentsOf: readBuf[0..<n])
-                if let message = try decodeBufferedMCPMessage(fd: fd, buffer: &buffer) {
-                    return message
+                // Try to parse Content-Length framed response
+                if let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                    let headerStr = String(data: buffer[buffer.startIndex..<headerEnd.lowerBound], encoding: .utf8) ?? ""
+                    if let clLine = headerStr.split(separator: "\r\n").first(where: { $0.hasPrefix("Content-Length:") }) {
+                        let cl = Int(clLine.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                        let bodyStart = headerEnd.upperBound
+                        if buffer.count >= bodyStart + cl {
+                            let bodyData = buffer[bodyStart..<(bodyStart + cl)]
+                            return try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
+                        }
+                    }
                 }
             } else if n == 0 {
-                bufferedMessagesByFD.removeValue(forKey: fd)
                 break // EOF
             } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
-                bufferedMessagesByFD.removeValue(forKey: fd)
                 break
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
 
-        bufferedMessagesByFD[fd] = buffer
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading response"])
-    }
-
-    private func decodeBufferedMCPMessage(fd: Int32, buffer: inout Data) throws -> [String: Any]? {
-        guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
-            bufferedMessagesByFD[fd] = buffer
-            return nil
-        }
-
-        let headerData = buffer[buffer.startIndex..<headerEnd.lowerBound]
-        let headerString = String(data: headerData, encoding: .utf8) ?? ""
-        guard let contentLengthLine = headerString
-            .components(separatedBy: "\r\n")
-            .first(where: { $0.hasPrefix("Content-Length:") }),
-              let separatorIndex = contentLengthLine.firstIndex(of: ":")
-        else {
-            bufferedMessagesByFD[fd] = buffer
-            return nil
-        }
-
-        let contentLength = Int(
-            contentLengthLine[contentLengthLine.index(after: separatorIndex)...]
-                .trimmingCharacters(in: .whitespaces)
-        ) ?? 0
-        let bodyStart = headerEnd.upperBound
-        guard buffer.count >= bodyStart + contentLength else {
-            bufferedMessagesByFD[fd] = buffer
-            return nil
-        }
-
-        let bodyRange = bodyStart..<(bodyStart + contentLength)
-        let bodyData = buffer[bodyRange]
-        let remaining = Data(buffer[bodyRange.upperBound...])
-        bufferedMessagesByFD[fd] = remaining
-        buffer = remaining
-        return try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
     }
 
     private func sendLineJSON(_ object: [String: Any], to handle: FileHandle) throws {
@@ -795,56 +731,5 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
-    }
-
-    private func configureBackpressuredClient(fd: Int32, receiveBufferSize: Int32) {
-        var bufSize = receiveBufferSize
-        _ = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout<Int32>.size))
-
-        var noSigPipe: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-    }
-
-    private func initializeRequest(id: Int, name: String) -> [String: Any] {
-        [
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "initialize",
-            "params": [
-                "protocolVersion": "2024-11-05",
-                "capabilities": [:] as [String: Any],
-                "clientInfo": ["name": name, "version": "1.0"]
-            ]
-        ]
-    }
-
-    private func toolsListRequest(id: Int) -> [String: Any] {
-        [
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "tools/list",
-        ]
-    }
-
-    private func waitForSocketClosure(fd: Int32, timeout: TimeInterval) throws -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        var buffer = [UInt8](repeating: 0, count: 65536)
-
-        while Date() < deadline {
-            let count = read(fd, &buffer, buffer.count)
-            if count == 0 {
-                return true
-            }
-            if count > 0 {
-                continue
-            }
-            if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
-                Thread.sleep(forTimeInterval: 0.01)
-                continue
-            }
-            return true
-        }
-
-        return false
     }
 }

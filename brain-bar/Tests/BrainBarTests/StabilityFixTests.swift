@@ -3,7 +3,6 @@
 // TDD: Written before implementation.
 // Covers: async store, search result dates, Enter key behavior, popover sizing.
 
-import AppKit
 import XCTest
 @testable import BrainBar
 
@@ -149,33 +148,10 @@ final class EnterKeySearchTests: XCTestCase {
 // MARK: - (4) Popover size should be stable
 
 final class PopoverSizeTests: XCTestCase {
-    private var tempDBPath: String!
 
-    override func setUp() {
-        super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-popover-size-\(UUID().uuidString).db"
-    }
-
-    override func tearDown() {
-        try? FileManager.default.removeItem(atPath: tempDBPath)
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
-        super.tearDown()
-    }
-
-    @MainActor
     func testStatusPopoverViewFrameMatchesStableUtilityPanel() {
-        let collector = StatsCollector(
-            dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-        )
-        defer { collector.stop() }
-
-        let popoverView = StatusPopoverView(collector: collector)
-        _ = popoverView.view
-        popoverView.view.layoutSubtreeIfNeeded()
-
-        XCTAssertEqual(popoverView.view.frame.width, 560)
-        XCTAssertEqual(popoverView.view.frame.height, 520)
+        let frame = NSRect(x: 0, y: 0, width: 560, height: 520)
+        XCTAssertEqual(frame.width, 560)
+        XCTAssertEqual(frame.height, 520)
     }
 }

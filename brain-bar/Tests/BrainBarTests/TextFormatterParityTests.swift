@@ -51,11 +51,7 @@ final class TextFormatterParityTests: XCTestCase {
             preferences: ["editor": "Neovim"],
             contactInfo: ["email": "etan@example.com"],
             relations: [
-                EntityCard.Relation(
-                    relationType: "works_on",
-                    targetName: "BrainLayer",
-                    direction: "outgoing"
-                )
+                EntityCard.Relation(relationType: "works_on", targetName: "BrainLayer")
             ],
             memories: [
                 EntityCard.Memory(type: "decision", date: "2026-03-29", content: "Chose Swift renderers for BrainBar parity.")

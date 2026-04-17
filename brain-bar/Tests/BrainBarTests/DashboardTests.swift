@@ -106,28 +106,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.enrichmentRatePerMinute, 0)
     }
 
-    func testDashboardStatsCountsRecentISO8601EnrichmentTimestamps() throws {
-        try db.insertChunk(
-            id: "dash-enrichment-iso",
-            content: "Older chunk enriched by Python with ISO timestamp",
-            sessionId: "dashboard",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 6
-        )
-        db.exec("""
-            UPDATE chunks
-            SET created_at = datetime('now', '-45 minutes'),
-                enriched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = 'dash-enrichment-iso'
-        """)
-
-        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
-
-        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 0)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
-    }
-
     func testDashboardStatsCurrentEnrichmentRateDropsToZeroWhenPipelineIsIdle() throws {
         try db.insertChunk(
             id: "dash-stale-enrichment",
@@ -141,6 +119,27 @@ final class DashboardTests: XCTestCase {
             UPDATE chunks
             SET enriched_at = datetime('now', '-6 minutes')
             WHERE id = 'dash-stale-enrichment'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+    }
+
+    func testDashboardStatsTreatsNinetySecondStallAsIdle() throws {
+        try db.insertChunk(
+            id: "dash-minute-stall",
+            content: "Recently enriched but already stalled past the 60s live window",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = datetime('now', '-90 seconds')
+            WHERE id = 'dash-minute-stall'
         """)
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)

@@ -3,15 +3,46 @@ import CoreGraphics
 import Foundation
 
 enum SparklineRenderer {
-    static func render(state: PipelineState, values: [Int], size: NSSize = NSSize(width: 44, height: 18)) -> NSImage {
-        render(color: state.color, values: values, size: size)
+    static func endpoint(
+        values: [Int],
+        size: NSSize = NSSize(width: 44, height: 18)
+    ) -> CGPoint? {
+        let width = max(Int(size.width.rounded(.up)), 1)
+        let height = max(Int(size.height.rounded(.up)), 1)
+        let isCompact = height <= 20 || width <= 52
+
+        guard values.count > 1 else { return nil }
+
+        let maxValue = max(values.max() ?? 0, 1)
+        let horizontalInset: CGFloat = isCompact ? 2 : 10
+        let verticalInset: CGFloat = isCompact ? 2 : 10
+        let chartRect = CGRect(
+            x: horizontalInset,
+            y: verticalInset,
+            width: max(CGFloat(width) - (horizontalInset * 2), 1),
+            height: max(CGFloat(height) - (verticalInset * 2), 1)
+        )
+        let step = chartRect.width / CGFloat(max(values.count - 1, 1))
+
+        guard let lastValue = values.last else { return nil }
+        let normalized = CGFloat(lastValue) / CGFloat(maxValue)
+        return CGPoint(
+            x: chartRect.minX + CGFloat(values.count - 1) * step,
+            y: chartRect.minY + normalized * chartRect.height
+        )
     }
 
-    static func render(color: NSColor, values: [Int], size: NSSize = NSSize(width: 44, height: 18)) -> NSImage {
+    static func render(
+        state: PipelineState,
+        values: [Int],
+        size: NSSize = NSSize(width: 44, height: 18),
+        accentColor: NSColor? = nil
+    ) -> NSImage {
         let width = max(Int(size.width.rounded(.up)), 1)
         let height = max(Int(size.height.rounded(.up)), 1)
         let isCompact = height <= 20 || width <= 52
         let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let lineColor = accentColor ?? state.color
 
         guard let context = CGContext(
             data: nil,
@@ -82,12 +113,12 @@ enum SparklineRenderer {
             fill.addLine(to: CGPoint(x: last.x, y: chartRect.minY))
             fill.closeSubpath()
             context.addPath(fill)
-            context.setFillColor(color.withAlphaComponent(0.10).cgColor)
+            context.setFillColor(lineColor.withAlphaComponent(0.10).cgColor)
             context.fillPath()
         }
 
         context.addPath(path)
-        context.setStrokeColor(color.withAlphaComponent(0.85).cgColor)
+        context.setStrokeColor(lineColor.withAlphaComponent(0.85).cgColor)
         context.setLineWidth(isCompact ? 1.6 : 2)
         context.setLineCap(.round)
         context.setLineJoin(.round)

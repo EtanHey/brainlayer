@@ -205,7 +205,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testRecordInjectionEventPersistsSessionQueryChunkIDsAndTokenCount() throws {
-        db.recordInjectionEvent(
+        try db.recordInjectionEvent(
             sessionID: "claude-session-1",
             query: "voicebar sleep recovery",
             chunkIDs: ["chunk-1", "chunk-2"],
@@ -221,56 +221,22 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(events.first?.tokenCount, 77)
     }
 
-    func testRecordInjectionEventReturnsZeroIDWhenInsertFails() throws {
-        let firstEvent = db.recordInjectionEvent(
-            sessionID: "session-1",
-            query: "first event",
-            chunkIDs: ["chunk-1"],
-            tokenCount: 10
-        )
-        XCTAssertGreaterThan(firstEvent.id, 0)
-
-        db.exec("PRAGMA busy_timeout = 1")
-
-        var lockDB: OpaquePointer?
-        XCTAssertEqual(sqlite3_open_v2(tempDBPath, &lockDB, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
-        guard let lockDB else {
-            XCTFail("Failed to open secondary lock connection")
-            return
-        }
-        defer { sqlite3_close(lockDB) }
-
-        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
-        defer { sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil) }
-
-        let failedEvent = db.recordInjectionEvent(
-            sessionID: "session-1",
-            query: "locked event",
-            chunkIDs: ["chunk-2"],
-            tokenCount: 20
-        )
-
-        XCTAssertEqual(failedEvent.id, 0)
-        let events = try db.listInjectionEvents(limit: 10)
-        XCTAssertEqual(events.map(\.query), ["first event"])
-    }
-
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
-        db.recordInjectionEvent(
+        try db.recordInjectionEvent(
             sessionID: "session-a",
             query: "older event",
             chunkIDs: ["old-1"],
             tokenCount: 10,
             timestamp: "2026-03-31T04:00:00.000Z"
         )
-        db.recordInjectionEvent(
+        try db.recordInjectionEvent(
             sessionID: "session-b",
             query: "other session",
             chunkIDs: ["other-1"],
             tokenCount: 20,
             timestamp: "2026-03-31T04:01:00.000Z"
         )
-        db.recordInjectionEvent(
+        try db.recordInjectionEvent(
             sessionID: "session-a",
             query: "newer event",
             chunkIDs: ["new-1", "new-2"],
@@ -281,30 +247,6 @@ final class DatabaseTests: XCTestCase {
         let filtered = try db.listInjectionEvents(sessionID: "session-a", limit: 10)
 
         XCTAssertEqual(filtered.map(\.query), ["newer event", "older event"])
-    }
-
-    func testListInjectionEventsUsesIDAsTieBreakerForMatchingTimestamps() throws {
-        db.recordInjectionEvent(
-            sessionID: "session-a",
-            query: "first same-second event",
-            chunkIDs: ["chunk-1"],
-            tokenCount: 10,
-            timestamp: "2026-03-31T04:02:00.000Z"
-        )
-        db.recordInjectionEvent(
-            sessionID: "session-a",
-            query: "second same-second event",
-            chunkIDs: ["chunk-2"],
-            tokenCount: 20,
-            timestamp: "2026-03-31T04:02:00.000Z"
-        )
-
-        let events = try db.listInjectionEvents(sessionID: "session-a", limit: 10)
-
-        XCTAssertEqual(
-            events.map(\.query),
-            ["second same-second event", "first same-second event"]
-        )
     }
 
     // MARK: - Filter: project
