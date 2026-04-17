@@ -223,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             database: sharedDatabase
         )
         statusVC.onPreferredSizeChange = { [weak popover] size in
+            guard popover?.contentSize != size else { return }
             popover?.contentSize = size
         }
         popover.contentViewController = statusVC
@@ -232,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] stats, state in
                 self?.statusItem?.button?.image = SparklineRenderer.render(
                     state: state,
-                    values: stats.recentActivityBuckets
+                    values: stats.recentEnrichmentBuckets
                 )
                 self?.statusItem?.button?.contentTintColor = state.color
             }

@@ -39,8 +39,10 @@ final class StatsCollector: ObservableObject {
             enrichedChunkCount: 0,
             pendingEnrichmentCount: 0,
             enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
             databaseSizeBytes: 0,
-            recentActivityBuckets: Array(repeating: 0, count: 12)
+            recentActivityBuckets: Array(repeating: 0, count: 12),
+            recentEnrichmentBuckets: Array(repeating: 0, count: 12)
         )
         self.state = .degraded
     }
@@ -88,8 +90,10 @@ final class StatsCollector: ObservableObject {
                     enrichedChunkCount: 0,
                     pendingEnrichmentCount: 0,
                     enrichmentPercent: 0,
+                    enrichmentRatePerMinute: 0,
                     databaseSizeBytes: 0,
-                    recentActivityBuckets: Array(repeating: 0, count: 12)
+                    recentActivityBuckets: Array(repeating: 0, count: 12),
+                    recentEnrichmentBuckets: Array(repeating: 0, count: 12)
                 )
             }
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)

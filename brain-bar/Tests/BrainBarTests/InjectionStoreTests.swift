@@ -20,7 +20,7 @@ final class InjectionStoreTests: XCTestCase {
     }
 
     func testStartPublishesExistingEventsImmediately() async throws {
-        try db.recordInjectionEvent(
+        db.recordInjectionEvent(
             sessionID: "session-1",
             query: "existing event",
             chunkIDs: ["chunk-1"],
@@ -35,6 +35,7 @@ final class InjectionStoreTests: XCTestCase {
 
         let queries = await MainActor.run { store.events.map(\.query) }
         XCTAssertEqual(queries, ["existing event"])
+        await MainActor.run { store.stop() }
     }
 
     func testObservationPublishesNewEventsAfterInsert() async throws {
@@ -42,7 +43,7 @@ final class InjectionStoreTests: XCTestCase {
         let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
         await MainActor.run { store.start() }
 
-        try db.recordInjectionEvent(
+        db.recordInjectionEvent(
             sessionID: "session-2",
             query: "new event",
             chunkIDs: ["chunk-a", "chunk-b"],
@@ -55,5 +56,83 @@ final class InjectionStoreTests: XCTestCase {
         let firstChunkIDs = await MainActor.run { store.events.first?.chunkIDs }
         XCTAssertEqual(firstQuery, "new event")
         XCTAssertEqual(firstChunkIDs, ["chunk-a", "chunk-b"])
+        await MainActor.run { store.stop() }
+    }
+
+    func testExpandedConversationLoadsTargetChunkAndContext() async throws {
+        for index in 1...4 {
+            try db.insertChunk(
+                id: "inject-\(index)",
+                content: "Injection conversation \(index)",
+                sessionId: "inject-session",
+                project: "brainlayer",
+                contentType: index.isMultiple(of: 2) ? "assistant_text" : "user_message",
+                importance: 5
+            )
+        }
+
+        let databasePath = tempDBPath!
+        let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+        let conversation = try await MainActor.run {
+            try store.expandedConversation(chunkID: "inject-2")
+        }
+
+        XCTAssertEqual(conversation.target.chunkID, "inject-2")
+        XCTAssertEqual(
+            conversation.entries.map(\.chunkID),
+            ["inject-1", "inject-2", "inject-3", "inject-4"]
+        )
+        await MainActor.run { store.stop() }
+    }
+
+    func testStoreCanRestartAfterStop() async throws {
+        let databasePath = tempDBPath!
+        let store = try await MainActor.run { try InjectionStore(databasePath: databasePath) }
+
+        await MainActor.run { store.start() }
+        try await Task.sleep(for: .milliseconds(100))
+        await MainActor.run { store.stop() }
+
+        db.recordInjectionEvent(
+            sessionID: "session-3",
+            query: "restart event",
+            chunkIDs: ["chunk-restart"],
+            tokenCount: 9
+        )
+
+        await MainActor.run { store.start() }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let queries = await MainActor.run { store.events.map(\.query) }
+        XCTAssertEqual(queries, ["restart event"])
+        await MainActor.run { store.stop() }
+    }
+
+    @MainActor
+    func testInitThrowsWhenDatabaseCannotOpen() throws {
+        let directoryPath = NSTemporaryDirectory() + "brainbar-injection-store-dir-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: directoryPath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: directoryPath) }
+
+        XCTAssertThrowsError(try InjectionStore(databasePath: directoryPath))
+    }
+
+    @MainActor
+    func testScheduledDarwinRefreshDoesNotRetainStoreAfterRelease() throws {
+        weak var weakStore: InjectionStore?
+        var observerBox: InjectionStoreObserverBox?
+
+        do {
+            let store = try InjectionStore(databasePath: tempDBPath)
+            observerBox = store.observerBoxForTesting
+            InjectionStoreDarwinObserver.scheduleRefresh(observerBox: observerBox!)
+            weakStore = store
+        }
+
+        XCTAssertNotNil(observerBox)
+        XCTAssertNil(
+            weakStore,
+            "Darwin notification refresh should capture the store weakly so teardown cannot hold it alive"
+        )
     }
 }

@@ -20,8 +20,10 @@ final class BrainDatabase: @unchecked Sendable {
         let enrichedChunkCount: Int
         let pendingEnrichmentCount: Int
         let enrichmentPercent: Double
+        let enrichmentRatePerMinute: Double
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
+        let recentEnrichmentBuckets: [Int]
     }
 
     struct SubscriberRecord: Sendable {
@@ -38,6 +40,25 @@ final class BrainDatabase: @unchecked Sendable {
     struct StoredChunk: Sendable {
         let chunkID: String
         let rowID: Int64
+    }
+
+    struct ConversationChunk: Sendable, Equatable, Identifiable {
+        let chunkID: String
+        let content: String
+        let contentType: String
+        let importance: Double
+        let createdAt: String
+        let summary: String
+        let isTarget: Bool
+
+        var id: String { chunkID }
+    }
+
+    struct ExpandedConversation: Sendable, Equatable, Identifiable {
+        let target: ConversationChunk
+        let entries: [ConversationChunk]
+
+        var id: String { target.chunkID }
     }
 
     private var db: OpaquePointer?
@@ -750,8 +771,10 @@ final class BrainDatabase: @unchecked Sendable {
                 enrichedChunkCount: 0,
                 pendingEnrichmentCount: 0,
                 enrichmentPercent: 0,
+                enrichmentRatePerMinute: 0,
                 databaseSizeBytes: databaseSizeBytes(),
-                recentActivityBuckets: []
+                recentActivityBuckets: [],
+                recentEnrichmentBuckets: []
             )
         }
 
@@ -760,7 +783,13 @@ final class BrainDatabase: @unchecked Sendable {
         let enrichedChunkCount = counts.enrichedChunkCount
         let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
         let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
+        let enrichmentRateWindowMinutes = min(max(activityWindowMinutes, 1), 2)
+        let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: enrichmentRateWindowMinutes)
         let recentActivityBuckets = try recentActivityBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount
+        )
+        let recentEnrichmentBuckets = try recentEnrichmentBuckets(
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: bucketCount
         )
@@ -770,8 +799,10 @@ final class BrainDatabase: @unchecked Sendable {
             enrichedChunkCount: enrichedChunkCount,
             pendingEnrichmentCount: pendingEnrichmentCount,
             enrichmentPercent: enrichmentPercent,
+            enrichmentRatePerMinute: enrichmentRatePerMinute,
             databaseSizeBytes: databaseSizeBytes(),
-            recentActivityBuckets: recentActivityBuckets
+            recentActivityBuckets: recentActivityBuckets,
+            recentEnrichmentBuckets: recentEnrichmentBuckets
         )
     }
 
@@ -837,6 +868,32 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+        try recentBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            timestampExpression: "datetime(created_at)",
+            additionalWhereClause: ""
+        )
+    }
+
+    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+        return try recentBuckets(
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            timestampExpression: "datetime(enriched_at)",
+            additionalWhereClause: """
+                AND enriched_at IS NOT NULL
+                  AND TRIM(enriched_at) != ''
+            """
+        )
+    }
+
+    private func recentBuckets(
+        activityWindowMinutes: Int,
+        bucketCount: Int,
+        timestampExpression: String,
+        additionalWhereClause: String
+    ) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
         guard let db else { throw DBError.notOpen }
 
@@ -845,10 +902,11 @@ final class BrainDatabase: @unchecked Sendable {
 
         var stmt: OpaquePointer?
         let sql = """
-            SELECT datetime(created_at)
+            SELECT \(timestampExpression)
             FROM chunks
-            WHERE datetime(created_at) >= datetime('now', ?)
-            ORDER BY datetime(created_at) ASC
+            WHERE \(timestampExpression) >= datetime('now', ?)
+              \(additionalWhereClause)
+            ORDER BY \(timestampExpression) ASC
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -859,12 +917,12 @@ final class BrainDatabase: @unchecked Sendable {
         let formatter = Self.sqliteDateFormatter
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let createdAtText = columnText(stmt, 0),
-                  let createdAt = formatter.date(from: createdAtText) else {
+            guard let timestampText = columnText(stmt, 0),
+                  let timestamp = formatter.date(from: timestampText) else {
                 continue
             }
 
-            let offset = createdAt.timeIntervalSince(windowStart)
+            let offset = timestamp.timeIntervalSince(windowStart)
             if offset < 0 { continue }
             if offset > Double(activityWindowMinutes * 60) { continue }
 
@@ -874,6 +932,28 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return buckets
+    }
+
+    private func recentEnrichmentRatePerMinute(windowMinutes: Int) throws -> Double {
+        guard windowMinutes > 0 else { return 0 }
+        guard let db else { throw DBError.notOpen }
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT COUNT(*)
+            FROM chunks
+            WHERE enriched_at IS NOT NULL
+              AND TRIM(enriched_at) != ''
+              AND datetime(enriched_at) >= datetime('now', ?)
+        """
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText("-\(windowMinutes) minutes", to: stmt, index: 1)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+        let count = Double(sqlite3_column_int(stmt, 0))
+        return count / Double(windowMinutes)
     }
 
     private func databaseSizeBytes() -> Int64 {
@@ -1347,7 +1427,8 @@ final class BrainDatabase: @unchecked Sendable {
         ]
 
         // Get surrounding chunks from same session using two separate queries
-        var context: [[String: Any]] = []
+        var beforeContext: [[String: Any]] = []
+        var afterContext: [[String: Any]] = []
 
         // Before chunks (reverse order, then flip)
         let beforeSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
@@ -1368,7 +1449,7 @@ final class BrainDatabase: @unchecked Sendable {
                     "summary": columnText(beforeStmt, 5) as Any
                 ])
             }
-            context.append(contentsOf: beforeChunks.reversed())
+            beforeContext = beforeChunks.reversed()
         }
 
         // After chunks
@@ -1380,7 +1461,7 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int64(afterStmt, 2, targetRowID)
             sqlite3_bind_int(afterStmt, 3, Int32(after))
             while sqlite3_step(afterStmt) == SQLITE_ROW {
-                context.append([
+                afterContext.append([
                     "chunk_id": columnText(afterStmt, 0) as Any,
                     "content": columnText(afterStmt, 1) as Any,
                     "content_type": columnText(afterStmt, 2) as Any,
@@ -1391,7 +1472,54 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
 
-        return ["target": target, "context": context]
+        return [
+            "target": target,
+            "before_context": beforeContext,
+            "after_context": afterContext,
+            "context": beforeContext + afterContext
+        ]
+    }
+
+    func expandedConversation(id: String, before: Int = 3, after: Int = 3) throws -> ExpandedConversation {
+        let payload = try expandChunk(id: id, before: before, after: after)
+        guard let targetPayload = payload["target"] as? [String: Any] else {
+            throw DBError.noResult
+        }
+
+        let target = ConversationChunk(
+            chunkID: targetPayload["chunk_id"] as? String ?? "",
+            content: targetPayload["content"] as? String ?? "",
+            contentType: targetPayload["content_type"] as? String ?? "",
+            importance: targetPayload["importance"] as? Double ?? 0,
+            createdAt: targetPayload["created_at"] as? String ?? "",
+            summary: targetPayload["summary"] as? String ?? "",
+            isTarget: true
+        )
+
+        let beforeContext = ((payload["before_context"] as? [[String: Any]]) ?? []).map { item in
+            ConversationChunk(
+                chunkID: item["chunk_id"] as? String ?? "",
+                content: item["content"] as? String ?? "",
+                contentType: item["content_type"] as? String ?? "",
+                importance: item["importance"] as? Double ?? 0,
+                createdAt: item["created_at"] as? String ?? "",
+                summary: item["summary"] as? String ?? "",
+                isTarget: false
+            )
+        }
+        let afterContext = ((payload["after_context"] as? [[String: Any]]) ?? []).map { item in
+            ConversationChunk(
+                chunkID: item["chunk_id"] as? String ?? "",
+                content: item["content"] as? String ?? "",
+                contentType: item["content_type"] as? String ?? "",
+                importance: item["importance"] as? Double ?? 0,
+                createdAt: item["created_at"] as? String ?? "",
+                summary: item["summary"] as? String ?? "",
+                isTarget: false
+            )
+        }
+
+        return ExpandedConversation(target: target, entries: beforeContext + [target] + afterContext)
     }
 
     // MARK: - brain_entity: insert + lookup entities
@@ -1784,8 +1912,14 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(query, to: stmt, index: 3)
         bindText(chunkJSON, to: stmt, index: 4)
         sqlite3_bind_int(stmt, 5, Int32(tokenCount))
-        sqlite3_step(stmt)
-        let rowID = sqlite3_last_insert_rowid(db)
+        let stepRC = sqlite3_step(stmt)
+        let rowID: Int64
+        if stepRC == SQLITE_DONE {
+            rowID = sqlite3_last_insert_rowid(db)
+            Self.postDashboardChangeNotification()
+        } else {
+            rowID = 0
+        }
         return InjectionEvent(id: rowID, sessionID: sessionID, timestamp: ts, query: query, chunkIDs: chunkIDs, tokenCount: tokenCount)
     }
 
@@ -1795,7 +1929,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
         if sessionID != nil { sql += " WHERE session_id = ?" }
-        sql += " ORDER BY timestamp DESC LIMIT ?"
+        sql += " ORDER BY timestamp DESC, id DESC LIMIT ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))

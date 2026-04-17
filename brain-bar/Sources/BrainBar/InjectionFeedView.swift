@@ -1,14 +1,17 @@
 import SwiftUI
 
 struct InjectionFeedView: View {
-    let events: [InjectionEvent]
+    @ObservedObject var store: InjectionStore
     @Binding var filterText: String
+    @State private var expandedEventIDs: Set<Int64> = []
+    @State private var selectedConversation: BrainDatabase.ExpandedConversation?
+    @State private var conversationErrorMessage: String?
 
     private var filteredEvents: [InjectionEvent] {
         let trimmed = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return events }
+        guard !trimmed.isEmpty else { return store.events }
         let needle = trimmed.lowercased()
-        return events.filter { event in
+        return store.events.filter { event in
             event.sessionID.lowercased().contains(needle) ||
                 event.query.lowercased().contains(needle) ||
                 event.chunkIDs.joined(separator: " ").lowercased().contains(needle)
@@ -41,15 +44,72 @@ struct InjectionFeedView: View {
                         .foregroundStyle(.secondary)
 
                     if !event.chunkIDs.isEmpty {
-                        Text(event.chunkIDs.joined(separator: ", "))
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                        Button(expandedEventIDs.contains(event.id) ? "Hide conversation chunks" : "Show conversation chunks") {
+                            toggle(event.id)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+
+                        if expandedEventIDs.contains(event.id) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(event.chunkIDs, id: \.self) { chunkID in
+                                    Button {
+                                        do {
+                                            selectedConversation = try store.expandedConversation(chunkID: chunkID)
+                                            conversationErrorMessage = nil
+                                        } catch {
+                                            conversationErrorMessage = error.localizedDescription
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Text(chunkID)
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .lineLimit(1)
+                                            Spacer()
+                                            Text("Open thread")
+                                                .font(.system(size: 10, weight: .semibold))
+                                        }
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+                        }
                     }
                 }
                 .padding(.vertical, 2)
             }
             .listStyle(.plain)
+        }
+        .sheet(item: $selectedConversation) { conversation in
+            ChunkConversationSheet(conversation: conversation)
+        }
+        .alert(
+            "Failed to load conversation",
+            isPresented: Binding(
+                get: { conversationErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        conversationErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK") {
+                conversationErrorMessage = nil
+            }
+        } message: {
+            Text(conversationErrorMessage ?? "Unknown error")
+        }
+    }
+
+    private func toggle(_ eventID: Int64) {
+        if expandedEventIDs.contains(eventID) {
+            expandedEventIDs.remove(eventID)
+        } else {
+            expandedEventIDs.insert(eventID)
         }
     }
 }

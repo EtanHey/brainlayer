@@ -422,10 +422,10 @@ final class BrainBarServer: @unchecked Sendable {
             latest.pendingWrites[0] = pending
 
             if pending.totalWritten == pending.data.count {
-                let delivered = pending.onDelivered
+                let onDelivered = pending.onDelivered
                 latest.pendingWrites.removeFirst()
                 clients[fd] = latest
-                delivered?()
+                onDelivered?()
             } else {
                 clients[fd] = latest
             }

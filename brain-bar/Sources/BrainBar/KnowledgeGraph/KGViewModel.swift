@@ -7,6 +7,7 @@ final class KGViewModel: ObservableObject {
     @Published var selectedNodeId: String?
     @Published var selectedEntity: EntityCard?
     @Published var selectedEntityChunks: [BrainDatabase.KGChunkRow] = []
+    @Published var selectedConversation: BrainDatabase.ExpandedConversation?
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
@@ -71,7 +72,12 @@ final class KGViewModel: ObservableObject {
         } else {
             selectedEntity = nil
             selectedEntityChunks = []
+            selectedConversation = nil
         }
+    }
+
+    func openConversation(chunkID: String) {
+        selectedConversation = try? database.expandedConversation(id: chunkID)
     }
 
     // MARK: - Hit Testing
