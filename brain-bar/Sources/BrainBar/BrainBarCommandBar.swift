@@ -133,6 +133,29 @@ private struct ModePill: View {
 
 // MARK: - Input (NSTextField bridge)
 
+/// NSTextField subclass that catches Cmd+Return via `performKeyEquivalent` —
+/// the default `controlTextDidChange` / `doCommandBy:` delegate chain does NOT
+/// fire for Cmd+Return in a single-line field, so without this override
+/// Cmd+Return silently does nothing from the user's perspective.
+final class KeyHandlingCommandBarField: NSTextField {
+    var onCommandReturn: (() -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.keyCode == 36, // Return / Enter
+              let currentEditor = currentEditor(),
+              window?.firstResponder === currentEditor else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.command) {
+            onCommandReturn?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 private struct CommandBarInput: NSViewRepresentable {
     @ObservedObject var viewModel: QuickCaptureViewModel
 
@@ -175,8 +198,8 @@ private struct CommandBarInput: NSViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField(frame: .zero)
+    func makeNSView(context: Context) -> KeyHandlingCommandBarField {
+        let field = KeyHandlingCommandBarField(frame: .zero)
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false
@@ -190,16 +213,22 @@ private struct CommandBarInput: NSViewRepresentable {
         field.placeholderString = viewModel.placeholderText
         field.stringValue = viewModel.inputText
         field.delegate = context.coordinator
+        field.onCommandReturn = { [viewModel] in
+            viewModel.handleInputReturn(modifiers: [.command])
+        }
         return field
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
+    func updateNSView(_ nsView: KeyHandlingCommandBarField, context: Context) {
         context.coordinator.parent = self
         if nsView.stringValue != viewModel.inputText {
             nsView.stringValue = viewModel.inputText
         }
         if nsView.placeholderString != viewModel.placeholderText {
             nsView.placeholderString = viewModel.placeholderText
+        }
+        nsView.onCommandReturn = { [viewModel] in
+            viewModel.handleInputReturn(modifiers: [.command])
         }
         if context.coordinator.lastFocusRequestCount != viewModel.focusRequestCount {
             context.coordinator.lastFocusRequestCount = viewModel.focusRequestCount
@@ -246,8 +275,8 @@ private struct CommandBarTrailingHint: View {
 
     private var keyboardHint: String {
         switch viewModel.mode {
-        case .capture: return "⏎ store · ⇥ switch"
-        case .search: return "⏎ open · ⌘⏎ capture"
+        case .capture: return "⏎ Store · ⌘⏎ Store · ⇥ Search"
+        case .search: return "⏎ Open · ⌘⏎ Capture · ⇥ Capture"
         }
     }
 }
@@ -326,21 +355,30 @@ private struct BrainBarCommandBarResultsOverlayReady: View {
 
     @ViewBuilder
     private var resultsList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(viewModel.results) { row in
-                    BrainBarCommandBarResultRow(
-                        row: row,
-                        isSelected: row.id == viewModel.selectedResultID,
-                        isCopied: row.id == viewModel.copiedResultID,
-                        onSelect: { viewModel.selectResult(id: row.id) },
-                        onActivate: { viewModel.copyResultToClipboard(id: row.id) }
-                    )
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(viewModel.results) { row in
+                        BrainBarCommandBarResultRow(
+                            row: row,
+                            isSelected: row.id == viewModel.selectedResultID,
+                            isCopied: row.id == viewModel.copiedResultID,
+                            onSelect: { viewModel.selectResult(id: row.id) },
+                            onActivate: { viewModel.copyResultToClipboard(id: row.id) }
+                        )
+                        .id(row.id)
+                    }
+                }
+                .padding(10)
+            }
+            .frame(maxHeight: 260)
+            .onChange(of: viewModel.selectedResultID) { _, newID in
+                guard let newID else { return }
+                withAnimation(.easeInOut(duration: 0.14)) {
+                    proxy.scrollTo(newID, anchor: .center)
                 }
             }
-            .padding(10)
         }
-        .frame(maxHeight: 260)
     }
 }
 
@@ -388,6 +426,22 @@ private struct BrainBarCommandBarResultRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture(perform: onSelect)
         .onTapGesture(count: 2, perform: onActivate)
+        .contextMenu {
+            Button {
+                onActivate()
+            } label: {
+                Label("Copy excerpt", systemImage: "doc.on.doc")
+            }
+            Button {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(row.id, forType: .string)
+            } label: {
+                Label("Copy chunk id", systemImage: "number")
+            }
+            Divider()
+            Text(row.metadata)
+        }
         .animation(.easeInOut(duration: 0.14), value: isCopied)
     }
 

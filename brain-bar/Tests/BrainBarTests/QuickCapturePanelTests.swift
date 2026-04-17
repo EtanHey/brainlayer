@@ -222,6 +222,46 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
     }
 
+    func testHandleInputReturnCommandEnterInCaptureModeStoresAndPreservesMode() async throws {
+        let (db, path) = try makeDatabase(name: "cmd-enter-capture-mode")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(db: db, panelState: QuickCapturePanelState())
+        model.inputText = "Cmd-enter in capture mode must still store"
+
+        model.handleInputReturn(modifiers: [.command])
+        await model._pendingStoreTask?.value
+
+        XCTAssertEqual(model.mode, .capture, "Cmd+Enter in capture mode must preserve capture mode")
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+        XCTAssertEqual(model.inputText, "")
+        let results = try db.search(query: "Cmd-enter in capture mode", limit: 5)
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testFeedbackAutoClearsToIdleAfterSuccessWindow() async throws {
+        let (db, path) = try makeDatabase(name: "feedback-auto-clear")
+        defer { cleanupDatabase(db, path: path) }
+
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: QuickCapturePanelState(),
+            feedbackAutoClearDelay: .milliseconds(30)
+        )
+        model.inputText = "Auto-clearing feedback makes capture legible"
+
+        model.submit()
+        await model._pendingStoreTask?.value
+        XCTAssertEqual(model.feedback, .success("Stored in BrainLayer"))
+
+        // Wait for the auto-clear task to fire (30ms delay + buffer).
+        try? await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(
+            model.feedback.isIdle,
+            "Feedback must auto-clear to idle after the success window so the trailing hint returns to its keyboard-shortcut legend."
+        )
+    }
+
     func testHandleInputReturnWithCommandStoresWhileRemainingInSearchMode() async throws {
         let (db, path) = try makeDatabase(name: "handle-command-return-search-mode")
         defer { cleanupDatabase(db, path: path) }

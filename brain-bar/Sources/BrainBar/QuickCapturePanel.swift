@@ -101,18 +101,41 @@ final class QuickCaptureViewModel: ObservableObject {
     private let panelState: QuickCapturePanelState
     private let clipboard: QuickCaptureClipboard
     private var copyResetTask: Task<Void, Never>?
+    private var feedbackResetTask: Task<Void, Never>?
     /// Exposed for test awaiting — set when an async store is in flight.
     var _pendingStoreTask: Task<Void, Never>?
+    /// Feedback state clears back to `.idle` after this delay on success.
+    /// Injectable so tests can collapse the wait window.
+    private let feedbackAutoClearDelay: Duration
 
     init(
         db: BrainDatabase,
         panelState: QuickCapturePanelState,
-        clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard()
+        clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard(),
+        feedbackAutoClearDelay: Duration = .milliseconds(2000)
     ) {
         self.db = db
         self.panelState = panelState
         self.clipboard = clipboard
+        self.feedbackAutoClearDelay = feedbackAutoClearDelay
         mode = panelState.mode
+        // Warm the DB search path so the first real keystroke in search mode
+        // doesn't eat the cold-cache / sqlite-vec init cost. Fire-and-forget.
+        Task.detached { [db] in
+            _ = try? db.search(query: "warm", limit: 1)
+        }
+    }
+
+    private func scheduleFeedbackAutoClear() {
+        feedbackResetTask?.cancel()
+        feedbackResetTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: feedbackAutoClearDelay)
+            guard !Task.isCancelled else { return }
+            if case .success = feedback {
+                feedback = .idle
+            }
+        }
     }
 
     var placeholderText: String {
@@ -299,6 +322,7 @@ final class QuickCaptureViewModel: ObservableObject {
                 }
                 feedback = .success("Stored in BrainLayer")
                 confirmationFlashCount += 1
+                scheduleFeedbackAutoClear()
             } catch {
                 feedback = .error(error.localizedDescription)
             }
