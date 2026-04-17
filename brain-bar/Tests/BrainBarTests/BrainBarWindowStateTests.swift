@@ -277,6 +277,37 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         runtime.clearQuickActionRequest()
         XCTAssertNil(runtime.requestedQuickAction)
     }
+
+    @MainActor
+    func testShowSearchPanelRoutesThroughSearchRequestedCallback() {
+        let runtime = BrainBarRuntime()
+        var searchRequests = 0
+        runtime.onSearchRequested = { searchRequests += 1 }
+
+        runtime.showSearchPanel()
+        runtime.showSearchPanel()
+
+        XCTAssertEqual(
+            searchRequests,
+            2,
+            "Header Search button must route through runtime.showSearchPanel → onSearchRequested so AppDelegate can drive the detached QuickCapturePanelController."
+        )
+    }
+
+    @MainActor
+    func testShowQuickCapturePanelRoutesThroughQuickCaptureRequestedCallback() {
+        let runtime = BrainBarRuntime()
+        var captureRequests = 0
+        runtime.onQuickCaptureRequested = { captureRequests += 1 }
+
+        runtime.showQuickCapturePanel()
+
+        XCTAssertEqual(
+            captureRequests,
+            1,
+            "Header Capture button must route through runtime.showQuickCapturePanel → onQuickCaptureRequested so AppDelegate can drive the detached QuickCapturePanelController."
+        )
+    }
 }
 
 private final class FakeKeyValueStore: BrainBarKeyValueStoring {

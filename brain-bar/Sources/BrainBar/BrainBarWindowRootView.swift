@@ -6,9 +6,8 @@ struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
 
     @State private var selectedTab: BrainBarTab = .dashboard
-    @State private var inlineQuickAction: BrainBarQuickAction?
-    @State private var quickActionPanelState = QuickCapturePanelState()
-    @State private var quickCaptureViewModel: QuickCaptureViewModel?
+    @State private var commandBarPanelState = QuickCapturePanelState()
+    @State private var commandBarViewModel: QuickCaptureViewModel?
     @StateObject private var windowObserver: BrainBarWindowObserver
 
     init(runtime: BrainBarRuntime) {
@@ -23,8 +22,7 @@ struct BrainBarWindowRootView: View {
             BrainBarWindowHeader(
                 selectedTab: $selectedTab,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                onCapture: { openInlineQuickAction(.capture) },
-                onSearch: { openInlineQuickAction(.search) }
+                commandBarViewModel: commandBarViewModel
             )
 
             Divider()
@@ -40,6 +38,14 @@ struct BrainBarWindowRootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                BrainBarCommandBarResultsOverlay(viewModel: commandBarViewModel)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.results.count)
+                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.mode)
+                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.inputText.isEmpty)
+            }
         }
         .frame(
             minWidth: 760,
@@ -55,21 +61,16 @@ struct BrainBarWindowRootView: View {
             windowObserver.attach(window: window)
         })
         .onAppear {
-            ensureQuickCaptureViewModel()
-            if let requestedQuickAction = runtime.requestedQuickAction {
-                handleRequestedQuickAction(requestedQuickAction)
+            ensureCommandBarViewModel()
+            if let action = runtime.requestedQuickAction {
+                handleRequestedQuickAction(action)
             }
         }
         .onReceive(runtime.$database) { _ in
-            ensureQuickCaptureViewModel()
+            ensureCommandBarViewModel()
         }
         .onReceive(runtime.$requestedQuickAction.compactMap { $0 }) { action in
             handleRequestedQuickAction(action)
-        }
-        .onChange(of: selectedTab) { _, newValue in
-            if newValue != .dashboard {
-                dismissInlineQuickAction()
-            }
         }
     }
 
@@ -78,10 +79,7 @@ struct BrainBarWindowRootView: View {
         if let collector = runtime.collector {
             BrainBarDashboardView(
                 collector: collector,
-                hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                quickCaptureViewModel: quickCaptureViewModel,
-                quickAction: inlineQuickAction,
-                onDismissQuickAction: dismissInlineQuickAction
+                hotkeyStatus: runtime.hotkeyStatus.statusLine
             )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
@@ -106,27 +104,17 @@ struct BrainBarWindowRootView: View {
         }
     }
 
-    private func ensureQuickCaptureViewModel() {
-        guard quickCaptureViewModel == nil, let database = runtime.database else { return }
-        quickCaptureViewModel = QuickCaptureViewModel(db: database, panelState: quickActionPanelState)
-    }
-
-    private func openInlineQuickAction(_ action: BrainBarQuickAction) {
-        ensureQuickCaptureViewModel()
-        selectedTab = .dashboard
-        inlineQuickAction = action
-        quickCaptureViewModel?.setMode(action == .capture ? .capture : .search)
-        quickCaptureViewModel?.panelDidAppear()
+    private func ensureCommandBarViewModel() {
+        guard commandBarViewModel == nil, let database = runtime.database else { return }
+        commandBarViewModel = QuickCaptureViewModel(db: database, panelState: commandBarPanelState)
     }
 
     private func handleRequestedQuickAction(_ action: BrainBarQuickAction) {
-        openInlineQuickAction(action)
+        ensureCommandBarViewModel()
+        selectedTab = .dashboard
+        commandBarViewModel?.setMode(action == .capture ? .capture : .search)
+        commandBarViewModel?.panelDidAppear()
         runtime.clearQuickActionRequest()
-    }
-
-    private func dismissInlineQuickAction() {
-        inlineQuickAction = nil
-        quickCaptureViewModel?.dismiss()
     }
 }
 
@@ -134,39 +122,40 @@ private struct BrainBarWindowHeader: View {
     @Binding var selectedTab: BrainBarTab
 
     let hotkeyStatus: String
-    let onCapture: () -> Void
-    let onSearch: () -> Void
+    let commandBarViewModel: QuickCaptureViewModel?
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
+        VStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 16) {
                 Label("BrainBar", systemImage: "brain")
                     .font(.system(size: 18, weight: .semibold))
+                    .labelStyle(.titleAndIcon)
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 16)
+
+                Picker("Section", selection: $selectedTab) {
+                    ForEach(BrainBarTab.allCases) { tab in
+                        Text(tab.title).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+                .labelsHidden()
+
+                Spacer(minLength: 16)
 
                 Text(hotkeyStatus)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-
-                Button("Capture", action: onCapture)
-                    .buttonStyle(.bordered)
-
-                Button("Search", action: onSearch)
-                    .buttonStyle(.borderedProminent)
+                    .truncationMode(.tail)
             }
 
-            Picker("Section", selection: $selectedTab) {
-                ForEach(BrainBarTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
+            BrainBarCommandBar(viewModel: commandBarViewModel)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
         .background(.regularMaterial)
         .background(WindowDragHandle())
     }
@@ -175,9 +164,6 @@ private struct BrainBarWindowHeader: View {
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
-    let quickCaptureViewModel: QuickCaptureViewModel?
-    let quickAction: BrainBarQuickAction?
-    let onDismissQuickAction: () -> Void
 
     @State private var previousBuckets: [Int] = []
     @State private var pulseRevision = 0
@@ -203,14 +189,6 @@ private struct BrainBarDashboardView: View {
                 hero(layout: layout)
 
                 VStack(spacing: layout.sectionSpacing) {
-                    if let quickCaptureViewModel,
-                       quickAction != nil {
-                        BrainBarQuickActionSection(
-                            viewModel: quickCaptureViewModel,
-                            onDismiss: onDismissQuickAction
-                        )
-                    }
-
                     HStack(alignment: .top, spacing: layout.gridSpacing) {
                         BrainBarMetricCard(
                             title: "Chunks",

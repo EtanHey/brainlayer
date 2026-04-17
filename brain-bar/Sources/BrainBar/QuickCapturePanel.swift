@@ -426,7 +426,7 @@ enum QuickCaptureInputFactory {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainerInset = NSSize(width: 0, height: 8)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.heightTracksTextView = false
@@ -774,8 +774,8 @@ struct QuickCapturePanelView: View {
                         Text(viewModel.placeholderText)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.tertiary)
-                            .padding(.top, 10)
-                            .padding(.leading, 12)
+                            .padding(.top, 8)
+                            .padding(.leading, 4)
                             .allowsHitTesting(false)
                     }
 
@@ -821,7 +821,7 @@ struct QuickCapturePanelView: View {
                         )
                     }
                 }
-                    .frame(minHeight: viewModel.mode == .search ? 44 : 44, maxHeight: viewModel.mode == .search ? 44 : 64)
+                    .frame(minHeight: 44, maxHeight: viewModel.mode == .search ? 44 : 120)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
@@ -919,171 +919,6 @@ struct QuickCapturePanelView: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
-    }
-}
-
-struct BrainBarQuickActionSection: View {
-    @ObservedObject var viewModel: QuickCaptureViewModel
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(viewModel.mode == .capture ? "Capture To BrainLayer" : "Search BrainLayer")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    Text(viewModel.mode == .capture ? "Type a note and press Return to store it." : "Type to search memory without leaving the dashboard.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                QuickCaptureModeButton(
-                    title: "Capture",
-                    shortcut: "1",
-                    isSelected: viewModel.mode == .capture
-                ) {
-                    viewModel.setMode(.capture)
-                }
-
-                QuickCaptureModeButton(
-                    title: "Search",
-                    shortcut: "2",
-                    isSelected: viewModel.mode == .search
-                ) {
-                    viewModel.setMode(.search)
-                }
-
-                Button("Done", action: onDismiss)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            ZStack(alignment: .topLeading) {
-                if viewModel.inputText.isEmpty {
-                    Text(viewModel.placeholderText)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 10)
-                        .padding(.leading, 12)
-                        .allowsHitTesting(false)
-                }
-
-                if viewModel.mode == .search {
-                    QuickCaptureSearchInputField(
-                        text: $viewModel.inputText,
-                        focusRequestCount: viewModel.focusRequestCount,
-                        onTextChange: { newValue in
-                            viewModel.handleInputChange(newValue)
-                        },
-                        onTab: {
-                            viewModel.handleInputTab()
-                        },
-                        onMoveUp: {
-                            viewModel.handleInputMove(.up)
-                        },
-                        onMoveDown: {
-                            viewModel.handleInputMove(.down)
-                        },
-                        onReturn: { modifiers in
-                            viewModel.handleInputReturn(modifiers: modifiers)
-                        }
-                    )
-                } else {
-                    QuickCaptureCaptureInputField(
-                        text: $viewModel.inputText,
-                        focusRequestCount: viewModel.focusRequestCount,
-                        onTextChange: { newValue in
-                            viewModel.handleInputChange(newValue)
-                        },
-                        onTab: {
-                            viewModel.handleInputTab()
-                        },
-                        onMoveUp: {
-                            viewModel.handleInputMove(.up)
-                        },
-                        onMoveDown: {
-                            viewModel.handleInputMove(.down)
-                        },
-                        onReturn: { modifiers in
-                            viewModel.handleInputReturn(modifiers: modifiers)
-                        }
-                    )
-                }
-            }
-            .frame(minHeight: viewModel.mode == .search ? 44 : 44, maxHeight: viewModel.mode == .search ? 44 : 64)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-            )
-
-            HStack(spacing: 8) {
-                Image(systemName: statusSymbol)
-                    .foregroundStyle(viewModel.feedback.isIdle ? Color.secondary : viewModel.feedback.tintColor)
-                Text(viewModel.statusText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(viewModel.feedback.isIdle ? .secondary : viewModel.feedback.tintColor)
-                Spacer()
-                Text(viewModel.mode == .capture ? "Return store • Tab switch" : "Return search • Cmd+Return capture")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            if viewModel.mode == .search {
-                SearchResultsList(
-                    results: viewModel.results.map {
-                        SearchResult(rowID: $0.id, title: $0.title, metadata: $0.metadata)
-                    },
-                    selectedResultID: viewModel.selectedResultID,
-                    copiedResultID: viewModel.copiedResultID,
-                    onSelect: { id in
-                        viewModel.selectResult(id: id)
-                    },
-                    onActivate: { id in
-                        viewModel.copyResultToClipboard(id: id)
-                    }
-                )
-                .frame(minHeight: 108, maxHeight: 180)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Capture tips")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Store a concise note here, or press Tab to switch into live search. The same field supports quick capture with Cmd+Return while searching.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                )
-            }
-        }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-    }
-
-    private var statusSymbol: String {
-        switch viewModel.feedback {
-        case .idle:
-            return viewModel.mode == .capture ? "square.and.arrow.down" : "magnifyingglass"
-        case .success:
-            return "checkmark.circle.fill"
-        case .error:
-            return "exclamationmark.triangle.fill"
-        }
     }
 }
 
