@@ -9,6 +9,7 @@ import XCTest
 final class SocketIntegrationTests: XCTestCase {
     let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
+    var bufferedMessagesByFD: [Int32: Data] = [:]
 
     override func setUp() {
         super.setUp()
@@ -20,6 +21,7 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     override func tearDown() {
+        bufferedMessagesByFD.removeAll()
         server.stop()
         super.tearDown()
     }
@@ -412,6 +414,51 @@ final class SocketIntegrationTests: XCTestCase {
 
     // MARK: - C1: Write retry cap
 
+    func testInitializeHandshakeSurvivesBriefBackpressureBurst() throws {
+        let clientFD = try connectClient()
+        defer { close(clientFD) }
+        configureBackpressuredClient(fd: clientFD, receiveBufferSize: 1_024)
+
+        try sendMCPRequest(on: clientFD, request: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "brief-pause", "version": "1.0"]
+            ]
+        ])
+        for id in 2...18 {
+            try sendMCPRequest(on: clientFD, request: [
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/list"
+            ])
+        }
+
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let initializeResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
+        XCTAssertNotNil(initializeResponse["result"], "Briefly backpressured clients should still receive the initialize handshake")
+
+        var lastResponse: [String: Any] = initializeResponse
+        for _ in 2...18 {
+            lastResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
+        }
+        let tools = (lastResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+        XCTAssertEqual(tools?.count, 11)
+
+        try sendMCPRequest(on: clientFD, request: [
+            "jsonrpc": "2.0",
+            "id": 81,
+            "method": "tools/list"
+        ])
+        let followUpResponse = try readMCPMessage(fd: clientFD, timeout: 2.0)
+        let followUpTools = (followUpResponse["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+        XCTAssertEqual(followUpTools?.count, 11, "Client should remain connected after a short backpressure burst")
+    }
+
     func testServerDisconnectsStalledClient() throws {
         // Connect but never read — server should disconnect after max retries (10),
         // not block the serial queue forever.
@@ -669,35 +716,68 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {
-        var buffer = Data()
+        var buffer = bufferedMessagesByFD[fd] ?? Data()
         var readBuf = [UInt8](repeating: 0, count: 65536)
         let deadline = Date().addingTimeInterval(timeout)
 
         while Date() < deadline {
+            if let message = try decodeBufferedMCPMessage(fd: fd, buffer: &buffer) {
+                return message
+            }
+
             let n = read(fd, &readBuf, readBuf.count)
             if n > 0 {
                 buffer.append(contentsOf: readBuf[0..<n])
-                // Try to parse Content-Length framed response
-                if let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                    let headerStr = String(data: buffer[buffer.startIndex..<headerEnd.lowerBound], encoding: .utf8) ?? ""
-                    if let clLine = headerStr.split(separator: "\r\n").first(where: { $0.hasPrefix("Content-Length:") }) {
-                        let cl = Int(clLine.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) ?? 0
-                        let bodyStart = headerEnd.upperBound
-                        if buffer.count >= bodyStart + cl {
-                            let bodyData = buffer[bodyStart..<(bodyStart + cl)]
-                            return try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
-                        }
-                    }
+                if let message = try decodeBufferedMCPMessage(fd: fd, buffer: &buffer) {
+                    return message
                 }
             } else if n == 0 {
+                bufferedMessagesByFD.removeValue(forKey: fd)
                 break // EOF
             } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
+                bufferedMessagesByFD.removeValue(forKey: fd)
                 break
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
 
+        bufferedMessagesByFD[fd] = buffer
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading response"])
+    }
+
+    private func decodeBufferedMCPMessage(fd: Int32, buffer: inout Data) throws -> [String: Any]? {
+        guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+            bufferedMessagesByFD[fd] = buffer
+            return nil
+        }
+
+        let headerData = buffer[buffer.startIndex..<headerEnd.lowerBound]
+        let headerString = String(data: headerData, encoding: .utf8) ?? ""
+        guard let contentLengthLine = headerString
+            .components(separatedBy: "\r\n")
+            .first(where: { $0.hasPrefix("Content-Length:") }),
+              let separatorIndex = contentLengthLine.firstIndex(of: ":")
+        else {
+            bufferedMessagesByFD[fd] = buffer
+            return nil
+        }
+
+        let contentLength = Int(
+            contentLengthLine[contentLengthLine.index(after: separatorIndex)...]
+                .trimmingCharacters(in: .whitespaces)
+        ) ?? 0
+        let bodyStart = headerEnd.upperBound
+        guard buffer.count >= bodyStart + contentLength else {
+            bufferedMessagesByFD[fd] = buffer
+            return nil
+        }
+
+        let bodyRange = bodyStart..<(bodyStart + contentLength)
+        let bodyData = buffer[bodyRange]
+        let remaining = Data(buffer[bodyRange.upperBound...])
+        bufferedMessagesByFD[fd] = remaining
+        buffer = remaining
+        return try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
     }
 
     private func sendLineJSON(_ object: [String: Any], to handle: FileHandle) throws {
@@ -731,5 +811,13 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
+    }
+
+    private func configureBackpressuredClient(fd: Int32, receiveBufferSize: Int32) {
+        var bufSize = receiveBufferSize
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout<Int32>.size))
+
+        var noSigPipe: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
     }
 }
