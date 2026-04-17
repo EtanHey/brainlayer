@@ -295,26 +295,50 @@ private struct CommandBarTrailingHint: View {
 
 struct BrainBarCommandBarResultsOverlay: View {
     let viewModel: QuickCaptureViewModel?
+    /// Command bar is ALWAYS visible in the header, but the results overlay is
+    /// scoped to the Dashboard tab. When the user switches to Injections or
+    /// Graph, the overlay hides so it doesn't float over unrelated content.
+    let isOnActiveTab: Bool
 
     var body: some View {
         if let viewModel {
-            BrainBarCommandBarResultsOverlayGate(viewModel: viewModel)
+            BrainBarCommandBarResultsOverlayGate(
+                viewModel: viewModel,
+                isOnActiveTab: isOnActiveTab
+            )
         }
     }
 }
 
 private struct BrainBarCommandBarResultsOverlayGate: View {
     @ObservedObject var viewModel: QuickCaptureViewModel
+    let isOnActiveTab: Bool
 
     var body: some View {
-        if shouldShow {
-            BrainBarCommandBarResultsOverlayReady(viewModel: viewModel)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+        ZStack(alignment: .top) {
+            if shouldShow {
+                // Full-area transparent tap-catcher UNDER the results card.
+                // Clicks outside the card dismiss the overlay without clearing
+                // the typed query (the dismissed flag resets on next keystroke).
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.dismissSearchOverlay()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                BrainBarCommandBarResultsOverlayReady(viewModel: viewModel)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .animation(.easeInOut(duration: 0.18), value: shouldShow)
     }
 
     private var shouldShow: Bool {
-        guard viewModel.mode == .search else { return false }
+        guard isOnActiveTab else { return false }
+        guard viewModel.mode == .search, !viewModel.isSearchOverlayDismissed else { return false }
         return !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

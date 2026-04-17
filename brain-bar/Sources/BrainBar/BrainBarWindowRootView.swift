@@ -38,19 +38,14 @@ struct BrainBarWindowRootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                // Click-outside-the-overlay: hide results without clearing the query.
-                commandBarViewModel?.dismissSearchOverlay()
-            }
-            .overlay(alignment: .top) {
-                BrainBarCommandBarResultsOverlay(viewModel: commandBarViewModel)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.results.count)
-                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.mode)
-                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.inputText.isEmpty)
-                    .animation(.easeInOut(duration: 0.18), value: commandBarViewModel?.isSearchOverlayDismissed)
+            .overlay {
+                // Overlay carries its own full-area tap-catcher and only
+                // renders when the user is on the Dashboard tab with a
+                // non-empty search query that hasn't been dismissed.
+                BrainBarCommandBarResultsOverlay(
+                    viewModel: commandBarViewModel,
+                    isOnActiveTab: selectedTab == .dashboard
+                )
             }
         }
         .frame(
