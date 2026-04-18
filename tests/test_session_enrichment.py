@@ -526,6 +526,37 @@ class TestListSessionsForEnrichment:
         session_ids = [s[0] for s in sessions]
         assert sid not in session_ids
 
+    @pytest.mark.parametrize("source", ["codex_cli", "cursor_cli", "gemini_cli"])
+    def test_agent_cli_sessions_are_discovered_from_chunks(self, store, source):
+        """Agent-session sources beyond Claude are eligible for session enrichment."""
+        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+
+        cursor = store.conn.cursor()
+        session_id = f"{source}-session"
+        source_file = f"/tmp/{session_id}.jsonl"
+
+        for idx in range(3):
+            cursor.execute(
+                """INSERT INTO chunks
+                   (id, content, metadata, source_file, project, content_type,
+                    value_type, char_count, source, created_at)
+                   VALUES (?, ?, '{}', ?, ?, 'assistant_text', 'HIGH', ?, ?, ?)""",
+                (
+                    f"{session_id}:c{idx}",
+                    f"{source} chunk {idx}",
+                    source_file,
+                    "brainlayer",
+                    len(f"{source} chunk {idx}"),
+                    source,
+                    f"2026-04-18T0{idx}:00:00Z",
+                ),
+            )
+
+        sessions = list_sessions_for_enrichment(store)
+        session_ids = [session[0] for session in sessions]
+
+        assert session_id in session_ids
+
 
 # ── End-to-End Enrichment Tests ─────────────────────────────────
 

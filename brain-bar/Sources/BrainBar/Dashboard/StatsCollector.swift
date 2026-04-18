@@ -18,22 +18,29 @@ private func statsCollectorDarwinNotificationCallback(
 
 @MainActor
 final class StatsCollector: ObservableObject {
+    static let defaultActivityWindowMinutes = 60
+    static let defaultBucketCount = 12
+
     @Published private(set) var stats: DashboardStats
     @Published private(set) var daemon: DaemonHealthSnapshot?
+    @Published private(set) var agentActivity: AgentActivitySnapshot
     @Published private(set) var state: PipelineState
 
     private let database: BrainDatabase
     private let daemonMonitor: DaemonHealthMonitor
+    private let agentActivityMonitor: AgentActivityMonitor
     private var pollTask: Task<Void, Never>?
     private var isRunning = false
     private var lastDataVersion: Int?
 
     init(
         dbPath: String,
-        daemonMonitor: DaemonHealthMonitor
+        daemonMonitor: DaemonHealthMonitor,
+        agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor()
     ) {
         self.database = BrainDatabase(path: dbPath)
         self.daemonMonitor = daemonMonitor
+        self.agentActivityMonitor = agentActivityMonitor
         self.stats = DashboardStats(
             chunkCount: 0,
             enrichedChunkCount: 0,
@@ -41,9 +48,12 @@ final class StatsCollector: ObservableObject {
             enrichmentPercent: 0,
             enrichmentRatePerMinute: 0,
             databaseSizeBytes: 0,
-            recentActivityBuckets: Array(repeating: 0, count: 12),
-            recentEnrichmentBuckets: Array(repeating: 0, count: 12)
+            recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
+            recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
+            activityWindowMinutes: Self.defaultActivityWindowMinutes,
+            bucketCount: Self.defaultBucketCount
         )
+        self.agentActivity = .empty
         self.state = .degraded
     }
 
@@ -73,11 +83,15 @@ final class StatsCollector: ObservableObject {
 
     func refresh(force: Bool = false) {
         let nextDaemon = daemonMonitor.sample()
+        agentActivity = agentActivityMonitor.sample()
 
         do {
             let currentDataVersion = try database.dataVersion()
             if force || currentDataVersion != lastDataVersion {
-                stats = try database.dashboardStats(activityWindowMinutes: 30, bucketCount: 12)
+                stats = try database.dashboardStats(
+                    activityWindowMinutes: Self.defaultActivityWindowMinutes,
+                    bucketCount: Self.defaultBucketCount
+                )
                 lastDataVersion = currentDataVersion
             }
             daemon = nextDaemon
@@ -92,8 +106,10 @@ final class StatsCollector: ObservableObject {
                     enrichmentPercent: 0,
                     enrichmentRatePerMinute: 0,
                     databaseSizeBytes: 0,
-                    recentActivityBuckets: Array(repeating: 0, count: 12),
-                    recentEnrichmentBuckets: Array(repeating: 0, count: 12)
+                    recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
+                    recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
+                    activityWindowMinutes: Self.defaultActivityWindowMinutes,
+                    bucketCount: Self.defaultBucketCount
                 )
             }
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)

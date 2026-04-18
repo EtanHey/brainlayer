@@ -83,6 +83,35 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
     }
 
+    func testDashboardStatsCountsRecentNaiveLocalTimestamps() throws {
+        try db.insertChunk(
+            id: "dash-local-naive",
+            content: "Recent chunk written with a local wall-clock timestamp",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        let now = Date()
+
+        db.exec("""
+            UPDATE chunks
+            SET created_at = '\(formatter.string(from: now))'
+            WHERE id = 'dash-local-naive'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
+
+        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
+        let lastWriteAt = try XCTUnwrap(stats.lastWriteAt)
+        XCTAssertLessThan(abs(lastWriteAt.timeIntervalSince(now)), 5)
+    }
+
     func testDashboardStatsTracksRecentEnrichmentSeparatelyFromIncomingWrites() throws {
         try db.insertChunk(
             id: "dash-enrichment-only",
@@ -144,6 +173,36 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
+        XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+    }
+
+    func testDashboardStatsCarriesExplicitWindowMetadataAndLastEventTimestamps() throws {
+        try db.insertChunk(
+            id: "dash-explicit-times",
+            content: "Fresh write with a slightly older enrichment event",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET created_at = datetime('now'),
+                enriched_at = datetime('now', '-90 seconds')
+            WHERE id = 'dash-explicit-times'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.activityWindowMinutes, 60)
+        XCTAssertEqual(stats.bucketCount, 12)
+        XCTAssertEqual(stats.liveWindowMinutes, 1)
+        XCTAssertNotNil(stats.lastWriteAt)
+        XCTAssertNotNil(stats.lastEnrichedAt)
+        let lastWriteAt = try XCTUnwrap(stats.lastWriteAt)
+        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
+        XCTAssertGreaterThan(lastWriteAt, lastEnrichedAt)
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
     }
