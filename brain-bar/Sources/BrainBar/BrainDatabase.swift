@@ -24,6 +24,68 @@ final class BrainDatabase: @unchecked Sendable {
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
+        let activityWindowMinutes: Int
+        let bucketCount: Int
+        let liveWindowMinutes: Int
+        let lastWriteAt: Date?
+        let lastEnrichedAt: Date?
+
+        init(
+            chunkCount: Int,
+            enrichedChunkCount: Int,
+            pendingEnrichmentCount: Int,
+            enrichmentPercent: Double,
+            enrichmentRatePerMinute: Double,
+            databaseSizeBytes: Int64,
+            recentActivityBuckets: [Int],
+            recentEnrichmentBuckets: [Int],
+            activityWindowMinutes: Int = 30,
+            bucketCount: Int = 12,
+            liveWindowMinutes: Int = 1,
+            lastWriteAt: Date? = nil,
+            lastEnrichedAt: Date? = nil
+        ) {
+            self.chunkCount = chunkCount
+            self.enrichedChunkCount = enrichedChunkCount
+            self.pendingEnrichmentCount = pendingEnrichmentCount
+            self.enrichmentPercent = enrichmentPercent
+            self.enrichmentRatePerMinute = enrichmentRatePerMinute
+            self.databaseSizeBytes = databaseSizeBytes
+            self.recentActivityBuckets = recentActivityBuckets
+            self.recentEnrichmentBuckets = recentEnrichmentBuckets
+            self.activityWindowMinutes = activityWindowMinutes
+            self.bucketCount = bucketCount
+            self.liveWindowMinutes = liveWindowMinutes
+            self.lastWriteAt = lastWriteAt
+            self.lastEnrichedAt = lastEnrichedAt
+        }
+
+        var recentWriteCount: Int {
+            recentActivityBuckets.reduce(0, +)
+        }
+
+        var recentEnrichmentCount: Int {
+            recentEnrichmentBuckets.reduce(0, +)
+        }
+
+        var writeRatePerMinute: Double {
+            guard activityWindowMinutes > 0 else { return 0 }
+            return Double(recentWriteCount) / Double(activityWindowMinutes)
+        }
+
+        func eventIsLive(_ date: Date?, now: Date = Date()) -> Bool {
+            guard let date else { return false }
+            let liveWindowSeconds = max(Double(liveWindowMinutes) * 60, 0)
+            return now.timeIntervalSince(date) < liveWindowSeconds
+        }
+
+        func hasRecentWriteActivity(now: Date = Date()) -> Bool {
+            eventIsLive(lastWriteAt, now: now) || recentWriteCount > 0
+        }
+
+        func hasRecentEnrichmentActivity(now: Date = Date()) -> Bool {
+            eventIsLive(lastEnrichedAt, now: now) || recentEnrichmentCount > 0
+        }
     }
 
     struct SubscriberRecord: Sendable {
@@ -765,6 +827,7 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
+        let liveWindowMinutes = 1
         guard bucketCount > 0 else {
             return DashboardStats(
                 chunkCount: 0,
@@ -774,17 +837,20 @@ final class BrainDatabase: @unchecked Sendable {
                 enrichmentRatePerMinute: 0,
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: [],
-                recentEnrichmentBuckets: []
+                recentEnrichmentBuckets: [],
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes
             )
         }
 
         let counts = try dashboardCounts()
+        let lastEvents = try dashboardLastEvents()
         let chunkCount = counts.chunkCount
         let enrichedChunkCount = counts.enrichedChunkCount
         let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
         let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
-        let enrichmentRateWindowMinutes = 1
-        let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: enrichmentRateWindowMinutes)
+        let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes)
         let recentActivityBuckets = try recentActivityBuckets(
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: bucketCount
@@ -802,7 +868,12 @@ final class BrainDatabase: @unchecked Sendable {
             enrichmentRatePerMinute: enrichmentRatePerMinute,
             databaseSizeBytes: databaseSizeBytes(),
             recentActivityBuckets: recentActivityBuckets,
-            recentEnrichmentBuckets: recentEnrichmentBuckets
+            recentEnrichmentBuckets: recentEnrichmentBuckets,
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            liveWindowMinutes: liveWindowMinutes,
+            lastWriteAt: lastEvents.lastWriteAt,
+            lastEnrichedAt: lastEvents.lastEnrichedAt
         )
     }
 
@@ -867,19 +938,54 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
+    private func dashboardLastEvents() throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {
+        guard let db else { throw DBError.notOpen }
+        let createdAtEpochSQL = Self.normalizedUnixEpochSQL(for: "created_at")
+        let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
+        let sql = """
+            SELECT
+                MAX(last_write_epoch),
+                MAX(last_enriched_epoch)
+            FROM (
+                SELECT
+                    \(createdAtEpochSQL) AS last_write_epoch,
+                    \(enrichedAtEpochSQL) AS last_enriched_epoch
+                FROM chunks
+            )
+        """
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
+
+        let lastWriteAt = sqlite3_column_type(stmt, 0) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 0)))
+        let lastEnrichedAt = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 1)))
+        return (lastWriteAt: lastWriteAt, lastEnrichedAt: lastEnrichedAt)
+    }
+
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
         guard let db else { throw DBError.notOpen }
 
         let bucketWidthSeconds = max(1, Double(activityWindowMinutes * 60) / Double(bucketCount))
         let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
+        let createdAtEpochSQL = Self.normalizedUnixEpochSQL(for: "created_at")
 
         var stmt: OpaquePointer?
         let sql = """
-            SELECT datetime(created_at)
-            FROM chunks
-            WHERE datetime(created_at) >= datetime('now', ?)
-            ORDER BY datetime(created_at) ASC
+            SELECT created_epoch
+            FROM (
+                SELECT \(createdAtEpochSQL) AS created_epoch
+                FROM chunks
+            )
+            WHERE created_epoch IS NOT NULL
+              AND created_epoch >= unixepoch('now', ?)
+            ORDER BY created_epoch ASC
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -887,13 +993,12 @@ final class BrainDatabase: @unchecked Sendable {
         bindText("-\(activityWindowMinutes) minutes", to: stmt, index: 1)
 
         var buckets = Array(repeating: 0, count: bucketCount)
-        let formatter = Self.sqliteDateFormatter
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let createdAtText = columnText(stmt, 0),
-                  let createdAt = formatter.date(from: createdAtText) else {
+            guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else {
                 continue
             }
+            let createdAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 0)))
 
             let offset = createdAt.timeIntervalSince(windowStart)
             if offset < 0 { continue }
@@ -913,15 +1018,18 @@ final class BrainDatabase: @unchecked Sendable {
 
         let bucketWidthSeconds = max(1, Double(activityWindowMinutes * 60) / Double(bucketCount))
         let windowStart = Date().addingTimeInterval(Double(-activityWindowMinutes * 60))
+        let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
 
         var stmt: OpaquePointer?
         let sql = """
-            SELECT datetime(enriched_at)
-            FROM chunks
-            WHERE enriched_at IS NOT NULL
-              AND TRIM(enriched_at) != ''
-              AND datetime(enriched_at) >= datetime('now', ?)
-            ORDER BY datetime(enriched_at) ASC
+            SELECT enriched_epoch
+            FROM (
+                SELECT \(enrichedAtEpochSQL) AS enriched_epoch
+                FROM chunks
+            )
+            WHERE enriched_epoch IS NOT NULL
+              AND enriched_epoch >= unixepoch('now', ?)
+            ORDER BY enriched_epoch ASC
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -929,13 +1037,12 @@ final class BrainDatabase: @unchecked Sendable {
         bindText("-\(activityWindowMinutes) minutes", to: stmt, index: 1)
 
         var buckets = Array(repeating: 0, count: bucketCount)
-        let formatter = Self.sqliteDateFormatter
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let enrichedAtText = columnText(stmt, 0),
-                  let enrichedAt = formatter.date(from: enrichedAtText) else {
+            guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else {
                 continue
             }
+            let enrichedAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 0)))
 
             let offset = enrichedAt.timeIntervalSince(windowStart)
             if offset < 0 { continue }
@@ -952,14 +1059,17 @@ final class BrainDatabase: @unchecked Sendable {
     private func recentEnrichmentRatePerMinute(windowMinutes: Int) throws -> Double {
         guard windowMinutes > 0 else { return 0 }
         guard let db else { throw DBError.notOpen }
+        let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
 
         var stmt: OpaquePointer?
         let sql = """
             SELECT COUNT(*)
-            FROM chunks
-            WHERE enriched_at IS NOT NULL
-              AND TRIM(enriched_at) != ''
-              AND datetime(enriched_at) >= datetime('now', ?)
+            FROM (
+                SELECT \(enrichedAtEpochSQL) AS enriched_epoch
+                FROM chunks
+            )
+            WHERE enriched_epoch IS NOT NULL
+              AND enriched_epoch >= unixepoch('now', ?)
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
@@ -969,6 +1079,18 @@ final class BrainDatabase: @unchecked Sendable {
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
         let count = Double(sqlite3_column_int(stmt, 0))
         return count / Double(windowMinutes)
+    }
+
+    private static func normalizedUnixEpochSQL(for column: String) -> String {
+        """
+        CASE
+            WHEN \(column) IS NULL OR TRIM(\(column)) = '' THEN NULL
+            WHEN substr(\(column), -1) = 'Z' THEN unixepoch(\(column))
+            WHEN substr(\(column), -6, 1) IN ('+', '-') THEN unixepoch(\(column))
+            WHEN instr(\(column), 'T') > 0 THEN unixepoch(\(column), 'utc')
+            ELSE unixepoch(\(column))
+        END
+        """
     }
 
     private func databaseSizeBytes() -> Int64 {

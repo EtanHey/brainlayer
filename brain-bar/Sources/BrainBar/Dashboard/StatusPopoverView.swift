@@ -338,10 +338,9 @@ final class StatusPopoverView: NSViewController {
     }
 
     private func render() {
+        let summary = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
         titleLabel.stringValue = "BrainBar"
-        statusLabel.stringValue = collector.state == .indexing ? "Incoming writes active" :
-            (collector.state == .enriching ? "Backlog is being processed" :
-            (collector.state == .idle ? "Pipeline settled" : "Pipeline degraded"))
+        statusLabel.stringValue = summary.headline
         pipelineValueLabel.stringValue = collector.state.label
         pipelineValueLabel.textColor = collector.state.color
         headerPanel.backgroundColor = NSColor.underPageBackgroundColor.withAlphaComponent(0.92)
@@ -363,7 +362,7 @@ final class StatusPopoverView: NSViewController {
         activityDetailLabel.stringValue = enrichmentActivitySummary(collector.stats)
         sparklineImageView.image = SparklineRenderer.render(
             state: collector.state,
-            values: collector.stats.recentEnrichmentBuckets,
+            values: summary.enrichment.values,
             size: NSSize(width: 500, height: 188)
         )
 
@@ -397,9 +396,9 @@ final class StatusPopoverView: NSViewController {
     private func enrichmentActivitySummary(_ stats: DashboardStats) -> String {
         let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
         if recentCompletions == 0 {
-            return "No completions in the last 30m"
+            return "No completions in \(DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes).lowercased())"
         }
-        return "\(recentCompletions) completions in the last 30m"
+        return "\(recentCompletions) completions in \(DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes).lowercased())"
     }
 
     private func verticalStack(_ views: [NSView]) -> NSStackView {

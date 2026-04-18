@@ -54,19 +54,23 @@ struct BrainBarLivePresentation: Equatable {
     let badgeText: String
     let statusText: String
 
-    static func derive(stats: BrainDatabase.DashboardStats) -> BrainBarLivePresentation {
-        if stats.enrichmentRatePerMinute > 0 {
+    static func derive(stats: BrainDatabase.DashboardStats, now: Date = Date()) -> BrainBarLivePresentation {
+        if stats.eventIsLive(stats.lastEnrichedAt, now: now) {
             return BrainBarLivePresentation(
                 sparklineStyle: .active,
-                badgeText: DashboardMetricFormatter.liveBadgeString(ratePerMinute: stats.enrichmentRatePerMinute),
-                statusText: "Live enrichment stream"
+                badgeText: "live now",
+                statusText: "Enrichments in the last 60s"
             )
         }
 
         return BrainBarLivePresentation(
             sparklineStyle: .idle,
-            badgeText: "idle",
-            statusText: "Idle — no enrichment in last 60s"
+            badgeText: DashboardMetricFormatter.lastEventString(
+                lastEventAt: stats.lastEnrichedAt,
+                activityWindowMinutes: stats.activityWindowMinutes,
+                now: now
+            ),
+            statusText: "No enrichments in the last 60s"
         )
     }
 }
