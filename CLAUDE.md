@@ -23,6 +23,43 @@ Current native Swift BrainBar tools (PR #135, 2026-03-30):
 
 ---
 
+<!-- DEPLOY-CHECK: every PR touching brain-bar/ MUST rebuild release + verify launchd points at release path before claiming done. Root cause of 2026-04-18 Mac crashes: PR #249 merged KG-CPU fix but daemon kept running from debug worktree binary via launchd. -->
+## 🚨 Post-Merge BrainBar Deploy Check (MANDATORY)
+
+**Every PR that touches `brain-bar/` code MUST complete these steps after merge. "PR merged" != "fix deployed."**
+
+Root cause of 2026-04-18 Mac crash + afternoon thrashing: PR #249 merged `fix(brainbar): energy-threshold early-exit in KG force-sim + onAppear timerActive reset` BUT the live daemon kept running from `/Users/etanheyman/.config/superpowers/worktrees/brainlayer/fix-brainbar-dashboard-flow/brain-bar/.build/debug/BrainBar` via `com.brainlayer.brainbar` launchd - fix was never in the running code. BrainBar sat at 69% CPU for 24h post-merge.
+
+### Deploy Check Sequence (after any brain-bar PR merges to main)
+
+1. **Pull main clone**: `cd ~/Gits/brainlayer && git fetch origin && git checkout main && git pull`
+2. **Release build** (NEVER debug): `cd brain-bar && swift build --configuration release --product BrainBar`
+3. **Locate release binary**: `.build/release/BrainBar`
+4. **Inspect launchd plist**: `cat ~/Library/LaunchAgents/com.brainlayer.brainbar.plist` - check `ProgramArguments` path
+5. **If plist points at a worktree/debug path** (ANY path containing `.build/debug/` or `/worktrees/`):
+   - Update plist `ProgramArguments` to point at `~/Gits/brainlayer/brain-bar/.build/release/BrainBar` (canonical release path)
+   - Update `WorkingDirectory` to `~/Gits/brainlayer/brain-bar`
+   - `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.brainlayer.brainbar.plist`
+   - `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brainlayer.brainbar.plist`
+6. **Kickstart the daemon**: `launchctl kickstart -k gui/$(id -u)/com.brainlayer.brainbar`
+7. **Verify new PID from release path**: `pgrep -fl BrainBar` should show the release binary, NOT debug/worktree
+8. **Verify socket alive**: `ls -la /tmp/brainbar.sock` - should exist and be fresh
+9. **CPU sanity check (60s watch)**: `ps -p <new-pid> -o pcpu` - should settle below 10% once KG graph settles
+10. **Report back** per the PR's original spec (PID, path, CPU %, socket status)
+
+### DO NOT
+
+- Do NOT build `--configuration debug` for daemon deployment
+- Do NOT leave plist pointing at a `worktrees/` path - worktrees get deleted, daemon dies
+- Do NOT assume "launchd will pick up new code" - launchd respawns the SAME binary at the SAME path; rebuild + plist update required
+- Do NOT ship a brain-bar PR without running this check in the same session
+
+### Emergency stop (daemon pegging CPU)
+
+`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.brainlayer.brainbar.plist` - unloads job, socket dies, MCP clients disconnect but Mac recovers immediately. Re-bootstrap after rebuild.
+
+---
+
 <!-- ARCHITECTURE: Python/Typer CLI, sqlite-vec storage via APSW, bge-large embeddings, FastAPI daemon, MCP server, Textual TUI + Next.js dashboard -->
 ## Stack (WHAT)
 - Python package + Typer CLI in `src/brainlayer/`
