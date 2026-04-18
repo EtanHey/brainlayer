@@ -6,6 +6,7 @@
 #   ./scripts/launchd/install.sh index        # Install indexing only
 #   ./scripts/launchd/install.sh enrich       # Install enrichment only
 #   ./scripts/launchd/install.sh decay        # Install decay only
+#   ./scripts/launchd/install.sh agent-ingest # Install multi-agent ingest watcher
 #   ./scripts/launchd/install.sh load enrichment
 #   ./scripts/launchd/install.sh unload enrichment
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
@@ -118,6 +119,9 @@ case "${1:-all}" in
     decay)
         install_plist decay
         ;;
+    agent-ingest)
+        install_plist agent-ingest
+        ;;
     load)
         load_plist "${2:-enrichment}"
         ;;
@@ -129,6 +133,7 @@ case "${1:-all}" in
         ;;
     all)
         install_plist index
+        install_plist agent-ingest
         install_plist enrichment
         install_plist decay
         install_plist wal-checkpoint
@@ -137,13 +142,14 @@ case "${1:-all}" in
         ;;
     remove)
         remove_plist index
+        remove_plist agent-ingest 2>/dev/null || true
         remove_plist enrich 2>/dev/null || true
         remove_plist enrichment 2>/dev/null || true
         remove_plist decay 2>/dev/null || true
         remove_plist wal-checkpoint
         ;;
     *)
-        echo "Usage: $0 [index|enrich|enrichment|decay|load [name]|unload [name]|checkpoint|all|remove]"
+        echo "Usage: $0 [index|agent-ingest|enrich|enrichment|decay|load [name]|unload [name]|checkpoint|all|remove]"
         exit 1
         ;;
 esac

@@ -1875,6 +1875,182 @@ def ingest_codex(
         raise typer.Exit(1)
 
 
+@app.command("ingest-cursor")
+def ingest_cursor(
+    path: Optional[Path] = typer.Argument(
+        None,
+        help="Cursor transcript JSONL file or projects directory (default: ~/.cursor/projects)",
+    ),
+    project: str = typer.Option(None, "--project", "-p", help="Override project name"),
+    since_days: int = typer.Option(None, "--since-days", "-d", help="Only process last N days"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Parse but do not write to DB"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print each classified entry"),
+) -> None:
+    """Ingest Cursor agent transcripts into BrainLayer."""
+    from ..ingest.cursor import ingest_cursor_dir, ingest_cursor_session
+    from ..paths import DEFAULT_DB_PATH
+
+    db_path = DEFAULT_DB_PATH
+
+    try:
+        if path and path.is_file():
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Cursor session: [bold]{path.name}[/]")
+            with console.status("Indexing..."):
+                n = ingest_cursor_session(
+                    path,
+                    db_path=db_path,
+                    project_override=project,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+            rprint(f"[bold green]✓[/] Indexed [bold]{n}[/] chunks from {path.name}")
+        else:
+            sessions_root = path if path else None
+            label = str(sessions_root) if sessions_root else "~/.cursor/projects"
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Cursor sessions from: [bold]{label}[/]")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Scanning sessions...", total=None)
+                files, chunks = ingest_cursor_dir(
+                    sessions_dir=sessions_root,
+                    db_path=db_path,
+                    project_override=project,
+                    since_days=since_days,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+                progress.update(task, description=f"Done — {files} files, {chunks:,} chunks")
+            tag = " [dim](dry run)[/]" if dry_run else ""
+            rprint(f"[bold green]✓[/] Processed [bold]{files}[/] session files, [bold]{chunks:,}[/] chunks{tag}")
+    except FileNotFoundError as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("ingest-gemini")
+def ingest_gemini(
+    path: Optional[Path] = typer.Argument(
+        None,
+        help="Gemini session JSON file or root directory (default: ~/.gemini/tmp)",
+    ),
+    project: str = typer.Option(None, "--project", "-p", help="Override project name"),
+    since_days: int = typer.Option(None, "--since-days", "-d", help="Only process last N days"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Parse but do not write to DB"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print each classified entry"),
+) -> None:
+    """Ingest Gemini session transcripts into BrainLayer."""
+    from ..ingest.gemini import ingest_gemini_dir, ingest_gemini_session
+    from ..paths import DEFAULT_DB_PATH
+
+    db_path = DEFAULT_DB_PATH
+
+    try:
+        if path and path.is_file():
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Gemini session: [bold]{path.name}[/]")
+            with console.status("Indexing..."):
+                n = ingest_gemini_session(
+                    path,
+                    db_path=db_path,
+                    project_override=project,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+            rprint(f"[bold green]✓[/] Indexed [bold]{n}[/] chunks from {path.name}")
+        else:
+            sessions_root = path if path else None
+            label = str(sessions_root) if sessions_root else "~/.gemini/tmp"
+            rprint(f"[bold blue]זיכרון[/] — Ingesting Gemini sessions from: [bold]{label}[/]")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Scanning sessions...", total=None)
+                files, chunks = ingest_gemini_dir(
+                    sessions_dir=sessions_root,
+                    db_path=db_path,
+                    project_override=project,
+                    since_days=since_days,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                )
+                progress.update(task, description=f"Done — {files} files, {chunks:,} chunks")
+            tag = " [dim](dry run)[/]" if dry_run else ""
+            rprint(f"[bold green]✓[/] Processed [bold]{files}[/] session files, [bold]{chunks:,}[/] chunks{tag}")
+    except FileNotFoundError as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("watch-agents")
+def watch_agents(
+    poll_interval: float = typer.Option(30.0, "--poll", help="Poll interval in seconds"),
+) -> None:
+    """Watch Codex, Cursor, and Gemini session roots and ingest changed files."""
+    import signal
+
+    from ..agent_watch import AgentSessionSource, AgentSessionWatcher
+    from ..ingest.codex import ingest_codex_session
+    from ..ingest.cursor import ingest_cursor_session
+    from ..ingest.gemini import ingest_gemini_session
+    from ..paths import get_db_path
+
+    db_path = get_db_path()
+    registry_path = db_path.parent / "agent-session-registry.json"
+
+    watcher = AgentSessionWatcher(
+        registry_path=registry_path,
+        poll_interval_s=poll_interval,
+        sources=[
+            AgentSessionSource(
+                name="codex_cli",
+                patterns=["**/*.jsonl"],
+                ingest=lambda path: ingest_codex_session(path, db_path=db_path),
+                root=Path.home() / ".codex" / "sessions",
+            ),
+            AgentSessionSource(
+                name="cursor",
+                patterns=["**/agent-transcripts/**/*.jsonl"],
+                ingest=lambda path: ingest_cursor_session(path, db_path=db_path),
+                root=Path.home() / ".cursor" / "projects",
+            ),
+            AgentSessionSource(
+                name="gemini",
+                patterns=["**/chats/session-*.json"],
+                ingest=lambda path: ingest_gemini_session(path, db_path=db_path),
+                root=Path.home() / ".gemini" / "tmp",
+            ),
+        ],
+    )
+
+    rprint("[bold blue]זיכרון[/] Multi-agent session watcher")
+    rprint(f"  Registry: [bold]{registry_path}[/]")
+    rprint(f"  Poll: {poll_interval}s")
+    rprint("  Sources: codex_cli, cursor, gemini")
+    rprint()
+
+    def handle_signal(signum, frame):
+        rprint("\n[bold yellow]Stopping multi-agent watcher...[/]")
+        watcher.stop()
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    watcher.start()
+    rprint("[bold green]Done.[/]")
+
+
 @app.command("analyze-semantic")
 def analyze_semantic(
     whatsapp_limit: int = typer.Option(5000, "--whatsapp-limit", "-w", help="Number of WhatsApp messages to analyze"),
