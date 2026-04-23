@@ -34,7 +34,7 @@ final class KGViewModel: ObservableObject {
 
             let entityIds = Set(entityRows.map(\.id))
 
-            nodes = entityRows.map { row in
+            let seededNodes = entityRows.map { row in
                 KGNode(
                     id: row.id,
                     name: row.name,
@@ -42,6 +42,13 @@ final class KGViewModel: ObservableObject {
                     importance: row.importance
                 )
             }
+            nodes = KGAtlasLayout.seededNodes(
+                seededNodes,
+                canvasSize: CGSize(
+                    width: max(canvasCenter.x * 2, 640),
+                    height: max(canvasCenter.y * 2, 480)
+                )
+            )
 
             // Only include edges where both endpoints exist
             edges = relationRows.compactMap { row in

@@ -5,6 +5,7 @@
 //         fetchEntityChunks, linkEntityChunk, KGNode, KGEdge, KGViewModel.
 
 import XCTest
+import SQLite3
 @testable import BrainBar
 
 // MARK: - Database KG Query Tests
@@ -66,6 +67,25 @@ final class KGDatabaseTests: XCTestCase {
         let entities = try db.fetchKGEntities()
         XCTAssertEqual(entities.first?.entityType, "tool")
         XCTAssertEqual(entities.first?.name, "Vim")
+    }
+
+    func testFetchKGEntitiesUsesImportanceColumnWhenMetadataImportanceMissing() throws {
+        try db.insertEntity(id: "agent-a", type: "agent", name: "Agent A")
+        try db.insertEntity(id: "tool-b", type: "tool", name: "Tool B")
+        try db.insertRelation(sourceId: "agent-a", targetId: "tool-b", relationType: "uses")
+
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+
+        XCTAssertEqual(sqlite3_exec(handle, "UPDATE kg_entities SET importance = 8.0 WHERE id = 'agent-a'", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(handle, "UPDATE kg_entities SET importance = 2.0 WHERE id = 'tool-b'", nil, nil, nil), SQLITE_OK)
+
+        let entities = try db.fetchKGEntities()
+        XCTAssertEqual(entities.map(\.name), ["Agent A", "Tool B"])
+        XCTAssertEqual(entities.first?.importance, 8.0)
+        XCTAssertEqual(entities.last?.importance, 2.0)
     }
 
     func testFetchKGEntitiesEmptyDB() throws {

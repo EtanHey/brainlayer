@@ -31,11 +31,14 @@ final class InjectionStore: ObservableObject {
     }
 
     func start(sessionID: String? = nil, limit: Int = 50) {
+        let parametersChanged = currentSessionID != sessionID || currentLimit != limit
         currentSessionID = sessionID
         currentLimit = limit
 
         guard !isRunning else {
-            refresh(force: true)
+            if parametersChanged {
+                refresh(force: true)
+            }
             return
         }
 

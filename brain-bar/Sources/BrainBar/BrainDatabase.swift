@@ -291,11 +291,13 @@ final class BrainDatabase: @unchecked Sendable {
                 name TEXT NOT NULL,
                 metadata TEXT DEFAULT '{}',
                 description TEXT,
+                importance REAL DEFAULT 0.5,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 UNIQUE(entity_type, name)
             )
         """)
+        try ensureKGEntityColumns()
 
         try execute("""
             CREATE TABLE IF NOT EXISTS kg_relations (
@@ -360,6 +362,7 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         try ensurePendingStoreQueueIndex()
+        try ensureKGEntityColumns()
     }
 
     func close() {
@@ -1499,6 +1502,17 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    private func ensureKGEntityColumns() throws {
+        guard let db else { throw DBError.notOpen }
+        let existingColumns = try tableColumns(name: "kg_entities", on: db)
+        if !existingColumns.contains("description") {
+            try execute("ALTER TABLE kg_entities ADD COLUMN description TEXT")
+        }
+        if !existingColumns.contains("importance") {
+            try execute("ALTER TABLE kg_entities ADD COLUMN importance REAL DEFAULT 0.5")
+        }
+    }
+
     private func ensurePreviewTextTriggers() throws {
         try execute("DROP TRIGGER IF EXISTS chunks_preview_text_insert")
         try execute("""
@@ -2371,7 +2385,7 @@ final class BrainDatabase: @unchecked Sendable {
         // Without this, the graph is mostly disconnected noise.
         let sql = """
             SELECT e.id, e.name, e.entity_type, e.description,
-                   COALESCE(CAST(json_extract(e.metadata, '$.importance') AS REAL), 5.0) AS importance
+                   COALESCE(e.importance, CAST(json_extract(e.metadata, '$.importance') AS REAL), 5.0) AS importance
             FROM kg_entities e
             WHERE EXISTS (
                 SELECT 1 FROM kg_relations r

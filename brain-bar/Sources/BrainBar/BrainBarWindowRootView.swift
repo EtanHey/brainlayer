@@ -6,6 +6,8 @@ struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
 
     @State private var selectedTab: BrainBarTab = .dashboard
+    @State private var hasActivatedInjectionsTab = false
+    @State private var hasActivatedGraphTab = false
     @State private var commandBarPanelState = QuickCapturePanelState()
     @State private var commandBarViewModel: QuickCaptureViewModel?
     @StateObject private var windowObserver: BrainBarWindowObserver
@@ -27,14 +29,18 @@ struct BrainBarWindowRootView: View {
 
             Divider()
 
-            Group {
-                switch selectedTab {
-                case .dashboard:
-                    dashboardContent
-                case .injections:
+            ZStack {
+                dashboardContent
+                    .brainBarTabVisibility(selectedTab == .dashboard)
+
+                if hasActivatedInjectionsTab || selectedTab == .injections {
                     injectionsContent
-                case .graph:
+                        .brainBarTabVisibility(selectedTab == .injections)
+                }
+
+                if hasActivatedGraphTab || selectedTab == .graph {
                     graphContent
+                        .brainBarTabVisibility(selectedTab == .graph)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,9 +69,13 @@ struct BrainBarWindowRootView: View {
         })
         .onAppear {
             ensureCommandBarViewModel()
+            activate(tab: selectedTab)
             if let action = runtime.requestedQuickAction {
                 handleRequestedQuickAction(action)
             }
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            activate(tab: newTab)
         }
         .onReceive(runtime.$database) { _ in
             ensureCommandBarViewModel()
@@ -124,6 +134,26 @@ struct BrainBarWindowRootView: View {
         vm.setMode(action == .capture ? .capture : .search)
         vm.panelDidAppear()
         runtime.clearQuickActionRequest()
+    }
+
+    private func activate(tab: BrainBarTab) {
+        switch tab {
+        case .dashboard:
+            break
+        case .injections:
+            hasActivatedInjectionsTab = true
+        case .graph:
+            hasActivatedGraphTab = true
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func brainBarTabVisibility(_ isVisible: Bool) -> some View {
+        opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
     }
 }
 
