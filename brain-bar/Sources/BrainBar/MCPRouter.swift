@@ -448,10 +448,43 @@ final class MCPRouter: @unchecked Sendable {
 
     // MARK: - Tool Definitions
 
+    private static func toolAnnotations(
+        readOnly: Bool,
+        destructive: Bool,
+        idempotent: Bool,
+        openWorld: Bool = false
+    ) -> [String: Any] {
+        [
+            "readOnlyHint": readOnly,
+            "destructiveHint": destructive,
+            "idempotentHint": idempotent,
+            "openWorldHint": openWorld,
+        ]
+    }
+
+    nonisolated(unsafe) static let readOnlyAnnotations = toolAnnotations(
+        readOnly: true,
+        destructive: false,
+        idempotent: true
+    )
+
+    nonisolated(unsafe) static let writeAnnotations = toolAnnotations(
+        readOnly: false,
+        destructive: false,
+        idempotent: false
+    )
+
+    nonisolated(unsafe) static let writeIdempotentAnnotations = toolAnnotations(
+        readOnly: false,
+        destructive: false,
+        idempotent: true
+    )
+
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [
             "name": "brain_search",
             "description": "Search through past conversations and learnings. Hybrid semantic + keyword search.",
+            "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -470,6 +503,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_store",
             "description": "Save decisions, learnings, mistakes, ideas, todos to memory.",
+            "annotations": MCPRouter.writeAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -483,6 +517,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_recall",
             "description": "Get current working context, browse sessions, or inspect session details.",
+            "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -494,6 +529,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_entity",
             "description": "Look up a known entity in the knowledge graph.",
+            "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -505,6 +541,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_digest",
             "description": "Ingest raw content (transcripts, docs, articles). Extracts entities, relations, action items.",
+            "annotations": MCPRouter.writeAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -516,6 +553,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_update",
             "description": "Update, archive, or merge existing memories.",
+            "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -528,6 +566,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_expand",
             "description": "Drill into a specific search result. Returns full content + surrounding chunks.",
+            "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -541,6 +580,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_tags",
             "description": "List, search, or suggest tags across the knowledge base.",
+            "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -551,6 +591,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_subscribe",
             "description": "Subscribe an agent to push notifications for matching tags.",
+            "annotations": MCPRouter.writeAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -563,6 +604,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_unsubscribe",
             "description": "Remove some or all tag subscriptions for an agent.",
+            "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -575,6 +617,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_ack",
             "description": "Acknowledge that an agent processed messages through the given chunk rowid.",
+            "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": [
                 "type": "object",
                 "properties": [

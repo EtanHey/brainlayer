@@ -107,6 +107,49 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
+    func testEachToolHasExpectedAnnotations() throws {
+        let router = MCPRouter()
+        let request: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/list",
+        ]
+
+        let response = router.handle(request)
+        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+        let toolsByName = Dictionary(
+            uniqueKeysWithValues: tools.compactMap { tool -> (String, [String: Any])? in
+                guard let name = tool["name"] as? String else { return nil }
+                return (name, tool)
+            }
+        )
+
+        let expected: [String: (readOnly: Bool, destructive: Bool, idempotent: Bool, openWorld: Bool)] = [
+            "brain_search": (true, false, true, false),
+            "brain_store": (false, false, false, false),
+            "brain_recall": (true, false, true, false),
+            "brain_entity": (true, false, true, false),
+            "brain_digest": (false, false, false, false),
+            "brain_update": (false, false, true, false),
+            "brain_expand": (true, false, true, false),
+            "brain_tags": (true, false, true, false),
+            "brain_subscribe": (false, false, false, false),
+            "brain_unsubscribe": (false, false, true, false),
+            "brain_ack": (false, false, true, false),
+        ]
+
+        XCTAssertEqual(toolsByName.count, expected.count)
+
+        for (name, taxonomy) in expected {
+            let annotations = toolsByName[name]?["annotations"] as? [String: Any]
+            XCTAssertNotNil(annotations, "\(name) must expose MCP tool annotations")
+            XCTAssertEqual(annotations?["readOnlyHint"] as? Bool, taxonomy.readOnly, "\(name) readOnlyHint mismatch")
+            XCTAssertEqual(annotations?["destructiveHint"] as? Bool, taxonomy.destructive, "\(name) destructiveHint mismatch")
+            XCTAssertEqual(annotations?["idempotentHint"] as? Bool, taxonomy.idempotent, "\(name) idempotentHint mismatch")
+            XCTAssertEqual(annotations?["openWorldHint"] as? Bool, taxonomy.openWorld, "\(name) openWorldHint mismatch")
+        }
+    }
+
     // MARK: - Tools call
 
     func testToolsCallDispatchesToHandler() throws {
