@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from copy import deepcopy
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,89 @@ _DESTRUCTIVE = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=False,
 )
+
+_DEFAULT_STRING_MAX_LENGTH = 256
+_DEFAULT_STRING_ARRAY_MAX_ITEMS = 100
+_INPUT_STRING_MAX_LENGTHS = {
+    "action": 64,
+    "agent_id": 128,
+    "chunk_id": 128,
+    "content": 200_000,
+    "content_type": 64,
+    "content_type_filter": 64,
+    "context": 4_096,
+    "correction_category": 128,
+    "date_from": 32,
+    "date_to": 32,
+    "detail": 16,
+    "entity_id": 128,
+    "entity_type": 64,
+    "file_path": 1_024,
+    "function_name": 256,
+    "intent": 32,
+    "mode": 32,
+    "name": 256,
+    "new_chunk_id": 128,
+    "old_chunk_id": 128,
+    "outcome": 32,
+    "pattern": 256,
+    "plan_name": 256,
+    "project": 256,
+    "query": 4_096,
+    "reason": 1_024,
+    "reversibility": 32,
+    "safety_check": 32,
+    "sentiment": 32,
+    "sentiment_filter": 32,
+    "session_id": 128,
+    "severity": 16,
+    "source": 32,
+    "source_filter": 512,
+    "status": 32,
+    "supersedes": 128,
+    "tag": 128,
+    "title": 512,
+    "type": 32,
+}
+_INPUT_STRING_ARRAY_LIMITS = {
+    "chunk_ids": {"max_items": 500, "item_max_length": 128},
+    "files_changed": {"max_items": 200, "item_max_length": 1_024},
+    "merge_chunk_ids": {"max_items": 100, "item_max_length": 128},
+    "participants": {"max_items": 100, "item_max_length": 256},
+    "tags": {"max_items": 100, "item_max_length": 128},
+}
+
+
+def _bounded_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Apply uniform input caps to string fields before exposing MCP schemas."""
+    bounded = deepcopy(schema)
+    _apply_input_limits(bounded)
+    return bounded
+
+
+def _apply_input_limits(node: Any, field_name: str | None = None) -> None:
+    if not isinstance(node, dict):
+        return
+
+    node_type = node.get("type")
+    if node_type == "string":
+        node.setdefault("maxLength", _INPUT_STRING_MAX_LENGTHS.get(field_name, _DEFAULT_STRING_MAX_LENGTH))
+        return
+
+    if node_type == "array":
+        items = node.get("items")
+        if isinstance(items, dict) and items.get("type") == "string":
+            limits = _INPUT_STRING_ARRAY_LIMITS.get(
+                field_name,
+                {"max_items": _DEFAULT_STRING_ARRAY_MAX_ITEMS, "item_max_length": _DEFAULT_STRING_MAX_LENGTH},
+            )
+            node.setdefault("maxItems", limits["max_items"])
+            items.setdefault("maxLength", limits["item_max_length"])
+        _apply_input_limits(items, field_name)
+        return
+
+    for prop_name, prop_schema in node.get("properties", {}).items():
+        _apply_input_limits(prop_schema, prop_name)
 
 # --- Output schemas ---
 
@@ -297,7 +381,7 @@ Auto-routes based on input:
 - "history of X" / "discussed about X" → topic recall
 - Default → hybrid semantic + keyword search""",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -430,7 +514,7 @@ Auto-routes based on input:
                     },
                 },
                 "required": ["query"],
-            },
+            }),
         ),
         Tool(
             name="brain_store",
@@ -441,7 +525,7 @@ Type is auto-detected from content if omitted (e.g., "Always use bun" → decisi
 
 Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar existing memories).""",
             annotations=_WRITE,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "content": {
@@ -535,7 +619,7 @@ Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar exist
                     },
                 },
                 "required": ["content"],
-            },
+            }),
             outputSchema=_STORE_OUTPUT_SCHEMA,
         ),
         Tool(
@@ -551,7 +635,7 @@ Otherwise, memories are ordered by their entity-chunk relevance score.
 
 Designed for copilot agents that need full person context in a single call.""",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "name": {
@@ -571,7 +655,7 @@ Designed for copilot agents that need full person context in a single call.""",
                     },
                 },
                 "required": ["name"],
-            },
+            }),
         ),
         Tool(
             name="brain_recall",
@@ -594,7 +678,7 @@ Smart routing when mode is omitted:
 - Capitalized proper noun (e.g. "BrainLayer", "Etan Heyman") → entity mode
 - Everything else → search mode""",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -723,7 +807,7 @@ Smart routing when mode is omitted:
                         "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
                     },
                 },
-            },
+            }),
         ),
         Tool(
             name="brain_digest",
@@ -741,7 +825,7 @@ How it differs from brain_store:
 - brain_store = fast write, minimal processing, optimized for immediate capture
 - brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing""",
             annotations=_WRITE,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "mode": {
@@ -775,14 +859,14 @@ How it differs from brain_store:
                     },
                 },
                 "required": [],
-            },
+            }),
         ),
         Tool(
             name="brain_entity",
             title="Entity Lookup",
             description="""Look up a known entity (person, project, technology) and its relationships from the knowledge graph. Use when asked about a specific named entity or to explore connections between entities. Returns entity details plus connected entities via kg_relations. Does NOT do fuzzy topic search — use brain_search for that.""",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -837,14 +921,14 @@ How it differs from brain_store:
                     },
                 },
                 "required": [],
-            },
+            }),
         ),
         Tool(
             name="brain_expand",
             title="Expand Chunk Context",
             description="Deprecated. Use brain_search with detail='full' to get full chunk content, or brain_recall with conversation_id to get session context.",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "chunk_id": {
@@ -860,14 +944,14 @@ How it differs from brain_store:
                     },
                 },
                 "required": ["chunk_id"],
-            },
+            }),
         ),
         Tool(
             name="brain_update",
             title="Update or Archive Memory",
             description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
             annotations=_WRITE_IDEMPOTENT,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "action": {
@@ -901,14 +985,14 @@ How it differs from brain_store:
                     },
                 },
                 "required": ["action", "chunk_id"],
-            },
+            }),
         ),
         Tool(
             name="brain_tags",
             title="Tag Discovery",
             description="Deprecated. Use brain_recall(mode='search', tag='prefix') to find tagged memories, or brain_store(tags=[...]) to tag when storing.",
             annotations=_READ_ONLY,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "action": {
@@ -937,7 +1021,7 @@ How it differs from brain_store:
                     },
                 },
                 "required": ["action"],
-            },
+            }),
         ),
         Tool(
             name="brain_supersede",
@@ -953,7 +1037,7 @@ health/finance/relationship content) requires safety_check='confirm' + confirm=t
 
 Returns: Structured JSON with action taken.""",
             annotations=_DESTRUCTIVE,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "old_chunk_id": {
@@ -977,7 +1061,7 @@ Returns: Structured JSON with action taken.""",
                     },
                 },
                 "required": ["old_chunk_id", "new_chunk_id"],
-            },
+            }),
         ),
         Tool(
             name="brain_archive",
@@ -991,7 +1075,7 @@ Use this to clean up stale, outdated, or irrelevant memories without permanent d
 
 Returns: Structured JSON with chunk_id and optional reason.""",
             annotations=_DESTRUCTIVE,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "chunk_id": {
@@ -1004,7 +1088,7 @@ Returns: Structured JSON with chunk_id and optional reason.""",
                     },
                 },
                 "required": ["chunk_id"],
-            },
+            }),
         ),
         Tool(
             name="brain_enrich",
@@ -1027,7 +1111,7 @@ Features:
 
 Pass stats=true to get enrichment progress without running anything.""",
             annotations=_WRITE,
-            inputSchema={
+            inputSchema=_bounded_input_schema({
                 "type": "object",
                 "properties": {
                     "mode": {
@@ -1069,7 +1153,7 @@ Pass stats=true to get enrichment progress without running anything.""",
                         "description": "Return enrichment progress statistics without running enrichment.",
                     },
                 },
-            },
+            }),
         ),
     ]
 
