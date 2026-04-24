@@ -22,6 +22,23 @@ final class MCPRouter: @unchecked Sendable {
 
     private var database: BrainDatabase?
     let entityCache = EntityCache()
+    private static let defaultStringMaxLength = 256
+    private static let defaultStringArrayMaxItems = 100
+    private static let stringMaxLengths: [String: Int] = [
+        "action": 64,
+        "agent_id": 128,
+        "chunk_id": 128,
+        "content": 200_000,
+        "detail": 16,
+        "mode": 32,
+        "project": 256,
+        "query": 4_096,
+        "session_id": 128,
+        "tag": 128
+    ]
+    private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
+        "tags": (maxItems: 100, itemMaxLength: 128)
+    ]
 
     /// Inject database for tool handlers + load entity cache.
     func setDatabase(_ db: BrainDatabase) {
@@ -122,6 +139,7 @@ final class MCPRouter: @unchecked Sendable {
 
         // Dispatch to handler
         do {
+            try Self.validate(arguments: arguments, for: toolName)
             let output = try dispatchTool(name: toolName, arguments: arguments)
             var result: [String: Any] = [
                 "content": [
@@ -453,11 +471,119 @@ final class MCPRouter: @unchecked Sendable {
         return response
     }
 
+    private static func limitedInputSchema(_ schema: [String: Any]) -> [String: Any] {
+        return applyInputLimits(to: schema, fieldName: nil)
+    }
+
+    private static func applyInputLimits(to schema: [String: Any], fieldName: String?) -> [String: Any] {
+        var schema = schema
+        guard let type = schema["type"] as? String else {
+            return schema
+        }
+
+        switch type {
+        case "string":
+            if schema["maxLength"] == nil {
+                schema["maxLength"] = stringMaxLengths[fieldName ?? ""] ?? defaultStringMaxLength
+            }
+        case "array":
+            if var items = schema["items"] as? [String: Any] {
+                if (items["type"] as? String) == "string" {
+                    let limits = stringArrayLimits[fieldName ?? ""] ??
+                        (maxItems: defaultStringArrayMaxItems, itemMaxLength: defaultStringMaxLength)
+                    if schema["maxItems"] == nil {
+                        schema["maxItems"] = limits.maxItems
+                    }
+                    if items["maxLength"] == nil {
+                        items["maxLength"] = limits.itemMaxLength
+                    }
+                }
+                schema["items"] = applyInputLimits(to: items, fieldName: fieldName)
+            }
+        case "object":
+            if var properties = schema["properties"] as? [String: Any] {
+                for (propertyName, value) in properties {
+                    guard let propertySchema = value as? [String: Any] else { continue }
+                    properties[propertyName] = applyInputLimits(to: propertySchema, fieldName: propertyName)
+                }
+                schema["properties"] = properties
+            }
+        default:
+            break
+        }
+
+        return schema
+    }
+
+    private static func validate(arguments: [String: Any], for toolName: String) throws {
+        guard
+            let tool = toolDefinitions.first(where: { ($0["name"] as? String) == toolName }),
+            let schema = tool["inputSchema"] as? [String: Any]
+        else {
+            return
+        }
+
+        try validate(value: arguments, against: schema, fieldPath: "arguments")
+    }
+
+    private static func validate(value: Any, against schema: [String: Any], fieldPath: String) throws {
+        guard let type = schema["type"] as? String else {
+            return
+        }
+
+        switch type {
+        case "object":
+            guard let object = value as? [String: Any] else {
+                throw ToolError.schemaValidation("\(fieldPath) must be an object")
+            }
+            let required = schema["required"] as? [String] ?? []
+            for key in required where object[key] == nil || object[key] is NSNull {
+                throw ToolError.schemaValidation("\(key) is required")
+            }
+            if let properties = schema["properties"] as? [String: Any] {
+                for (propertyName, propertyValue) in object {
+                    guard
+                        !(propertyValue is NSNull),
+                        let propertySchema = properties[propertyName] as? [String: Any]
+                    else { continue }
+                    try validate(value: propertyValue, against: propertySchema, fieldPath: propertyName)
+                }
+            }
+        case "string":
+            guard let stringValue = value as? String else {
+                throw ToolError.schemaValidation("\(fieldPath) must be a string")
+            }
+            if let enumValues = schema["enum"] as? [String], !enumValues.contains(stringValue) {
+                throw ToolError.schemaValidation("\(fieldPath) must be one of \(enumValues.joined(separator: ", "))")
+            }
+            if let maxLength = schema["maxLength"] as? Int, stringValue.count > maxLength {
+                throw ToolError.schemaValidation(
+                    "\(fieldPath) length \(stringValue.count) exceeds maxLength \(maxLength)"
+                )
+            }
+        case "array":
+            guard let arrayValue = value as? [Any] else {
+                throw ToolError.schemaValidation("\(fieldPath) must be an array")
+            }
+            if let maxItems = schema["maxItems"] as? Int, arrayValue.count > maxItems {
+                throw ToolError.schemaValidation("\(fieldPath) item count \(arrayValue.count) exceeds maxItems \(maxItems)")
+            }
+            if let itemSchema = schema["items"] as? [String: Any] {
+                for (index, item) in arrayValue.enumerated() {
+                    try validate(value: item, against: itemSchema, fieldPath: "\(fieldPath)[\(index)]")
+                }
+            }
+        default:
+            break
+        }
+    }
+
     enum ToolError: LocalizedError {
         case unknownTool(String)
         case missingParameter(String)
         case noDatabase
         case notImplemented(String)
+        case schemaValidation(String)
 
         var errorDescription: String? {
             switch self {
@@ -465,6 +591,7 @@ final class MCPRouter: @unchecked Sendable {
             case .missingParameter(let param): return "Missing required parameter: \(param)"
             case .noDatabase: return "Database not available"
             case .notImplemented(let tool): return "\(tool) not yet implemented in BrainBar (use Python MCP server)"
+            case .schemaValidation(let message): return "Schema validation error: \(message)"
             }
         }
     }
@@ -508,7 +635,7 @@ final class MCPRouter: @unchecked Sendable {
             "name": "brain_search",
             "description": "Search through past conversations and learnings. Hybrid semantic + keyword search.",
             "annotations": MCPRouter.readOnlyAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "query": ["type": "string", "description": "Natural language search query"],
@@ -521,13 +648,13 @@ final class MCPRouter: @unchecked Sendable {
                     "detail": ["type": "string", "enum": ["compact", "full"], "description": "Result detail level"],
                 ] as [String: Any],
                 "required": ["query"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_store",
             "description": "Save decisions, learnings, mistakes, ideas, todos to memory.",
             "annotations": MCPRouter.writeAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "content": ["type": "string", "description": "Content to store"],
@@ -535,62 +662,62 @@ final class MCPRouter: @unchecked Sendable {
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
                 ] as [String: Any],
                 "required": ["content"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_recall",
             "description": "Get current working context, browse sessions, or inspect session details.",
             "annotations": MCPRouter.readOnlyAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "mode": ["type": "string", "enum": ["context", "sessions", "operations", "plan", "summary", "stats", "injections"], "description": "Recall mode"],
                     "session_id": ["type": "string", "description": "Session ID for operations/summary mode"],
                 ] as [String: Any],
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_entity",
             "description": "Look up a known entity in the knowledge graph.",
             "annotations": MCPRouter.readOnlyAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "query": ["type": "string", "description": "Entity name to look up"],
                 ] as [String: Any],
                 "required": ["query"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_digest",
             "description": "Ingest raw content (transcripts, docs, articles). Extracts entities, relations, action items.",
             "annotations": MCPRouter.writeAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "content": ["type": "string", "description": "Raw content to digest"],
                 ] as [String: Any],
                 "required": ["content"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_update",
             "description": "Update, archive, or merge existing memories.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "action": ["type": "string", "enum": ["update", "archive", "merge"], "description": "Action to perform"],
                     "chunk_id": ["type": "string", "description": "Chunk ID to update"],
                 ] as [String: Any],
                 "required": ["action", "chunk_id"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_expand",
             "description": "Drill into a specific search result. Returns full content + surrounding chunks.",
             "annotations": MCPRouter.readOnlyAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "chunk_id": ["type": "string", "description": "Chunk ID to expand"],
@@ -598,57 +725,57 @@ final class MCPRouter: @unchecked Sendable {
                     "after": ["type": "integer", "description": "Context chunks after (default: 3)"],
                 ] as [String: Any],
                 "required": ["chunk_id"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_tags",
             "description": "List, search, or suggest tags across the knowledge base.",
             "annotations": MCPRouter.readOnlyAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "query": ["type": "string", "description": "Optional search query to filter tags"],
                 ] as [String: Any],
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_subscribe",
             "description": "Subscribe an agent to push notifications for matching tags.",
             "annotations": MCPRouter.writeAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "agent_id": ["type": "string", "description": "Stable agent identifier"],
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags to receive live notifications for"],
                 ] as [String: Any],
                 "required": ["agent_id", "tags"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_unsubscribe",
             "description": "Remove some or all tag subscriptions for an agent.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "agent_id": ["type": "string", "description": "Stable agent identifier"],
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Optional subset of tags to remove"],
                 ] as [String: Any],
                 "required": ["agent_id"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
         [
             "name": "brain_ack",
             "description": "Acknowledge that an agent processed messages through the given chunk rowid.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
-            "inputSchema": [
+            "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "agent_id": ["type": "string", "description": "Stable agent identifier"],
                     "seq": ["type": "integer", "description": "Highest chunk rowid acknowledged by the agent"],
                 ] as [String: Any],
                 "required": ["agent_id", "seq"]
-            ] as [String: Any]
+            ] as [String: Any])
         ],
     ]
 }
