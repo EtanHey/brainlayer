@@ -54,6 +54,7 @@ def test_all_string_input_fields_have_max_length_and_string_arrays_have_max_item
             assert "maxItems" in array_schema, f"{tool.name}.{field_path} is missing maxItems"
             assert "maxLength" in item_schema, f"{tool.name}.{field_path}[] is missing maxLength"
 
+
 async def _call_brain_digest(arguments: dict[str, Any]):
     handler = server.request_handlers[types.CallToolRequest]
     request = types.CallToolRequest(params=types.CallToolRequestParams(name="brain_digest", arguments=arguments))
