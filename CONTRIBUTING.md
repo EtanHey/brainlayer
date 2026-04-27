@@ -9,7 +9,11 @@ git clone https://github.com/EtanHey/brainlayer.git
 cd brainlayer
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+git config core.hooksPath .githooks
 ```
+
+The repo ships a pre-push regression gate in `.githooks/pre-push`. Set `core.hooksPath`
+once per clone so `git push` runs `scripts/run_tests.sh` before anything leaves your machine.
 
 ## Project Structure
 
