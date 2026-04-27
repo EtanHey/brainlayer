@@ -87,3 +87,37 @@ def test_run_tests_skips_bun_when_no_typescript_tests_exist(tmp_path: Path) -> N
     assert result.returncode == 0
     assert pytest_log.read_text().strip()
     assert not bun_log.exists()
+
+
+def test_run_tests_executes_regression_shell_scripts(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    regression_root = test_root / "regression"
+    regression_root.mkdir(parents=True)
+    (test_root / "fixture.test.ts").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    shell_log = tmp_path / "shell.log"
+    _write_executable(
+        regression_root / "test_fixture.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'echo "ran" >> "$SHELL_LOG"',
+                "exit 0",
+                "",
+            ]
+        ),
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+    env["SHELL_LOG"] = str(shell_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    assert shell_log.read_text().strip() == "ran"

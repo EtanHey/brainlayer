@@ -30,7 +30,19 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Unit tests
-        run: pytest tests/ -v --tb=short -m "not integration" -x
+        run: >
+          pytest tests/ -v --tb=short -m "not integration and not live" -x
+          --ignore=tests/test_eval_framework.py
+          --ignore=tests/test_follow_up_rewrite.py
+          --ignore=tests/test_prompt_classification.py
+
+      - name: Isolated eval and hook routing tests
+        run: >
+          pytest
+          tests/test_eval_framework.py
+          tests/test_follow_up_rewrite.py
+          tests/test_prompt_classification.py
+          -v --tb=short -x
 
       - name: MCP tool registration
         run: pytest tests/test_think_recall_integration.py::TestMCPToolCount -v --tb=short
