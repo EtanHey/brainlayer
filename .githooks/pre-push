@@ -34,3 +34,5 @@ The 5-day regression cycle exists because past pushes bypassed checks.
 BANNER
   exit $exit_status
 fi
+
+exit 0
