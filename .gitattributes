@@ -1,0 +1,2 @@
+# Mark test fixtures as generated to exclude from language stats
+tests/fixtures/*.json linguist-generated=true

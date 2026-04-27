@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v uvx &> /dev/null; then
+    echo "ERROR: uvx (from uv package manager) is required but not found in PATH" >&2
+    echo "Install with: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_PATH="${1:-$ROOT_DIR/tests/fixtures/stale_index_query.json}"
 
