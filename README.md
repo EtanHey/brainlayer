@@ -195,6 +195,7 @@ brainlayer dashboard          # Interactive TUI
 
 ```bash
 pip install -e ".[dev]"
+git config core.hooksPath .githooks     # install repo pre-push hook once per clone
 pytest tests/                           # 1,848 Python tests
 pytest tests/ -m "not integration"      # Unit tests only (fast)
 ruff check src/ && ruff format src/     # Lint + format

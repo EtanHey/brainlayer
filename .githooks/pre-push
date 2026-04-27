@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-push hook — regression harness gate
+#
+# NOT FRICTION — discipline. The 5-day regression cycle in this repo
+# exists because past pushes bypassed checks. This hook stops that.
+#
+# DO NOT BYPASS:
+#   git push --no-verify          ← sneaks past the hook
+#   chmod -x .githooks/pre-push   ← disables it
+#
+# DO NOT SILENCE FAILURES:
+#   A failing test = a real bug. The Zero-RMS Hang recurred Apr 2 → Apr 27
+#   because symptomatic fixes shipped without root-cause coverage.
+#   Treat each failure as CRITICAL REVIEW TIME.
+
+set -uo pipefail
+[ ! -f scripts/run_tests.sh ] && { echo "⚠️  no scripts/run_tests.sh — skipping"; exit 0; }
+bash scripts/run_tests.sh
+exit_status=$?
+
+if [ $exit_status -ne 0 ]; then
+  cat <<'BANNER'
+
+🛑 PUSH BLOCKED — regression harness failed.
+
+This is a real regression. DO NOT bypass with --no-verify or silence the test.
+  1. Read the failure carefully
+  2. Reproduce locally
+  3. Fix the underlying bug
+  4. If the test IS wrong, separate PR with rationale
+
+The 5-day regression cycle exists because past pushes bypassed checks.
+
+BANNER
+  exit $exit_status
+fi
