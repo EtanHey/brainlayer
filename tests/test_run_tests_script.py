@@ -25,7 +25,7 @@ def _make_stub_bin(tmp_path: Path, *, pytest_exit: int, bun_exit: int | None) ->
         "\n".join(
             [
                 "#!/usr/bin/env bash",
-                "echo \"$*\" >> \"$PYTEST_LOG\"",
+                'echo "$*" >> "$PYTEST_LOG"',
                 f"exit {pytest_exit}",
                 "",
             ]
@@ -38,7 +38,7 @@ def _make_stub_bin(tmp_path: Path, *, pytest_exit: int, bun_exit: int | None) ->
             "\n".join(
                 [
                     "#!/usr/bin/env bash",
-                    "echo \"$*\" >> \"$BUN_LOG\"",
+                    'echo "$*" >> "$BUN_LOG"',
                     f"exit {bun_exit}",
                     "",
                 ]
