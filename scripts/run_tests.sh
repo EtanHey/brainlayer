@@ -43,7 +43,7 @@ run_pytest() {
 
 cd "$ROOT_DIR"
 
-run_step "pytest unit suite" run_pytest "$TEST_ROOT/" -v --tb=short -m "not integration" -x
+run_step "pytest unit suite" run_pytest "$TEST_ROOT/" -v --tb=short -m "not integration"
 run_step \
   "pytest MCP tool registration" \
   run_pytest "$TEST_ROOT/test_think_recall_integration.py::TestMCPToolCount" -v --tb=short
