@@ -77,9 +77,13 @@ telemetry = [
     "axiom-py>=0.10.0",  # Axiom observability (optional — degrades gracefully)
 ]
 dev = [
+    "deepchecks>=0.19.1",
+    "numpy<2",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
+    "scikit-learn<1.6",
+    "setuptools>=70.0.0,<81",
 ]
 docs = [
     "mkdocs-material>=9.5.0",

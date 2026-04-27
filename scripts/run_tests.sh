@@ -33,9 +33,17 @@ collect_bun_tests() {
   find "$TEST_ROOT" -type f -name "*.test.ts" | sort
 }
 
+collect_regression_shell_tests() {
+  if [ ! -d "$TEST_ROOT" ]; then
+    return 0
+  fi
+
+  find "$TEST_ROOT" -type f -path "*/regression/*.sh" | sort
+}
+
 run_pytest() {
   if [ "$BRAINLAYER_USE_UV" = "1" ] && command -v uv >/dev/null 2>&1; then
-    uv run pytest "$@"
+    uv run --extra dev pytest "$@"
   else
     pytest "$@"
   fi
@@ -64,6 +72,21 @@ if [ "${#bun_tests[@]}" -gt 0 ]; then
 else
   echo "==> bun test suite"
   echo "SKIP: no .test.ts files found under $TEST_ROOT"
+  echo
+fi
+
+shell_tests=()
+while IFS= read -r test_file; do
+  shell_tests+=("$test_file")
+done < <(collect_regression_shell_tests)
+
+if [ "${#shell_tests[@]}" -gt 0 ]; then
+  for shell_test in "${shell_tests[@]}"; do
+    run_step "regression shell $(basename "$shell_test")" bash "$shell_test"
+  done
+else
+  echo "==> regression shell suite"
+  echo "SKIP: no regression shell scripts found under $TEST_ROOT"
   echo
 fi
 
