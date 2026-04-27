@@ -5,6 +5,7 @@ set -u -o pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="${BRAINLAYER_TEST_ROOT:-$ROOT_DIR/tests}"
 BRAINLAYER_USE_UV="${BRAINLAYER_USE_UV:-1}"
+UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live}"
 exit_status=0
 
 run_step() {
@@ -33,6 +34,23 @@ collect_bun_tests() {
   find "$TEST_ROOT" -type f -name "*.test.ts" | sort
 }
 
+collect_isolated_pytest_files() {
+  if [ ! -d "$TEST_ROOT" ]; then
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "$TEST_ROOT/test_eval_framework.py" \
+    "$TEST_ROOT/test_follow_up_rewrite.py" \
+    "$TEST_ROOT/test_prompt_classification.py"
+  do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+    fi
+  done
+}
+
 collect_regression_shell_tests() {
   if [ ! -d "$TEST_ROOT" ]; then
     return 0
@@ -51,10 +69,32 @@ run_pytest() {
 
 cd "$ROOT_DIR"
 
-run_step "pytest unit suite" run_pytest "$TEST_ROOT/" -v --tb=short -m "not integration"
+isolated_pytest_files=()
+while IFS= read -r test_file; do
+  isolated_pytest_files+=("$test_file")
+done < <(collect_isolated_pytest_files)
+
+pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+if [ "${#isolated_pytest_files[@]}" -gt 0 ]; then
+  for isolated_test in "${isolated_pytest_files[@]}"; do
+    pytest_unit_cmd+=("--ignore=$isolated_test")
+  done
+fi
+
+run_step "pytest unit suite" "${pytest_unit_cmd[@]}"
 run_step \
   "pytest MCP tool registration" \
   run_pytest "$TEST_ROOT/test_think_recall_integration.py::TestMCPToolCount" -v --tb=short
+
+if [ "${#isolated_pytest_files[@]}" -gt 0 ]; then
+  run_step \
+    "pytest isolated eval and hook routing" \
+    run_pytest "${isolated_pytest_files[@]}" -v --tb=short
+else
+  echo "==> pytest isolated eval and hook routing"
+  echo "SKIP: no isolated pytest files found under $TEST_ROOT"
+  echo
+fi
 
 bun_tests=()
 while IFS= read -r test_file; do
