@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "stale_index_query.json"
 
 
