@@ -6,6 +6,7 @@
 // - tools/call: dispatch to tool handler by name
 
 import XCTest
+import SQLite3
 @testable import BrainBar
 
 final class MCPRouterTests: XCTestCase {
@@ -478,6 +479,137 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
     }
 
+    // MARK: - brain_store queue fallback
+
+    func testBrainStoreQueuesWhenWritePrepareFails() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        db.exec("DROP TABLE chunks")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Store should queue after prepare failure",
+                    "tags": ["queue-fallback"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let text = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+
+        XCTAssertNotEqual(result?["isError"] as? Bool, true, "brain_store should queue instead of surfacing an error")
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("queued"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
+
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertTrue(queuedText.contains("Store should queue after prepare failure"))
+    }
+
+    func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let queuedPayload = """
+        {"content":"Queued item should flush","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try queuedPayload.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live write triggers flush",
+                    "tags": ["live"],
+                    "importance": 5
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNil(result?["isError"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path), "successful store should drain the pending queue")
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertTrue(contents.contains("Queued item should flush"))
+        XCTAssertTrue(contents.contains("Live write triggers flush"))
+    }
+
+    func testBrainStoreFlushKeepsMalformedQueueLines() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let seededQueue = """
+        not-json
+        {"content":"Queued valid item survives malformed sibling","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try seededQueue.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live write tolerates malformed queue lines",
+                    "tags": ["live"],
+                    "importance": 5
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNil(result?["isError"])
+
+        let remainingText = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertEqual(remainingText.trimmingCharacters(in: .whitespacesAndNewlines), "not-json")
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertTrue(contents.contains("Queued valid item survives malformed sibling"))
+        XCTAssertTrue(contents.contains("Live write tolerates malformed queue lines"))
+    }
+
     // MARK: - Notifications (no id)
 
     func testNotificationDoesNotRequireResponse() {
@@ -491,4 +623,35 @@ final class MCPRouterTests: XCTestCase {
         // Notifications should return empty/nil response (no id to respond to)
         XCTAssertTrue(response.isEmpty || response["id"] == nil)
     }
+}
+
+private func makeTempTestDirectory() -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+private func chunkContents(path: String) throws -> [String] {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "MCPRouterTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    var stmt: OpaquePointer?
+    let sql = "SELECT content FROM chunks ORDER BY rowid ASC"
+    let prepareRC = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareRC == SQLITE_OK else {
+        throw NSError(domain: "MCPRouterTests", code: Int(prepareRC))
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    var results: [String] = []
+    while sqlite3_step(stmt) == SQLITE_ROW {
+        if let value = sqlite3_column_text(stmt, 0) {
+            results.append(String(cString: value))
+        }
+    }
+    return results
 }

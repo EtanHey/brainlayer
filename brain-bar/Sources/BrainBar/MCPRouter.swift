@@ -242,16 +242,34 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return ToolOutput(
-            text: Formatters.formatStoreResult(chunkId: stored.chunkID),
-            metadata: [
-                "_brainbarStoredChunk": [
-                    "chunk_id": stored.chunkID,
-                    "rowid": stored.rowID
+        do {
+            let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
+            let flushedCount = db.flushPendingStores()
+            return ToolOutput(
+                text: Formatters.formatStoreResult(chunkId: stored.chunkID),
+                metadata: [
+                    "queued": false,
+                    "flushed_count": flushedCount,
+                    "_brainbarStoredChunk": [
+                        "chunk_id": stored.chunkID,
+                        "rowid": stored.rowID
+                    ]
                 ]
-            ]
-        )
+            )
+        } catch {
+            guard db.shouldQueueStoreError(error) else {
+                throw error
+            }
+            do {
+                try db.queuePendingStore(content: content, tags: tags, importance: importance, source: "mcp")
+                return ToolOutput(
+                    text: Formatters.formatStoreResult(chunkId: "", queued: true),
+                    metadata: ["queued": true]
+                )
+            } catch {
+                throw error
+            }
+        }
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
