@@ -114,6 +114,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
+    private let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
 
     init(path: String) {
@@ -183,6 +184,12 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at
             ON chunks(created_at)
+        """)
+
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_brainbar_queue_id
+            ON chunks(json_extract(metadata, '$.brainbar_queue_id'))
+            WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL
         """)
 
         try ensureAuxiliarySchema()
@@ -526,6 +533,9 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func queuePendingStore(content: String, tags: [String], importance: Int, source: String) throws {
+        pendingStoreFileLock.lock()
+        defer { pendingStoreFileLock.unlock() }
+
         let path = pendingStorePath()
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
@@ -556,6 +566,9 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func flushPendingStores() -> [FlushedPendingStore] {
+        pendingStoreFileLock.lock()
+        defer { pendingStoreFileLock.unlock() }
+
         let path = pendingStorePath()
         guard FileManager.default.fileExists(atPath: path.path) else { return [] }
         guard let lines = readPendingStoreLines(at: path) else {
@@ -578,7 +591,13 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             let queueID = Self.pendingStoreQueueID(for: item)
-            if (try? hasStoredQueuedItem(queueID: queueID)) == true {
+            do {
+                if try hasStoredQueuedItem(queueID: queueID) {
+                    continue
+                }
+            } catch {
+                NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
+                remaining.append(line)
                 continue
             }
 
@@ -1580,11 +1599,16 @@ final class BrainDatabase: @unchecked Sendable {
     private func hasStoredQueuedItem(queueID: String) throws -> Bool {
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
-        let sql = "SELECT 1 FROM chunks WHERE metadata = ? LIMIT 1"
+        let sql = """
+            SELECT 1
+            FROM chunks
+            WHERE json_extract(metadata, '$.brainbar_queue_id') = ?
+            LIMIT 1
+        """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }
-        bindText(Self.storeMetadataJSON(queueID: queueID), to: stmt, index: 1)
+        bindText(queueID, to: stmt, index: 1)
         return sqlite3_step(stmt) == SQLITE_ROW
     }
 

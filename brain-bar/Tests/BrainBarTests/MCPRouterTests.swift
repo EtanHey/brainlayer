@@ -708,6 +708,43 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(contents.filter { $0 == "Legacy queue line without queue id" }.count, 1)
     }
 
+    func testQueuePendingStorePreservesConcurrentFirstWrites() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        let iterations = 24
+        let failureLock = NSLock()
+        var failures: [String] = []
+
+        DispatchQueue.concurrentPerform(iterations: iterations) { index in
+            do {
+                try db.queuePendingStore(
+                    content: "Concurrent queue item \(index)",
+                    tags: ["queued"],
+                    importance: 5,
+                    source: "mcp"
+                )
+            } catch {
+                failureLock.lock()
+                failures.append(String(describing: error))
+                failureLock.unlock()
+            }
+        }
+
+        XCTAssertTrue(failures.isEmpty, "queuePendingStore should serialize concurrent first writes without errors: \(failures)")
+
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+        let lines = queuedText.split(whereSeparator: \.isNewline)
+        XCTAssertEqual(lines.count, iterations)
+    }
+
     func testShouldQueueOnlyTransientSQLiteStoreErrors() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
