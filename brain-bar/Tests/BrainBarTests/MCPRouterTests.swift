@@ -481,7 +481,7 @@ final class MCPRouterTests: XCTestCase {
 
     // MARK: - brain_store queue fallback
 
-    func testBrainStoreQueuesWhenWritePrepareFails() throws {
+    func testBrainStoreQueuesWhenWriteHitsTransientSQLiteLock() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -489,9 +489,15 @@ final class MCPRouterTests: XCTestCase {
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
         defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
 
-        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
         defer { db.close() }
-        db.exec("DROP TABLE chunks")
+        db.exec("PRAGMA busy_timeout = 1")
+
+        let lockDB = try openSQLiteConnection(path: dbPath)
+        defer { sqlite3_close(lockDB) }
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        defer { sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil) }
 
         let router = MCPRouter()
         router.setDatabase(db)
@@ -503,7 +509,7 @@ final class MCPRouterTests: XCTestCase {
             "params": [
                 "name": "brain_store",
                 "arguments": [
-                    "content": "Store should queue after prepare failure",
+                    "content": "Store should queue after transient SQLite lock",
                     "tags": ["queue-fallback"],
                     "importance": 7
                 ] as [String: Any]
@@ -513,12 +519,12 @@ final class MCPRouterTests: XCTestCase {
         let result = response["result"] as? [String: Any]
         let text = ((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
 
-        XCTAssertNotEqual(result?["isError"] as? Bool, true, "brain_store should queue instead of surfacing an error")
+        XCTAssertNotEqual(result?["isError"] as? Bool, true, "brain_store should queue instead of surfacing a transient lock")
         XCTAssertTrue(text.localizedCaseInsensitiveContains("queued"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
 
         let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
-        XCTAssertTrue(queuedText.contains("Store should queue after prepare failure"))
+        XCTAssertTrue(queuedText.contains("Store should queue after transient SQLite lock"))
     }
 
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
@@ -618,6 +624,107 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(contents.contains("Live write tolerates malformed queue lines"))
     }
 
+    func testBrainStoreFlushKeepsInvalidUTF8QueueLines() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let invalidLine = Data([0xC3, 0x28, 0x0A])
+        let validLine = Data("""
+        {"content":"Queued valid item survives invalid utf8 sibling","tags":["queued"],"importance":4,"source":"mcp"}
+        """.utf8)
+        try (invalidLine + validLine + Data([0x0A])).write(to: queuePath, options: .atomic)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live write tolerates invalid utf8 queue lines",
+                    "tags": ["live"],
+                    "importance": 5
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNil(result?["isError"])
+        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
+        let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
+        XCTAssertEqual(flushed?.count, 1)
+        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives invalid utf8 sibling")
+
+        let remainingData = try Data(contentsOf: queuePath)
+        XCTAssertEqual(remainingData, invalidLine)
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertTrue(contents.contains("Queued valid item survives invalid utf8 sibling"))
+        XCTAssertTrue(contents.contains("Live write tolerates invalid utf8 queue lines"))
+    }
+
+    func testBrainStoreLegacyQueueLinesStayIdempotentAcrossReplay() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let legacyLine = """
+        {"content":"Legacy queue line without queue id","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try (legacyLine + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        let firstFlush = db.flushPendingStores()
+        XCTAssertEqual(firstFlush.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+
+        let metadata = try chunkMetadata(path: dbPath, content: "Legacy queue line without queue id")
+        XCTAssertNotNil(metadata)
+        XCTAssertTrue(metadata?.contains("brainbar_queue_id") == true)
+
+        try (legacyLine + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let secondFlush = db.flushPendingStores()
+        XCTAssertTrue(secondFlush.isEmpty)
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertEqual(contents.filter { $0 == "Legacy queue line without queue id" }.count, 1)
+    }
+
+    func testShouldQueueOnlyTransientSQLiteStoreErrors() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        XCTAssertTrue(db.shouldQueueStoreError(BrainDatabase.DBError.prepare(SQLITE_BUSY)))
+        XCTAssertTrue(db.shouldQueueStoreError(BrainDatabase.DBError.step(SQLITE_LOCKED)))
+        XCTAssertTrue(db.shouldQueueStoreError(BrainDatabase.DBError.exec(SQLITE_BUSY, "database is busy")))
+
+        XCTAssertFalse(db.shouldQueueStoreError(BrainDatabase.DBError.prepare(SQLITE_ERROR)))
+        XCTAssertFalse(db.shouldQueueStoreError(BrainDatabase.DBError.step(SQLITE_CORRUPT)))
+        XCTAssertFalse(db.shouldQueueStoreError(BrainDatabase.DBError.exec(SQLITE_CANTOPEN, "cannot open database")))
+        XCTAssertFalse(db.shouldQueueStoreError(NSError(domain: "test", code: 1)))
+    }
+
     // MARK: - Notifications (no id)
 
     func testNotificationDoesNotRequireResponse() {
@@ -662,4 +769,40 @@ private func chunkContents(path: String) throws -> [String] {
         }
     }
     return results
+}
+
+private func chunkMetadata(path: String, content: String) throws -> String? {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "MCPRouterTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    var stmt: OpaquePointer?
+    let sql = "SELECT metadata FROM chunks WHERE content = ? ORDER BY rowid DESC LIMIT 1"
+    let prepareRC = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareRC == SQLITE_OK else {
+        throw NSError(domain: "MCPRouterTests", code: Int(prepareRC))
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    sqlite3_bind_text(stmt, 1, content, -1, transient)
+    guard sqlite3_step(stmt) == SQLITE_ROW else {
+        return nil
+    }
+    guard let value = sqlite3_column_text(stmt, 0) else {
+        return nil
+    }
+    return String(cString: value)
+}
+
+private func openSQLiteConnection(path: String) throws -> OpaquePointer {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "MCPRouterTests", code: Int(rc))
+    }
+    return db
 }

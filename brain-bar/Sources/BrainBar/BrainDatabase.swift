@@ -516,8 +516,10 @@ final class BrainDatabase: @unchecked Sendable {
     func shouldQueueStoreError(_ error: Error) -> Bool {
         guard let dbError = error as? DBError else { return false }
         switch dbError {
-        case .prepare, .step, .exec:
-            return true
+        case .prepare(let rc), .step(let rc):
+            return Self.isRetryableQueueErrorCode(rc)
+        case .exec(let rc, _):
+            return Self.isRetryableQueueErrorCode(rc)
         case .notOpen, .open, .noResult, .invalidPragma:
             return false
         }
@@ -556,32 +558,27 @@ final class BrainDatabase: @unchecked Sendable {
     func flushPendingStores() -> [FlushedPendingStore] {
         let path = pendingStorePath()
         guard FileManager.default.fileExists(atPath: path.path) else { return [] }
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+        guard let lines = readPendingStoreLines(at: path) else {
             NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
             return []
         }
-
-        let lines = text.split(whereSeparator: \.isNewline).map(String.init)
         guard !lines.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
         var flushed: [FlushedPendingStore] = []
-        var remaining: [String] = []
+        var remaining: [Data] = []
 
         for line in lines {
-            guard let data = line.data(using: .utf8) else {
-                remaining.append(line)
-                continue
-            }
             let item: PendingStoreItem
             do {
-                item = try decoder.decode(PendingStoreItem.self, from: data)
+                item = try decoder.decode(PendingStoreItem.self, from: line)
             } catch {
                 remaining.append(line)
                 continue
             }
 
-            if let queueID = item.queueID, (try? hasStoredQueuedItem(queueID: queueID)) == true {
+            let queueID = Self.pendingStoreQueueID(for: item)
+            if (try? hasStoredQueuedItem(queueID: queueID)) == true {
                 continue
             }
 
@@ -591,7 +588,7 @@ final class BrainDatabase: @unchecked Sendable {
                     tags: item.tags,
                     importance: item.importance,
                     source: item.source,
-                    queueID: item.queueID,
+                    queueID: queueID,
                     refreshStatistics: false
                 )
                 flushed.append(
@@ -1469,14 +1466,115 @@ final class BrainDatabase: @unchecked Sendable {
         return URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
     }
 
+    private func readPendingStoreLines(at path: URL) -> [Data]? {
+        guard let data = try? Data(contentsOf: path) else {
+            return nil
+        }
+
+        var lines: [Data] = []
+        var start = data.startIndex
+
+        func appendLine(_ range: Range<Data.Index>) {
+            guard !range.isEmpty else { return }
+            var line = Data(data[range])
+            if line.last == 0x0D {
+                line.removeLast()
+            }
+            guard !line.isEmpty else { return }
+            lines.append(line)
+        }
+
+        for index in data.indices where data[index] == 0x0A {
+            appendLine(start..<index)
+            start = data.index(after: index)
+        }
+
+        if start < data.endIndex {
+            appendLine(start..<data.endIndex)
+        }
+
+        return lines
+    }
+
     private static func storeMetadataJSON(queueID: String?) -> String {
-        guard let queueID else { return "{}" }
+        guard let queueID = normalizedQueueID(queueID) else { return "{}" }
         let payload = ["brainbar_queue_id": queueID]
         guard let data = try? JSONEncoder().encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             return "{}"
         }
         return text
+    }
+
+    private static func normalizedQueueID(_ queueID: String?) -> String? {
+        guard let queueID = queueID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !queueID.isEmpty else {
+            return nil
+        }
+        return queueID
+    }
+
+    private static func pendingStoreQueueID(for item: PendingStoreItem) -> String {
+        if let queueID = normalizedQueueID(item.queueID) {
+            return queueID
+        }
+        return deterministicPendingStoreQueueID(
+            content: item.content,
+            tags: item.tags,
+            importance: item.importance,
+            source: item.source
+        )
+    }
+
+    private static func deterministicPendingStoreQueueID(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String
+    ) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+
+        func mix(_ byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+
+        func mix(_ data: Data) {
+            for byte in data {
+                mix(byte)
+            }
+        }
+
+        func mix(length: Int) {
+            var value = UInt64(length).littleEndian
+            withUnsafeBytes(of: &value) { bytes in
+                mix(Data(bytes))
+            }
+        }
+
+        func mix(_ string: String) {
+            let data = Data(string.utf8)
+            mix(length: data.count)
+            mix(data)
+        }
+
+        mix(content)
+        mix(length: tags.count)
+        for tag in tags {
+            mix(tag)
+        }
+        var encodedImportance = Int64(importance).littleEndian
+        withUnsafeBytes(of: &encodedImportance) { bytes in
+            mix(Data(bytes))
+        }
+        mix(source)
+
+        return String(format: "brainbar-pending-%016llx", hash)
+    }
+
+    private static func isRetryableQueueErrorCode(_ rc: Int32) -> Bool {
+        let primaryCode = rc & 0xFF
+        return primaryCode == SQLITE_BUSY || primaryCode == SQLITE_LOCKED
     }
 
     private func hasStoredQueuedItem(queueID: String) throws -> Bool {
@@ -1490,13 +1588,18 @@ final class BrainDatabase: @unchecked Sendable {
         return sqlite3_step(stmt) == SQLITE_ROW
     }
 
-    private func rewritePendingStoreFile(path: URL, remainingLines: [String]) {
+    private func rewritePendingStoreFile(path: URL, remainingLines: [Data]) {
         guard !remainingLines.isEmpty else {
             try? FileManager.default.removeItem(at: path)
             return
         }
         do {
-            try Data((remainingLines.joined(separator: "\n") + "\n").utf8).write(to: path, options: .atomic)
+            var data = Data()
+            for line in remainingLines {
+                data.append(line)
+                data.append(0x0A)
+            }
+            try data.write(to: path, options: .atomic)
         } catch {
             NSLog("[BrainBar] Failed to rewrite pending stores queue: %@", String(describing: error))
         }
