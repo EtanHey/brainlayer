@@ -311,7 +311,7 @@ final class BrainBarServer: @unchecked Sendable {
             default:
                 let response = router.handle(request)
                 if toolCall.name == "brain_store", !isToolError(response) {
-                    publishStoredChunk(response: response, arguments: toolCall.arguments)
+                    publishStoredChunks(response: response, arguments: toolCall.arguments)
                 }
                 return response
             }
@@ -561,15 +561,25 @@ final class BrainBarServer: @unchecked Sendable {
         return (name, arguments)
     }
 
-    private func publishStoredChunk(response: [String: Any], arguments: [String: Any]) {
-        guard let stored = extractStoredChunk(from: response),
-              let content = arguments["content"] as? String,
-              let tags = arguments["tags"] as? [String],
-              !tags.isEmpty else {
-            return
+    private func publishStoredChunks(response: [String: Any], arguments: [String: Any]) {
+        if let stored = extractStoredChunk(from: response),
+           let content = arguments["content"] as? String,
+           let tags = arguments["tags"] as? [String] {
+            publishStoredChunk(stored: stored, content: content, tags: tags, importance: arguments["importance"] as? Int ?? 5)
         }
 
-        let importance = arguments["importance"] as? Int ?? 5
+        for flushed in extractFlushedQueuedChunks(from: response) {
+            publishStoredChunk(
+                stored: flushed.storedChunk,
+                content: flushed.content,
+                tags: flushed.tags,
+                importance: flushed.importance
+            )
+        }
+    }
+
+    private func publishStoredChunk(stored: StoreResultPayload, content: String, tags: [String], importance: Int) {
+        guard !tags.isEmpty else { return }
         let tagSet = Set(tags)
         for (clientFD, client) in Array(clients) {
             if let agentID = client.agentID,
@@ -602,21 +612,30 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private func extractFlushedQueuedChunks(from response: [String: Any]) -> [(storedChunk: StoreResultPayload, content: String, tags: [String], importance: Int)] {
+        guard let result = response["result"] as? [String: Any],
+              let items = result["_brainbarFlushedQueuedChunks"] as? [[String: Any]] else {
+            return []
+        }
+
+        return items.compactMap { item in
+            guard let stored = storedChunkPayload(from: item),
+                  let content = item["content"] as? String,
+                  let tags = item["tags"] as? [String] else {
+                return nil
+            }
+            let importance = item["importance"] as? Int ?? 5
+            return (stored, content, tags, importance)
+        }
+    }
+
     private func extractStoredChunk(from response: [String: Any]) -> StoreResultPayload? {
         guard let result = response["result"] as? [String: Any] else {
             return nil
         }
         if let stored = result["_brainbarStoredChunk"] as? [String: Any],
-           let chunkID = stored["chunk_id"] as? String {
-            let rowID: Int64
-            if let intRowID = stored["rowid"] as? Int64 {
-                rowID = intRowID
-            } else if let intRowID = stored["rowid"] as? Int {
-                rowID = Int64(intRowID)
-            } else {
-                return nil
-            }
-            return StoreResultPayload(chunkID: chunkID, rowID: rowID)
+           let payload = storedChunkPayload(from: stored) {
+            return payload
         }
         guard let content = result["content"] as? [[String: Any]],
               let text = content.first?["text"] as? String,
@@ -625,6 +644,21 @@ final class BrainBarServer: @unchecked Sendable {
             return nil
         }
         return payload
+    }
+
+    private func storedChunkPayload(from payload: [String: Any]) -> StoreResultPayload? {
+        guard let chunkID = payload["chunk_id"] as? String else {
+            return nil
+        }
+        let rowID: Int64
+        if let intRowID = payload["rowid"] as? Int64 {
+            rowID = intRowID
+        } else if let intRowID = payload["rowid"] as? Int {
+            rowID = Int64(intRowID)
+        } else {
+            return nil
+        }
+        return StoreResultPayload(chunkID: chunkID, rowID: rowID)
     }
 
     private func jsonString<T: Encodable>(_ payload: T) -> String {

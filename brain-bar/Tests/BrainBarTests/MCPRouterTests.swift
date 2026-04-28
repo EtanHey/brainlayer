@@ -557,6 +557,10 @@ final class MCPRouterTests: XCTestCase {
 
         let result = response["result"] as? [String: Any]
         XCTAssertNil(result?["isError"])
+        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
+        let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
+        XCTAssertEqual(flushed?.count, 1)
+        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush")
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path), "successful store should drain the pending queue")
 
         let contents = try chunkContents(path: dbPath)
@@ -601,6 +605,10 @@ final class MCPRouterTests: XCTestCase {
 
         let result = response["result"] as? [String: Any]
         XCTAssertNil(result?["isError"])
+        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
+        let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
+        XCTAssertEqual(flushed?.count, 1)
+        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives malformed sibling")
 
         let remainingText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertEqual(remainingText.trimmingCharacters(in: .whitespacesAndNewlines), "not-json")

@@ -42,6 +42,13 @@ final class BrainDatabase: @unchecked Sendable {
         let rowID: Int64
     }
 
+    struct FlushedPendingStore: Sendable {
+        let storedChunk: StoredChunk
+        let content: String
+        let tags: [String]
+        let importance: Int
+    }
+
     struct PendingStoreItem: Codable, Sendable {
         let content: String
         let tags: [String]
@@ -534,8 +541,10 @@ final class BrainDatabase: @unchecked Sendable {
         guard let line = String(data: data, encoding: .utf8) else {
             throw DBError.exec(SQLITE_MISUSE, "failed to encode pending store item")
         }
-        if FileManager.default.fileExists(atPath: path.path),
-           let handle = try? FileHandle(forWritingTo: path) {
+        if FileManager.default.fileExists(atPath: path.path) {
+            guard let handle = try? FileHandle(forWritingTo: path) else {
+                throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append")
+            }
             defer { try? handle.close() }
             try handle.seekToEnd()
             try handle.write(contentsOf: Data((line + "\n").utf8))
@@ -544,20 +553,19 @@ final class BrainDatabase: @unchecked Sendable {
         try Data((line + "\n").utf8).write(to: path, options: .atomic)
     }
 
-    @discardableResult
-    func flushPendingStores() -> Int {
+    func flushPendingStores() -> [FlushedPendingStore] {
         let path = pendingStorePath()
-        guard FileManager.default.fileExists(atPath: path.path) else { return 0 }
+        guard FileManager.default.fileExists(atPath: path.path) else { return [] }
         guard let text = try? String(contentsOf: path, encoding: .utf8) else {
             NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
-            return 0
+            return []
         }
 
         let lines = text.split(whereSeparator: \.isNewline).map(String.init)
-        guard !lines.isEmpty else { return 0 }
+        guard !lines.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
-        var flushed = 0
+        var flushed: [FlushedPendingStore] = []
         var remaining: [String] = []
 
         for line in lines {
@@ -578,7 +586,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             do {
-                _ = try store(
+                let stored = try store(
                     content: item.content,
                     tags: item.tags,
                     importance: item.importance,
@@ -586,7 +594,14 @@ final class BrainDatabase: @unchecked Sendable {
                     queueID: item.queueID,
                     refreshStatistics: false
                 )
-                flushed += 1
+                flushed.append(
+                    FlushedPendingStore(
+                        storedChunk: stored,
+                        content: item.content,
+                        tags: item.tags,
+                        importance: item.importance
+                    )
+                )
             } catch {
                 NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
                 remaining.append(line)
@@ -594,7 +609,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         rewritePendingStoreFile(path: path, remainingLines: remaining)
-        if flushed > 0 {
+        if !flushed.isEmpty {
             refreshSearchStatisticsBestEffort()
         }
         return flushed
@@ -1456,7 +1471,12 @@ final class BrainDatabase: @unchecked Sendable {
 
     private static func storeMetadataJSON(queueID: String?) -> String {
         guard let queueID else { return "{}" }
-        return #"{"brainbar_queue_id":"\#(queueID)"}"#
+        let payload = ["brainbar_queue_id": queueID]
+        guard let data = try? JSONEncoder().encode(payload),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
     }
 
     private func hasStoredQueuedItem(queueID: String) throws -> Bool {
@@ -1475,13 +1495,8 @@ final class BrainDatabase: @unchecked Sendable {
             try? FileManager.default.removeItem(at: path)
             return
         }
-        let tmp = path.appendingPathExtension("tmp")
         do {
-            try Data((remainingLines.joined(separator: "\n") + "\n").utf8).write(to: tmp, options: .atomic)
-            if FileManager.default.fileExists(atPath: path.path) {
-                try FileManager.default.removeItem(at: path)
-            }
-            try FileManager.default.moveItem(at: tmp, to: path)
+            try Data((remainingLines.joined(separator: "\n") + "\n").utf8).write(to: path, options: .atomic)
         } catch {
             NSLog("[BrainBar] Failed to rewrite pending stores queue: %@", String(describing: error))
         }

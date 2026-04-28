@@ -244,16 +244,25 @@ final class MCPRouter: @unchecked Sendable {
         }
         do {
             let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-            let flushedCount = db.flushPendingStores()
+            let flushedStores = db.flushPendingStores()
             return ToolOutput(
                 text: Formatters.formatStoreResult(chunkId: stored.chunkID),
                 metadata: [
                     "queued": false,
-                    "flushed_count": flushedCount,
+                    "flushed_count": flushedStores.count,
                     "_brainbarStoredChunk": [
                         "chunk_id": stored.chunkID,
                         "rowid": stored.rowID
-                    ]
+                    ],
+                    "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
+                        [
+                            "chunk_id": flushed.storedChunk.chunkID,
+                            "rowid": flushed.storedChunk.rowID,
+                            "content": flushed.content,
+                            "tags": flushed.tags,
+                            "importance": flushed.importance
+                        ] as [String: Any]
+                    }
                 ]
             )
         } catch {
