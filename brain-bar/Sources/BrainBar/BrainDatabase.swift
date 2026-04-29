@@ -554,19 +554,20 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func flushPendingStores() -> [FlushedPendingStore] {
-        Self.pendingStoreFileLock.lock()
         let path = pendingStorePath()
-        guard FileManager.default.fileExists(atPath: path.path) else {
-            Self.pendingStoreFileLock.unlock()
-            return []
-        }
-        guard let snapshot = readPendingStoreData(at: path) else {
-            Self.pendingStoreFileLock.unlock()
-            NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
-            return []
+        let snapshot: Data
+        do {
+            Self.pendingStoreFileLock.lock()
+            defer { Self.pendingStoreFileLock.unlock() }
+
+            guard FileManager.default.fileExists(atPath: path.path) else { return [] }
+            guard let data = readPendingStoreData(at: path) else {
+                NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
+                return []
+            }
+            snapshot = data
         }
         let lines = Self.pendingStoreLines(from: snapshot)
-        Self.pendingStoreFileLock.unlock()
 
         guard !lines.isEmpty else { return [] }
 
