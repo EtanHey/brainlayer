@@ -708,6 +708,31 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(contents.filter { $0 == "Legacy queue line without queue id" }.count, 1)
     }
 
+    func testBrainStoreLegacyQueuePreservesDuplicatePayloadLines() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let legacyLine = """
+        {"content":"Repeated legacy queue payload","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try (legacyLine + "\n" + legacyLine + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        let flushed = db.flushPendingStores()
+        XCTAssertEqual(flushed.count, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertEqual(contents.filter { $0 == "Repeated legacy queue payload" }.count, 2)
+    }
+
     func testQueuePendingStorePreservesConcurrentFirstWrites() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

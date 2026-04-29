@@ -568,7 +568,7 @@ final class BrainDatabase: @unchecked Sendable {
         var flushed: [FlushedPendingStore] = []
         var remaining: [Data] = []
 
-        for line in lines {
+        for (lineIndex, line) in lines.enumerated() {
             let item: PendingStoreItem
             do {
                 item = try decoder.decode(PendingStoreItem.self, from: line)
@@ -577,7 +577,7 @@ final class BrainDatabase: @unchecked Sendable {
                 continue
             }
 
-            let queueID = Self.pendingStoreQueueID(for: item)
+            let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
             do {
                 if try hasStoredQueuedItem(queueID: queueID) {
                     continue
@@ -1556,7 +1556,7 @@ final class BrainDatabase: @unchecked Sendable {
         return queueID
     }
 
-    private static func pendingStoreQueueID(for item: PendingStoreItem) -> String {
+    private static func pendingStoreQueueID(for item: PendingStoreItem, lineIndex: Int) -> String {
         if let queueID = normalizedQueueID(item.queueID) {
             return queueID
         }
@@ -1564,7 +1564,8 @@ final class BrainDatabase: @unchecked Sendable {
             content: item.content,
             tags: item.tags,
             importance: item.importance,
-            source: item.source
+            source: item.source,
+            lineIndex: lineIndex
         )
     }
 
@@ -1572,7 +1573,8 @@ final class BrainDatabase: @unchecked Sendable {
         content: String,
         tags: [String],
         importance: Int,
-        source: String
+        source: String,
+        lineIndex: Int
     ) -> String {
         var hash: UInt64 = 0xcbf29ce484222325
 
@@ -1610,6 +1612,10 @@ final class BrainDatabase: @unchecked Sendable {
             mix(Data(bytes))
         }
         mix(source)
+        var encodedLineIndex = Int64(lineIndex).littleEndian
+        withUnsafeBytes(of: &encodedLineIndex) { bytes in
+            mix(Data(bytes))
+        }
 
         return String(format: "brainbar-pending-%016llx", hash)
     }
