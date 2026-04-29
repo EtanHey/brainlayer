@@ -486,8 +486,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let db = BrainDatabase(path: dbPath)
@@ -532,8 +532,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let queuedPayload = """
         {"content":"Queued item should flush","tags":["queued"],"importance":4,"source":"mcp"}
@@ -579,8 +579,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let seededQueue = """
         not-json
@@ -629,8 +629,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let invalidLine = Data([0xC3, 0x28, 0x0A])
         let validLine = Data("""
@@ -679,8 +679,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let legacyLine = """
         {"content":"Legacy queue line without queue id","tags":["queued"],"importance":4,"source":"mcp"}
@@ -713,8 +713,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let legacyLine = """
         {"content":"Repeated legacy queue payload","tags":["queued"],"importance":4,"source":"mcp"}
@@ -738,8 +738,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let legacyLine = """
         {"content":"Repeated legacy queue payload with transient failure","tags":["queued"],"importance":4,"source":"mcp"}
@@ -782,8 +782,8 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
-        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
 
         let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
         defer { db.close() }
@@ -812,6 +812,52 @@ final class MCPRouterTests: XCTestCase {
         let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
         let lines = queuedText.split(whereSeparator: \.isNewline)
         XCTAssertEqual(lines.count, iterations)
+    }
+
+    func testQueuePendingStoreCreatesPrivateQueueFile() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        try db.queuePendingStore(
+            content: "Private queued content",
+            tags: ["queued"],
+            importance: 5,
+            source: "mcp"
+        )
+
+        XCTAssertEqual(try posixPermissions(path: queuePath), 0o600)
+    }
+
+    func testBrainStoreFlushRewriteKeepsQueueFilePrivate() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let seededQueue = """
+        not-json
+        {"content":"Private rewritten queued item","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try seededQueue.write(to: queuePath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: queuePath.path)
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        let flushed = db.flushPendingStores()
+
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
+        XCTAssertEqual(try posixPermissions(path: queuePath), 0o600)
     }
 
     func testShouldQueueOnlyTransientSQLiteStoreErrors() throws {
@@ -850,6 +896,23 @@ private func makeTempTestDirectory() -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
+}
+
+private func setPendingStoreQueuePath(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
+    setenv("BRAINBAR_PENDING_STORES_PATH", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINBAR_PENDING_STORES_PATH", previous, 1)
+        } else {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+        }
+    }
+}
+
+private func posixPermissions(path: URL) throws -> Int {
+    let attributes = try FileManager.default.attributesOfItem(atPath: path.path)
+    return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
 }
 
 private func chunkContents(path: String) throws -> [String] {

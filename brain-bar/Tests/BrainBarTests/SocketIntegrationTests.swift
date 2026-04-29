@@ -342,8 +342,15 @@ final class SocketIntegrationTests: XCTestCase {
 
         server.stop()
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let previousQueuePath = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
-        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+        defer {
+            if let previousQueuePath {
+                setenv("BRAINBAR_PENDING_STORES_PATH", previousQueuePath, 1)
+            } else {
+                unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            }
+        }
         server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath)
         server.start()
         Thread.sleep(forTimeInterval: 0.2)

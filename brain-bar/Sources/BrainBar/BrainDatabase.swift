@@ -498,10 +498,11 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int(stmt, 7, Int32(content.count))
             bindText(Self.previewText(summary: "", content: content), to: stmt, index: 8)
         }
+        let rowID = sqlite3_last_insert_rowid(db)
         if refreshStatistics {
             refreshSearchStatisticsBestEffort()
         }
-        return StoredChunk(chunkID: chunkID, rowID: sqlite3_last_insert_rowid(db))
+        return StoredChunk(chunkID: chunkID, rowID: rowID)
     }
 
     /// Async wrapper for store() — runs DB write off the main thread.
@@ -554,14 +555,19 @@ final class BrainDatabase: @unchecked Sendable {
 
     func flushPendingStores() -> [FlushedPendingStore] {
         Self.pendingStoreFileLock.lock()
-        defer { Self.pendingStoreFileLock.unlock() }
-
         let path = pendingStorePath()
-        guard FileManager.default.fileExists(atPath: path.path) else { return [] }
-        guard let lines = readPendingStoreLines(at: path) else {
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            Self.pendingStoreFileLock.unlock()
+            return []
+        }
+        guard let snapshot = readPendingStoreData(at: path) else {
+            Self.pendingStoreFileLock.unlock()
             NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
             return []
         }
+        let lines = Self.pendingStoreLines(from: snapshot)
+        Self.pendingStoreFileLock.unlock()
+
         guard !lines.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
@@ -612,7 +618,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
 
-        rewritePendingStoreFile(path: path, remainingLines: remaining)
+        rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
         if !flushed.isEmpty {
             refreshSearchStatisticsBestEffort()
         }
@@ -1483,12 +1489,13 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func appendPendingStoreLine(_ line: Data, to path: URL) throws {
-        let fd = open(path.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        let fd = open(path.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard fd >= 0 else {
             let message = String(cString: strerror(errno))
             throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append: \(message)")
         }
         defer { Darwin.close(fd) }
+        try Self.enforcePendingStoreFileMode(fd: fd, path: path)
 
         try line.withUnsafeBytes { rawBuffer in
             guard var baseAddress = rawBuffer.baseAddress else { return }
@@ -1510,11 +1517,11 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private func readPendingStoreLines(at path: URL) -> [Data]? {
-        guard let data = try? Data(contentsOf: path) else {
-            return nil
-        }
+    private func readPendingStoreData(at path: URL) -> Data? {
+        try? Data(contentsOf: path)
+    }
 
+    private static func pendingStoreLines(from data: Data) -> [Data] {
         var lines: [Data] = []
         var start = data.startIndex
 
@@ -1538,6 +1545,22 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return lines
+    }
+
+    private static func enforcePendingStoreFileMode(fd: Int32? = nil, path: URL) throws {
+        if let fd {
+            guard fchmod(fd, 0o600) == 0 else {
+                let message = String(cString: strerror(errno))
+                throw DBError.exec(SQLITE_IOERR, "failed to set pending store queue permissions: \(message)")
+            }
+            return
+        }
+
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        } catch {
+            throw DBError.exec(SQLITE_IOERR, "failed to set pending store queue permissions: \(error)")
+        }
     }
 
     private static func storeMetadataJSON(queueID: String?) -> String {
@@ -1653,21 +1676,44 @@ final class BrainDatabase: @unchecked Sendable {
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }
         bindText(queueID, to: stmt, index: 1)
-        return sqlite3_step(stmt) == SQLITE_ROW
+        let stepRC = sqlite3_step(stmt)
+        switch stepRC {
+        case SQLITE_ROW:
+            return true
+        case SQLITE_DONE:
+            return false
+        default:
+            throw DBError.step(stepRC)
+        }
     }
 
-    private func rewritePendingStoreFile(path: URL, remainingLines: [Data]) {
-        guard !remainingLines.isEmpty else {
-            try? FileManager.default.removeItem(at: path)
-            return
-        }
+    private func rewritePendingStoreFile(path: URL, snapshot: Data, remainingLines: [Data]) {
+        Self.pendingStoreFileLock.lock()
+        defer { Self.pendingStoreFileLock.unlock() }
+
         do {
+            let current = (try? Data(contentsOf: path)) ?? Data()
+            let appendedLines: [Data]
+            if current.count >= snapshot.count && current.prefix(snapshot.count).elementsEqual(snapshot) {
+                appendedLines = Self.pendingStoreLines(from: Data(current.dropFirst(snapshot.count)))
+            } else {
+                NSLog("[BrainBar] Skipping pending store queue rewrite because the file changed outside the snapshot")
+                return
+            }
+
+            let finalLines = remainingLines + appendedLines
+            guard !finalLines.isEmpty else {
+                try? FileManager.default.removeItem(at: path)
+                return
+            }
+
             var data = Data()
-            for line in remainingLines {
+            for line in finalLines {
                 data.append(line)
                 data.append(0x0A)
             }
             try data.write(to: path, options: .atomic)
+            try Self.enforcePendingStoreFileMode(path: path)
         } catch {
             NSLog("[BrainBar] Failed to rewrite pending stores queue: %@", String(describing: error))
         }
