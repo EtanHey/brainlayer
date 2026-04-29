@@ -94,6 +94,31 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(sql.contains("WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL"))
     }
 
+    func testQueueIDExpressionIndexMigratesExistingSchema() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                )
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyDB = BrainDatabase(path: legacyPath)
+        defer { legacyDB.close() }
+
+        let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: legacyPath)
+        XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id')"))
+    }
+
     func testQueueIDLookupUsesExpressionIndex() throws {
         db.exec("""
             INSERT INTO chunks (
@@ -679,6 +704,25 @@ private func withSQLiteConnection<T>(path: String, body: (OpaquePointer) throws 
     }
     defer { sqlite3_close(db) }
     return try body(db)
+}
+
+private func sqliteExecWrite(path: String, sql: String) throws {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(
+        path,
+        &db,
+        SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+        nil
+    )
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "DatabaseTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    let execRC = sqlite3_exec(db, sql, nil, nil, nil)
+    guard execRC == SQLITE_OK else {
+        throw NSError(domain: "DatabaseTests", code: Int(execRC))
+    }
 }
 
 private func scalarString(

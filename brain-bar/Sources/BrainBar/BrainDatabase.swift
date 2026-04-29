@@ -114,7 +114,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
-    private let pendingStoreFileLock = NSLock()
+    private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
 
     init(path: String) {
@@ -186,11 +186,7 @@ final class BrainDatabase: @unchecked Sendable {
             ON chunks(created_at)
         """)
 
-        try execute("""
-            CREATE INDEX IF NOT EXISTS idx_chunks_brainbar_queue_id
-            ON chunks(json_extract(metadata, '$.brainbar_queue_id'))
-            WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL
-        """)
+        try ensurePendingStoreQueueIndex()
 
         try ensureAuxiliarySchema()
         try refreshSearchStatistics()
@@ -298,6 +294,8 @@ final class BrainDatabase: @unchecked Sendable {
             FROM kg_relations
             WHERE relation_type != 'co_occurs_with'
         """)
+
+        try ensurePendingStoreQueueIndex()
     }
 
     func close() {
@@ -533,8 +531,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func queuePendingStore(content: String, tags: [String], importance: Int, source: String) throws {
-        pendingStoreFileLock.lock()
-        defer { pendingStoreFileLock.unlock() }
+        Self.pendingStoreFileLock.lock()
+        defer { Self.pendingStoreFileLock.unlock() }
 
         let path = pendingStorePath()
         try FileManager.default.createDirectory(
@@ -549,25 +547,14 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: UUID().uuidString.lowercased(),
             queuedAt: Self.timestamp()
         )
-        let data = try JSONEncoder().encode(item)
-        guard let line = String(data: data, encoding: .utf8) else {
-            throw DBError.exec(SQLITE_MISUSE, "failed to encode pending store item")
-        }
-        if FileManager.default.fileExists(atPath: path.path) {
-            guard let handle = try? FileHandle(forWritingTo: path) else {
-                throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append")
-            }
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: Data((line + "\n").utf8))
-            return
-        }
-        try Data((line + "\n").utf8).write(to: path, options: .atomic)
+        var line = try JSONEncoder().encode(item)
+        line.append(0x0A)
+        try appendPendingStoreLine(line, to: path)
     }
 
     func flushPendingStores() -> [FlushedPendingStore] {
-        pendingStoreFileLock.lock()
-        defer { pendingStoreFileLock.unlock() }
+        Self.pendingStoreFileLock.lock()
+        defer { Self.pendingStoreFileLock.unlock() }
 
         let path = pendingStorePath()
         guard FileManager.default.fileExists(atPath: path.path) else { return [] }
@@ -1477,12 +1464,48 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    private func ensurePendingStoreQueueIndex() throws {
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_brainbar_queue_id
+            ON chunks(json_extract(metadata, '$.brainbar_queue_id'))
+            WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL
+        """)
+    }
+
     private func pendingStorePath() -> URL {
         if let override = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: override)
         }
         return URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
+    }
+
+    private func appendPendingStoreLine(_ line: Data, to path: URL) throws {
+        let fd = open(path.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard fd >= 0 else {
+            let message = String(cString: strerror(errno))
+            throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append: \(message)")
+        }
+        defer { Darwin.close(fd) }
+
+        try line.withUnsafeBytes { rawBuffer in
+            guard var baseAddress = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+
+            while remaining > 0 {
+                let written = Darwin.write(fd, baseAddress, remaining)
+                if written < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    let message = String(cString: strerror(errno))
+                    throw DBError.exec(SQLITE_IOERR, "failed to append pending store queue line: \(message)")
+                }
+
+                remaining -= written
+                baseAddress = baseAddress.advanced(by: written)
+            }
+        }
     }
 
     private func readPendingStoreLines(at path: URL) -> [Data]? {
