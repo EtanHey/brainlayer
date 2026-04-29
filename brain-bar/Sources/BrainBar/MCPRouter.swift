@@ -242,16 +242,39 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
-        return ToolOutput(
-            text: Formatters.formatStoreResult(chunkId: stored.chunkID),
-            metadata: [
-                "_brainbarStoredChunk": [
-                    "chunk_id": stored.chunkID,
-                    "rowid": stored.rowID
+        do {
+            let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
+            let flushedStores = db.flushPendingStores()
+            return ToolOutput(
+                text: Formatters.formatStoreResult(chunkId: stored.chunkID),
+                metadata: [
+                    "queued": false,
+                    "flushed_count": flushedStores.count,
+                    "_brainbarStoredChunk": [
+                        "chunk_id": stored.chunkID,
+                        "rowid": stored.rowID
+                    ],
+                    "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
+                        [
+                            "chunk_id": flushed.storedChunk.chunkID,
+                            "rowid": flushed.storedChunk.rowID,
+                            "content": flushed.content,
+                            "tags": flushed.tags,
+                            "importance": flushed.importance
+                        ] as [String: Any]
+                    }
                 ]
-            ]
-        )
+            )
+        } catch {
+            guard db.shouldQueueStoreError(error) else {
+                throw error
+            }
+            try db.queuePendingStore(content: content, tags: tags, importance: importance, source: "mcp")
+            return ToolOutput(
+                text: Formatters.formatStoreResult(chunkId: "", queued: true),
+                metadata: ["queued": true]
+            )
+        }
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {

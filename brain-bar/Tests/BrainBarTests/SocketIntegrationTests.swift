@@ -328,6 +328,85 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertFalse(clearedText.contains("Live push message for agent live"), "Acked chunk should no longer be unread")
     }
 
+    func testFlushedQueuedStoreAlsoPushesChannelNotification() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-flush-notify-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let queuedPayload = """
+        {"content":"Queued subscriber message","tags":["agent-message"],"importance":4,"source":"mcp"}
+        """
+        try queuedPayload.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        server.stop()
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let previousQueuePath = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            if let previousQueuePath {
+                setenv("BRAINBAR_PENDING_STORES_PATH", previousQueuePath, 1)
+            } else {
+                unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            }
+        }
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath)
+        server.start()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let subscriberFD = try connectClient()
+        defer { close(subscriberFD) }
+
+        try initializeClient(fd: subscriberFD, name: "subscriber-flush")
+        try sendMCPRequest(on: subscriberFD, request: [
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_subscribe",
+                "arguments": [
+                    "agent_id": "agent-flush",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        _ = try readMCPMessage(fd: subscriberFD)
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "publisher-flush", "version": "1.0"]
+            ]
+        ])
+
+        let publishResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live trigger message",
+                    "tags": ["agent-message"],
+                    "importance": 6
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(publishResponse["error"])
+
+        let notifications = try readMCPMessages(fd: subscriberFD, expectedCount: 2)
+        let receivedContents = notifications.compactMap {
+            ($0["params"] as? [String: Any])?["content"] as? String
+        }
+
+        XCTAssertEqual(Set(receivedContents), Set(["Live trigger message", "Queued subscriber message"]))
+    }
+
     func testDeadSubscriberDoesNotBlockLiveSubscriberNotification() throws {
         let deadFD = try connectClient()
         try initializeClient(fd: deadFD, name: "dead-subscriber")
@@ -699,24 +778,44 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {
+        return try readMCPMessages(fd: fd, expectedCount: 1, timeout: timeout).first ?? [:]
+    }
+
+    private func readMCPMessages(fd: Int32, expectedCount: Int, timeout: TimeInterval = 5.0) throws -> [[String: Any]] {
         var buffer = Data()
         var readBuf = [UInt8](repeating: 0, count: 65536)
         let deadline = Date().addingTimeInterval(timeout)
+        var messages: [[String: Any]] = []
 
         while Date() < deadline {
             let n = read(fd, &readBuf, readBuf.count)
             if n > 0 {
                 buffer.append(contentsOf: readBuf[0..<n])
-                // Try to parse Content-Length framed response
-                if let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                while let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
                     let headerStr = String(data: buffer[buffer.startIndex..<headerEnd.lowerBound], encoding: .utf8) ?? ""
-                    if let clLine = headerStr.split(separator: "\r\n").first(where: { $0.hasPrefix("Content-Length:") }) {
-                        let cl = Int(clLine.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) ?? 0
-                        let bodyStart = headerEnd.upperBound
-                        if buffer.count >= bodyStart + cl {
-                            let bodyData = buffer[bodyStart..<(bodyStart + cl)]
-                            return try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
-                        }
+                    guard let clLine = headerStr.split(separator: "\r\n").first(where: { $0.hasPrefix("Content-Length:") }) else {
+                        break
+                    }
+                    let headerParts = clLine.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard headerParts.count == 2,
+                          let cl = Int(headerParts[1].trimmingCharacters(in: .whitespaces)),
+                          cl >= 0 else {
+                        throw NSError(
+                            domain: "test",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: "Malformed Content-Length header"]
+                        )
+                    }
+                    let bodyStart = headerEnd.upperBound
+                    guard buffer.count >= bodyStart + cl else {
+                        break
+                    }
+                    let bodyData = buffer[bodyStart..<(bodyStart + cl)]
+                    let message = try JSONSerialization.jsonObject(with: bodyData) as? [String: Any] ?? [:]
+                    messages.append(message)
+                    buffer.removeSubrange(buffer.startIndex..<(bodyStart + cl))
+                    if messages.count == expectedCount {
+                        return messages
                     }
                 }
             } else if n == 0 {

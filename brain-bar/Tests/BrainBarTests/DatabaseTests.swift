@@ -87,6 +87,105 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "injection_events table must exist")
     }
 
+    func testQueueIDExpressionIndexExists() throws {
+        let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: tempDBPath)
+
+        XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id')"))
+        XCTAssertTrue(sql.contains("json_valid(metadata)"))
+        XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL"))
+    }
+
+    func testQueueIDExpressionIndexMigratesExistingSchema() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                )
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyDB = BrainDatabase(path: legacyPath)
+        defer { legacyDB.close() }
+
+        let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: legacyPath)
+        XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id')"))
+    }
+
+    func testQueueIDExpressionIndexMigratesExistingSchemaWithMalformedMetadata() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-malformed-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                );
+                INSERT INTO chunks (id, content, metadata)
+                VALUES ('legacy-bad-metadata', 'Legacy malformed metadata row', '{not json');
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyDB = BrainDatabase(path: legacyPath)
+        defer { legacyDB.close() }
+
+        XCTAssertTrue(legacyDB.isOpen)
+        let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: legacyPath)
+        XCTAssertTrue(sql.contains("json_valid(metadata)"))
+    }
+
+    func testQueueIDLookupUsesExpressionIndex() throws {
+        db.exec("""
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type, char_count, source, tags, importance, preview_text
+            ) VALUES (
+                'queued-indexed',
+                'Queued chunk metadata lookup',
+                '{"brainbar_queue_id":"brainbar-pending-lookup"}',
+                'brainbar-store',
+                'brainbar',
+                'assistant_text',
+                28,
+                'mcp',
+                '[]',
+                5,
+                'Queued chunk metadata lookup'
+            )
+        """)
+
+        let plan = try sqliteQueryPlan(
+            path: tempDBPath,
+            sql: """
+                EXPLAIN QUERY PLAN
+                SELECT 1
+                FROM chunks
+                WHERE json_valid(metadata)
+                  AND json_extract(metadata, '$.brainbar_queue_id') = ?
+                LIMIT 1
+            """,
+            binds: ["brainbar-pending-lookup"]
+        )
+
+        XCTAssertTrue(
+            plan.contains(where: { $0.localizedCaseInsensitiveContains("idx_chunks_brainbar_queue_id") }),
+            "Queue ID dedupe lookups should use the dedicated expression index"
+        )
+    }
+
     func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
         db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
         db.exec("DROP TABLE IF EXISTS brainbar_agents")
@@ -598,6 +697,35 @@ private func sqliteStatCount(for tables: [String], path: String) throws -> Int {
     }
 }
 
+private func sqliteQueryPlan(path: String, sql: String, binds: [String]) throws -> [String] {
+    try withSQLiteConnection(path: path) { db in
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else {
+            throw NSError(domain: "DatabaseTests", code: Int(rc))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        for (index, value) in binds.enumerated() {
+            sqlite3_bind_text(
+                stmt,
+                Int32(index + 1),
+                value,
+                -1,
+                unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            )
+        }
+
+        var details: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 3) {
+                details.append(String(cString: text))
+            }
+        }
+        return details
+    }
+}
+
 private func withSQLiteConnection<T>(path: String, body: (OpaquePointer) throws -> T) throws -> T {
     var db: OpaquePointer?
     let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
@@ -606,6 +734,25 @@ private func withSQLiteConnection<T>(path: String, body: (OpaquePointer) throws 
     }
     defer { sqlite3_close(db) }
     return try body(db)
+}
+
+private func sqliteExecWrite(path: String, sql: String) throws {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(
+        path,
+        &db,
+        SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+        nil
+    )
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "DatabaseTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    let execRC = sqlite3_exec(db, sql, nil, nil, nil)
+    guard execRC == SQLITE_OK else {
+        throw NSError(domain: "DatabaseTests", code: Int(execRC))
+    }
 }
 
 private func scalarString(
