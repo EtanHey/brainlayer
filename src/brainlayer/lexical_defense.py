@@ -93,19 +93,13 @@ class LexicalDefenseDictionary:
         return {
             "updated_at": self.generated_at,
             "prompt_terms": self.protected_entities(),
-            "aliases": [
-                {"from": match, "to": replacement}
-                for match, replacement in self.replacement_map.items()
-            ],
+            "aliases": [{"from": match, "to": replacement} for match, replacement in self.replacement_map.items()],
         }
 
     def whisper_entity_gbnf(self) -> str:
         protected = [entry for entry in self.entries if entry.protect_from_split]
         lines = ["root ::= protected_entity", ""]
-        lines.append(
-            "protected_entity ::= "
-            + " | ".join(f"entity_{index}" for index, _entry in enumerate(protected))
-        )
+        lines.append("protected_entity ::= " + " | ".join(f"entity_{index}" for index, _entry in enumerate(protected)))
         lines.append("")
         for index, entry in enumerate(protected):
             literal = entry.canonical.replace("\\", "\\\\").replace('"', '\\"')
