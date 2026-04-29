@@ -765,6 +765,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
         let compactedQueue = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertTrue(compactedQueue.contains("queue_id"))
+        XCTAssertFalse(compactedQueue.contains("\n\n"))
 
         try sqliteExec(path: dbPath, sql: "DROP TRIGGER fail_second_repeated_legacy_insert")
 

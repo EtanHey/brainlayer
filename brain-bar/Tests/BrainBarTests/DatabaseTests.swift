@@ -91,7 +91,8 @@ final class DatabaseTests: XCTestCase {
         let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: tempDBPath)
 
         XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id')"))
-        XCTAssertTrue(sql.contains("WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL"))
+        XCTAssertTrue(sql.contains("json_valid(metadata)"))
+        XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL"))
     }
 
     func testQueueIDExpressionIndexMigratesExistingSchema() throws {
@@ -119,6 +120,34 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(sql.contains("json_extract(metadata, '$.brainbar_queue_id')"))
     }
 
+    func testQueueIDExpressionIndexMigratesExistingSchemaWithMalformedMetadata() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-malformed-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}'
+                );
+                INSERT INTO chunks (id, content, metadata)
+                VALUES ('legacy-bad-metadata', 'Legacy malformed metadata row', '{not json');
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyDB = BrainDatabase(path: legacyPath)
+        defer { legacyDB.close() }
+
+        XCTAssertTrue(legacyDB.isOpen)
+        let sql = try sqliteMasterSQL(name: "idx_chunks_brainbar_queue_id", path: legacyPath)
+        XCTAssertTrue(sql.contains("json_valid(metadata)"))
+    }
+
     func testQueueIDLookupUsesExpressionIndex() throws {
         db.exec("""
             INSERT INTO chunks (
@@ -144,7 +173,8 @@ final class DatabaseTests: XCTestCase {
                 EXPLAIN QUERY PLAN
                 SELECT 1
                 FROM chunks
-                WHERE json_extract(metadata, '$.brainbar_queue_id') = ?
+                WHERE json_valid(metadata)
+                  AND json_extract(metadata, '$.brainbar_queue_id') = ?
                 LIMIT 1
             """,
             binds: ["brainbar-pending-lookup"]

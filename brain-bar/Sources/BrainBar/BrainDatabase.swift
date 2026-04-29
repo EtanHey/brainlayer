@@ -1469,7 +1469,8 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_brainbar_queue_id
             ON chunks(json_extract(metadata, '$.brainbar_queue_id'))
-            WHERE json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL
+            WHERE json_valid(metadata)
+              AND json_extract(metadata, '$.brainbar_queue_id') IS NOT NULL
         """)
     }
 
@@ -1579,11 +1580,7 @@ final class BrainDatabase: @unchecked Sendable {
             queueID: queueID,
             queuedAt: item.queuedAt
         )
-        guard var data = try? JSONEncoder().encode(replayItem) else {
-            return nil
-        }
-        data.append(0x0A)
-        return data
+        return try? JSONEncoder().encode(replayItem)
     }
 
     private static func deterministicPendingStoreQueueID(
@@ -1648,7 +1645,8 @@ final class BrainDatabase: @unchecked Sendable {
         let sql = """
             SELECT 1
             FROM chunks
-            WHERE json_extract(metadata, '$.brainbar_queue_id') = ?
+            WHERE json_valid(metadata)
+              AND json_extract(metadata, '$.brainbar_queue_id') = ?
             LIMIT 1
         """
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
