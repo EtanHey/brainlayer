@@ -269,15 +269,11 @@ final class MCPRouter: @unchecked Sendable {
             guard db.shouldQueueStoreError(error) else {
                 throw error
             }
-            do {
-                try db.queuePendingStore(content: content, tags: tags, importance: importance, source: "mcp")
-                return ToolOutput(
-                    text: Formatters.formatStoreResult(chunkId: "", queued: true),
-                    metadata: ["queued": true]
-                )
-            } catch {
-                throw error
-            }
+            try db.queuePendingStore(content: content, tags: tags, importance: importance, source: "mcp")
+            return ToolOutput(
+                text: Formatters.formatStoreResult(chunkId: "", queued: true),
+                metadata: ["queued": true]
+            )
         }
     }
 
