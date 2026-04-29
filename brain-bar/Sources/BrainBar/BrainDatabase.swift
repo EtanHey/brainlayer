@@ -14,6 +14,8 @@ final class BrainDatabase: @unchecked Sendable {
     """
     private static let ftsColumns = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
+    private static let defaultPendingStoreMaxLines = 10_000
+    private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
 
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
@@ -498,7 +500,9 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int(stmt, 7, Int32(content.count))
             bindText(Self.previewText(summary: "", content: content), to: stmt, index: 8)
         }
-        let rowID = sqlite3_last_insert_rowid(db)
+        guard let rowID = try chunkRowID(forChunkID: chunkID) else {
+            throw DBError.noResult
+        }
         if refreshStatistics {
             refreshSearchStatisticsBestEffort()
         }
@@ -555,75 +559,78 @@ final class BrainDatabase: @unchecked Sendable {
 
     func flushPendingStores() -> [FlushedPendingStore] {
         let path = pendingStorePath()
-        let snapshot: Data
+        Self.pendingStoreFileLock.lock()
+        defer { Self.pendingStoreFileLock.unlock() }
+
         do {
-            Self.pendingStoreFileLock.lock()
-            defer { Self.pendingStoreFileLock.unlock() }
-
-            guard FileManager.default.fileExists(atPath: path.path) else { return [] }
-            guard let data = readPendingStoreData(at: path) else {
-                NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
-                return []
-            }
-            snapshot = data
-        }
-        let lines = Self.pendingStoreLines(from: snapshot)
-
-        guard !lines.isEmpty else { return [] }
-
-        let decoder = JSONDecoder()
-        var flushed: [FlushedPendingStore] = []
-        var remaining: [Data] = []
-
-        for (lineIndex, line) in lines.enumerated() {
-            let item: PendingStoreItem
-            do {
-                item = try decoder.decode(PendingStoreItem.self, from: line)
-            } catch {
-                remaining.append(line)
-                continue
-            }
-
-            let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
-            let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID) ?? line
-            do {
-                if try hasStoredQueuedItem(queueID: queueID) {
-                    continue
+            return try Self.withPendingStoreProcessLock(for: path) {
+                guard FileManager.default.fileExists(atPath: path.path) else { return [] }
+                guard let snapshot = readPendingStoreData(at: path) else {
+                    NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
+                    return []
                 }
-            } catch {
-                NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
-                remaining.append(replayLine)
-                continue
-            }
+                let lines = Self.pendingStoreLines(from: snapshot)
 
-            do {
-                let stored = try store(
-                    content: item.content,
-                    tags: item.tags,
-                    importance: item.importance,
-                    source: item.source,
-                    queueID: queueID,
-                    refreshStatistics: false
-                )
-                flushed.append(
-                    FlushedPendingStore(
-                        storedChunk: stored,
-                        content: item.content,
-                        tags: item.tags,
-                        importance: item.importance
-                    )
-                )
-            } catch {
-                NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
-                remaining.append(replayLine)
-            }
-        }
+                guard !lines.isEmpty else { return [] }
 
-        rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
-        if !flushed.isEmpty {
-            refreshSearchStatisticsBestEffort()
+                let decoder = JSONDecoder()
+                var flushed: [FlushedPendingStore] = []
+                var remaining: [Data] = []
+
+                for (lineIndex, line) in lines.enumerated() {
+                    let item: PendingStoreItem
+                    do {
+                        item = try decoder.decode(PendingStoreItem.self, from: line)
+                    } catch {
+                        remaining.append(line)
+                        continue
+                    }
+
+                    let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
+                    let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID) ?? line
+                    do {
+                        if try hasStoredQueuedItem(queueID: queueID) {
+                            continue
+                        }
+                    } catch {
+                        NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
+                        remaining.append(replayLine)
+                        continue
+                    }
+
+                    do {
+                        let stored = try store(
+                            content: item.content,
+                            tags: item.tags,
+                            importance: item.importance,
+                            source: item.source,
+                            queueID: queueID,
+                            refreshStatistics: false
+                        )
+                        flushed.append(
+                            FlushedPendingStore(
+                                storedChunk: stored,
+                                content: item.content,
+                                tags: item.tags,
+                                importance: item.importance
+                            )
+                        )
+                    } catch {
+                        NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
+                        remaining.append(replayLine)
+                    }
+                }
+
+                rewritePendingStoreFile(path: path, snapshot: snapshot, remainingLines: remaining)
+                if !flushed.isEmpty {
+                    refreshSearchStatisticsBestEffort()
+                }
+                return flushed
+            }
+        } catch {
+            NSLog("[BrainBar] Failed to lock pending stores queue for flush: %@", String(describing: error))
+            return []
         }
-        return flushed
     }
 
     func searchCandidates(
@@ -1490,31 +1497,25 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func appendPendingStoreLine(_ line: Data, to path: URL) throws {
-        let fd = open(path.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
-        guard fd >= 0 else {
-            let message = String(cString: strerror(errno))
-            throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append: \(message)")
-        }
-        defer { Darwin.close(fd) }
-        try Self.enforcePendingStoreFileMode(fd: fd, path: path)
-
-        try line.withUnsafeBytes { rawBuffer in
-            guard var baseAddress = rawBuffer.baseAddress else { return }
-            var remaining = rawBuffer.count
-
-            while remaining > 0 {
-                let written = Darwin.write(fd, baseAddress, remaining)
-                if written < 0 {
-                    if errno == EINTR {
-                        continue
-                    }
-                    let message = String(cString: strerror(errno))
-                    throw DBError.exec(SQLITE_IOERR, "failed to append pending store queue line: \(message)")
-                }
-
-                remaining -= written
-                baseAddress = baseAddress.advanced(by: written)
+        try Self.withPendingStoreProcessLock(for: path) {
+            let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
+            guard fd >= 0 else {
+                let message = String(cString: strerror(errno))
+                throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue for append: \(message)")
             }
+            defer { Darwin.close(fd) }
+            try Self.enforcePendingStoreFileMode(fd: fd, path: path)
+
+            let existingLineCount = Self.pendingStoreLines(from: readPendingStoreData(at: path) ?? Data()).count
+            let maxLines = Self.pendingStoreMaxLines()
+            guard existingLineCount < maxLines else {
+                throw DBError.exec(
+                    SQLITE_FULL,
+                    "pending store queue is full (\(existingLineCount)/\(maxLines) lines); refusing to append another fallback item"
+                )
+            }
+
+            try Self.writeAll(line, to: fd, context: "append pending store queue line")
         }
     }
 
@@ -1546,6 +1547,96 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return lines
+    }
+
+    private static func pendingStoreMaxLines() -> Int {
+        let rawValue = ProcessInfo.processInfo.environment[pendingStoreMaxLinesEnv]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let rawValue, let parsed = Int(rawValue), parsed > 0 else {
+            return defaultPendingStoreMaxLines
+        }
+        return parsed
+    }
+
+    private static func pendingStoreLockPath(for path: URL) -> URL {
+        path.deletingLastPathComponent().appendingPathComponent(".\(path.lastPathComponent).lock")
+    }
+
+    private static func withPendingStoreProcessLock<T>(for path: URL, _ body: () throws -> T) throws -> T {
+        let lockPath = pendingStoreLockPath(for: path)
+        try FileManager.default.createDirectory(
+            at: lockPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let fd = open(lockPath.path, O_RDWR | O_CREAT, 0o600)
+        guard fd >= 0 else {
+            let message = String(cString: strerror(errno))
+            throw DBError.exec(SQLITE_CANTOPEN, "failed to open pending store queue lock: \(message)")
+        }
+        defer { Darwin.close(fd) }
+        try enforcePendingStoreFileMode(fd: fd, path: lockPath)
+
+        guard flock(fd, LOCK_EX) == 0 else {
+            let message = String(cString: strerror(errno))
+            throw DBError.exec(SQLITE_IOERR, "failed to lock pending store queue: \(message)")
+        }
+        defer { flock(fd, LOCK_UN) }
+
+        return try body()
+    }
+
+    private static func writeAll(_ data: Data, to fd: Int32, context: String) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard var baseAddress = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+
+            while remaining > 0 {
+                let written = Darwin.write(fd, baseAddress, remaining)
+                if written < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    let message = String(cString: strerror(errno))
+                    throw DBError.exec(SQLITE_IOERR, "failed to \(context): \(message)")
+                }
+                guard written > 0 else {
+                    throw DBError.exec(SQLITE_IOERR, "failed to \(context): write returned 0")
+                }
+
+                remaining -= written
+                baseAddress = baseAddress.advanced(by: written)
+            }
+        }
+    }
+
+    private static func writePrivateAtomic(_ data: Data, to path: URL) throws {
+        let directory = path.deletingLastPathComponent()
+        let temporaryPath = directory.appendingPathComponent(".\(path.lastPathComponent).\(UUID().uuidString).tmp")
+        let fd = open(temporaryPath.path, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0o600)
+        guard fd >= 0 else {
+            let message = String(cString: strerror(errno))
+            throw DBError.exec(SQLITE_CANTOPEN, "failed to create private pending store queue temp file: \(message)")
+        }
+
+        do {
+            defer { Darwin.close(fd) }
+            try enforcePendingStoreFileMode(fd: fd, path: temporaryPath)
+            try writeAll(data, to: fd, context: "write pending store queue temp file")
+            guard fsync(fd) == 0 else {
+                let message = String(cString: strerror(errno))
+                throw DBError.exec(SQLITE_IOERR, "failed to sync pending store queue temp file: \(message)")
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryPath)
+            throw error
+        }
+
+        guard rename(temporaryPath.path, path.path) == 0 else {
+            let message = String(cString: strerror(errno))
+            try? FileManager.default.removeItem(at: temporaryPath)
+            throw DBError.exec(SQLITE_IOERR, "failed to replace pending store queue atomically: \(message)")
+        }
     }
 
     private static func enforcePendingStoreFileMode(fd: Int32? = nil, path: URL) throws {
@@ -1689,9 +1780,6 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func rewritePendingStoreFile(path: URL, snapshot: Data, remainingLines: [Data]) {
-        Self.pendingStoreFileLock.lock()
-        defer { Self.pendingStoreFileLock.unlock() }
-
         do {
             let current = (try? Data(contentsOf: path)) ?? Data()
             let appendedLines: [Data]
@@ -1713,7 +1801,7 @@ final class BrainDatabase: @unchecked Sendable {
                 data.append(line)
                 data.append(0x0A)
             }
-            try data.write(to: path, options: .atomic)
+            try Self.writePrivateAtomic(data, to: path)
             try Self.enforcePendingStoreFileMode(path: path)
         } catch {
             NSLog("[BrainBar] Failed to rewrite pending stores queue: %@", String(describing: error))

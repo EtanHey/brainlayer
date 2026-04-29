@@ -796,7 +796,16 @@ final class SocketIntegrationTests: XCTestCase {
                     guard let clLine = headerStr.split(separator: "\r\n").first(where: { $0.hasPrefix("Content-Length:") }) else {
                         break
                     }
-                    let cl = Int(clLine.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                    let headerParts = clLine.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard headerParts.count == 2,
+                          let cl = Int(headerParts[1].trimmingCharacters(in: .whitespaces)),
+                          cl >= 0 else {
+                        throw NSError(
+                            domain: "test",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: "Malformed Content-Length header"]
+                        )
+                    }
                     let bodyStart = headerEnd.upperBound
                     guard buffer.count >= bodyStart + cl else {
                         break

@@ -835,6 +835,44 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(try posixPermissions(path: queuePath), 0o600)
     }
 
+    func testQueuePendingStoreRejectsAppendsPastConfiguredLineCap() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+        let restoreMaxLines = setPendingStoreQueueMaxLines(3)
+        defer { restoreMaxLines() }
+
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        for index in 0..<3 {
+            try db.queuePendingStore(
+                content: "Queued item \(index)",
+                tags: ["queued"],
+                importance: 5,
+                source: "mcp"
+            )
+        }
+
+        XCTAssertThrowsError(try db.queuePendingStore(
+            content: "Rejected queued item",
+            tags: ["queued"],
+            importance: 5,
+            source: "mcp"
+        ))
+
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+        let lines = queuedText.split(whereSeparator: \.isNewline)
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertTrue(queuedText.contains("Queued item 0"))
+        XCTAssertTrue(queuedText.contains("Queued item 2"))
+        XCTAssertFalse(queuedText.contains("Rejected queued item"))
+        XCTAssertEqual(try posixPermissions(path: queuePath), 0o600)
+    }
+
     func testBrainStoreFlushRewriteKeepsQueueFilePrivate() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -906,6 +944,19 @@ private func setPendingStoreQueuePath(_ path: URL) -> () -> Void {
             setenv("BRAINBAR_PENDING_STORES_PATH", previous, 1)
         } else {
             unsetenv("BRAINBAR_PENDING_STORES_PATH")
+        }
+    }
+}
+
+private func setPendingStoreQueueMaxLines(_ maxLines: Int) -> () -> Void {
+    let key = "BRAINBAR_PENDING_STORES_MAX_LINES"
+    let previous = ProcessInfo.processInfo.environment[key]
+    setenv(key, String(maxLines), 1)
+    return {
+        if let previous {
+            setenv(key, previous, 1)
+        } else {
+            unsetenv(key)
         }
     }
 }
