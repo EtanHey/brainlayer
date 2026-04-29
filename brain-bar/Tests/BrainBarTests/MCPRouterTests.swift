@@ -733,6 +733,49 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(contents.filter { $0 == "Repeated legacy queue payload" }.count, 2)
     }
 
+    func testBrainStoreLegacyQueueDuplicateSurvivesPartialFlushCompaction() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
+
+        let legacyLine = """
+        {"content":"Repeated legacy queue payload with transient failure","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try (legacyLine + "\n" + legacyLine + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        try sqliteExec(path: dbPath, sql: """
+            CREATE TRIGGER fail_second_repeated_legacy_insert
+            BEFORE INSERT ON chunks
+            WHEN NEW.content = 'Repeated legacy queue payload with transient failure'
+                 AND (SELECT COUNT(*) FROM chunks WHERE content = NEW.content) > 0
+            BEGIN
+                SELECT RAISE(ABORT, 'fail second repeated legacy insert');
+            END;
+        """)
+
+        let firstFlush = db.flushPendingStores()
+        XCTAssertEqual(firstFlush.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
+        let compactedQueue = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertTrue(compactedQueue.contains("queue_id"))
+
+        try sqliteExec(path: dbPath, sql: "DROP TRIGGER fail_second_repeated_legacy_insert")
+
+        let secondFlush = db.flushPendingStores()
+        XCTAssertEqual(secondFlush.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertEqual(contents.filter { $0 == "Repeated legacy queue payload with transient failure" }.count, 2)
+    }
+
     func testQueuePendingStorePreservesConcurrentFirstWrites() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -858,6 +901,20 @@ private func chunkMetadata(path: String, content: String) throws -> String? {
         return nil
     }
     return String(cString: value)
+}
+
+private func sqliteExec(path: String, sql: String) throws {
+    var db: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let db else {
+        throw NSError(domain: "MCPRouterTests", code: Int(rc))
+    }
+    defer { sqlite3_close(db) }
+
+    let execRC = sqlite3_exec(db, sql, nil, nil, nil)
+    guard execRC == SQLITE_OK else {
+        throw NSError(domain: "MCPRouterTests", code: Int(execRC))
+    }
 }
 
 private func openSQLiteConnection(path: String) throws -> OpaquePointer {

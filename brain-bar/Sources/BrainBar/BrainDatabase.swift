@@ -578,13 +578,14 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
+            let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID) ?? line
             do {
                 if try hasStoredQueuedItem(queueID: queueID) {
                     continue
                 }
             } catch {
                 NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
-                remaining.append(line)
+                remaining.append(replayLine)
                 continue
             }
 
@@ -607,7 +608,7 @@ final class BrainDatabase: @unchecked Sendable {
                 )
             } catch {
                 NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
-                remaining.append(line)
+                remaining.append(replayLine)
             }
         }
 
@@ -1567,6 +1568,22 @@ final class BrainDatabase: @unchecked Sendable {
             source: item.source,
             lineIndex: lineIndex
         )
+    }
+
+    private static func pendingStoreReplayLine(for item: PendingStoreItem, queueID: String) -> Data? {
+        let replayItem = PendingStoreItem(
+            content: item.content,
+            tags: item.tags,
+            importance: item.importance,
+            source: item.source,
+            queueID: queueID,
+            queuedAt: item.queuedAt
+        )
+        guard var data = try? JSONEncoder().encode(replayItem) else {
+            return nil
+        }
+        data.append(0x0A)
+        return data
     }
 
     private static func deterministicPendingStoreQueueID(
