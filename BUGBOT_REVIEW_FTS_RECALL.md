@@ -28,8 +28,8 @@ The changes directly address search recall regressions where identifiers and nam
 - ✅ **Correct:** Chunk-id shaped queries (regex `^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$`) bypass hybrid search
 - ✅ **Safe:** No-op on miss (returns `None`, falls through to normal search)
 - ✅ **Test coverage:** `test_search_exact_chunk_id.py` verifies bypass + structured output
-<<<<<<< HEAD
 - ⚠️ **Edge case:** Token-shaped hyphenated queries (e.g., `brain-layer`) can match the regex but still miss `get_chunk()` lookup — acceptable degradation
+- 🔴 **CRITICAL BUG:** Bypass ignores ALL filters (project, source, entity_id, etc.) → cross-project data leakage (see BUGBOT_CRITICAL_ISSUES.md)
 
 **Trigram FTS Index** (`vector_store.py:281-286, 304-318, 366-372`)
 - ✅ **Schema migration:** Creates `chunks_fts_trigram` with `tokenize='trigram'`
