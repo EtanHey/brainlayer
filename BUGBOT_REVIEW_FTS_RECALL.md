@@ -28,7 +28,7 @@ The changes directly address search recall regressions where identifiers and nam
 - ✅ **Correct:** Chunk-id shaped queries (regex `^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$`) bypass hybrid search
 - ✅ **Safe:** No-op on miss (returns `None`, falls through to normal search)
 - ✅ **Test coverage:** `test_search_exact_chunk_id.py` verifies bypass + structured output
-- ⚠️ **Edge case:** Multi-word queries with hyphens (e.g., `brain-layer memory`) will match regex but fail lookup — acceptable degradation
+- ⚠️ **Edge case:** Hyphenated tokens that match regex pattern (e.g., `missing-chunk-id-123`) will attempt direct lookup and fall through to normal search on miss — acceptable degradation
 
 **Trigram FTS Index** (`vector_store.py:281-286, 304-318, 366-372`)
 - ✅ **Schema migration:** Creates `chunks_fts_trigram` with `tokenize='trigram'`
@@ -128,28 +128,33 @@ The changes directly address search recall regressions where identifiers and nam
 ## Edge Cases & Observations
 
 ### 1. Chunk-ID Regex False Positives
-**Example:** Query `brain-layer memory` matches regex but fails `get_chunk()` lookup  
+
+**Example:** Query `chunk-missing-123` matches regex but fails `get_chunk()` lookup  
 **Behavior:** Falls through to normal hybrid search (correct)  
 **Impact:** Minimal — rare query pattern, degradation is graceful
 
 ### 2. OR Expansion Query Length
+
 **Example:** Entity with 20 aliases generates `"alias1" OR "alias2" OR ... "alias20"` FTS query  
 **Risk:** FTS5 has no documented OR limit, but very long queries may hit parser limits  
 **Mitigation:** Lexical dictionary is curated (31 entries, max 4 aliases each)  
 **Observation:** No limit enforced in `_expanded_fts_query()` — acceptable for current scale
 
 ### 3. Trigram Index Write Amplification
+
 **Scenario:** Bulk chunk upserts (e.g., initial index) trigger 2x FTS writes (main + trigram)  
 **Impact:** Enrichment workers and watcher will see ~2x FTS write latency  
 **Mitigation:** Existing `upsert_chunks()` logic is batched, WAL absorbs write amplification  
 **Recommendation:** Monitor enrichment queue depth after production deployment
 
 ### 4. Readonly DB Trigram Miss
+
 **Scenario:** Agent opens live DB (readonly), trigram index exists but `_trigram_fts_available` not set  
 **Root cause:** `_init_readonly_db()` checks `sqlite_master` for table existence — should be correct  
 **Status:** No issue detected, but worth production telemetry to confirm
 
 ---
+
 
 ## Regression Risk Assessment
 
@@ -170,26 +175,31 @@ The changes directly address search recall regressions where identifiers and nam
 ## Recommendations
 
 ### Before Merge
+
 1. ✅ **DONE:** Verify test suite passes (PR description lists passing tests)
 2. ✅ **DONE:** Confirm storage delta acceptable (1.8GB documented)
 3. 💡 **OPTIONAL:** Add `EXPLAIN QUERY PLAN` logging for alias-expanded queries (production observability)
 
 ### Post-Merge Observability
+
 1. 📊 **Track:** `fts_query_override` usage frequency (alias expansion adoption)
 2. 📊 **Track:** Trigram FTS hit rate (identifier recall improvement)
 3. 📊 **Monitor:** Enrichment queue depth (watch for write amplification impact)
 4. 📊 **Alert:** FTS5 desync on trigram table (existing health check should catch)
 
 ### Production Migration
+
 1. 📝 **Document:** Trigram index storage overhead (~50% increase expected)
 2. 📝 **Document:** WAL checkpoint recommendation before migration (minimize downtime)
 3. 🔧 **Consider:** Parallel index build script for large DBs (backfill can be slow on 300K+ chunks)
 
 ---
 
+
 ## Code Quality Notes
 
 **Strengths** ✅
+
 - Clear separation of concerns: `_exact_chunk_lookup_result`, `_lexical_defense_variants`, `_kg_alias_variants`
 - Defensive programming: graceful degradation on missing tables, failed queries
 - Comprehensive test coverage: unit tests for each new feature
@@ -200,6 +210,7 @@ The changes directly address search recall regressions where identifiers and nam
 - `_CHUNK_ID_QUERY_RE` regex magic constant (L36) — consider docstring with examples
 
 ---
+
 
 ## Conclusion
 
@@ -230,6 +241,7 @@ This PR delivers **high-value recall improvements** with **acceptable storage co
 ## Appendix: Test Execution Checklist
 
 **Per PR description verification command:**
+
 ```bash
 uv run pytest -q \
   tests/test_search_exact_chunk_id.py \

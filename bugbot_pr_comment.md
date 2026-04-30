@@ -38,7 +38,7 @@
 - Alias expansion adds 2 KG SELECTs per query (acceptable overhead)
 
 ### Edge Cases Noted
-1. **Chunk-ID regex false positives** (e.g., `brain-layer memory`) — falls through to normal search ✅
+1. **Chunk-ID regex false positives** (e.g., `chunk-missing-123`) — falls through to normal search ✅
 2. **OR expansion length** — limited by curated dictionary (31 entries, max 4 aliases) ✅
 3. **Trigram write amplification** — existing WAL + batching absorb cost ✅
 4. **Readonly DB trigram detection** — `_init_readonly_db()` checks `sqlite_master` correctly ✅
