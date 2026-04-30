@@ -3,8 +3,8 @@
 Assigns each chunk a processing tier based on source, content type, and age:
 
   T0 (IMMEDIATE): manual/digest — always enrich, highest priority
-  T1 (HOURLY):    recent claude_code chunks — hourly local enrichment
-  T2 (LAZY):      old claude_code backlog — lazy remote batch
+  T1 (HOURLY):    recent agent-session chunks — hourly local enrichment
+  T2 (LAZY):      old agent-session backlog — lazy remote batch
   T3 (EXPLICIT):  youtube transcripts — only when explicitly triggered
 
 Design note: tiers are IntEnum so T0 < T1 < T2 < T3 comparisons work naturally
@@ -20,8 +20,8 @@ from typing import List, Optional, Set
 
 class EnrichmentTier(IntEnum):
     T0_IMMEDIATE = 0  # manual / digest — enrich immediately
-    T1_HOURLY = 1  # recent claude_code — hourly local run
-    T2_LAZY = 2  # old claude_code backlog — lazy / remote batch
+    T1_HOURLY = 1  # recent agent-session chunks — hourly local run
+    T2_LAZY = 2  # old agent-session backlog — lazy / remote batch
     T3_EXPLICIT = 3  # youtube — explicit request only
 
 
@@ -44,7 +44,7 @@ SKIP_CONTENT_TYPES: frozenset = frozenset({"noise"})
 
 # Only these sources participate in the T1/T2 recency gate.
 # Unrecognised sources fall through to T2 (lazy backlog) rather than T1.
-T1_T2_SOURCES: frozenset = frozenset({"claude_code"})
+T1_T2_SOURCES: frozenset = frozenset({"claude_code", "codex_cli", "cursor_cli", "gemini_cli"})
 
 
 # ── Classifier ───────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ def classify_chunk_tier(
     """Return the enrichment tier for a chunk.
 
     Args:
-        source:        The chunk source field (e.g. "claude_code", "youtube", "manual").
+        source:        The chunk source field (e.g. "claude_code", "codex_cli", "youtube", "manual").
         content_type:  The chunk content_type field (e.g. "ai_code", "assistant_text").
         created_at:    ISO timestamp string when the chunk was created, or None.
         recency_days:  Window (days) for T1 vs T2 split (default 7).
@@ -84,7 +84,7 @@ def classify_chunk_tier(
     if source not in T1_T2_SOURCES:
         return EnrichmentTier.T2_LAZY
 
-    # Claude code: age determines tier.
+    # Agent-session sources: age determines tier.
     if _is_recent(created_at, recency_days):
         return EnrichmentTier.T1_HOURLY
     return EnrichmentTier.T2_LAZY
@@ -123,16 +123,16 @@ def get_tier_source_filter(tier: EnrichmentTier) -> Set[str]:
     Useful for building SQL IN clauses or filtering chunk lists.
 
     T0 → {manual, digest}
-    T1 → {claude_code}   (explicitly excludes youtube)
-    T2 → {claude_code}   (old backlog only)
+    T1 → {claude_code, codex_cli, cursor_cli, gemini_cli}   (explicitly excludes youtube)
+    T2 → {claude_code, codex_cli, cursor_cli, gemini_cli}   (old backlog only)
     T3 → {youtube}
     """
     if tier == EnrichmentTier.T0_IMMEDIATE:
         return set(T0_SOURCES)
     if tier == EnrichmentTier.T1_HOURLY:
-        return {"claude_code"}
+        return set(T1_T2_SOURCES)
     if tier == EnrichmentTier.T2_LAZY:
-        return {"claude_code"}
+        return set(T1_T2_SOURCES)
     if tier == EnrichmentTier.T3_EXPLICIT:
         return set(T3_SOURCES)
     return set()  # pragma: no cover
