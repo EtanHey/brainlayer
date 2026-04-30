@@ -138,7 +138,9 @@ async def test_brain_search_alias_expansion_preserves_multiword_query_semantics(
             patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
             patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
         ):
-            _, structured = await _brain_search(query="Hershkovitz release plan", project="brainlayer", detail="compact")
+            _, structured = await _brain_search(
+                query="Hershkovitz release plan", project="brainlayer", detail="compact"
+            )
 
         result_ids = [item["chunk_id"] for item in structured["results"]]
         assert "chunk-good" in result_ids
