@@ -825,6 +825,7 @@ class SearchMixin:
         self,
         query_embedding: List[float],
         query_text: str,
+        fts_query_override: Optional[str] = None,
         n_results: int = 10,
         project_filter: Optional[str] = None,
         content_type_filter: Optional[str] = None,
@@ -877,7 +878,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
-        ) + (kg_boost, source_filter_like, correction_category, filter_meta_noise)
+        ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -942,99 +943,123 @@ class SearchMixin:
 
         # 2. FTS5 keyword search
         cursor = self._read_cursor()
-        fts_extra = []
         # FTS5 MATCH requires escaped query text. Special chars like
         # '.', '*', '"', '(', ')' cause syntax errors if passed raw.
         # Wrap each term in double quotes to treat as literal strings.
-        fts_query = _escape_fts5_query(query_text)
+        fts_query = fts_query_override or _escape_fts5_query(query_text)
         fts_results = []
+        trigram_fts_results = []
         if fts_query:
-            fts_params: list = [fts_query]
+            fts_extra = []
+            fts_filter_params: list = []
             entity_join = ""
             if entity_id:
                 entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
                 fts_extra.append("AND ec.entity_id = ?")
-                fts_params.append(entity_id)
+                fts_filter_params.append(entity_id)
             if project_filter:
                 fts_extra.append("AND (c.project = ? OR c.project IS NULL)")
-                fts_params.append(project_filter)
+                fts_filter_params.append(project_filter)
             if source_filter:
                 fts_extra.append("AND c.source = ?")
-                fts_params.append(source_filter)
+                fts_filter_params.append(source_filter)
+            if sender_filter:
+                fts_extra.append("AND c.sender = ?")
+                fts_filter_params.append(sender_filter)
+            if language_filter:
+                fts_extra.append("AND c.language = ?")
+                fts_filter_params.append(language_filter)
             if tag_filter:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
-                fts_params.append(tag_filter)
+                fts_filter_params.append(tag_filter)
             if intent_filter:
                 fts_extra.append("AND c.intent = ?")
-                fts_params.append(intent_filter)
+                fts_filter_params.append(intent_filter)
             if importance_min is not None:
                 fts_extra.append("AND c.importance >= ?")
-                fts_params.append(importance_min)
+                fts_filter_params.append(importance_min)
             if date_from:
                 fts_extra.append("AND c.created_at >= ?")
-                fts_params.append(date_from)
+                fts_filter_params.append(date_from)
             if date_to:
                 fts_extra.append("AND c.created_at <= ?")
-                fts_params.append(date_to)
+                fts_filter_params.append(date_to)
             if sentiment_filter:
                 fts_extra.append("AND c.sentiment_label = ?")
-                fts_params.append(sentiment_filter)
+                fts_filter_params.append(sentiment_filter)
             if source_filter_like:
                 fts_extra.append("AND c.source LIKE ?")
-                fts_params.append(source_filter_like)
+                fts_filter_params.append(source_filter_like)
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
-                fts_params.append(f"correction:{correction_category}%")
+                fts_filter_params.append(f"correction:{correction_category}%")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
-                    fts_params.append(f"%{pattern}%")
+                    fts_filter_params.append(f"%{pattern}%")
             if not include_archived:
                 fts_extra.append("AND c.superseded_by IS NULL")
                 fts_extra.append("AND c.aggregated_into IS NULL")
                 fts_extra.append("AND c.archived_at IS NULL")
-            fts_params.append(candidate_fetch_count)
 
-            fts_results = list(
-                cursor.execute(
-                    f"""
-                SELECT f.chunk_id, f.rank,
-                       c.content, c.metadata, c.source_file, c.project,
-                       c.content_type, c.value_type, c.char_count,
-                       c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source, c.decay_score
-                FROM chunks_fts f
-                JOIN chunks c ON f.chunk_id = c.id
-                {entity_join}
-                WHERE chunks_fts MATCH ? {" ".join(fts_extra)}
-                ORDER BY f.rank
-                LIMIT ?
-            """,
-                    fts_params,
+            def _fetch_fts_rows(table_name: str) -> list[tuple]:
+                params = [fts_query, *fts_filter_params, candidate_fetch_count]
+                return list(
+                    cursor.execute(
+                        f"""
+                    SELECT f.chunk_id, f.rank,
+                           c.content, c.metadata, c.source_file, c.project,
+                           c.content_type, c.value_type, c.char_count,
+                           c.summary, c.tags, c.importance, c.intent,
+                           c.created_at, c.source, c.sender, c.language, c.decay_score
+                    FROM {table_name} f
+                    JOIN chunks c ON f.chunk_id = c.id
+                    {entity_join}
+                    WHERE {table_name} MATCH ? {" ".join(fts_extra)}
+                    ORDER BY f.rank
+                    LIMIT ?
+                """,
+                        params,
+                    )
                 )
-            )
+
+            fts_results = _fetch_fts_rows("chunks_fts")
+            if getattr(self, "_trigram_fts_available", False):
+                trigram_fts_results = _fetch_fts_rows("chunks_fts_trigram")
 
         # Build FTS rank map
         fts_ranks = {}
-        fts_data = {}
-        for i, row in enumerate(fts_results):
-            chunk_id = row[0]
-            fts_ranks[chunk_id] = i
-            fts_data[chunk_id] = {
-                "content": row[2],
-                "metadata": json.loads(row[3]) if row[3] else {},
-                "source_file": row[4],
-                "project": row[5],
-                "content_type": row[6],
-                "value_type": row[7],
-                "char_count": row[8],
-                "summary": row[9],
-                "tags": row[10],
-                "importance": row[11],
-                "intent": row[12],
-                "created_at": row[13],
-                "source": row[14],
-            }
+        trigram_ranks = {}
+        keyword_data = {}
+
+        def _ingest_keyword_rows(rows: list[tuple], ranks: dict[str, int]) -> None:
+            for i, row in enumerate(rows):
+                chunk_id = row[0]
+                ranks[chunk_id] = i
+                keyword_data.setdefault(
+                    chunk_id,
+                    {
+                        "content": row[2],
+                        "metadata": json.loads(row[3]) if row[3] else {},
+                        "source_file": row[4],
+                        "project": row[5],
+                        "content_type": row[6],
+                        "value_type": row[7],
+                        "char_count": row[8],
+                        "summary": row[9],
+                        "tags": row[10],
+                        "importance": row[11],
+                        "intent": row[12],
+                        "created_at": row[13],
+                        "source": row[14],
+                        "sender": row[15],
+                        "language": row[16],
+                        "decay_score": row[17],
+                    },
+                )
+
+        _ingest_keyword_rows(fts_results, fts_ranks)
+        _ingest_keyword_rows(trigram_fts_results, trigram_ranks)
 
         # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
         # Build semantic rank map keyed by actual chunk_id
@@ -1050,26 +1075,29 @@ class SearchMixin:
                 }
 
         # Union of all chunk_ids from both sources
-        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys())
+        all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys()) | set(trigram_ranks.keys())
 
         scored = []
         for cid in all_chunk_ids:
             score = 0.0
             sem_entry = semantic_by_id.get(cid)
             fts_rank = fts_ranks.get(cid)
+            trigram_rank = trigram_ranks.get(cid)
 
             if sem_entry is not None:
                 score += 1.0 / (k + sem_entry["rank"])
             if fts_rank is not None:
                 score += 1.0 / (k + fts_rank)
+            if trigram_rank is not None:
+                score += 1.0 / (k + trigram_rank)
 
             # Get data — prefer semantic (has distance)
             if sem_entry is not None:
                 doc = sem_entry["doc"]
                 meta = sem_entry["meta"]
                 dist = sem_entry["dist"]
-            elif cid in fts_data:
-                data = fts_data[cid]
+            elif cid in keyword_data:
+                data = keyword_data[cid]
                 doc = data["content"]
                 meta = data["metadata"].copy()
                 meta.update(
@@ -1096,6 +1124,10 @@ class SearchMixin:
                     meta["created_at"] = data["created_at"]
                 if data.get("source"):
                     meta["source"] = data["source"]
+                if data.get("sender"):
+                    meta["sender"] = data["sender"]
+                if data.get("language"):
+                    meta["language"] = data["language"]
                 if data.get("decay_score") is not None:
                     meta["decay_score"] = data["decay_score"]
                 dist = None
@@ -1112,6 +1144,10 @@ class SearchMixin:
                 if project_filter and meta.get("project") not in (project_filter, None):
                     continue
                 if content_type_filter and meta.get("content_type") != content_type_filter:
+                    continue
+                if sender_filter and meta.get("sender") != sender_filter:
+                    continue
+                if language_filter and meta.get("language") != language_filter:
                     continue
 
             scored.append((score, cid, doc, meta, dist))

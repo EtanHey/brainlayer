@@ -149,12 +149,14 @@ class TestFTS5HealthMonitoring:
         """Explicit rebuild should restore missing FTS rows."""
         _insert_chunks(store, 6)
         store.conn.cursor().execute("DELETE FROM chunks_fts WHERE chunk_id IN ('chunk-0', 'chunk-1')")
+        store.conn.cursor().execute("DELETE FROM chunks_fts_trigram WHERE chunk_id IN ('chunk-0', 'chunk-1')")
 
         result = store.rebuild_fts5()
 
         assert result["success"] is True
         assert result["chunk_count"] == 6
         assert result["fts_count"] == 6
+        assert result["trigram_count"] == 6
         assert result["desync_pct"] == 0.0
 
     def test_health_events_logged(self, store):
