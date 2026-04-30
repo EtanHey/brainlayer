@@ -36,3 +36,32 @@ async def test_brain_search_exact_chunk_id_query_bypasses_hybrid_search():
     assert structured["results"][0]["chunk_id"] == chunk_id
     assert structured["results"][0]["project"] == "brainlayer"
     assert structured["results"][0]["summary"] == "Search recall regression repro"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown():
+    """Exact chunk lookup should keep compact results stable when project is null."""
+    chunk_id = "brainbar-nullproj01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": "Chunk without project metadata",
+        "source_file": "docs/repro.md",
+        "project": None,
+        "content_type": "note",
+        "importance": 3,
+        "created_at": "2026-04-30T09:15:00Z",
+        "summary": "Null project repro",
+        "tags": '["fts"]',
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("exact chunk-id query should bypass hybrid search")),
+        ),
+    ):
+        _, structured = await _brain_search(query=chunk_id, detail="compact")
+
+    assert structured["results"][0]["project"] == "unknown"

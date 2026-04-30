@@ -145,7 +145,7 @@ def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[lis
     item = {
         "score": 1.0,
         "chunk_id": chunk["id"],
-        "project": _normalize_project_name(chunk.get("project")) or chunk.get("project", "unknown"),
+        "project": _normalize_project_name(chunk.get("project")) or chunk.get("project") or "unknown",
         "content": chunk.get("content", ""),
         "source_file": chunk.get("source_file", "unknown"),
         "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
