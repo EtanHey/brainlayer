@@ -208,7 +208,7 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 94,
-      "aliases": [],
+      "aliases": ["Hershkovitz"],
       "split_forms": [],
       "sources": ["manual_seed", "user_prompt"]
     },
