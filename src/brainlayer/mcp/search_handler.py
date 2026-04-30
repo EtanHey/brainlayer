@@ -8,6 +8,7 @@ from typing import Any
 import apsw
 from mcp.types import TextContent
 
+from .._helpers import _escape_fts5_query
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 
 # Retry settings for DB lock resilience on reads
@@ -118,20 +119,51 @@ def _kg_alias_variants(query: str, store: Any) -> list[str]:
 
 
 def _expanded_fts_query(query: str, store: Any) -> str | None:
-    variants = _lexical_defense_variants(query)
-    seen = {value.casefold().strip() for value in variants if value.strip()}
-    for variant in _kg_alias_variants(query, store):
-        dedupe_key = variant.casefold().strip()
-        if dedupe_key and dedupe_key not in seen:
-            seen.add(dedupe_key)
-            variants.append(variant)
+    token_clauses: list[str] = []
+    expanded = False
 
-    if len(variants) <= 1:
+    for token in query.split():
+        variants = _lexical_defense_variants(token)
+        seen = {value.casefold().strip() for value in variants if value.strip()}
+        for variant in _kg_alias_variants(token, store):
+            dedupe_key = variant.casefold().strip()
+            if dedupe_key and dedupe_key not in seen:
+                seen.add(dedupe_key)
+                variants.append(variant)
+
+        escaped_variants = [_escape_fts5_query(variant) for variant in variants]
+        escaped_variants = [variant for variant in escaped_variants if variant]
+        if not escaped_variants:
+            continue
+        if len(escaped_variants) == 1:
+            token_clauses.append(escaped_variants[0])
+            continue
+
+        expanded = True
+        token_clauses.append(f"({' OR '.join(escaped_variants)})")
+
+    if not expanded or not token_clauses:
         return None
-    return " OR ".join(_quote_fts_phrase(variant) for variant in variants)
+    return " AND ".join(token_clauses)
 
 
-def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[list[TextContent], dict] | None:
+def _exact_chunk_lookup_result(
+    query: str,
+    store: Any,
+    detail: str,
+    *,
+    project: str | None = None,
+    content_type: str | None = None,
+    tag: str | None = None,
+    importance_min: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    source: str | None = None,
+    intent: str | None = None,
+    sentiment: str | None = None,
+    source_filter: str | None = None,
+    correction_category: str | None = None,
+) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
     if not candidate or " " in candidate or not _CHUNK_ID_QUERY_RE.fullmatch(candidate):
@@ -142,6 +174,15 @@ def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[lis
         return None
     if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
         return None
+    if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
+        return None
+    if project is not None:
+        chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
+        normalized_project = _normalize_project_name(project) or project
+        if chunk_project not in (normalized_project, None):
+            return None
+    if content_type is not None and chunk.get("content_type") != content_type:
+        return None
 
     tags = chunk.get("tags")
     parsed_tags = None
@@ -150,6 +191,17 @@ def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[lis
             parsed_tags = json.loads(tags) if isinstance(tags, str) else tags
         except (json.JSONDecodeError, TypeError):
             parsed_tags = None
+    if tag is not None and tag not in (parsed_tags or []):
+        return None
+    if importance_min is not None:
+        chunk_importance = chunk.get("importance")
+        if not isinstance(chunk_importance, (int, float)) or float(chunk_importance) < float(importance_min):
+            return None
+    chunk_date = chunk.get("created_at", "")[:10] if chunk.get("created_at") else None
+    if date_from is not None and (chunk_date is None or chunk_date < date_from):
+        return None
+    if date_to is not None and (chunk_date is None or chunk_date > date_to):
+        return None
 
     item = {
         "score": 1.0,
@@ -386,7 +438,22 @@ async def _brain_search(
         return await _context(chunk_id=chunk_id, before=before, after=after)
 
     store = _get_vector_store()
-    exact_chunk_hit = _exact_chunk_lookup_result(query, store, detail)
+    exact_chunk_hit = _exact_chunk_lookup_result(
+        query,
+        store,
+        detail,
+        project=project,
+        content_type=content_type,
+        tag=tag,
+        importance_min=importance_min,
+        date_from=date_from,
+        date_to=date_to,
+        source=source,
+        intent=intent,
+        sentiment=sentiment,
+        source_filter=source_filter,
+        correction_category=correction_category,
+    )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)

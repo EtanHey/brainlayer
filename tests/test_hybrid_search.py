@@ -244,6 +244,28 @@ class TestHybridSearch:
 
         assert results["ids"][0] == ["sender-lang-hit"]
 
+    def test_hybrid_search_trigram_only_respects_project_filter(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="trigram-hit",
+            content="stalker-golem queue note",
+            embedding=_embed("distant vector"),
+            project="other-project",
+        )
+        store.build_binary_index()
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("nothing close"),
+            query_text="alker-go",
+            n_results=5,
+            project_filter="brainlayer",
+        )
+
+        assert results["ids"][0] == []
+
     def test_hybrid_search_vec_only(self, store):
         query_embedding = _embed("vector only query")
         _insert_chunk(

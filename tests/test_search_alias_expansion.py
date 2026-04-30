@@ -121,3 +121,27 @@ async def test_brain_search_ignores_transient_busy_errors_during_alias_expansion
         search_mock.assert_awaited_once()
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_brain_search_alias_expansion_preserves_multiword_query_semantics(tmp_path, mock_model):
+    store = VectorStore(tmp_path / "kg-multiword.db")
+    try:
+        _insert_chunk(store, chunk_id="chunk-good", content="Hershkovits reviewed the release plan yesterday.")
+        _insert_chunk(store, chunk_id="chunk-bad", content="Met with Hershkovits yesterday.")
+        store.build_binary_index()
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
+        ):
+            _, structured = await _brain_search(query="Hershkovitz release plan", project="brainlayer", detail="compact")
+
+        result_ids = [item["chunk_id"] for item in structured["results"]]
+        assert "chunk-good" in result_ids
+        assert "chunk-bad" not in result_ids
+    finally:
+        store.close()
