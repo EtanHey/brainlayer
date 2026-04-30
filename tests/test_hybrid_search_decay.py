@@ -75,6 +75,30 @@ def test_hybrid_search_decay_score_changes_ranking(store):
     assert results["ids"][0][0] == "fresh"
 
 
+def test_hybrid_search_fts_only_results_include_decay_score_metadata(store):
+    query_embedding = _embed("fts decay metadata")
+    _insert_chunk(
+        store,
+        chunk_id="fts-decay",
+        content="fts decay metadata result",
+        embedding=_embed("distant vector"),
+        decay_score=0.42,
+    )
+    store.build_binary_index()
+    cursor = store.conn.cursor()
+    cursor.execute("DELETE FROM chunk_vectors")
+    cursor.execute("DELETE FROM chunk_vectors_binary")
+
+    results = store.hybrid_search(
+        query_embedding=query_embedding,
+        query_text="fts decay metadata",
+        n_results=1,
+    )
+
+    assert results["ids"][0] == ["fts-decay"]
+    assert results["metadatas"][0][0]["decay_score"] == pytest.approx(0.42)
+
+
 def test_hybrid_search_queues_retrieval_strengthening_until_flush_threshold(store):
     store._retrieval_strengthening_flush_threshold = 1000
     query_embedding = _embed("strengthen later")

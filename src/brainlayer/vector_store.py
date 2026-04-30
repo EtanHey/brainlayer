@@ -93,6 +93,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
         }
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
+        self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._local = threading.local()
 
     def _init_db_with_retry(self) -> None:
@@ -253,6 +254,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         # FTS5 full-text search — indexes content + enrichment metadata
         # for better keyword matches on summaries, tags, and resolved queries.
         _FTS5_COLUMNS = "content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED"
+        _TRIGRAM_TOKENIZER = "trigram"
 
         # Detect old single-column FTS5 schema and rebuild if needed.
         # FTS5 virtual tables can't be ALTERed — must drop and recreate.
@@ -275,6 +277,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 {_FTS5_COLUMNS}
             )
         """)
+        cursor.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_trigram USING fts5(
+                {_FTS5_COLUMNS},
+                tokenize='{_TRIGRAM_TOKENIZER}'
+            )
+        """)
+        self._trigram_fts_available = True
 
         # FTS5 sync triggers — keep summary/tags/resolved_query in sync
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
@@ -292,10 +301,31 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 );
             END
         """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                );
+            END
+        """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
                 DELETE FROM chunks_fts WHERE chunk_id = old.id;
+            END
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_delete")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
@@ -315,6 +345,31 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 );
             END
         """)
+        cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update
+            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
+                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (
+                    new.content,
+                    new.summary,
+                    new.tags,
+                    new.resolved_query,
+                    new.key_facts,
+                    new.resolved_queries,
+                    new.id
+                );
+            END
+        """)
+
+        trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+        chunk_count = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        if trigram_count == 0 and chunk_count > 0:
+            cursor.execute("""
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+            """)
 
         # ── Tag junction table (replaces json_each scanning) ──────────
         cursor.execute("""
@@ -1061,6 +1116,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._log_health_event("fts5_rebuild", "emergency", {"db_path": str(self.db_path)})
         cursor = self.conn.cursor()
         cursor.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        if getattr(self, "_trigram_fts_available", False):
+            cursor.execute("INSERT INTO chunks_fts_trigram(chunks_fts_trigram) VALUES('rebuild')")
         chunk_count, fts_count = self._get_fts5_counts()
         if chunk_count != fts_count:
             cursor.execute("DELETE FROM chunks_fts")
@@ -1068,6 +1125,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
                 SELECT content, summary, tags, resolved_query, id FROM chunks
             """)
+        if getattr(self, "_trigram_fts_available", False):
+            trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+            if chunk_count != trigram_count:
+                cursor.execute("DELETE FROM chunks_fts_trigram")
+                cursor.execute("""
+                    INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                    SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                """)
         try:
             cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except apsw.Error:

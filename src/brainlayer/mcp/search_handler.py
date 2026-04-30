@@ -1,10 +1,14 @@
 """Search and recall MCP handlers."""
 
 import asyncio
+import json
+import re
 from typing import Any
 
 import apsw
 from mcp.types import TextContent
+
+from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -28,6 +32,137 @@ from ._shared import (
     _query_signals_think,
     logger,
 )
+
+_CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")
+
+
+def _quote_fts_phrase(value: str) -> str:
+    return f'"{value.replace(chr(34), "")}"'
+
+
+def _lexical_defense_variants(query: str) -> list[str]:
+    dictionary = load_lexical_defense_dictionary()
+    variants: list[str] = [query]
+    seen = {query.casefold().strip()}
+
+    for candidate in {query, *query.split()}:
+        entry = dictionary.lookup(candidate)
+        if not entry:
+            continue
+        for surface in entry.all_surfaces:
+            dedupe_key = surface.casefold().strip()
+            if dedupe_key and dedupe_key not in seen:
+                seen.add(dedupe_key)
+                variants.append(surface)
+
+    return variants
+
+
+def _kg_alias_variants(query: str, store: Any) -> list[str]:
+    normalized_candidates = {_normalize_surface(query)}
+    normalized_candidates.update(_normalize_surface(token) for token in query.split())
+    normalized_candidates.discard("")
+    if not normalized_candidates:
+        return []
+
+    cursor = store._read_cursor()
+    placeholders = ", ".join("?" for _ in normalized_candidates)
+    normalizer = "LOWER(REPLACE(REPLACE(REPLACE(REPLACE({col}, '-', ''), '_', ''), '.', ''), ' ', ''))"
+    params = [*normalized_candidates, *normalized_candidates]
+    entity_rows = list(
+        cursor.execute(
+            f"""
+            SELECT DISTINCT e.id, e.name
+            FROM kg_entities e
+            LEFT JOIN kg_entity_aliases a ON a.entity_id = e.id
+            WHERE {normalizer.format(col='e.name')} IN ({placeholders})
+               OR {normalizer.format(col='a.alias')} IN ({placeholders})
+            """,
+            params,
+        )
+    )
+    if not entity_rows:
+        return []
+
+    variants: list[str] = []
+    seen = set()
+    entity_ids = []
+    for entity_id, entity_name in entity_rows:
+        entity_ids.append(entity_id)
+        dedupe_key = entity_name.casefold().strip()
+        if dedupe_key and dedupe_key not in seen:
+            seen.add(dedupe_key)
+            variants.append(entity_name)
+
+    alias_placeholders = ", ".join("?" for _ in entity_ids)
+    alias_rows = list(
+        cursor.execute(
+            f"SELECT alias FROM kg_entity_aliases WHERE entity_id IN ({alias_placeholders})",
+            entity_ids,
+        )
+    )
+    for (alias,) in alias_rows:
+        dedupe_key = alias.casefold().strip()
+        if dedupe_key and dedupe_key not in seen:
+            seen.add(dedupe_key)
+            variants.append(alias)
+
+    return variants
+
+
+def _expanded_fts_query(query: str, store: Any) -> str | None:
+    variants = _lexical_defense_variants(query)
+    seen = {value.casefold().strip() for value in variants if value.strip()}
+    for variant in _kg_alias_variants(query, store):
+        dedupe_key = variant.casefold().strip()
+        if dedupe_key and dedupe_key not in seen:
+            seen.add(dedupe_key)
+            variants.append(variant)
+
+    if len(variants) <= 1:
+        return None
+    return " OR ".join(_quote_fts_phrase(variant) for variant in variants)
+
+
+def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[list[TextContent], dict] | None:
+    """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
+    candidate = query.strip()
+    if not candidate or " " in candidate or not _CHUNK_ID_QUERY_RE.fullmatch(candidate):
+        return None
+
+    chunk = store.get_chunk(candidate)
+    if not chunk:
+        return None
+
+    tags = chunk.get("tags")
+    parsed_tags = None
+    if tags:
+        try:
+            parsed_tags = json.loads(tags) if isinstance(tags, str) else tags
+        except (json.JSONDecodeError, TypeError):
+            parsed_tags = None
+
+    item = {
+        "score": 1.0,
+        "chunk_id": chunk["id"],
+        "project": _normalize_project_name(chunk.get("project")) or chunk.get("project", "unknown"),
+        "content": chunk.get("content", ""),
+        "source_file": chunk.get("source_file", "unknown"),
+        "date": chunk.get("created_at", "")[:10] if chunk.get("created_at") else None,
+        "importance": chunk.get("importance"),
+        "summary": chunk.get("summary"),
+    }
+    if parsed_tags:
+        item["tags"] = parsed_tags
+
+    if detail == "compact":
+        structured_results = [_build_compact_result(item)]
+    else:
+        structured_results = [item]
+
+    structured = {"query": query, "total": 1, "results": structured_results}
+    formatted_text = format_search_results(query, structured_results, 1)
+    return ([TextContent(type="text", text=formatted_text)], structured)
 
 
 def _detect_entities(query: str, store: Any) -> list[dict]:
@@ -238,6 +373,12 @@ async def _brain_search(
             correction_category=correction_category,
         )
 
+    store = _get_vector_store()
+    exact_chunk_hit = _exact_chunk_lookup_result(query, store, detail)
+    if exact_chunk_hit is not None:
+        return exact_chunk_hit
+    fts_query_override = _expanded_fts_query(query, store)
+
     if chunk_id is not None:
         return await _context(chunk_id=chunk_id, before=before, after=after)
 
@@ -324,7 +465,6 @@ async def _brain_search(
             correction_category,
         ]
     )
-    store = _get_vector_store()
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
     if detected_entities:
         entity_name = detected_entities[0]["name"]
@@ -415,6 +555,7 @@ async def _brain_search(
         date_to=date_to,
         sentiment=sentiment,
         detail=detail,
+        fts_query_override=fts_query_override,
         source_filter_like=source_filter,
         correction_category=correction_category,
     )
@@ -626,6 +767,7 @@ async def _search(
     sentiment: str | None = None,
     entity_id: str | None = None,
     detail: str = "compact",
+    fts_query_override: str | None = None,
     # Backward compat: accept old 'format' kwarg
     output_format: str | None = None,
     # --- T3 filter additions ---
@@ -677,6 +819,7 @@ async def _search(
                 results = store.hybrid_search(
                     query_embedding=query_embedding,
                     query_text=query,
+                    fts_query_override=fts_query_override,
                     n_results=num_results,
                     project_filter=normalized_project,
                     content_type_filter=content_type,
