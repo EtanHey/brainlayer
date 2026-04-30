@@ -365,7 +365,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
         chunk_count = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        if trigram_count == 0 and chunk_count > 0:
+        if trigram_count != chunk_count:
+            cursor.execute("DELETE FROM chunks_fts_trigram")
             cursor.execute("""
                 INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
@@ -1140,11 +1141,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         self._fts5_health_cache = {}
         chunk_count, fts_count = self._get_fts5_counts()
-        desync_pct = 0.0 if chunk_count == 0 else round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        trigram_count = None
+        fts_desync_pct = 0.0 if chunk_count == 0 else round(abs(chunk_count - fts_count) * 100.0 / chunk_count, 2)
+        trigram_desync_pct = 0.0
+        if getattr(self, "_trigram_fts_available", False):
+            trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+            trigram_desync_pct = 0.0 if chunk_count == 0 else round(abs(chunk_count - trigram_count) * 100.0 / chunk_count, 2)
+        desync_pct = max(fts_desync_pct, trigram_desync_pct)
         return {
-            "success": chunk_count == fts_count,
+            "success": chunk_count == fts_count and (trigram_count is None or chunk_count == trigram_count),
             "chunk_count": chunk_count,
             "fts_count": fts_count,
+            "trigram_count": trigram_count,
             "desync_pct": desync_pct,
         }
 

@@ -59,55 +59,62 @@ def _lexical_defense_variants(query: str) -> list[str]:
 
 
 def _kg_alias_variants(query: str, store: Any) -> list[str]:
-    normalized_candidates = {_normalize_surface(query)}
-    normalized_candidates.update(_normalize_surface(token) for token in query.split())
-    normalized_candidates.discard("")
-    if not normalized_candidates:
-        return []
+    try:
+        normalized_candidates = {_normalize_surface(query)}
+        normalized_candidates.update(_normalize_surface(token) for token in query.split())
+        normalized_candidates.discard("")
+        if not normalized_candidates:
+            return []
 
-    cursor = store._read_cursor()
-    placeholders = ", ".join("?" for _ in normalized_candidates)
-    normalizer = "LOWER(REPLACE(REPLACE(REPLACE(REPLACE({col}, '-', ''), '_', ''), '.', ''), ' ', ''))"
-    params = [*normalized_candidates, *normalized_candidates]
-    entity_rows = list(
-        cursor.execute(
-            f"""
-            SELECT DISTINCT e.id, e.name
-            FROM kg_entities e
-            LEFT JOIN kg_entity_aliases a ON a.entity_id = e.id
-            WHERE {normalizer.format(col='e.name')} IN ({placeholders})
-               OR {normalizer.format(col='a.alias')} IN ({placeholders})
-            """,
-            params,
+        cursor = store._read_cursor()
+        placeholders = ", ".join("?" for _ in normalized_candidates)
+        normalizer = "LOWER(REPLACE(REPLACE(REPLACE(REPLACE({col}, '-', ''), '_', ''), '.', ''), ' ', ''))"
+        params = [*normalized_candidates, *normalized_candidates]
+        entity_rows = list(
+            cursor.execute(
+                f"""
+                SELECT DISTINCT e.id, e.name
+                FROM kg_entities e
+                LEFT JOIN kg_entity_aliases a ON a.entity_id = e.id
+                WHERE {normalizer.format(col='e.name')} IN ({placeholders})
+                   OR {normalizer.format(col='a.alias')} IN ({placeholders})
+                """,
+                params,
+            )
         )
-    )
-    if not entity_rows:
-        return []
+        if not entity_rows:
+            return []
 
-    variants: list[str] = []
-    seen = set()
-    entity_ids = []
-    for entity_id, entity_name in entity_rows:
-        entity_ids.append(entity_id)
-        dedupe_key = entity_name.casefold().strip()
-        if dedupe_key and dedupe_key not in seen:
-            seen.add(dedupe_key)
-            variants.append(entity_name)
+        variants: list[str] = []
+        seen = set()
+        entity_ids = []
+        for entity_id, entity_name in entity_rows:
+            entity_ids.append(entity_id)
+            dedupe_key = entity_name.casefold().strip()
+            if dedupe_key and dedupe_key not in seen:
+                seen.add(dedupe_key)
+                variants.append(entity_name)
 
-    alias_placeholders = ", ".join("?" for _ in entity_ids)
-    alias_rows = list(
-        cursor.execute(
-            f"SELECT alias FROM kg_entity_aliases WHERE entity_id IN ({alias_placeholders})",
-            entity_ids,
+        alias_placeholders = ", ".join("?" for _ in entity_ids)
+        alias_rows = list(
+            cursor.execute(
+                f"SELECT alias FROM kg_entity_aliases WHERE entity_id IN ({alias_placeholders})",
+                entity_ids,
+            )
         )
-    )
-    for (alias,) in alias_rows:
-        dedupe_key = alias.casefold().strip()
-        if dedupe_key and dedupe_key not in seen:
-            seen.add(dedupe_key)
-            variants.append(alias)
+        for (alias,) in alias_rows:
+            dedupe_key = alias.casefold().strip()
+            if dedupe_key and dedupe_key not in seen:
+                seen.add(dedupe_key)
+                variants.append(alias)
 
-    return variants
+        return variants
+    except apsw.BusyError as exc:
+        logger.debug("KG alias expansion skipped on BusyError: %s", exc)
+        return []
+    except apsw.Error as exc:
+        logger.debug("KG alias expansion skipped on APSW error: %s", exc)
+        return []
 
 
 def _expanded_fts_query(query: str, store: Any) -> str | None:
@@ -132,6 +139,8 @@ def _exact_chunk_lookup_result(query: str, store: Any, detail: str) -> tuple[lis
 
     chunk = store.get_chunk(candidate)
     if not chunk:
+        return None
+    if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
         return None
 
     tags = chunk.get("tags")
@@ -373,14 +382,14 @@ async def _brain_search(
             correction_category=correction_category,
         )
 
+    if chunk_id is not None:
+        return await _context(chunk_id=chunk_id, before=before, after=after)
+
     store = _get_vector_store()
     exact_chunk_hit = _exact_chunk_lookup_result(query, store, detail)
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)
-
-    if chunk_id is not None:
-        return await _context(chunk_id=chunk_id, before=before, after=after)
 
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)

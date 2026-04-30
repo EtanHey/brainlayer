@@ -44,19 +44,23 @@ def _insert_chunk(
     importance: float | None = None,
     created_at: str | None = "2026-04-05T00:00:00Z",
     project: str = "hybrid-test",
+    sender: str | None = None,
+    language: str | None = None,
 ):
     """Insert a chunk and its float vector directly."""
     cursor = store.conn.cursor()
     cursor.execute(
         """INSERT INTO chunks (
             id, content, metadata, source_file, project, content_type,
-            char_count, source, summary, tags, resolved_query, importance, created_at
-        ) VALUES (?, ?, '{}', 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?)""",
+            char_count, source, sender, language, summary, tags, resolved_query, importance, created_at
+        ) VALUES (?, ?, '{}', 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?, ?, ?)""",
         (
             chunk_id,
             content,
             project,
             len(content),
+            sender,
+            language,
             summary,
             json.dumps(tags) if tags else None,
             resolved_query,
@@ -207,6 +211,38 @@ class TestHybridSearch:
         )
 
         assert "fts-hit" in results["ids"][0]
+
+    def test_hybrid_search_fts_only_respects_sender_and_language_filters(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="sender-lang-hit",
+            content="keyword fallback sender language exact hit",
+            embedding=_embed("distant vector"),
+            sender="etan",
+            language="he",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="sender-lang-miss",
+            content="keyword fallback sender language exact hit",
+            embedding=_embed("another distant vector"),
+            sender="other",
+            language="en",
+        )
+        store.build_binary_index()
+        cursor = store.conn.cursor()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("nothing close"),
+            query_text="keyword fallback sender language",
+            n_results=5,
+            sender_filter="etan",
+            language_filter="he",
+        )
+
+        assert results["ids"][0] == ["sender-lang-hit"]
 
     def test_hybrid_search_vec_only(self, store):
         query_embedding = _embed("vector only query")

@@ -963,6 +963,12 @@ class SearchMixin:
             if source_filter:
                 fts_extra.append("AND c.source = ?")
                 fts_filter_params.append(source_filter)
+            if sender_filter:
+                fts_extra.append("AND c.sender = ?")
+                fts_filter_params.append(sender_filter)
+            if language_filter:
+                fts_extra.append("AND c.language = ?")
+                fts_filter_params.append(language_filter)
             if tag_filter:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
                 fts_filter_params.append(tag_filter)
@@ -1005,7 +1011,7 @@ class SearchMixin:
                            c.content, c.metadata, c.source_file, c.project,
                            c.content_type, c.value_type, c.char_count,
                            c.summary, c.tags, c.importance, c.intent,
-                           c.created_at, c.source, c.decay_score
+                           c.created_at, c.source, c.sender, c.language, c.decay_score
                     FROM {table_name} f
                     JOIN chunks c ON f.chunk_id = c.id
                     {entity_join}
@@ -1046,7 +1052,9 @@ class SearchMixin:
                         "intent": row[12],
                         "created_at": row[13],
                         "source": row[14],
-                        "decay_score": row[15],
+                        "sender": row[15],
+                        "language": row[16],
+                        "decay_score": row[17],
                     },
                 )
 
@@ -1116,6 +1124,10 @@ class SearchMixin:
                     meta["created_at"] = data["created_at"]
                 if data.get("source"):
                     meta["source"] = data["source"]
+                if data.get("sender"):
+                    meta["sender"] = data["sender"]
+                if data.get("language"):
+                    meta["language"] = data["language"]
                 if data.get("decay_score") is not None:
                     meta["decay_score"] = data["decay_score"]
                 dist = None
@@ -1132,6 +1144,10 @@ class SearchMixin:
                 if project_filter and meta.get("project") not in (project_filter, None):
                     continue
                 if content_type_filter and meta.get("content_type") != content_type_filter:
+                    continue
+                if sender_filter and meta.get("sender") != sender_filter:
+                    continue
+                if language_filter and meta.get("language") != language_filter:
                     continue
 
             scored.append((score, cid, doc, meta, dist))
