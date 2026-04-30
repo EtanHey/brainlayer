@@ -28,7 +28,8 @@ The changes directly address search recall regressions where identifiers and nam
 - ✅ **Correct:** Chunk-id shaped queries (regex `^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$`) bypass hybrid search
 - ✅ **Safe:** No-op on miss (returns `None`, falls through to normal search)
 - ✅ **Test coverage:** `test_search_exact_chunk_id.py` verifies bypass + structured output
-- ⚠️ **Edge case:** Hyphenated tokens that match regex pattern (e.g., `missing-chunk-id-123`) will attempt direct lookup and fall through to normal search on miss — acceptable degradation
+<<<<<<< HEAD
+- ⚠️ **Edge case:** Token-shaped hyphenated queries (e.g., `brain-layer`) can match the regex but still miss `get_chunk()` lookup — acceptable degradation
 
 **Trigram FTS Index** (`vector_store.py:281-286, 304-318, 366-372`)
 - ✅ **Schema migration:** Creates `chunks_fts_trigram` with `tokenize='trigram'`
@@ -129,7 +130,7 @@ The changes directly address search recall regressions where identifiers and nam
 
 ### 1. Chunk-ID Regex False Positives
 
-**Example:** Query `chunk-missing-123` matches regex but fails `get_chunk()` lookup  
+**Example:** Query `brain-layer` matches regex but fails `get_chunk()` lookup  
 **Behavior:** Falls through to normal hybrid search (correct)  
 **Impact:** Minimal — rare query pattern, degradation is graceful
 
@@ -258,6 +259,7 @@ uv run pytest -q \
 **Expected result:** All tests pass (as documented in PR description)
 
 **Lint check:**
+
 ```bash
 uv run ruff check src/brainlayer/mcp/search_handler.py \
                    src/brainlayer/search_repo.py \

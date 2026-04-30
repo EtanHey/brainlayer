@@ -76,8 +76,8 @@ def _kg_alias_variants(query: str, store: Any) -> list[str]:
                 SELECT DISTINCT e.id, e.name
                 FROM kg_entities e
                 LEFT JOIN kg_entity_aliases a ON a.entity_id = e.id
-                WHERE {normalizer.format(col='e.name')} IN ({placeholders})
-                   OR {normalizer.format(col='a.alias')} IN ({placeholders})
+                WHERE {normalizer.format(col="e.name")} IN ({placeholders})
+                   OR {normalizer.format(col="a.alias")} IN ({placeholders})
                 """,
                 params,
             )

@@ -34,9 +34,7 @@ def _insert_chunk(store: VectorStore, *, chunk_id: str, content: str) -> None:
 def test_vector_store_creates_trigram_fts_table(tmp_path):
     store = VectorStore(tmp_path / "trigram.db")
     try:
-        sql = store.conn.cursor().execute(
-            "SELECT sql FROM sqlite_master WHERE name = 'chunks_fts_trigram'"
-        ).fetchone()
+        sql = store.conn.cursor().execute("SELECT sql FROM sqlite_master WHERE name = 'chunks_fts_trigram'").fetchone()
         assert sql is not None
         assert "tokenize='trigram'" in sql[0]
     finally:
