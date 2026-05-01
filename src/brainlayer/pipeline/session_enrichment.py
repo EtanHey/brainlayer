@@ -23,8 +23,8 @@ import json
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .enrichment_tiers import T1_T2_SOURCES
 from ..vector_store import VectorStore
+from .enrichment_tiers import T1_T2_SOURCES
 
 # Valid values for structured fields
 VALID_INTENTS = [
