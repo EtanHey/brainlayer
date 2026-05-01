@@ -144,6 +144,24 @@ def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) ->
     assert "README.md" in result.stderr
 
 
+def test_build_app_allows_dirty_canonical_repo_with_force_dirty(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+    (repo / "README.md").write_text("# dirty repo\n")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_args=["--force-dirty"],
+    )
+
+    assert result.returncode == 0
+    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+
+
 def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/space-case")
     home = tmp_path / "home"
