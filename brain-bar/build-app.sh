@@ -1,16 +1,54 @@
 #!/usr/bin/env bash
 # Build BrainBar as a proper macOS .app bundle.
 #
-# Usage: bash brain-bar/build-app.sh
+# Usage: bash brain-bar/build-app.sh [--dry-run] [--force-worktree-build] [--force-dirty]
 #
 # Output: ~/Applications/BrainBar.app (override with BRAINBAR_APP_DIR)
 
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+Usage: bash brain-bar/build-app.sh [--dry-run] [--force-worktree-build] [--force-dirty]
+
+Options:
+  --dry-run               Validate guards and print the resolved app path without building
+  --force-worktree-build  Allow non-canonical repo builds, but route them to a DEV app bundle
+  --force-dirty           Allow builds from a dirty tree after explicit review
+EOF
+}
+
+DRY_RUN=0
+FORCE_WORKTREE_BUILD=0
+FORCE_DIRTY=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run)
+            DRY_RUN=1
+            ;;
+        --force-worktree-build)
+            FORCE_WORKTREE_BUILD=1
+            ;;
+        --force-dirty)
+            FORCE_DIRTY=1
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[build-app] ERROR: unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
-APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Apple Development: Etan Heyman (DXHB5E7P2D)}"
 PLIST_LABEL="com.brainlayer.brainbar"
 PLIST_FILENAME="$PLIST_LABEL.plist"
@@ -19,6 +57,58 @@ PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
+CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
+
+if [ -d "$CANONICAL_REPO_ROOT" ]; then
+    CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd)"
+fi
+
+CURRENT_REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$CURRENT_REPO_ROOT" ]; then
+    echo "[build-app] ERROR: build-app.sh must run from a git checkout" >&2
+    exit 1
+fi
+
+resolve_branch_name() {
+    local branch
+    branch="$(git -C "$CURRENT_REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" = "HEAD" ]; then
+        branch="detached-$(git -C "$CURRENT_REPO_ROOT" rev-parse --short HEAD)"
+    fi
+    printf '%s\n' "$branch"
+}
+
+sanitize_branch_name() {
+    printf '%s' "$1" | tr '/[:space:]' '--' | sed 's/[^A-Za-z0-9._-]/-/g'
+}
+
+if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ] && [ "$FORCE_WORKTREE_BUILD" -ne 1 ]; then
+    echo "[build-app] ERROR: refusing non-canonical build from $CURRENT_REPO_ROOT" >&2
+    echo "[build-app] Re-run with --force-worktree-build to install a DEV bundle instead of ~/Applications/BrainBar.app" >&2
+    exit 1
+fi
+
+if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
+    SAFE_BRANCH_NAME="$(sanitize_branch_name "$(resolve_branch_name)")"
+    APP_DIR="$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app"
+else
+    APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
+fi
+
+DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain)"
+if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
+    echo "[build-app] ERROR: refusing dirty build from $CURRENT_REPO_ROOT" >&2
+    echo "[build-app] Re-run with --force-dirty once these changes are explicitly reviewed:" >&2
+    printf '%s\n' "$DIRTY_STATUS" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[build-app] Dry run OK"
+    echo "[build-app] Repo: $CURRENT_REPO_ROOT"
+    echo "[build-app] App path: $APP_DIR"
+    exit 0
+fi
 
 git_commit() {
     git -C "$PACKAGE_DIR" rev-parse HEAD
