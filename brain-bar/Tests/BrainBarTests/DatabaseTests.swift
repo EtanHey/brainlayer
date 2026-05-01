@@ -221,6 +221,124 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(results.isEmpty)
     }
 
+    func testSearchReturnsEmptyForBlankQuery() throws {
+        try db.insertChunk(
+            id: "blank-query-decoy",
+            content: "Blank searches should not hit arbitrary content.",
+            sessionId: "session-blank",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let results = try db.search(query: "   ", limit: 10)
+
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testSearchExactChunkIDShortCircuitsFTS() throws {
+        try db.insertChunk(
+            id: "brainbar-5ac50aa1-ed5",
+            content: "Exact chunk lookup should not require the identifier to appear in content.",
+            sessionId: "session-exact",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 9
+        )
+        try db.insertChunk(
+            id: "brainbar-d01",
+            content: "Decoy chunk mentions brainbar-5ac50aa1-ed5 but must not outrank the exact chunk id.",
+            sessionId: "session-decoy",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 9
+        )
+
+        let results = try db.search(query: "brainbar-5ac50aa1-ed5", limit: 10)
+
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "brainbar-5ac50aa1-ed5")
+    }
+
+    func testSearchExactChunkIDRespectsProjectScope() throws {
+        try db.insertChunk(
+            id: "brainbar-scoped-001",
+            content: "Project-scoped exact id lookup should return only matching project chunks.",
+            sessionId: "session-scope",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let scoped = try db.search(query: "brainbar-scoped-001", limit: 10, project: "brainlayer")
+        let wrongScope = try db.search(query: "brainbar-scoped-001", limit: 10, project: "voicelayer")
+
+        XCTAssertEqual(scoped.first?["chunk_id"] as? String, "brainbar-scoped-001")
+        XCTAssertTrue(wrongScope.isEmpty)
+    }
+
+    func testSearchUsesTrigramFTSForIdentifierSubstrings() throws {
+        try db.insertChunk(
+            id: "trigram-hit",
+            content: "stalker-golem queue note",
+            sessionId: "session-trigram",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        let results = try db.search(query: "alker-go", limit: 10)
+
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "trigram-hit")
+    }
+
+    func testSearchAliasExpansionPreservesMultiwordSemantics() throws {
+        try db.insertChunk(
+            id: "alias-good",
+            content: "Hershkovits reviewed the release plan yesterday.",
+            sessionId: "session-alias-good",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+        try db.insertChunk(
+            id: "alias-bad",
+            content: "Met with Hershkovits yesterday.",
+            sessionId: "session-alias-bad",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let results = try db.search(query: "Hershkovitz release plan", limit: 10)
+        let resultIDs = results.compactMap { $0["chunk_id"] as? String }
+
+        XCTAssertTrue(resultIDs.contains("alias-good"))
+        XCTAssertFalse(resultIDs.contains("alias-bad"))
+    }
+
+    func testSearchAliasExpansionNormalizesDotsConsistently() throws {
+        db.exec("""
+            INSERT INTO kg_entities (id, entity_type, name)
+            VALUES ('entity-openai', 'org', 'Open.AI');
+        """)
+        db.exec("""
+            INSERT INTO kg_entity_aliases (alias, entity_id)
+            VALUES ('OpenAI', 'entity-openai');
+        """)
+        try db.insertChunk(
+            id: "alias-dot",
+            content: "Open.AI roadmap review notes.",
+            sessionId: "session-alias-dot",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let results = try db.search(query: "OpenAI roadmap", limit: 10)
+
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "alias-dot")
+    }
+
     // MARK: - Store
 
     func testStoreCreatesChunk() throws {

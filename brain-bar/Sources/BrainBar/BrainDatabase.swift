@@ -14,8 +14,13 @@ final class BrainDatabase: @unchecked Sendable {
     """
     private static let ftsColumns = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
+    private static let trigramFTSOptions = "tokenize='trigram'"
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
+    private static let lexicalDefenseReplacements: [String: [String]] = [
+        "hershkovitz": ["Hershkovits"],
+        "hershkovits": ["Hershkovitz"]
+    ]
 
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
@@ -243,6 +248,7 @@ final class BrainDatabase: @unchecked Sendable {
         try ensureChunkColumns()
         try ensurePreviewTextTriggers()
         try rebuildFTSTableIfNeeded()
+        try rebuildTrigramFTSTable()
         try backfillPreviewText()
 
         try execute("""
@@ -321,8 +327,30 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         try execute("""
+            CREATE TABLE IF NOT EXISTS kg_entity_aliases (
+                alias TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                alias_type TEXT DEFAULT 'name',
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                valid_from TEXT,
+                valid_to TEXT,
+                PRIMARY KEY (alias, entity_id)
+            )
+        """)
+
+        try execute("""
             CREATE INDEX IF NOT EXISTS idx_kg_ec_entity
             ON kg_entity_chunks(entity_id)
+        """)
+
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_kg_alias_lookup
+            ON kg_entity_aliases(alias COLLATE NOCASE)
+        """)
+
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_kg_alias_entity
+            ON kg_entity_aliases(entity_id)
         """)
 
         try execute("""
@@ -361,8 +389,11 @@ final class BrainDatabase: @unchecked Sendable {
             WHERE relation_type != 'co_occurs_with'
         """)
 
+        try ensureChunkColumns()
         try ensurePendingStoreQueueIndex()
         try ensureKGEntityColumns()
+        try ensureKGEntityAliasTable()
+        try rebuildTrigramFTSTableIfNeeded()
     }
 
     func close() {
@@ -442,8 +473,8 @@ final class BrainDatabase: @unchecked Sendable {
         subscriberID: String? = nil,
         unreadOnly: Bool = false
     ) throws -> [[String: Any]] {
-        guard let db else { throw DBError.notOpen }
-        let sanitized = sanitizeFTS5Query(query)
+        guard db != nil else { throw DBError.notOpen }
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var subscribedTags: [String] = []
         var ackFloor: Int64 = 0
@@ -452,7 +483,84 @@ final class BrainDatabase: @unchecked Sendable {
             ackFloor = record.lastAckedSeq
         }
 
-        var conditions = ["chunks_fts MATCH ?"]
+        if !unreadOnly,
+           let exact = try exactChunkIDSearchResult(
+               query: trimmedQuery,
+               limit: limit,
+               project: project,
+               tag: tag,
+               importanceMin: importanceMin
+           ) {
+            return exact
+        }
+
+        let expandedQueries = expandedSearchQueries(trimmedQuery)
+        var results: [[String: Any]] = []
+        var seenChunkIDs = Set<String>()
+        var maxRowID: Int64 = 0
+
+        for expandedQuery in expandedQueries {
+            let searchResult = try runFTSSearch(
+                tableName: "chunks_fts",
+                matchQuery: sanitizeFTS5Query(expandedQuery),
+                limit: max(limit, 1),
+                project: project,
+                tag: tag,
+                importanceMin: importanceMin,
+                subscribedTags: subscribedTags,
+                ackFloor: ackFloor,
+                unreadOnly: unreadOnly
+            )
+            maxRowID = max(maxRowID, searchResult.maxRowID)
+            appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
+            if results.count >= limit { break }
+        }
+
+        if results.count < limit {
+            for expandedQuery in expandedQueries {
+                let trigramQuery = sanitizeTrigramFTS5Query(expandedQuery)
+                guard !trigramQuery.isEmpty else { continue }
+                let searchResult = try runFTSSearch(
+                    tableName: "chunks_fts_trigram",
+                    matchQuery: trigramQuery,
+                    limit: max(limit, 1),
+                    project: project,
+                    tag: tag,
+                    importanceMin: importanceMin,
+                    subscribedTags: subscribedTags,
+                    ackFloor: ackFloor,
+                    unreadOnly: unreadOnly
+                )
+                maxRowID = max(maxRowID, searchResult.maxRowID)
+                appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
+                if results.count >= limit { break }
+            }
+        }
+
+        if unreadOnly, let subscriberID, maxRowID > 0 {
+            try markDelivered(agentID: subscriberID, seq: maxRowID)
+        }
+
+        return results
+    }
+
+    private func runFTSSearch(
+        tableName: String,
+        matchQuery: String,
+        limit: Int,
+        project: String?,
+        tag: String?,
+        importanceMin: Double?,
+        subscribedTags: [String],
+        ackFloor: Int64,
+        unreadOnly: Bool
+    ) throws -> (rows: [[String: Any]], maxRowID: Int64) {
+        guard let db else { throw DBError.notOpen }
+        let allowedTables = ["chunks_fts", "chunks_fts_trigram"]
+        guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid FTS table") }
+
+        var subscribedTags = subscribedTags
+        var conditions = ["\(tableName) MATCH ?"]
         if project != nil { conditions.append("c.project = ?") }
         if let explicitTag = tag {
             conditions.append("c.tags LIKE ?")
@@ -470,7 +578,7 @@ final class BrainDatabase: @unchecked Sendable {
         let sql = """
             SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id, f.rank
-            FROM chunks_fts f
+            FROM \(tableName) f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
             ORDER BY \(orderByClause)
@@ -483,7 +591,7 @@ final class BrainDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
 
         var paramIdx: Int32 = 1
-        bindText(sanitized, to: stmt, index: paramIdx)
+        bindText(matchQuery, to: stmt, index: paramIdx)
         paramIdx += 1
         if let project {
             bindText(project, to: stmt, index: paramIdx)
@@ -516,27 +624,10 @@ final class BrainDatabase: @unchecked Sendable {
             // FTS5 rank is negative (lower = better match). Negate for a positive score.
             let rawRank = sqlite3_column_double(stmt, 10)
             let score = max(0, -rawRank)
-            results.append([
-                "rowid": Int(rowID),
-                "chunk_id": columnText(stmt, 1) as Any,
-                "content": columnText(stmt, 2) as Any,
-                "project": columnText(stmt, 3) as Any,
-                "content_type": columnText(stmt, 4) as Any,
-                "importance": sqlite3_column_double(stmt, 5),
-                "created_at": columnText(stmt, 6) as Any,
-                "summary": columnText(stmt, 7) as Any,
-                "preview_text": Self.previewText(summary: columnText(stmt, 7), content: columnText(stmt, 2)),
-                "tags": columnText(stmt, 8) as Any,
-                "session_id": columnText(stmt, 9) as Any,
-                "score": score
-            ])
+            results.append(searchRow(from: stmt, score: score))
         }
 
-        if unreadOnly, let subscriberID, maxRowID > 0 {
-            try markDelivered(agentID: subscriberID, seq: maxRowID)
-        }
-
-        return results
+        return (results, maxRowID)
     }
 
     func store(
@@ -1494,9 +1585,193 @@ final class BrainDatabase: @unchecked Sendable {
         return tokens.joined(separator: " ")
     }
 
+    private func sanitizeTrigramFTS5Query(_ query: String) -> String {
+        let cleaned = query
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "*", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "" }
+        return "\"\(cleaned)\""
+    }
+
+    private func expandedSearchQueries(_ query: String) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var variants = [trimmed]
+        let tokens = trimmed.split(separator: " ").map(String.init)
+        for token in tokens {
+            let replacements = lexicalDefenseReplacements(for: token) + kgAliasReplacements(for: token)
+            for replacement in replacements where replacement != token {
+                variants.append(replaceToken(token, with: replacement, in: trimmed))
+            }
+        }
+
+        var seen = Set<String>()
+        return variants.filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    private func lexicalDefenseReplacements(for token: String) -> [String] {
+        let normalized = token
+            .trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
+            .lowercased()
+        return Self.lexicalDefenseReplacements[normalized] ?? []
+    }
+
+    private func kgAliasReplacements(for token: String) -> [String] {
+        guard let db else { return [] }
+        let normalized = normalizedAliasSurface(token)
+        guard normalized.count >= 3 else { return [] }
+
+        let sql = """
+            SELECT name FROM kg_entities
+            WHERE lower(replace(replace(replace(replace(name, '-', ''), '_', ''), '.', ''), ' ', '')) = ?
+            UNION
+            SELECT alias FROM kg_entity_aliases
+            WHERE lower(replace(replace(replace(replace(alias, '-', ''), '_', ''), '.', ''), ' ', '')) = ?
+            UNION
+            SELECT e.name
+            FROM kg_entity_aliases a
+            JOIN kg_entities e ON e.id = a.entity_id
+            WHERE lower(replace(replace(replace(replace(a.alias, '-', ''), '_', ''), '.', ''), ' ', '')) = ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(normalized, to: stmt, index: 1)
+        bindText(normalized, to: stmt, index: 2)
+        bindText(normalized, to: stmt, index: 3)
+
+        var replacements: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let value = columnText(stmt, 0), !value.isEmpty {
+                replacements.append(value)
+            }
+        }
+        return replacements
+    }
+
+    private func normalizedAliasSurface(_ value: String) -> String {
+        value
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    private func replaceToken(_ token: String, with replacement: String, in query: String) -> String {
+        guard let range = query.range(of: token) else { return query }
+        var copy = query
+        copy.replaceSubrange(range, with: replacement)
+        return copy
+    }
+
+    private func appendDeduped(
+        _ rows: [[String: Any]],
+        to results: inout [[String: Any]],
+        seenChunkIDs: inout Set<String>,
+        limit: Int
+    ) {
+        for row in rows {
+            guard results.count < limit else { return }
+            guard let chunkID = row["chunk_id"] as? String else { continue }
+            if seenChunkIDs.insert(chunkID).inserted {
+                results.append(row)
+            }
+        }
+    }
+
+    private func exactChunkIDSearchResult(
+        query: String,
+        limit: Int,
+        project: String?,
+        tag: String?,
+        importanceMin: Double?
+    ) throws -> [[String: Any]]? {
+        guard let db else { throw DBError.notOpen }
+        guard limit > 0, !query.contains(where: { $0.isWhitespace }), query.contains("-") else {
+            return nil
+        }
+
+        var conditions = ["c.id = ?"]
+        if project != nil { conditions.append("c.project = ?") }
+        if tag != nil { conditions.append("c.tags LIKE ?") }
+        if importanceMin != nil { conditions.append("c.importance >= ?") }
+
+        let sql = """
+            SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
+                   c.created_at, c.summary, c.tags, c.conversation_id
+            FROM chunks c
+            WHERE \(conditions.joined(separator: " AND "))
+            LIMIT 1
+        """
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        var paramIdx: Int32 = 1
+        bindText(query, to: stmt, index: paramIdx)
+        paramIdx += 1
+        if let project {
+            bindText(project, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let tag {
+            bindText("%\"\(tag)\"%", to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let importanceMin {
+            sqlite3_bind_double(stmt, paramIdx, importanceMin)
+        }
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return [searchRow(from: stmt, score: 1.0)]
+        }
+
+        return try chunkExists(id: query) ? [] : nil
+    }
+
+    private func chunkExists(id: String) throws -> Bool {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let sql = "SELECT 1 FROM chunks WHERE id = ? LIMIT 1"
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText(id, to: stmt, index: 1)
+        return sqlite3_step(stmt) == SQLITE_ROW
+    }
+
+    private func searchRow(from stmt: OpaquePointer?, score: Double) -> [String: Any] {
+        let rowID = sqlite3_column_int64(stmt, 0)
+        return [
+            "rowid": Int(rowID),
+            "chunk_id": columnText(stmt, 1) as Any,
+            "content": columnText(stmt, 2) as Any,
+            "project": columnText(stmt, 3) as Any,
+            "content_type": columnText(stmt, 4) as Any,
+            "importance": sqlite3_column_double(stmt, 5),
+            "created_at": columnText(stmt, 6) as Any,
+            "summary": columnText(stmt, 7) as Any,
+            "preview_text": Self.previewText(summary: columnText(stmt, 7), content: columnText(stmt, 2)),
+            "tags": columnText(stmt, 8) as Any,
+            "session_id": columnText(stmt, 9) as Any,
+            "score": score
+        ]
+    }
+
     private func ensureChunkColumns() throws {
         guard let db else { throw DBError.notOpen }
         let existingColumns = try tableColumns(name: "chunks", on: db)
+        if !existingColumns.contains("summary") {
+            try execute("ALTER TABLE chunks ADD COLUMN summary TEXT")
+        }
+        if !existingColumns.contains("tags") {
+            try execute("ALTER TABLE chunks ADD COLUMN tags TEXT DEFAULT '[]'")
+        }
         if !existingColumns.contains("preview_text") {
             try execute("ALTER TABLE chunks ADD COLUMN preview_text TEXT")
         }
@@ -1504,6 +1779,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func ensureKGEntityColumns() throws {
         guard let db else { throw DBError.notOpen }
+        try ensureKGEntityTable()
         let existingColumns = try tableColumns(name: "kg_entities", on: db)
         if !existingColumns.contains("description") {
             try execute("ALTER TABLE kg_entities ADD COLUMN description TEXT")
@@ -1511,6 +1787,44 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("importance") {
             try execute("ALTER TABLE kg_entities ADD COLUMN importance REAL DEFAULT 0.5")
         }
+    }
+
+    private func ensureKGEntityTable() throws {
+        try execute("""
+            CREATE TABLE IF NOT EXISTS kg_entities (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}',
+                description TEXT,
+                importance REAL DEFAULT 0.5,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(entity_type, name)
+            )
+        """)
+    }
+
+    private func ensureKGEntityAliasTable() throws {
+        try execute("""
+            CREATE TABLE IF NOT EXISTS kg_entity_aliases (
+                alias TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                alias_type TEXT DEFAULT 'name',
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                valid_from TEXT,
+                valid_to TEXT,
+                PRIMARY KEY (alias, entity_id)
+            )
+        """)
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_kg_alias_lookup
+            ON kg_entity_aliases(alias COLLATE NOCASE)
+        """)
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_kg_alias_entity
+            ON kg_entity_aliases(entity_id)
+        """)
     }
 
     private func ensurePreviewTextTriggers() throws {
@@ -1584,6 +1898,79 @@ final class BrainDatabase: @unchecked Sendable {
         """)
     }
 
+    private func rebuildTrigramFTSTable() throws {
+        try execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_trigram USING fts5(
+                \(Self.ftsColumns),
+                \(Self.trigramFTSOptions)
+            )
+        """)
+        try execute("DELETE FROM chunks_fts_trigram")
+        try execute("""
+            INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+            SELECT content, summary, tags, NULL, id FROM chunks
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+            END
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_delete")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
+            END
+        """)
+
+        try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
+        try execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update AFTER UPDATE ON chunks BEGIN
+                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+            END
+        """)
+    }
+
+    private func rebuildTrigramFTSTableIfNeeded() throws {
+        if try trigramFTSTableNeedsRebuild() {
+            try rebuildTrigramFTSTable()
+        }
+    }
+
+    private func trigramFTSTableNeedsRebuild() throws -> Bool {
+        guard let db else { throw DBError.notOpen }
+        guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else { return true }
+        let normalizedSQL = sql.lowercased()
+        guard normalizedSQL.contains("tokenize='trigram'"),
+              normalizedSQL.contains("summary"),
+              normalizedSQL.contains("resolved_query")
+        else {
+            return true
+        }
+
+        let chunkCount = try countRows(in: "chunks")
+        let trigramCount = try countRows(in: "chunks_fts_trigram")
+        return chunkCount != trigramCount
+    }
+
+    private func countRows(in tableName: String) throws -> Int {
+        guard let db else { throw DBError.notOpen }
+        let allowedTables = ["chunks", "chunks_fts_trigram"]
+        guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid count table") }
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM \(tableName)", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
     private func ftsTableNeedsRebuild() throws -> Bool {
         guard let db else { throw DBError.notOpen }
         guard let sql = try sqliteMasterSQL(name: "chunks_fts", on: db) else { return true }
@@ -1605,6 +1992,7 @@ final class BrainDatabase: @unchecked Sendable {
     private func refreshSearchStatistics() throws {
         try execute("ANALYZE chunks")
         try execute("ANALYZE chunks_fts")
+        try execute("ANALYZE chunks_fts_trigram")
     }
 
     private func refreshSearchStatisticsBestEffort() {
