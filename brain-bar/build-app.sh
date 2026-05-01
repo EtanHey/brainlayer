@@ -60,7 +60,7 @@ PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
 
 if [ -d "$CANONICAL_REPO_ROOT" ]; then
-    CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd)"
+    CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd -P)"
 fi
 
 CURRENT_REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -68,6 +68,7 @@ if [ -z "$CURRENT_REPO_ROOT" ]; then
     echo "[build-app] ERROR: build-app.sh must run from a git checkout" >&2
     exit 1
 fi
+CURRENT_REPO_ROOT="$(cd "$CURRENT_REPO_ROOT" && pwd -P)"
 
 resolve_branch_name() {
     local branch
@@ -79,7 +80,7 @@ resolve_branch_name() {
 }
 
 sanitize_branch_name() {
-    printf '%s' "$1" | tr '/[:space:]' '--' | sed 's/[^A-Za-z0-9._-]/-/g'
+    printf '%s' "$1" | sed 's#[[:space:]/]#-#g; s/[^A-Za-z0-9._-]/-/g'
 }
 
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ] && [ "$FORCE_WORKTREE_BUILD" -ne 1 ]; then
@@ -95,7 +96,7 @@ else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi
 
-DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain)"
+DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"
 if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
     echo "[build-app] ERROR: refusing dirty build from $CURRENT_REPO_ROOT" >&2
     echo "[build-app] Re-run with --force-dirty once these changes are explicitly reviewed:" >&2

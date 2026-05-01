@@ -142,3 +142,59 @@ def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) ->
     assert result.returncode != 0
     assert "dirty" in result.stderr.lower()
     assert "README.md" in result.stderr
+
+
+def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/space-case")
+    home = tmp_path / "home"
+    home.mkdir()
+    canonical_root = tmp_path / "brainlayer-canonical"
+    canonical_root.mkdir()
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=canonical_root,
+        home=home,
+        extra_args=["--force-worktree-build"],
+    )
+
+    assert result.returncode == 0
+    assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
+
+
+def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+    symlink_root = tmp_path / "brainlayer-link"
+    symlink_root.symlink_to(repo, target_is_directory=True)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=symlink_root,
+        home=home,
+    )
+
+    assert result.returncode == 0
+    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+
+
+def test_build_app_rejects_untracked_dirty_repo_even_when_status_hides_untracked_files(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    (repo / "UNTRACKED.txt").write_text("untracked\n")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode != 0
+    assert "dirty" in result.stderr.lower()
+    assert "UNTRACKED.txt" in result.stderr
