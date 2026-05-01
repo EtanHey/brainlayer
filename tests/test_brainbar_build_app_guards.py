@@ -88,6 +88,7 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
 
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert "LaunchAgent: canonical install" in result.stdout
 
 
 def test_build_app_rejects_noncanonical_repo_without_force(tmp_path: Path) -> None:
@@ -125,6 +126,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
 
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
+    assert "LaunchAgent: skipped for DEV worktree build" in result.stdout
 
 
 def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) -> None:
