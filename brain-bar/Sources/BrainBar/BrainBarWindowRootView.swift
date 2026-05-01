@@ -4,6 +4,7 @@ import SwiftUI
 
 struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
+    private let managesWindowFrame: Bool
 
     @State private var selectedTab: BrainBarTab = .dashboard
     @State private var hasActivatedInjectionsTab = false
@@ -12,8 +13,9 @@ struct BrainBarWindowRootView: View {
     @State private var commandBarViewModel: QuickCaptureViewModel?
     @StateObject private var windowObserver: BrainBarWindowObserver
 
-    init(runtime: BrainBarRuntime) {
+    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true) {
         self.runtime = runtime
+        self.managesWindowFrame = managesWindowFrame
         _windowObserver = StateObject(
             wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
         )
@@ -57,16 +59,14 @@ struct BrainBarWindowRootView: View {
         .frame(
             minWidth: 760,
             idealWidth: 900,
-            maxWidth: 1_600,
+            maxWidth: .infinity,
             minHeight: 560,
             idealHeight: 640,
-            maxHeight: 1_200
+            maxHeight: .infinity
         )
-        .opacity(windowObserver.isContentReady ? 1 : 0)
+        .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(Color(nsColor: .windowBackgroundColor))
-        .background(WindowAttachmentView { window in
-            windowObserver.attach(window: window)
-        })
+        .background(windowAttachment)
         .onAppear {
             ensureCommandBarViewModel()
             activate(tab: selectedTab)
@@ -87,6 +87,15 @@ struct BrainBarWindowRootView: View {
         }
         .onReceive(runtime.$requestedQuickAction.compactMap { $0 }) { action in
             handleRequestedQuickAction(action)
+        }
+    }
+
+    @ViewBuilder
+    private var windowAttachment: some View {
+        if managesWindowFrame {
+            WindowAttachmentView { window in
+                windowObserver.attach(window: window)
+            }
         }
     }
 
