@@ -1,16 +1,55 @@
 #!/usr/bin/env bash
 # Build BrainBar as a proper macOS .app bundle.
 #
-# Usage: bash brain-bar/build-app.sh
+# Usage: bash brain-bar/build-app.sh [--dry-run] [--force-worktree-build] [--force-dirty]
 #
 # Output: ~/Applications/BrainBar.app (override with BRAINBAR_APP_DIR)
 
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+Usage: bash brain-bar/build-app.sh [--dry-run] [--force-worktree-build] [--force-dirty]
+
+Options:
+  --dry-run               Validate guards and print the resolved app path without building
+  --force-worktree-build  Allow non-canonical repo builds, but route them to a DEV app bundle
+  --force-dirty           Allow builds from a dirty tree after explicit review
+EOF
+}
+
+DRY_RUN=0
+FORCE_WORKTREE_BUILD=0
+FORCE_DIRTY=0
+DEV_BUNDLE_BUILD=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run)
+            DRY_RUN=1
+            ;;
+        --force-worktree-build)
+            FORCE_WORKTREE_BUILD=1
+            ;;
+        --force-dirty)
+            FORCE_DIRTY=1
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[build-app] ERROR: unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
-APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Apple Development: Etan Heyman (DXHB5E7P2D)}"
 PLIST_LABEL="com.brainlayer.brainbar"
 PLIST_FILENAME="$PLIST_LABEL.plist"
@@ -19,6 +58,65 @@ PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
+CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
+
+if [ -d "$CANONICAL_REPO_ROOT" ]; then
+    CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd -P)"
+fi
+
+CURRENT_REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$CURRENT_REPO_ROOT" ]; then
+    echo "[build-app] ERROR: build-app.sh must run from a git checkout" >&2
+    exit 1
+fi
+CURRENT_REPO_ROOT="$(cd "$CURRENT_REPO_ROOT" && pwd -P)"
+
+resolve_branch_name() {
+    local branch
+    branch="$(git -C "$CURRENT_REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" = "HEAD" ]; then
+        branch="detached-$(git -C "$CURRENT_REPO_ROOT" rev-parse --short HEAD)"
+    fi
+    printf '%s\n' "$branch"
+}
+
+sanitize_branch_name() {
+    printf '%s' "$1" | sed 's#[[:space:]/]#-#g; s/[^A-Za-z0-9._-]/-/g'
+}
+
+if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ] && [ "$FORCE_WORKTREE_BUILD" -ne 1 ]; then
+    echo "[build-app] ERROR: refusing non-canonical build from $CURRENT_REPO_ROOT" >&2
+    echo "[build-app] Re-run with --force-worktree-build to install a DEV bundle instead of ~/Applications/BrainBar.app" >&2
+    exit 1
+fi
+
+if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
+    DEV_BUNDLE_BUILD=1
+    SAFE_BRANCH_NAME="$(sanitize_branch_name "$(resolve_branch_name)")"
+    APP_DIR="$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app"
+else
+    APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
+fi
+
+DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"
+if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
+    echo "[build-app] ERROR: refusing dirty build from $CURRENT_REPO_ROOT" >&2
+    echo "[build-app] Re-run with --force-dirty once these changes are explicitly reviewed:" >&2
+    printf '%s\n' "$DIRTY_STATUS" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[build-app] Dry run OK"
+    echo "[build-app] Repo: $CURRENT_REPO_ROOT"
+    echo "[build-app] App path: $APP_DIR"
+    if [ "$DEV_BUNDLE_BUILD" -eq 1 ]; then
+        echo "[build-app] LaunchAgent: skipped for DEV worktree build"
+    else
+        echo "[build-app] LaunchAgent: canonical install to $PLIST_DST"
+    fi
+    exit 0
+fi
 
 git_commit() {
     git -C "$PACKAGE_DIR" rev-parse HEAD
@@ -83,22 +181,26 @@ wait_for_socket() {
     return 1
 }
 
-# Stop LaunchAgent first so KeepAlive cannot race the rebuild and unlink the
-# freshly rebound socket from an older instance that is still terminating.
-echo "[build-app] Stopping LaunchAgent..."
-bootout_launchagent
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    # Stop LaunchAgent first so KeepAlive cannot race the rebuild and unlink the
+    # freshly rebound socket from an older instance that is still terminating.
+    echo "[build-app] Stopping LaunchAgent..."
+    bootout_launchagent
 
-# Kill any running BrainBar instances before installing.
-if pgrep -x BrainBar > /dev/null 2>&1; then
-    echo "[build-app] Stopping running BrainBar instances..."
-    killall BrainBar 2>/dev/null || true
-    if ! wait_for_brainbar_exit; then
-        echo "[build-app] ERROR: BrainBar did not exit cleanly"
-        pgrep -fl BrainBar || true
-        exit 1
+    # Kill any running BrainBar instances before installing.
+    if pgrep -x BrainBar > /dev/null 2>&1; then
+        echo "[build-app] Stopping running BrainBar instances..."
+        killall BrainBar 2>/dev/null || true
+        if ! wait_for_brainbar_exit; then
+            echo "[build-app] ERROR: BrainBar did not exit cleanly"
+            pgrep -fl BrainBar || true
+            exit 1
+        fi
     fi
+    rm -f "$SOCKET_PATH"
+else
+    echo "[build-app] DEV worktree build: preserving canonical LaunchAgent and socket"
 fi
-rm -f "$SOCKET_PATH"
 
 echo "[build-app] Building BrainBar (release)..."
 swift build -c release --package-path "$PACKAGE_DIR"
@@ -148,7 +250,7 @@ fi
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -R "$APP_DIR"
 
 # Install LaunchAgent (expands path to actual APP_DIR)
-if [ -f "$PLIST_SRC" ]; then
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ -f "$PLIST_SRC" ]; then
     echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
     bootout_launchagent
     sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
@@ -157,13 +259,14 @@ if [ -f "$PLIST_SRC" ]; then
     echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"
 fi
 
-if ! wait_for_socket "$SOCKET_PATH"; then
-    echo "[build-app] ERROR: BrainBar did not recreate $SOCKET_PATH"
-    pgrep -fl BrainBar || true
-    exit 1
-fi
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    if ! wait_for_socket "$SOCKET_PATH"; then
+        echo "[build-app] ERROR: BrainBar did not recreate $SOCKET_PATH"
+        pgrep -fl BrainBar || true
+        exit 1
+    fi
 
-python3 - <<'PY' "$SOCKET_PATH"
+    python3 - <<'PY' "$SOCKET_PATH"
 import os
 import socket
 import sys
@@ -178,7 +281,12 @@ except OSError as exc:
 finally:
     s.close()
 PY
+fi
 
 echo "[build-app] Done: $APP_DIR"
-echo "[build-app] Socket: $SOCKET_PATH"
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    echo "[build-app] Socket: $SOCKET_PATH"
+else
+    echo "[build-app] Socket: unchanged (canonical service preserved)"
+fi
 echo "[build-app] DB: ~/.local/share/brainlayer/brainlayer.db"
