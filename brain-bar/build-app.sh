@@ -129,9 +129,9 @@ plist_set_string() {
     local value="$3"
 
     if "$PLIST_BUDDY" -c "Print :$key" "$plist_path" >/dev/null 2>&1; then
-        "$PLIST_BUDDY" -c "Set :$key $value" "$plist_path"
+        "$PLIST_BUDDY" -c "Set :$key \"$value\"" "$plist_path"
     else
-        "$PLIST_BUDDY" -c "Add :$key string $value" "$plist_path"
+        "$PLIST_BUDDY" -c "Add :$key string \"$value\"" "$plist_path"
     fi
 }
 
