@@ -57,11 +57,14 @@ def _run_build_script(
     canonical_root: Path,
     home: Path,
     extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("BRAINBAR_APP_DIR", None)
     env["HOME"] = str(home)
     env["BRAINBAR_CANONICAL_REPO_ROOT"] = str(canonical_root)
+    if extra_env:
+        env.update(extra_env)
     cmd = ["bash", str(script), "--dry-run"]
     if extra_args:
         cmd.extend(extra_args)
@@ -202,7 +205,7 @@ def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) ->
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
 
 
-def test_build_app_ignores_parent_brainbar_app_dir_in_canonical_dry_run(
+def test_run_build_script_strips_parent_brainbar_app_dir_for_test_isolation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -221,6 +224,24 @@ def test_build_app_ignores_parent_brainbar_app_dir_in_canonical_dry_run(
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
     assert "leaked.app" not in result.stdout
+
+
+def test_build_app_honors_explicit_brainbar_app_dir_for_canonical_dry_run(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+    explicit_app_dir = tmp_path / "custom" / "BrainBar-Custom.app"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={"BRAINBAR_APP_DIR": str(explicit_app_dir)},
+    )
+
+    assert result.returncode == 0
+    assert str(explicit_app_dir) in result.stdout
 
 
 def test_build_app_rejects_untracked_dirty_repo_even_when_status_hides_untracked_files(tmp_path: Path) -> None:
