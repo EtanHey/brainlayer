@@ -18,6 +18,42 @@ PLIST_SRC="$BUNDLE_DIR/$PLIST_FILENAME"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
+
+git_commit() {
+    git -C "$PACKAGE_DIR" rev-parse HEAD
+}
+
+git_describe() {
+    git -C "$PACKAGE_DIR" describe --always --dirty
+}
+
+build_time_utc() {
+    date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+plist_set_string() {
+    local plist_path="$1"
+    local key="$2"
+    local value="$3"
+
+    if "$PLIST_BUDDY" -c "Print :$key" "$plist_path" >/dev/null 2>&1; then
+        "$PLIST_BUDDY" -c "Set :$key $value" "$plist_path"
+    else
+        "$PLIST_BUDDY" -c "Add :$key string $value" "$plist_path"
+    fi
+}
+
+stamp_info_plist() {
+    local plist_path="$1"
+    local commit_sha="$2"
+    local describe_ref="$3"
+    local build_utc="$4"
+
+    plist_set_string "$plist_path" "GitCommit" "$commit_sha"
+    plist_set_string "$plist_path" "GitDescribe" "$describe_ref"
+    plist_set_string "$plist_path" "BuildTimeUTC" "$build_utc"
+}
 
 bootout_launchagent() {
     launchctl bootout "$LAUNCH_DOMAIN/$PLIST_LABEL" 2>/dev/null || true
@@ -87,6 +123,15 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
+
+COMMIT_SHA="$(git_commit)"
+DESCRIBE_REF="$(git_describe)"
+BUILD_UTC="$(build_time_utc)"
+stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC"
+echo "[build-app] Stamped Info.plist:"
+echo "  GitCommit=$COMMIT_SHA"
+echo "  GitDescribe=$DESCRIBE_REF"
+echo "  BuildTimeUTC=$BUILD_UTC"
 
 # Developer signing keeps TCC permissions stable across rebuilds.
 echo "[build-app] Signing..."
