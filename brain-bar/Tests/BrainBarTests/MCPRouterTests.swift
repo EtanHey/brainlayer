@@ -9,6 +9,54 @@ import XCTest
 import SQLite3
 @testable import BrainBar
 
+private func collectStringFields(in schema: [String: Any], path: String = "") -> [(String, [String: Any])] {
+    guard let type = schema["type"] as? String else {
+        return []
+    }
+
+    switch type {
+    case "string":
+        return [(path, schema)]
+    case "array":
+        if let items = schema["items"] as? [String: Any], (items["type"] as? String) == "string" {
+            return [("\(path)[]", items)]
+        }
+        return []
+    case "object":
+        let properties = schema["properties"] as? [String: Any] ?? [:]
+        return properties.flatMap { propertyName, value -> [(String, [String: Any])] in
+            guard let propertySchema = value as? [String: Any] else { return [] }
+            let nextPath = path.isEmpty ? propertyName : "\(path).\(propertyName)"
+            return collectStringFields(in: propertySchema, path: nextPath)
+        }
+    default:
+        return []
+    }
+}
+
+private func collectStringArrays(in schema: [String: Any], path: String = "") -> [(String, [String: Any], [String: Any])] {
+    guard let type = schema["type"] as? String else {
+        return []
+    }
+
+    switch type {
+    case "array":
+        if let items = schema["items"] as? [String: Any], (items["type"] as? String) == "string" {
+            return [(path, schema, items)]
+        }
+        return []
+    case "object":
+        let properties = schema["properties"] as? [String: Any] ?? [:]
+        return properties.flatMap { propertyName, value -> [(String, [String: Any], [String: Any])] in
+            guard let propertySchema = value as? [String: Any] else { return [] }
+            let nextPath = path.isEmpty ? propertyName : "\(path).\(propertyName)"
+            return collectStringArrays(in: propertySchema, path: nextPath)
+        }
+    default:
+        return []
+    }
+}
+
 final class MCPRouterTests: XCTestCase {
 
     // MARK: - Initialize
@@ -108,15 +156,23 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
-    func testEachToolHasExpectedAnnotations() throws {
+            "brain_entity": (true, false, true, false),
         let router = MCPRouter()
+            "brain_digest": (false, false, false, false),
         let request: [String: Any] = [
+            "brain_update": (false, false, true, false),
             "jsonrpc": "2.0",
+            "brain_expand": (true, false, true, false),
             "id": 12,
+            "brain_tags": (true, false, true, false),
             "method": "tools/list",
+            "brain_subscribe": (false, false, false, false),
         ]
+            "brain_unsubscribe": (false, false, true, false),
 
+            "brain_ack": (false, false, true, false),
         let response = router.handle(request)
+            XCTAssertEqual(annotations?["openWorldHint"] as? Bool, taxonomy.openWorld, "\(name) openWorldHint mismatch")
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
         let toolsByName = Dictionary(
             uniqueKeysWithValues: tools.compactMap { tool -> (String, [String: Any])? in
@@ -127,16 +183,6 @@ final class MCPRouterTests: XCTestCase {
 
         let expected: [String: (readOnly: Bool, destructive: Bool, idempotent: Bool, openWorld: Bool)] = [
             "brain_search": (true, false, true, false),
-            "brain_store": (false, false, false, false),
-            "brain_recall": (true, false, true, false),
-            "brain_entity": (true, false, true, false),
-            "brain_digest": (false, false, false, false),
-            "brain_update": (false, false, true, false),
-            "brain_expand": (true, false, true, false),
-            "brain_tags": (true, false, true, false),
-            "brain_subscribe": (false, false, false, false),
-            "brain_unsubscribe": (false, false, true, false),
-            "brain_ack": (false, false, true, false),
         ]
 
         XCTAssertEqual(toolsByName.count, expected.count)
@@ -147,7 +193,22 @@ final class MCPRouterTests: XCTestCase {
             XCTAssertEqual(annotations?["readOnlyHint"] as? Bool, taxonomy.readOnly, "\(name) readOnlyHint mismatch")
             XCTAssertEqual(annotations?["destructiveHint"] as? Bool, taxonomy.destructive, "\(name) destructiveHint mismatch")
             XCTAssertEqual(annotations?["idempotentHint"] as? Bool, taxonomy.idempotent, "\(name) idempotentHint mismatch")
-            XCTAssertEqual(annotations?["openWorldHint"] as? Bool, taxonomy.openWorld, "\(name) openWorldHint mismatch")
+            "brain_store": (false, false, false, false),
+            "brain_recall": (true, false, true, false),
+    func testEachToolHasExpectedAnnotations() throws {
+        for tool in MCPRouter.toolDefinitions {
+            let name = tool["name"] as? String ?? "unknown"
+            let schema = try XCTUnwrap(tool["inputSchema"] as? [String: Any], "\(name) missing inputSchema")
+
+            for (fieldPath, stringSchema) in collectStringFields(in: schema) {
+                XCTAssertNotNil(stringSchema["maxLength"] as? Int, "\(name).\(fieldPath) must declare maxLength")
+            }
+
+            for (fieldPath, arraySchema, itemSchema) in collectStringArrays(in: schema) {
+                XCTAssertNotNil(arraySchema["maxItems"] as? Int, "\(name).\(fieldPath) must declare maxItems")
+                XCTAssertNotNil(itemSchema["maxLength"] as? Int, "\(name).\(fieldPath)[] must declare maxLength")
+            }
+    func testEachToolSchemaBoundsStringInputs() throws {
         }
     }
 
@@ -190,6 +251,29 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertNotNil(error, "Unknown tool should return JSON-RPC error")
         XCTAssertEqual(error?["code"] as? Int, -32601, "Should be method-not-found error")
+    }
+
+    func testBrainDigestRejectsOversizedContentAtSchemaLayer() throws {
+        let router = MCPRouter()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": [
+                    "content": String(repeating: "x", count: 200_001)
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(text.contains("Schema validation error"))
+        XCTAssertTrue(text.contains("content length 200001 exceeds maxLength 200000"))
     }
 
     func testBrainSubscribeToolIsServerHandled() throws {

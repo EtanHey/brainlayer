@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from copy import deepcopy
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,90 @@ _DESTRUCTIVE = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=False,
 )
+
+_DEFAULT_STRING_MAX_LENGTH = 256
+_DEFAULT_STRING_ARRAY_MAX_ITEMS = 100
+_INPUT_STRING_MAX_LENGTHS = {
+    "action": 64,
+    "agent_id": 128,
+    "chunk_id": 128,
+    "content": 200_000,
+    "content_type": 64,
+    "content_type_filter": 64,
+    "context": 4_096,
+    "correction_category": 128,
+    "date_from": 32,
+    "date_to": 32,
+    "detail": 16,
+    "entity_id": 128,
+    "entity_type": 64,
+    "file_path": 1_024,
+    "function_name": 256,
+    "intent": 32,
+    "mode": 32,
+    "name": 256,
+    "new_chunk_id": 128,
+    "old_chunk_id": 128,
+    "outcome": 32,
+    "pattern": 256,
+    "plan_name": 256,
+    "project": 256,
+    "query": 4_096,
+    "reason": 1_024,
+    "reversibility": 32,
+    "safety_check": 32,
+    "sentiment": 32,
+    "sentiment_filter": 32,
+    "session_id": 128,
+    "severity": 16,
+    "source": 32,
+    "source_filter": 512,
+    "status": 32,
+    "supersedes": 128,
+    "tag": 128,
+    "title": 512,
+    "type": 32,
+}
+_INPUT_STRING_ARRAY_LIMITS = {
+    "chunk_ids": {"max_items": 500, "item_max_length": 128},
+    "files_changed": {"max_items": 200, "item_max_length": 1_024},
+    "merge_chunk_ids": {"max_items": 100, "item_max_length": 128},
+    "participants": {"max_items": 100, "item_max_length": 256},
+    "tags": {"max_items": 100, "item_max_length": 128},
+}
+
+
+def _bounded_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Apply uniform input caps to string fields before exposing MCP schemas."""
+    bounded = deepcopy(schema)
+    _apply_input_limits(bounded)
+    return bounded
+
+
+def _apply_input_limits(node: Any, field_name: str | None = None) -> None:
+    if not isinstance(node, dict):
+        return
+
+    node_type = node.get("type")
+    if node_type == "string":
+        node.setdefault("maxLength", _INPUT_STRING_MAX_LENGTHS.get(field_name, _DEFAULT_STRING_MAX_LENGTH))
+        return
+
+    if node_type == "array":
+        items = node.get("items")
+        if isinstance(items, dict) and items.get("type") == "string":
+            limits = _INPUT_STRING_ARRAY_LIMITS.get(
+                field_name,
+                {"max_items": _DEFAULT_STRING_ARRAY_MAX_ITEMS, "item_max_length": _DEFAULT_STRING_MAX_LENGTH},
+            )
+            node.setdefault("maxItems", limits["max_items"])
+            items.setdefault("maxLength", limits["item_max_length"])
+        _apply_input_limits(items, field_name)
+        return
+
+    for prop_name, prop_schema in node.get("properties", {}).items():
+        _apply_input_limits(prop_schema, prop_name)
+
 
 # --- Output schemas ---
 
@@ -297,140 +382,142 @@ Auto-routes based on input:
 - "history of X" / "discussed about X" → topic recall
 - Default → hybrid semantic + keyword search""",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural language search query (e.g., 'how did I implement authentication', 'what happened with auth.ts', 'what am I working on')",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural language search query (e.g., 'how did I implement authentication', 'what happened with auth.ts', 'what am I working on')",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Filter by project name. Encoded/worktree names are auto-normalized.",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path to search for (e.g., 'auth.ts'). Triggers file-aware routing: timeline + related knowledge. Add regression signals in query for regression analysis.",
+                        },
+                        "chunk_id": {
+                            "type": "string",
+                            "description": "Expand context around a specific chunk from a previous search result.",
+                        },
+                        "content_type": {
+                            "type": "string",
+                            "enum": [
+                                "ai_code",
+                                "stack_trace",
+                                "user_message",
+                                "assistant_text",
+                                "file_read",
+                                "git_diff",
+                            ],
+                            "description": "Filter by content type (search mode only)",
+                        },
+                        "source": {
+                            "type": "string",
+                            "enum": ["claude_code", "whatsapp", "youtube", "all"],
+                            "description": "Filter by data source (default: claude_code). Use 'all' to search everything.",
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Filter by tag (e.g. 'bug-fix', 'authentication', 'typescript')",
+                        },
+                        "intent": {
+                            "type": "string",
+                            "enum": [
+                                "debugging",
+                                "designing",
+                                "configuring",
+                                "discussing",
+                                "deciding",
+                                "implementing",
+                                "reviewing",
+                            ],
+                            "description": "Filter by intent classification",
+                        },
+                        "importance_min": {
+                            "type": "number",
+                            "description": "Minimum importance score (1-10)",
+                        },
+                        "date_from": {
+                            "type": "string",
+                            "description": "Filter results from this date (ISO 8601, e.g. '2026-02-01')",
+                        },
+                        "date_to": {
+                            "type": "string",
+                            "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')",
+                        },
+                        "sentiment": {
+                            "type": "string",
+                            "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
+                            "description": "Filter by sentiment label (Phase 6)",
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "default": 5,
+                            "minimum": 1,
+                            "maximum": 100,
+                            "description": "Number of results to return (default: 5, max: 100)",
+                        },
+                        "before": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 0,
+                            "maximum": 50,
+                            "description": "Context chunks before target (chunk_id mode only)",
+                        },
+                        "after": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 0,
+                            "maximum": 50,
+                            "description": "Context chunks after target (chunk_id mode only)",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "default": 10,
+                            "description": "Maximum results for think/recall modes (default: 10)",
+                        },
+                        "entity_id": {
+                            "type": "string",
+                            "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
+                        },
+                        "sentiment_filter": {
+                            "type": "string",
+                            "enum": ["positive", "negative", "neutral", "mixed"],
+                            "description": "Filter results by sentiment label. Alias for 'sentiment' with standardized values.",
+                        },
+                        "content_type_filter": {
+                            "type": "string",
+                            "enum": [
+                                "user_message",
+                                "assistant_text",
+                                "ai_code",
+                                "learning",
+                                "decision",
+                                "bug_fix",
+                            ],
+                            "description": "Filter by content type. Alias for 'content_type' with extended value set including enrichment types.",
+                        },
+                        "source_filter": {
+                            "type": "string",
+                            "description": "Filter by source file pattern (SQL LIKE match, e.g. '%youtube%'). More flexible than 'source' enum.",
+                        },
+                        "correction_category": {
+                            "type": "string",
+                            "description": "Filter by correction type tag (e.g. 'correction:preference', 'correction:factual', 'correction:naming'). Matches chunks tagged with the given correction category.",
+                        },
+                        "detail": {
+                            "type": "string",
+                            "enum": ["compact", "full"],
+                            "default": "compact",
+                            "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary. 'full': returns full content + all metadata fields. Use 'full' when you need the complete text of a result.",
+                        },
                     },
-                    "project": {
-                        "type": "string",
-                        "description": "Filter by project name. Encoded/worktree names are auto-normalized.",
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "File path to search for (e.g., 'auth.ts'). Triggers file-aware routing: timeline + related knowledge. Add regression signals in query for regression analysis.",
-                    },
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "Expand context around a specific chunk from a previous search result.",
-                    },
-                    "content_type": {
-                        "type": "string",
-                        "enum": [
-                            "ai_code",
-                            "stack_trace",
-                            "user_message",
-                            "assistant_text",
-                            "file_read",
-                            "git_diff",
-                        ],
-                        "description": "Filter by content type (search mode only)",
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": ["claude_code", "whatsapp", "youtube", "all"],
-                        "description": "Filter by data source (default: claude_code). Use 'all' to search everything.",
-                    },
-                    "tag": {
-                        "type": "string",
-                        "description": "Filter by tag (e.g. 'bug-fix', 'authentication', 'typescript')",
-                    },
-                    "intent": {
-                        "type": "string",
-                        "enum": [
-                            "debugging",
-                            "designing",
-                            "configuring",
-                            "discussing",
-                            "deciding",
-                            "implementing",
-                            "reviewing",
-                        ],
-                        "description": "Filter by intent classification",
-                    },
-                    "importance_min": {
-                        "type": "number",
-                        "description": "Minimum importance score (1-10)",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Filter results from this date (ISO 8601, e.g. '2026-02-01')",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Filter results up to this date (ISO 8601, e.g. '2026-02-19')",
-                    },
-                    "sentiment": {
-                        "type": "string",
-                        "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
-                        "description": "Filter by sentiment label (Phase 6)",
-                    },
-                    "num_results": {
-                        "type": "integer",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Number of results to return (default: 5, max: 100)",
-                    },
-                    "before": {
-                        "type": "integer",
-                        "default": 3,
-                        "minimum": 0,
-                        "maximum": 50,
-                        "description": "Context chunks before target (chunk_id mode only)",
-                    },
-                    "after": {
-                        "type": "integer",
-                        "default": 3,
-                        "minimum": 0,
-                        "maximum": 50,
-                        "description": "Context chunks after target (chunk_id mode only)",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Maximum results for think/recall modes (default: 10)",
-                    },
-                    "entity_id": {
-                        "type": "string",
-                        "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
-                    },
-                    "sentiment_filter": {
-                        "type": "string",
-                        "enum": ["positive", "negative", "neutral", "mixed"],
-                        "description": "Filter results by sentiment label. Alias for 'sentiment' with standardized values.",
-                    },
-                    "content_type_filter": {
-                        "type": "string",
-                        "enum": [
-                            "user_message",
-                            "assistant_text",
-                            "ai_code",
-                            "learning",
-                            "decision",
-                            "bug_fix",
-                        ],
-                        "description": "Filter by content type. Alias for 'content_type' with extended value set including enrichment types.",
-                    },
-                    "source_filter": {
-                        "type": "string",
-                        "description": "Filter by source file pattern (SQL LIKE match, e.g. '%youtube%'). More flexible than 'source' enum.",
-                    },
-                    "correction_category": {
-                        "type": "string",
-                        "description": "Filter by correction type tag (e.g. 'correction:preference', 'correction:factual', 'correction:naming'). Matches chunks tagged with the given correction category.",
-                    },
-                    "detail": {
-                        "type": "string",
-                        "enum": ["compact", "full"],
-                        "default": "compact",
-                        "description": "Result detail level. 'compact' (default): returns snippet (150 chars), chunk_id, score, date, project, summary. 'full': returns full content + all metadata fields. Use 'full' when you need the complete text of a result.",
-                    },
-                },
-                "required": ["query"],
-            },
+                    "required": ["query"],
+                }
+            ),
         ),
         Tool(
             name="brain_store",
@@ -441,101 +528,103 @@ Type is auto-detected from content if omitted (e.g., "Always use bun" → decisi
 
 Returns: Structured JSON with `chunk_id` (string) and `related[]` (similar existing memories).""",
             annotations=_WRITE,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The text content to store (e.g., a decision, learning, idea)",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The text content to store (e.g., a decision, learning, idea)",
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "idea",
+                                "mistake",
+                                "decision",
+                                "learning",
+                                "todo",
+                                "bookmark",
+                                "note",
+                                "journal",
+                                "issue",
+                            ],
+                            "description": "Memory type. Auto-detected from content if omitted.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional: project name to scope the memory",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional: tags for categorization (e.g., ['reliability', 'api'])",
+                        },
+                        "importance": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                            "description": "Optional: importance score 1-10. Auto-scored from content if omitted.",
+                        },
+                        "confidence_score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Decision confidence (0-1). Only for type=decision.",
+                        },
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["pending", "validated", "reversed"],
+                            "description": "Decision outcome. Only for type=decision.",
+                        },
+                        "reversibility": {
+                            "type": "string",
+                            "enum": ["easy", "hard", "destructive"],
+                            "description": "How hard to reverse. Only for type=decision.",
+                        },
+                        "files_changed": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files affected by this decision.",
+                        },
+                        "entity_id": {
+                            "type": "string",
+                            "description": "Link this memory to an entity (e.g., a person). The stored chunk will be linked via kg_entity_chunks for per-person memory retrieval.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["open", "in_progress", "done", "archived"],
+                            "description": "Issue lifecycle status. Only for type=issue. Defaults to 'open'.",
+                        },
+                        "severity": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                            "description": "Issue severity. Only for type=issue.",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Code file reference (e.g., 'src/brainlayer/mcp/__init__.py'). Only for type=issue.",
+                        },
+                        "function_name": {
+                            "type": "string",
+                            "description": "Function/method reference. Only for type=issue.",
+                        },
+                        "line_number": {
+                            "type": "integer",
+                            "description": "Line number reference. Only for type=issue.",
+                        },
+                        "supersedes": {
+                            "type": "string",
+                            "description": "Optional chunk_id to supersede. The old chunk is marked as superseded by this new one and removed from default search.",
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Optional stable agent identifier. Tags the stored chunk with the agent's identity for per-agent scoping and attribution.",
+                        },
                     },
-                    "type": {
-                        "type": "string",
-                        "enum": [
-                            "idea",
-                            "mistake",
-                            "decision",
-                            "learning",
-                            "todo",
-                            "bookmark",
-                            "note",
-                            "journal",
-                            "issue",
-                        ],
-                        "description": "Memory type. Auto-detected from content if omitted.",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Optional: project name to scope the memory",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional: tags for categorization (e.g., ['reliability', 'api'])",
-                    },
-                    "importance": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
-                        "description": "Optional: importance score 1-10. Auto-scored from content if omitted.",
-                    },
-                    "confidence_score": {
-                        "type": "number",
-                        "minimum": 0,
-                        "maximum": 1,
-                        "description": "Decision confidence (0-1). Only for type=decision.",
-                    },
-                    "outcome": {
-                        "type": "string",
-                        "enum": ["pending", "validated", "reversed"],
-                        "description": "Decision outcome. Only for type=decision.",
-                    },
-                    "reversibility": {
-                        "type": "string",
-                        "enum": ["easy", "hard", "destructive"],
-                        "description": "How hard to reverse. Only for type=decision.",
-                    },
-                    "files_changed": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Files affected by this decision.",
-                    },
-                    "entity_id": {
-                        "type": "string",
-                        "description": "Link this memory to an entity (e.g., a person). The stored chunk will be linked via kg_entity_chunks for per-person memory retrieval.",
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["open", "in_progress", "done", "archived"],
-                        "description": "Issue lifecycle status. Only for type=issue. Defaults to 'open'.",
-                    },
-                    "severity": {
-                        "type": "string",
-                        "enum": ["critical", "high", "medium", "low"],
-                        "description": "Issue severity. Only for type=issue.",
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "Code file reference (e.g., 'src/brainlayer/mcp/__init__.py'). Only for type=issue.",
-                    },
-                    "function_name": {
-                        "type": "string",
-                        "description": "Function/method reference. Only for type=issue.",
-                    },
-                    "line_number": {
-                        "type": "integer",
-                        "description": "Line number reference. Only for type=issue.",
-                    },
-                    "supersedes": {
-                        "type": "string",
-                        "description": "Optional chunk_id to supersede. The old chunk is marked as superseded by this new one and removed from default search.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional stable agent identifier. Tags the stored chunk with the agent's identity for per-agent scoping and attribution.",
-                    },
-                },
-                "required": ["content"],
-            },
+                    "required": ["content"],
+                }
+            ),
             outputSchema=_STORE_OUTPUT_SCHEMA,
         ),
         Tool(
@@ -551,27 +640,29 @@ Otherwise, memories are ordered by their entity-chunk relevance score.
 
 Designed for copilot agents that need full person context in a single call.""",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Person name to look up (e.g., 'Avi Simon'). Searches by FTS + semantic match.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Person name to look up (e.g., 'Avi Simon'). Searches by FTS + semantic match.",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional meeting/conversation context to rank memories by relevance (e.g., 'schedule a meeting next week about product roadmap').",
+                        },
+                        "num_memories": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": 50,
+                            "description": "Number of memory chunks to return (default: 10).",
+                        },
                     },
-                    "context": {
-                        "type": "string",
-                        "description": "Optional meeting/conversation context to rank memories by relevance (e.g., 'schedule a meeting next week about product roadmap').",
-                    },
-                    "num_memories": {
-                        "type": "integer",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 50,
-                        "description": "Number of memory chunks to return (default: 10).",
-                    },
-                },
-                "required": ["name"],
-            },
+                    "required": ["name"],
+                }
+            ),
         ),
         Tool(
             name="brain_recall",
@@ -594,136 +685,147 @@ Smart routing when mode is omitted:
 - Capitalized proper noun (e.g. "BrainLayer", "Etan Heyman") → entity mode
 - Everything else → search mode""",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query or entity name. Required for mode=search and mode=entity. Triggers smart mode detection when mode is omitted.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query or entity name. Required for mode=search and mode=entity. Triggers smart mode detection when mode is omitted.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "search",
+                                "entity",
+                                "context",
+                                "sessions",
+                                "operations",
+                                "plan",
+                                "summary",
+                                "stats",
+                            ],
+                            "description": "Recall mode. Auto-detected from query if omitted.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Filter by project name.",
+                        },
+                        "hours": {
+                            "type": "integer",
+                            "default": 24,
+                            "description": "How many hours back to look (mode=context, default: 24)",
+                        },
+                        "days": {
+                            "type": "integer",
+                            "default": 7,
+                            "minimum": 1,
+                            "maximum": 365,
+                            "description": "How many days back (mode=sessions, default: 7)",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 20,
+                            "minimum": 1,
+                            "maximum": 100,
+                            "description": "Max sessions to return (mode=sessions, default: 20)",
+                        },
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID (required for mode=operations/summary, optional for mode=plan)",
+                        },
+                        "plan_name": {
+                            "type": "string",
+                            "description": "Plan name (mode=plan, e.g. 'local-llm-integration')",
+                        },
+                        "entity_type": {
+                            "type": "string",
+                            "enum": [
+                                "person",
+                                "constraint",
+                                "preference",
+                                "life_event",
+                                "meeting",
+                                "location",
+                                "organization",
+                            ],
+                            "description": "Filter by entity type (mode=entity only)",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "File path to search for (mode=search). Triggers file-aware routing.",
+                        },
+                        "chunk_id": {
+                            "type": "string",
+                            "description": "Expand context around a specific chunk (mode=search).",
+                        },
+                        "content_type": {
+                            "type": "string",
+                            "enum": [
+                                "ai_code",
+                                "stack_trace",
+                                "user_message",
+                                "assistant_text",
+                                "file_read",
+                                "git_diff",
+                            ],
+                            "description": "Filter by content type (mode=search only)",
+                        },
+                        "source": {
+                            "type": "string",
+                            "enum": ["claude_code", "whatsapp", "youtube", "all"],
+                            "description": "Filter by data source (mode=search, default: claude_code).",
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Filter by tag (mode=search, e.g. 'bug-fix')",
+                        },
+                        "intent": {
+                            "type": "string",
+                            "enum": [
+                                "debugging",
+                                "designing",
+                                "configuring",
+                                "discussing",
+                                "deciding",
+                                "implementing",
+                                "reviewing",
+                            ],
+                            "description": "Filter by intent classification (mode=search)",
+                        },
+                        "importance_min": {
+                            "type": "number",
+                            "description": "Minimum importance score 1-10 (mode=search)",
+                        },
+                        "date_from": {
+                            "type": "string",
+                            "description": "Filter results from this date (ISO 8601, mode=search)",
+                        },
+                        "date_to": {
+                            "type": "string",
+                            "description": "Filter results up to this date (ISO 8601, mode=search)",
+                        },
+                        "sentiment": {
+                            "type": "string",
+                            "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
+                            "description": "Filter by sentiment label (mode=search)",
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "default": 5,
+                            "minimum": 1,
+                            "maximum": 100,
+                            "description": "Number of results (mode=search, default: 5)",
+                        },
+                        "detail": {
+                            "type": "string",
+                            "enum": ["compact", "full"],
+                            "default": "compact",
+                            "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
+                        },
                     },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["search", "entity", "context", "sessions", "operations", "plan", "summary", "stats"],
-                        "description": "Recall mode. Auto-detected from query if omitted.",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Filter by project name.",
-                    },
-                    "hours": {
-                        "type": "integer",
-                        "default": 24,
-                        "description": "How many hours back to look (mode=context, default: 24)",
-                    },
-                    "days": {
-                        "type": "integer",
-                        "default": 7,
-                        "minimum": 1,
-                        "maximum": 365,
-                        "description": "How many days back (mode=sessions, default: 7)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 20,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Max sessions to return (mode=sessions, default: 20)",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID (required for mode=operations/summary, optional for mode=plan)",
-                    },
-                    "plan_name": {
-                        "type": "string",
-                        "description": "Plan name (mode=plan, e.g. 'local-llm-integration')",
-                    },
-                    "entity_type": {
-                        "type": "string",
-                        "enum": [
-                            "person",
-                            "constraint",
-                            "preference",
-                            "life_event",
-                            "meeting",
-                            "location",
-                            "organization",
-                        ],
-                        "description": "Filter by entity type (mode=entity only)",
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "File path to search for (mode=search). Triggers file-aware routing.",
-                    },
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "Expand context around a specific chunk (mode=search).",
-                    },
-                    "content_type": {
-                        "type": "string",
-                        "enum": [
-                            "ai_code",
-                            "stack_trace",
-                            "user_message",
-                            "assistant_text",
-                            "file_read",
-                            "git_diff",
-                        ],
-                        "description": "Filter by content type (mode=search only)",
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": ["claude_code", "whatsapp", "youtube", "all"],
-                        "description": "Filter by data source (mode=search, default: claude_code).",
-                    },
-                    "tag": {
-                        "type": "string",
-                        "description": "Filter by tag (mode=search, e.g. 'bug-fix')",
-                    },
-                    "intent": {
-                        "type": "string",
-                        "enum": [
-                            "debugging",
-                            "designing",
-                            "configuring",
-                            "discussing",
-                            "deciding",
-                            "implementing",
-                            "reviewing",
-                        ],
-                        "description": "Filter by intent classification (mode=search)",
-                    },
-                    "importance_min": {
-                        "type": "number",
-                        "description": "Minimum importance score 1-10 (mode=search)",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Filter results from this date (ISO 8601, mode=search)",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Filter results up to this date (ISO 8601, mode=search)",
-                    },
-                    "sentiment": {
-                        "type": "string",
-                        "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
-                        "description": "Filter by sentiment label (mode=search)",
-                    },
-                    "num_results": {
-                        "type": "integer",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Number of results (mode=search, default: 5)",
-                    },
-                    "detail": {
-                        "type": "string",
-                        "enum": ["compact", "full"],
-                        "default": "compact",
-                        "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
-                    },
-                },
-            },
+                }
+            ),
         ),
         Tool(
             name="brain_digest",
@@ -741,203 +843,213 @@ How it differs from brain_store:
 - brain_store = fast write, minimal processing, optimized for immediate capture
 - brain_digest = slower deep enrichment, may call Gemini, intended for richer indexing""",
             annotations=_WRITE,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["digest", "enrich", "connect"],
-                        "description": "digest (default): ingest content and store. connect: search→connect→propose without storing (returns proposal). enrich: run realtime enrichment on existing DB chunks.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["digest", "enrich", "connect"],
+                            "description": "digest (default): ingest content and store. connect: search→connect→propose without storing (returns proposal). enrich: run realtime enrichment on existing DB chunks.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Raw text content to deeply digest and enrich (research, audit, transcript, article, meeting notes)",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Optional title for the content",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project name to associate with",
+                        },
+                        "participants": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of known participant names (improves entity extraction)",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 25,
+                            "minimum": 1,
+                            "maximum": 5000,
+                            "description": "For mode=enrich: max number of existing chunks to enrich via realtime mode.",
+                        },
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Raw text content to deeply digest and enrich (research, audit, transcript, article, meeting notes)",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Optional title for the content",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Optional project name to associate with",
-                    },
-                    "participants": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of known participant names (improves entity extraction)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 25,
-                        "minimum": 1,
-                        "maximum": 5000,
-                        "description": "For mode=enrich: max number of existing chunks to enrich via realtime mode.",
-                    },
-                },
-                "required": [],
-            },
+                    "required": [],
+                }
+            ),
         ),
         Tool(
             name="brain_entity",
             title="Entity Lookup",
             description="""Look up a known entity (person, project, technology) and its relationships from the knowledge graph. Use when asked about a specific named entity or to explore connections between entities. Returns entity details plus connected entities via kg_relations. Does NOT do fuzzy topic search — use brain_search for that.""",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Entity name or search query (e.g., 'Etan Heyman', 'brainlayer', 'Cantaloupe AI')",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Entity name or search query (e.g., 'Etan Heyman', 'brainlayer', 'Cantaloupe AI')",
+                        },
+                        "entity_type": {
+                            "type": "string",
+                            "enum": [
+                                "person",
+                                "agent",
+                                "golem",
+                                "tool",
+                                "platform",
+                                "project",
+                                "technology",
+                                "library",
+                                "organization",
+                                "company",
+                                "topic",
+                                "concept",
+                                "workflow",
+                                "skill",
+                                "decision",
+                                "protocol",
+                                "health_metric",
+                                "community",
+                                "device",
+                                "event",
+                                "location",
+                            ],
+                            "description": "Optional: filter by entity type",
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["lookup", "list"],
+                            "default": "lookup",
+                            "description": "lookup: find specific entity by name (default). list: browse entities by type with pagination.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 20,
+                            "minimum": 1,
+                            "maximum": 100,
+                            "description": "Max results for list action.",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "default": 0,
+                            "minimum": 0,
+                            "description": "Pagination offset for list action.",
+                        },
                     },
-                    "entity_type": {
-                        "type": "string",
-                        "enum": [
-                            "person",
-                            "agent",
-                            "golem",
-                            "tool",
-                            "platform",
-                            "project",
-                            "technology",
-                            "library",
-                            "organization",
-                            "company",
-                            "topic",
-                            "concept",
-                            "workflow",
-                            "skill",
-                            "decision",
-                            "protocol",
-                            "health_metric",
-                            "community",
-                            "device",
-                            "event",
-                            "location",
-                        ],
-                        "description": "Optional: filter by entity type",
-                    },
-                    "action": {
-                        "type": "string",
-                        "enum": ["lookup", "list"],
-                        "default": "lookup",
-                        "description": "lookup: find specific entity by name (default). list: browse entities by type with pagination.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 20,
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Max results for list action.",
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "default": 0,
-                        "minimum": 0,
-                        "description": "Pagination offset for list action.",
-                    },
-                },
-                "required": [],
-            },
+                    "required": [],
+                }
+            ),
         ),
         Tool(
             name="brain_expand",
             title="Expand Chunk Context",
             description="Deprecated. Use brain_search with detail='full' to get full chunk content, or brain_recall with conversation_id to get session context.",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "The chunk_id from a brain_search result to expand.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "chunk_id": {
+                            "type": "string",
+                            "description": "The chunk_id from a brain_search result to expand.",
+                        },
+                        "context": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": "Number of surrounding chunks to include (before and after). Default: 3.",
+                        },
                     },
-                    "context": {
-                        "type": "integer",
-                        "default": 3,
-                        "minimum": 0,
-                        "maximum": 20,
-                        "description": "Number of surrounding chunks to include (before and after). Default: 3.",
-                    },
-                },
-                "required": ["chunk_id"],
-            },
+                    "required": ["chunk_id"],
+                }
+            ),
         ),
         Tool(
             name="brain_update",
             title="Update or Archive Memory",
             description="Deprecated. Use brain_store with supersedes param to replace a memory, or brain_archive/brain_supersede for lifecycle management.",
             annotations=_WRITE_IDEMPOTENT,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["update", "archive", "merge"],
-                        "description": "What to do: update fields, archive (soft-delete), or merge duplicates",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["update", "archive", "merge"],
+                            "description": "What to do: update fields, archive (soft-delete), or merge duplicates",
+                        },
+                        "chunk_id": {
+                            "type": "string",
+                            "description": "The chunk ID to update or archive. For merge, this is the chunk to keep.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "New content (update only). Will be re-embedded.",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "New tags (update only). Replaces existing tags.",
+                        },
+                        "importance": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                            "description": "New importance score (update only).",
+                        },
+                        "merge_chunk_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "For merge: additional chunk IDs to archive (duplicates of chunk_id).",
+                        },
                     },
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "The chunk ID to update or archive. For merge, this is the chunk to keep.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "New content (update only). Will be re-embedded.",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "New tags (update only). Replaces existing tags.",
-                    },
-                    "importance": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
-                        "description": "New importance score (update only).",
-                    },
-                    "merge_chunk_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "For merge: additional chunk IDs to archive (duplicates of chunk_id).",
-                    },
-                },
-                "required": ["action", "chunk_id"],
-            },
+                    "required": ["action", "chunk_id"],
+                }
+            ),
         ),
         Tool(
             name="brain_tags",
             title="Tag Discovery",
             description="Deprecated. Use brain_recall(mode='search', tag='prefix') to find tagged memories, or brain_store(tags=[...]) to tag when storing.",
             annotations=_READ_ONLY,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["list", "search", "suggest"],
-                        "description": "What to do: list top tags, search by prefix, or suggest tags for content.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "search", "suggest"],
+                            "description": "What to do: list top tags, search by prefix, or suggest tags for content.",
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Tag prefix or pattern to match (required for action='search').",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Text content to suggest tags for (required for action='suggest').",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional: filter by project name (action='list' only).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 20,
+                            "minimum": 1,
+                            "maximum": 200,
+                            "description": "Maximum number of tags to return (default: 20).",
+                        },
                     },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Tag prefix or pattern to match (required for action='search').",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Text content to suggest tags for (required for action='suggest').",
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Optional: filter by project name (action='list' only).",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 20,
-                        "minimum": 1,
-                        "maximum": 200,
-                        "description": "Maximum number of tags to return (default: 20).",
-                    },
-                },
-                "required": ["action"],
-            },
+                    "required": ["action"],
+                }
+            ),
         ),
         Tool(
             name="brain_supersede",
@@ -953,31 +1065,33 @@ health/finance/relationship content) requires safety_check='confirm' + confirm=t
 
 Returns: Structured JSON with action taken.""",
             annotations=_DESTRUCTIVE,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "old_chunk_id": {
-                        "type": "string",
-                        "description": "The chunk ID to mark as superseded.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "old_chunk_id": {
+                            "type": "string",
+                            "description": "The chunk ID to mark as superseded.",
+                        },
+                        "new_chunk_id": {
+                            "type": "string",
+                            "description": "The chunk ID that replaces the old one.",
+                        },
+                        "safety_check": {
+                            "type": "string",
+                            "enum": ["auto", "confirm"],
+                            "default": "auto",
+                            "description": "Safety mode: 'auto' for technical facts (auto-supersedes), 'confirm' for personal data (requires confirm=true).",
+                        },
+                        "confirm": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Set to true to confirm superseding personal data (when safety_check='confirm').",
+                        },
                     },
-                    "new_chunk_id": {
-                        "type": "string",
-                        "description": "The chunk ID that replaces the old one.",
-                    },
-                    "safety_check": {
-                        "type": "string",
-                        "enum": ["auto", "confirm"],
-                        "default": "auto",
-                        "description": "Safety mode: 'auto' for technical facts (auto-supersedes), 'confirm' for personal data (requires confirm=true).",
-                    },
-                    "confirm": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Set to true to confirm superseding personal data (when safety_check='confirm').",
-                    },
-                },
-                "required": ["old_chunk_id", "new_chunk_id"],
-            },
+                    "required": ["old_chunk_id", "new_chunk_id"],
+                }
+            ),
         ),
         Tool(
             name="brain_archive",
@@ -991,20 +1105,22 @@ Use this to clean up stale, outdated, or irrelevant memories without permanent d
 
 Returns: Structured JSON with chunk_id and optional reason.""",
             annotations=_DESTRUCTIVE,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "chunk_id": {
-                        "type": "string",
-                        "description": "The chunk ID to archive.",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "chunk_id": {
+                            "type": "string",
+                            "description": "The chunk ID to archive.",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Optional: reason for archiving (stored for audit trail).",
+                        },
                     },
-                    "reason": {
-                        "type": "string",
-                        "description": "Optional: reason for archiving (stored for audit trail).",
-                    },
-                },
-                "required": ["chunk_id"],
-            },
+                    "required": ["chunk_id"],
+                }
+            ),
         ),
         Tool(
             name="brain_enrich",
@@ -1027,49 +1143,51 @@ Features:
 
 Pass stats=true to get enrichment progress without running anything.""",
             annotations=_WRITE,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["realtime", "batch"],
-                        "default": "realtime",
-                        "description": "Enrichment mode: realtime (Gemini Flash) or batch (Gemini Batch API).",
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["realtime", "batch"],
+                            "default": "realtime",
+                            "description": "Enrichment mode: realtime (Gemini Flash) or batch (Gemini Batch API).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 25,
+                            "minimum": 1,
+                            "maximum": 5000,
+                            "description": "Maximum number of chunks to process.",
+                        },
+                        "since_hours": {
+                            "type": "integer",
+                            "default": DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
+                            "minimum": 1,
+                            "description": (
+                                "Only enrich chunks from the last N hours (realtime mode only). "
+                                f"Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h."
+                            ),
+                        },
+                        "phase": {
+                            "type": "string",
+                            "enum": ["submit", "poll", "import", "run"],
+                            "default": "run",
+                            "description": "Batch phase: submit (upload), poll (check), import (results), run (all-in-one).",
+                        },
+                        "chunk_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional: specific chunk IDs to enrich (realtime mode only).",
+                        },
+                        "stats": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Return enrichment progress statistics without running enrichment.",
+                        },
                     },
-                    "limit": {
-                        "type": "integer",
-                        "default": 25,
-                        "minimum": 1,
-                        "maximum": 5000,
-                        "description": "Maximum number of chunks to process.",
-                    },
-                    "since_hours": {
-                        "type": "integer",
-                        "default": DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-                        "minimum": 1,
-                        "description": (
-                            "Only enrich chunks from the last N hours (realtime mode only). "
-                            f"Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h."
-                        ),
-                    },
-                    "phase": {
-                        "type": "string",
-                        "enum": ["submit", "poll", "import", "run"],
-                        "default": "run",
-                        "description": "Batch phase: submit (upload), poll (check), import (results), run (all-in-one).",
-                    },
-                    "chunk_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional: specific chunk IDs to enrich (realtime mode only).",
-                    },
-                    "stats": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Return enrichment progress statistics without running enrichment.",
-                    },
-                },
-            },
+                }
+            ),
         ),
     ]
 
