@@ -1793,15 +1793,22 @@ def index_fast(
             f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total / 60:.1f}[/] minutes"
         )
 
-        # Sync enrichment stats to Supabase (best-effort)
+        # Sync enrichment stats to Supabase (best-effort, only if configured)
         try:
-            from ..pipeline.enrichment import DEFAULT_DB_PATH, _sync_stats_to_supabase
-            from ..vector_store import VectorStore
+            from ..pipeline.enrichment import (
+                DEFAULT_DB_PATH,
+                SUPABASE_SERVICE_KEY,
+                SUPABASE_URL,
+                _sync_stats_to_supabase,
+            )
 
-            store = VectorStore(DEFAULT_DB_PATH)
-            _sync_stats_to_supabase(store)
-            store.close()
-            rprint("[dim]Synced enrichment stats to Supabase[/]")
+            if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+                from ..vector_store import VectorStore
+
+                store = VectorStore(DEFAULT_DB_PATH)
+                _sync_stats_to_supabase(store)
+                store.close()
+                rprint("[dim]Synced enrichment stats to Supabase[/]")
         except Exception as e:
             rprint(f"[dim]Supabase stats sync skipped: {e}[/]")
 
