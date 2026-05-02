@@ -197,6 +197,15 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(decision, .skipBackfill)
     }
 
+    func testTrigramMaintenanceBatchSizeIsClampedForExternalInput() {
+        XCTAssertEqual(BrainDatabase.normalizedTrigramMaintenanceBatchSize(0), 1)
+        XCTAssertEqual(BrainDatabase.normalizedTrigramMaintenanceBatchSize(42), 42)
+        XCTAssertEqual(
+            BrainDatabase.normalizedTrigramMaintenanceBatchSize(Int.max),
+            BrainDatabase.maximumTrigramMaintenanceBatchSize
+        )
+    }
+
     func testTriggerTrigramRebuildBackfillsInBatchesWithProgress() throws {
         try seedTrigramMaintenanceRows(count: 5)
         try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")

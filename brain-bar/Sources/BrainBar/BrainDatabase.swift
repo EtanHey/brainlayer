@@ -16,6 +16,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
     private static let trigramFTSOptions = "tokenize='trigram'"
     private static let synchronousTrigramBackfillChunkLimit = 10_000
+    static let maximumTrigramMaintenanceBatchSize = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
     private static let lexicalDefenseReplacements: [String: [String]] = [
@@ -2040,7 +2041,7 @@ final class BrainDatabase: @unchecked Sendable {
         progress: (TrigramMaintenanceProgress) -> Void = { _ in }
     ) throws -> TrigramMaintenanceProgress {
         try ensureTrigramFTSSchemaAndTriggers()
-        let batchSize = max(1, requestedBatchSize)
+        let batchSize = Self.normalizedTrigramMaintenanceBatchSize(requestedBatchSize)
         let total = try countRows(in: "chunks")
         let maxChunkRowID = try maxChunkRowID()
         var lastProcessedRowID: Int64 = 0
@@ -2124,8 +2125,13 @@ final class BrainDatabase: @unchecked Sendable {
         let rc = sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(rowid), 0) FROM chunks", -1, &stmt, nil)
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_ROW else { throw DBError.step(stepRC) }
         return sqlite3_column_int64(stmt, 0)
+    }
+
+    static func normalizedTrigramMaintenanceBatchSize(_ requestedBatchSize: Int) -> Int {
+        min(max(1, requestedBatchSize), maximumTrigramMaintenanceBatchSize)
     }
 
     private func nextChunkBatchUpperRowID(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> Int64? {

@@ -587,9 +587,25 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainMaintenanceRebuildTrigram(_ args: [String: Any]) throws -> ToolOutput {
+        let cancelRequested = args["cancel"] as? Bool ?? false
+        if cancelRequested {
+            let final = BrainDatabase.TrigramMaintenanceProgress(
+                state: .cancelled,
+                processed: 0,
+                total: 0,
+                etaSeconds: nil
+            )
+            return ToolOutput(
+                text: "brain_maintenance_rebuild_trigram: cancelled 0/0",
+                metadata: [
+                    "progress": final.metadata,
+                    "events": [final.metadata]
+                ]
+            )
+        }
+
         guard let db = database else { throw ToolError.noDatabase }
         let batchSize = args["batch_size"] as? Int ?? 1_000
-        let cancelRequested = args["cancel"] as? Bool ?? false
         let maxReturnedEvents = 25
         var events: [BrainDatabase.TrigramMaintenanceProgress] = []
         let final = try db.triggerTrigramRebuild(

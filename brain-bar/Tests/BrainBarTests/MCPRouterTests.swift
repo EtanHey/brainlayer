@@ -294,6 +294,39 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(events.last?["state"] as? String, "done")
     }
 
+    func testBrainMaintenanceRebuildTrigramCancelReturnsBeforeSchemaWrites() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-cancel-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try sqliteExec(path: tempDB, sql: "DROP TABLE IF EXISTS chunks_fts_trigram")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_maintenance_rebuild_trigram",
+                "arguments": ["cancel": true]
+            ]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNotEqual(result?["isError"] as? Bool, true)
+        let progress = result?["progress"] as? [String: Any]
+        XCTAssertEqual(progress?["state"] as? String, "cancelled")
+        XCTAssertEqual(progress?["processed"] as? Int, 0)
+        XCTAssertEqual(progress?["total"] as? Int, 0)
+        XCTAssertFalse(try db.tableExists("chunks_fts_trigram"))
+    }
+
     func testToolsCallUnknownToolReturnsError() throws {
         let router = MCPRouter()
         let request: [String: Any] = [
