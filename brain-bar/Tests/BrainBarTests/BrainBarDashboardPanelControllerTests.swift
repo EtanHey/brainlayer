@@ -40,4 +40,58 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.toggle()
         XCTAssertFalse(controller.panelForTesting.isVisible)
     }
+
+    func testCommandBarBecomesReadyWhenDatabaseWasInstalledWhilePanelWasHidden() {
+        let runtime = BrainBarRuntime()
+        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let tempDBPath = NSTemporaryDirectory() + "brainbar-commandbar-ready-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: tempDBPath)
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: getpid())
+        )
+        defer {
+            collector.stop()
+            db.close()
+            controller.dismiss()
+            try? FileManager.default.removeItem(atPath: tempDBPath)
+            try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        }
+
+        // Match launch order: AppDelegate creates the hidden NSPanel before the
+        // async database install lands, then the user opens BrainBar later.
+        _ = controller.panelForTesting.contentViewController?.view
+        runMainRunLoop()
+
+        runtime.install(collector: collector, injectionStore: nil, database: db)
+        runMainRunLoop()
+
+        controller.show()
+        runMainRunLoop()
+
+        let field = controller.panelForTesting.contentView.flatMap {
+            findSubview(ofType: KeyHandlingCommandBarField.self, in: $0)
+        }
+        XCTAssertNotNil(
+            field,
+            "Command bar should create its ready text field when runtime.database was installed before the panel became visible."
+        )
+    }
+
+    private func runMainRunLoop() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private func findSubview<T: NSView>(ofType type: T.Type, in root: NSView) -> T? {
+        if let match = root as? T {
+            return match
+        }
+        for subview in root.subviews {
+            if let match = findSubview(ofType: type, in: subview) {
+                return match
+            }
+        }
+        return nil
+    }
 }

@@ -9,8 +9,7 @@ struct BrainBarWindowRootView: View {
     @State private var selectedTab: BrainBarTab = .dashboard
     @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
-    @State private var commandBarPanelState = QuickCapturePanelState()
-    @State private var commandBarViewModel: QuickCaptureViewModel?
+    @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
 
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true) {
@@ -68,7 +67,6 @@ struct BrainBarWindowRootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .background(windowAttachment)
         .onAppear {
-            ensureCommandBarViewModel()
             activate(tab: selectedTab)
             if let action = runtime.requestedQuickAction {
                 handleRequestedQuickAction(action)
@@ -77,8 +75,7 @@ struct BrainBarWindowRootView: View {
         .onChange(of: selectedTab) { _, newTab in
             activate(tab: newTab)
         }
-        .onReceive(runtime.$database) { _ in
-            ensureCommandBarViewModel()
+        .onChange(of: runtime.database != nil, initial: true) { _, _ in
             // DB just became available — replay any pending request that was
             // left in runtime.requestedQuickAction while we were still warming.
             if let action = runtime.requestedQuickAction {
@@ -129,15 +126,13 @@ struct BrainBarWindowRootView: View {
         }
     }
 
-    private func ensureCommandBarViewModel() {
-        guard commandBarViewModel == nil, let database = runtime.database else { return }
-        commandBarViewModel = QuickCaptureViewModel(db: database, panelState: commandBarPanelState)
+    private var commandBarViewModel: QuickCaptureViewModel? {
+        commandBarProvider.viewModel(database: runtime.database)
     }
 
     private func handleRequestedQuickAction(_ action: BrainBarQuickAction) {
-        ensureCommandBarViewModel()
         // If the DB isn't ready yet, leave the request in flight and replay
-        // when `onReceive(runtime.$database)` fires.
+        // when the runtime database readiness token changes.
         guard let vm = commandBarViewModel else { return }
         selectedTab = .dashboard
         vm.setMode(action == .capture ? .capture : .search)
@@ -154,6 +149,20 @@ struct BrainBarWindowRootView: View {
         case .graph:
             hasActivatedGraphTab = true
         }
+    }
+}
+
+@MainActor
+private final class BrainBarCommandBarViewModelProvider {
+    private let panelState = QuickCapturePanelState()
+    private var currentViewModel: QuickCaptureViewModel?
+
+    func viewModel(database: BrainDatabase?) -> QuickCaptureViewModel? {
+        guard let database else { return currentViewModel }
+        if currentViewModel == nil {
+            currentViewModel = QuickCaptureViewModel(db: database, panelState: panelState)
+        }
+        return currentViewModel
     }
 }
 
