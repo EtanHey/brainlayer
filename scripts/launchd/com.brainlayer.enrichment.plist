@@ -6,23 +6,20 @@
     <string>com.brainlayer.enrichment</string>
 
     <!-- Realtime Gemini enrichment LaunchAgent.
-         Runs once at login/load and then every 10 minutes. -->
+         Runs a supervised shell loop so the one-shot enrich command stays continuous. -->
 
     <key>ProgramArguments</key>
     <array>
-        <string>__BRAINLAYER_BIN__</string>
-        <string>enrich</string>
-        <string>--mode</string>
-        <string>realtime</string>
-        <string>--limit</string>
-        <string>50</string>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd "__BRAINLAYER_DIR__" || exit 1; while true; do "__BRAINLAYER_BIN__" enrich --mode realtime --limit 200000 --since-hours 87600; sleep 5; done</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>__BRAINLAYER_DIR__</string>
 
-    <key>StartInterval</key>
-    <integer>600</integer>
+    <key>KeepAlive</key>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
@@ -40,9 +37,9 @@
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
         <key>BRAINLAYER_ENRICH_RATE</key>
-        <string>50</string>
+        <string>15</string>
         <key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-        <string>10</string>
+        <string>18</string>
         <key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
         <string>flex</string>
         <key>GOOGLE_API_KEY</key>
