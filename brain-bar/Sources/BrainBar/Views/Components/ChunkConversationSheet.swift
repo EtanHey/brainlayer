@@ -2,7 +2,16 @@ import SwiftUI
 
 struct ChunkConversationSheet: View {
     let conversation: BrainDatabase.ExpandedConversation
+    let onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        conversation: BrainDatabase.ExpandedConversation,
+        onClose: (() -> Void)? = nil
+    ) {
+        self.conversation = conversation
+        self.onClose = onClose
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -15,7 +24,7 @@ struct ChunkConversationSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Close") { dismiss() }
+                Button("Close", action: close)
             }
 
             ScrollView {
@@ -62,6 +71,14 @@ struct ChunkConversationSheet: View {
         .frame(minWidth: 580, minHeight: 460)
     }
 
+    private func close() {
+        if let onClose {
+            onClose()
+        } else {
+            dismiss()
+        }
+    }
+
     private func roleLabel(for entry: BrainDatabase.ConversationChunk) -> String {
         switch entry.contentType {
         case "user_message":
@@ -71,5 +88,36 @@ struct ChunkConversationSheet: View {
         default:
             return entry.contentType.replacingOccurrences(of: "_", with: " ").capitalized
         }
+    }
+}
+
+struct ChunkConversationOverlay: View {
+    let conversation: BrainDatabase.ExpandedConversation
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.black.opacity(0.22))
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onClose)
+
+            ChunkConversationSheet(conversation: conversation, onClose: onClose)
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.18), radius: 24, y: 10)
+                .padding(28)
+                .frame(maxWidth: 940, maxHeight: .infinity)
+                .onTapGesture {}
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity)
+        .zIndex(30)
     }
 }

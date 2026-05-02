@@ -31,6 +31,7 @@ final class BrainBarWindowStateTests: XCTestCase {
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
             enrichedChunkCount: 100,
@@ -39,16 +40,19 @@ final class BrainBarWindowStateTests: XCTestCase {
             enrichmentRatePerMinute: 24,
             databaseSizeBytes: 4_096,
             recentActivityBuckets: [0, 0, 0, 2, 4],
-            recentEnrichmentBuckets: [0, 0, 0, 1, 3]
+            recentEnrichmentBuckets: [0, 0, 0, 1, 3],
+            lastWriteAt: now.addingTimeInterval(-12),
+            lastEnrichedAt: now.addingTimeInterval(-8)
         )
 
-        let presentation = BrainBarLivePresentation.derive(stats: stats)
+        let presentation = BrainBarLivePresentation.derive(stats: stats, now: now)
 
         XCTAssertEqual(presentation.sparklineStyle, .active)
-        XCTAssertEqual(presentation.badgeText, "24/min")
+        XCTAssertEqual(presentation.badgeText, "live now")
     }
 
-    func testLivePresentationShowsIdleBadgeWhenEnrichmentRateDropsToZero() {
+    func testLivePresentationShowsLastEventAgeWhenEnrichmentRateDropsToZero() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
             enrichedChunkCount: 100,
@@ -57,13 +61,16 @@ final class BrainBarWindowStateTests: XCTestCase {
             enrichmentRatePerMinute: 0,
             databaseSizeBytes: 4_096,
             recentActivityBuckets: [0, 0, 0, 2, 4],
-            recentEnrichmentBuckets: [4, 3, 1, 0, 0]
+            recentEnrichmentBuckets: [4, 3, 1, 0, 0],
+            lastWriteAt: now.addingTimeInterval(-30),
+            lastEnrichedAt: now.addingTimeInterval(-90)
         )
 
-        let presentation = BrainBarLivePresentation.derive(stats: stats)
+        let presentation = BrainBarLivePresentation.derive(stats: stats, now: now)
 
         XCTAssertEqual(presentation.sparklineStyle, .idle)
-        XCTAssertEqual(presentation.badgeText, "idle")
+        XCTAssertEqual(presentation.badgeText, "2m ago")
+        XCTAssertEqual(presentation.statusText, "No enrichments in the last 60s")
     }
 }
 

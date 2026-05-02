@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..vector_store import VectorStore
+from .enrichment_tiers import T1_T2_SOURCES
 
 # Valid values for structured fields
 VALID_INTENTS = [
@@ -357,14 +358,15 @@ def list_sessions_for_enrichment(
                 already_enriched.add(sid)
 
     # Method 2: Distinct source_files from chunks (catches sessions without git overlay)
-    source_query = """
+    source_placeholders = ",".join("?" for _ in T1_T2_SOURCES)
+    source_query = f"""
         SELECT DISTINCT source_file, project, COUNT(*) as cnt
         FROM chunks
-        WHERE source IS NULL OR source = 'claude_code'
+        WHERE source IS NULL OR source IN ({source_placeholders})
         GROUP BY source_file
         HAVING cnt >= 3
     """
-    for row in cursor.execute(source_query):
+    for row in cursor.execute(source_query, tuple(T1_T2_SOURCES)):
         source_file = row[0] or ""
         proj = row[1] or ""
 

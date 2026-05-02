@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var injectionStore: InjectionStore?
     private var quickCapturePanel: QuickCapturePanelController?
     private var searchPanel: SearchPanelController?
+    private var dashboardPanel: BrainBarDashboardPanelController?
     private var quickCaptureHotkey: HotkeyManager?
     private weak var menuBarExtraWindow: NSWindow?
     private weak var discoveredMenuBarWindow: NSWindow?
@@ -48,8 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if launchMode == .menuBarWindow {
             UserDefaults.standard.removeObject(forKey: Self.menuBarWindowAutosaveKey)
-            installMenuBarWindowObservers()
-            startMenuBarWindowSync()
+            dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
         }
 
         let runningInstances = NSRunningApplication.runningApplications(
@@ -235,6 +235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if let dashboardPanel {
+            dashboardPanel.toggle()
+            return
+        }
+
         if let window = menuBarExtraWindow ?? discoverMenuBarWindow() {
             runtime.windowCoordinator.attach(window: window)
             ensureDefaultMenuBarWindowFrame(window)
@@ -272,7 +277,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func showDashboardPanel() {
+        guard launchMode == .menuBarWindow else {
+            toggleLegacySurface(nil)
+            return
+        }
+
+        dashboardPanel?.show()
+    }
+
     private func showMenuBarWindow(_ sender: Any?) {
+        if launchMode == .menuBarWindow, let dashboardPanel {
+            dashboardPanel.show()
+            return
+        }
+
         if let window = menuBarExtraWindow ?? discoverMenuBarWindow() {
             runtime.windowCoordinator.attach(window: window)
             ensureDefaultMenuBarWindowFrame(window)
@@ -843,13 +862,21 @@ struct BrainBarApp: App {
 
     var body: some Scene {
         MenuBarExtra(isInserted: .constant(launchMode == .menuBarWindow)) {
-            BrainBarWindowRootView(runtime: appDelegate.runtime)
+            Button("Open Dashboard") {
+                appDelegate.showDashboardPanel()
+            }
+
+            Button("Search BrainLayer") {
+                appDelegate.showSearchPanel()
+            }
+
+            Button("Capture Note") {
+                appDelegate.showQuickCapturePanel()
+            }
         } label: {
             BrainBarMenuBarLabel(runtime: appDelegate.runtime)
         }
-        .defaultSize(width: 900, height: 640)
-        .windowResizability(.contentMinSize)
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         Settings {
             EmptyView()

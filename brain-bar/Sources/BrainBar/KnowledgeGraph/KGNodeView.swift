@@ -9,6 +9,7 @@ enum KGNodeRenderer {
         in context: inout GraphicsContext,
         environment: EnvironmentValues
     ) {
+        let darkMode = environment.colorScheme == .dark
         let r = node.radius
         let rect = CGRect(
             x: node.position.x - r,
@@ -19,12 +20,14 @@ enum KGNodeRenderer {
 
         // Circle fill
         let fillColor = isSelected
-            ? Color.white
+            ? (darkMode ? Color.white : Color.black)
             : node.color
         context.fill(Circle().path(in: rect), with: .color(fillColor.opacity(0.85)))
 
         // Border ring
-        let strokeColor = isSelected ? node.color : Color.white.opacity(0.4)
+        let strokeColor = isSelected
+            ? node.color
+            : (darkMode ? Color.white.opacity(0.4) : Color.black.opacity(0.22))
         context.stroke(
             Circle().path(in: rect),
             with: .color(strokeColor),
@@ -35,7 +38,7 @@ enum KGNodeRenderer {
         let label = Text(node.name)
             .font(.system(size: max(9, r * 0.55), weight: isSelected ? .bold : .medium))
             .underline(isSelected)
-            .foregroundColor(isSelected ? node.color : .white)
+            .foregroundColor(isSelected ? node.color : (darkMode ? .white : .black))
         context.draw(
             context.resolve(label),
             at: CGPoint(x: node.position.x, y: node.position.y + r + 12),
