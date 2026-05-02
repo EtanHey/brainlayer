@@ -265,8 +265,9 @@ final class MCPRouterTests: XCTestCase {
         }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertChunk(id: "mcp-trigram-1", content: "MCP trigram maintenance fixture one", sessionId: "mcp", project: "brainlayer", contentType: "assistant_text", importance: 5)
-        try db.insertChunk(id: "mcp-trigram-2", content: "MCP trigram maintenance fixture two", sessionId: "mcp", project: "brainlayer", contentType: "assistant_text", importance: 5)
+        for index in 0..<30 {
+            try db.insertChunk(id: "mcp-trigram-\(index)", content: "MCP trigram maintenance fixture \(index)", sessionId: "mcp", project: "brainlayer", contentType: "assistant_text", importance: 5)
+        }
         try sqliteExec(path: tempDB, sql: "DELETE FROM chunks_fts_trigram")
 
         let router = MCPRouter()
@@ -286,10 +287,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotEqual(result?["isError"] as? Bool, true)
         let progress = result?["progress"] as? [String: Any]
         XCTAssertEqual(progress?["state"] as? String, "done")
-        XCTAssertEqual(progress?["processed"] as? Int, 2)
-        XCTAssertEqual(progress?["total"] as? Int, 2)
+        XCTAssertEqual(progress?["processed"] as? Int, 30)
+        XCTAssertEqual(progress?["total"] as? Int, 30)
         let events = result?["events"] as? [[String: Any]] ?? []
-        XCTAssertGreaterThanOrEqual(events.count, 2)
+        XCTAssertLessThanOrEqual(events.count, 25)
+        XCTAssertEqual(events.last?["state"] as? String, "done")
     }
 
     func testToolsCallUnknownToolReturnsError() throws {

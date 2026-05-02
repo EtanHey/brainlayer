@@ -590,11 +590,17 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else { throw ToolError.noDatabase }
         let batchSize = args["batch_size"] as? Int ?? 1_000
         let cancelRequested = args["cancel"] as? Bool ?? false
+        let maxReturnedEvents = 25
         var events: [BrainDatabase.TrigramMaintenanceProgress] = []
         let final = try db.triggerTrigramRebuild(
             batchSize: batchSize,
             shouldCancel: { cancelRequested },
-            progress: { event in events.append(event) }
+            progress: { event in
+                events.append(event)
+                if events.count > maxReturnedEvents {
+                    events.removeFirst(events.count - maxReturnedEvents)
+                }
+            }
         )
         let text = "brain_maintenance_rebuild_trigram: \(final.state.rawValue) \(final.processed)/\(final.total)"
         return ToolOutput(

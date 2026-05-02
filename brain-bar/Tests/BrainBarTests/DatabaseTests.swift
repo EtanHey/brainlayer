@@ -233,38 +233,60 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(events.last?.state, .cancelled)
     }
 
+    func testTriggerTrigramRebuildCancellationPreservesUnprocessedLiveRows() throws {
+        try seedTrigramMaintenanceRows(count: 5)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+
+        var events: [BrainDatabase.TrigramMaintenanceProgress] = []
+        let final = try db.triggerTrigramRebuild(
+            batchSize: 2,
+            shouldCancel: { !events.isEmpty },
+            progress: { event in events.append(event) }
+        )
+
+        XCTAssertEqual(final.state, .cancelled)
+        XCTAssertEqual(final.processed, 2)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+    }
+
     func testTriggerTrigramRebuildAllowsWritersBetweenBatches() throws {
         try seedTrigramMaintenanceRows(count: 4)
         try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
 
         var insertedDuringProgress = false
+        var concurrentInsertError: Error?
         let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
             guard event.state == .running, !insertedDuringProgress else { return }
-            insertedDuringProgress = true
-            try? sqliteExecWrite(
-                path: self.tempDBPath,
-                sql: """
-                    INSERT INTO chunks (
-                        id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary, preview_text
-                    ) VALUES (
-                        'trigram-concurrent-writer',
-                        'Concurrent writer should acquire the lock between trigram batches',
-                        '{}',
-                        'brainbar',
-                        'brainlayer',
-                        'assistant_text',
-                        5,
-                        'trigram-maintenance',
-                        67,
-                        '[]',
-                        '',
-                        'Concurrent writer should acquire the lock between trigram batches'
-                    )
-                """
-            )
+            do {
+                try sqliteExecWrite(
+                    path: self.tempDBPath,
+                    sql: """
+                        INSERT INTO chunks (
+                            id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary, preview_text
+                        ) VALUES (
+                            'trigram-concurrent-writer',
+                            'Concurrent writer should acquire the lock between trigram batches',
+                            '{}',
+                            'brainbar',
+                            'brainlayer',
+                            'assistant_text',
+                            5,
+                            'trigram-maintenance',
+                            67,
+                            '[]',
+                            '',
+                            'Concurrent writer should acquire the lock between trigram batches'
+                        )
+                    """
+                )
+                insertedDuringProgress = true
+            } catch {
+                concurrentInsertError = error
+            }
         })
 
         XCTAssertEqual(final.state, .done)
+        XCTAssertNil(concurrentInsertError)
         XCTAssertTrue(insertedDuringProgress)
         XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks"), 5)
         XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
@@ -275,20 +297,26 @@ final class DatabaseTests: XCTestCase {
         try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
 
         var updatedDuringProgress = false
+        var concurrentUpdateError: Error?
         let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
             guard event.state == .running, !updatedDuringProgress else { return }
-            updatedDuringProgress = true
-            try? sqliteExecWrite(
-                path: self.tempDBPath,
-                sql: """
-                    UPDATE chunks
-                    SET content = 'Updated not-yet-processed chunk during trigram maintenance'
-                    WHERE id = 'trigram-maintenance-3'
-                """
-            )
+            do {
+                try sqliteExecWrite(
+                    path: self.tempDBPath,
+                    sql: """
+                        UPDATE chunks
+                        SET content = 'Updated not-yet-processed chunk during trigram maintenance'
+                        WHERE id = 'trigram-maintenance-3'
+                    """
+                )
+                updatedDuringProgress = true
+            } catch {
+                concurrentUpdateError = error
+            }
         })
 
         XCTAssertEqual(final.state, .done)
+        XCTAssertNil(concurrentUpdateError)
         XCTAssertTrue(updatedDuringProgress)
         XCTAssertEqual(
             try sqliteCount(

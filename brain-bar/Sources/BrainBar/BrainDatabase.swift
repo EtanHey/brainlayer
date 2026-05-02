@@ -2047,8 +2047,6 @@ final class BrainDatabase: @unchecked Sendable {
         var processed = 0
         let startedAt = Date()
 
-        try clearTrigramFTSTableInBatches(batchSize: batchSize, shouldCancel: shouldCancel)
-
         while processed < total,
               let upperRowID = try nextChunkBatchUpperRowID(
                 after: lastProcessedRowID,
@@ -2118,28 +2116,6 @@ final class BrainDatabase: @unchecked Sendable {
         )
         progress(done)
         return done
-    }
-
-    private func clearTrigramFTSTableInBatches(batchSize: Int, shouldCancel: () -> Bool) throws {
-        while try countRows(in: "chunks_fts_trigram") > 0 {
-            if shouldCancel() {
-                return
-            }
-
-            try withImmediateTransaction {
-                try executeUpdate(
-                    """
-                    DELETE FROM chunks_fts_trigram
-                    WHERE rowid IN (
-                        SELECT rowid FROM chunks_fts_trigram LIMIT ?
-                    )
-                    """,
-                    binds: { stmt in
-                        sqlite3_bind_int(stmt, 1, Int32(batchSize))
-                    }
-                )
-            }
-        }
     }
 
     private func maxChunkRowID() throws -> Int64 {
