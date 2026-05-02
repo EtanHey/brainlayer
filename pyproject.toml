@@ -78,6 +78,7 @@ telemetry = [
 ]
 dev = [
     "deepchecks>=0.19.1",
+    "google-genai>=1.0.0",
     "numpy<2",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

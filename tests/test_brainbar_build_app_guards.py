@@ -8,14 +8,31 @@ import subprocess
 from pathlib import Path
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=_clean_git_env(),
         check=True,
         capture_output=True,
         text=True,
     )
+
+
+def _git_stdout(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=_clean_git_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def _init_repo(repo: Path, branch: str = "main") -> None:
@@ -59,7 +76,7 @@ def _run_build_script(
     extra_args: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    env = _clean_git_env()
     env.pop("BRAINBAR_APP_DIR", None)
     env["HOME"] = str(home)
     env["BRAINBAR_CANONICAL_REPO_ROOT"] = str(canonical_root)
@@ -92,6 +109,34 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
     assert "LaunchAgent: canonical install" in result.stdout
+
+
+def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
+    parent_repo = tmp_path / "parent"
+    _init_repo(parent_repo)
+    _write_tracked_file(parent_repo, "README.md", "# parent repo\n")
+    _commit(parent_repo, "feat: parent commit")
+
+    monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
+
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    repo_subjects = _git_stdout(repo, "log", "--format=%s").splitlines()
+    parent_subjects = _git_stdout(parent_repo, "log", "--format=%s").splitlines()
+
+    assert result.returncode == 0
+    assert repo_subjects == ["chore: seed build script"]
+    assert parent_subjects == ["feat: parent commit"]
 
 
 def test_build_app_rejects_noncanonical_repo_without_force(tmp_path: Path) -> None:

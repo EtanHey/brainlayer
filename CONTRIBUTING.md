@@ -14,6 +14,8 @@ git config core.hooksPath .githooks
 
 The repo ships a pre-push regression gate in `.githooks/pre-push`. Set `core.hooksPath`
 once per clone so `git push` runs `scripts/run_tests.sh` before anything leaves your machine.
+The `dev` extra includes the Gemini SDK used by digest-time enrichment tests; keep it installed even if
+you do not set `GOOGLE_API_KEY` locally.
 
 ## Project Structure
 

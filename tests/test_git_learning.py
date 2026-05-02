@@ -1,6 +1,7 @@
 """Tests for Phase 3 git-based continual learning MVP."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,10 +13,15 @@ from brainlayer.vector_store import VectorStore
 runner = CliRunner()
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=_clean_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -86,6 +92,38 @@ def test_brain_learn_git_seeds_single_repo_without_duplicates(tmp_path, monkeypa
 
     second = runner.invoke(app, ["brain-learn", "--git", "--repos-config", str(config_path), "--since", "30d"])
     assert second.exit_code == 0, second.stdout
+
+    store = VectorStore(db_path)
+    cursor = store.conn.cursor()
+    count = cursor.execute("SELECT COUNT(*) FROM git_memories").fetchone()[0]
+    repos = {row[0] for row in cursor.execute("SELECT DISTINCT repo FROM git_memories")}
+
+    assert count == 2
+    assert repos == {repo.name}
+
+
+def test_brain_learn_git_ignores_parent_git_hook_env(tmp_path, monkeypatch):
+    from brainlayer.git_learning import ensure_repos_config
+
+    parent_repo = tmp_path / "parent"
+    _init_repo(parent_repo)
+    _commit_file(parent_repo, "README.md", "# parent\n", "feat: parent commit")
+
+    repo = tmp_path / "repo-one"
+    _init_repo(repo)
+    _commit_file(repo, "src/app.py", "print('one')\n", "feat: add app bootstrap")
+    _commit_file(repo, "src/app.py", "print('two')\n", "fix: handle startup failure")
+
+    db_path = tmp_path / "brainlayer.db"
+    config_path = tmp_path / "repos.json"
+    ensure_repos_config(config_path, default_repos=[str(repo)])
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
+
+    result = runner.invoke(app, ["brain-learn", "--git", "--repos-config", str(config_path), "--since", "30d"])
+    assert result.exit_code == 0, result.stdout
 
     store = VectorStore(db_path)
     cursor = store.conn.cursor()
