@@ -29,6 +29,32 @@ final class BrainDatabase: @unchecked Sendable {
         case skipBackfill
     }
 
+    struct TrigramMaintenanceProgress: Sendable, Equatable {
+        enum State: String, Sendable, Equatable {
+            case running
+            case done
+            case cancelled
+            case failed
+        }
+
+        let state: State
+        let processed: Int
+        let total: Int
+        let etaSeconds: Double?
+
+        var metadata: [String: Any] {
+            var payload: [String: Any] = [
+                "state": state.rawValue,
+                "processed": processed,
+                "total": total,
+            ]
+            if let etaSeconds {
+                payload["eta_seconds"] = etaSeconds
+            }
+            return payload
+        }
+    }
+
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
         let enrichedChunkCount: Int
@@ -43,6 +69,7 @@ final class BrainDatabase: @unchecked Sendable {
         let liveWindowMinutes: Int
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
+        let trigramIndexedChunkCount: Int
 
         init(
             chunkCount: Int,
@@ -57,7 +84,8 @@ final class BrainDatabase: @unchecked Sendable {
             bucketCount: Int = 12,
             liveWindowMinutes: Int = 1,
             lastWriteAt: Date? = nil,
-            lastEnrichedAt: Date? = nil
+            lastEnrichedAt: Date? = nil,
+            trigramIndexedChunkCount: Int = 0
         ) {
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
@@ -72,6 +100,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.liveWindowMinutes = liveWindowMinutes
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
+            self.trigramIndexedChunkCount = trigramIndexedChunkCount
         }
 
         var recentWriteCount: Int {
@@ -99,6 +128,11 @@ final class BrainDatabase: @unchecked Sendable {
 
         func hasRecentEnrichmentActivity(now: Date = Date()) -> Bool {
             eventIsLive(lastEnrichedAt, now: now) || recentEnrichmentCount > 0
+        }
+
+        var trigramCoveragePercent: Double {
+            guard chunkCount > 0 else { return 100 }
+            return (Double(trigramIndexedChunkCount) / Double(chunkCount)) * 100
         }
     }
 
@@ -1174,7 +1208,8 @@ final class BrainDatabase: @unchecked Sendable {
             bucketCount: bucketCount,
             liveWindowMinutes: liveWindowMinutes,
             lastWriteAt: lastEvents.lastWriteAt,
-            lastEnrichedAt: lastEvents.lastEnrichedAt
+            lastEnrichedAt: lastEvents.lastEnrichedAt,
+            trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0
         )
     }
 
@@ -1997,6 +2032,102 @@ final class BrainDatabase: @unchecked Sendable {
             INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
             SELECT content, summary, tags, NULL, id FROM chunks
         """)
+    }
+
+    func triggerTrigramRebuild(
+        batchSize requestedBatchSize: Int = 1_000,
+        shouldCancel: () -> Bool = { false },
+        progress: (TrigramMaintenanceProgress) -> Void = { _ in }
+    ) throws -> TrigramMaintenanceProgress {
+        try ensureTrigramFTSSchemaAndTriggers()
+        let batchSize = max(1, requestedBatchSize)
+        let total = try countRows(in: "chunks")
+        var processed = 0
+        let startedAt = Date()
+
+        try clearTrigramFTSTableInBatches(batchSize: batchSize, shouldCancel: shouldCancel)
+
+        while processed < total {
+            if shouldCancel() {
+                let cancelled = TrigramMaintenanceProgress(
+                    state: .cancelled,
+                    processed: processed,
+                    total: total,
+                    etaSeconds: nil
+                )
+                progress(cancelled)
+                return cancelled
+            }
+
+            let offset = processed
+            try withImmediateTransaction {
+                try executeUpdate(
+                    """
+                    INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+                    SELECT content, summary, tags, NULL, id
+                    FROM chunks
+                    ORDER BY rowid ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    binds: { stmt in
+                        sqlite3_bind_int(stmt, 1, Int32(batchSize))
+                        sqlite3_bind_int(stmt, 2, Int32(offset))
+                    }
+                )
+            }
+
+            processed = min(processed + batchSize, total)
+            let running = TrigramMaintenanceProgress(
+                state: .running,
+                processed: processed,
+                total: total,
+                etaSeconds: Self.estimatedSecondsRemaining(
+                    startedAt: startedAt,
+                    processed: processed,
+                    total: total
+                )
+            )
+            progress(running)
+        }
+
+        try execute("ANALYZE chunks_fts_trigram", retries: 3)
+        let done = TrigramMaintenanceProgress(
+            state: .done,
+            processed: total,
+            total: total,
+            etaSeconds: 0
+        )
+        progress(done)
+        return done
+    }
+
+    private func clearTrigramFTSTableInBatches(batchSize: Int, shouldCancel: () -> Bool) throws {
+        while try countRows(in: "chunks_fts_trigram") > 0 {
+            if shouldCancel() {
+                return
+            }
+
+            try withImmediateTransaction {
+                try executeUpdate(
+                    """
+                    DELETE FROM chunks_fts_trigram
+                    WHERE rowid IN (
+                        SELECT rowid FROM chunks_fts_trigram LIMIT ?
+                    )
+                    """,
+                    binds: { stmt in
+                        sqlite3_bind_int(stmt, 1, Int32(batchSize))
+                    }
+                )
+            }
+        }
+    }
+
+    private static func estimatedSecondsRemaining(startedAt: Date, processed: Int, total: Int) -> Double? {
+        guard processed > 0, total > processed else { return nil }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let rate = Double(processed) / max(elapsed, 0.001)
+        return Double(total - processed) / rate
     }
 
     private func rebuildTrigramFTSTableIfNeeded() throws {

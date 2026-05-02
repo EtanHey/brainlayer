@@ -444,6 +444,7 @@ private struct BrainBarDashboardView: View {
                 ("Daemon", daemonSummary),
                 ("Agents", collector.agentActivity.summaryText),
                 ("State", collector.state.label),
+                ("Trigram", trigramSummary),
                 ("Last seen", daemonLastSeenSummary),
             ],
             columns: layout.diagnosticItemColumns
@@ -463,6 +464,7 @@ private struct BrainBarDashboardView: View {
                             runtimeCard
                         }
                     }
+                    BrainBarTrigramProgress(stats: collector.stats)
                 }
                 .padding(.top, 4)
             } label: {
@@ -507,6 +509,30 @@ private struct BrainBarDashboardView: View {
             lastEventAt: daemon.lastSeenAt,
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
+    }
+
+    private var trigramSummary: String {
+        "\(collector.stats.trigramIndexedChunkCount)/\(collector.stats.chunkCount) · " +
+            String(format: "%.0f%%", collector.stats.trigramCoveragePercent)
+    }
+}
+
+private struct BrainBarTrigramProgress: View {
+    let stats: BrainDatabase.DashboardStats
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Trigram maintenance")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer(minLength: 8)
+                Text("\(stats.trigramIndexedChunkCount)/\(stats.chunkCount)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            ProgressView(value: min(stats.trigramCoveragePercent, 100), total: 100)
+        }
     }
 }
 

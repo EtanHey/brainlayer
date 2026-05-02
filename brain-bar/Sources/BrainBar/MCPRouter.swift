@@ -206,6 +206,8 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainUnsubscribe(arguments)
         case "brain_ack":
             return try handleBrainAck(arguments)
+        case "brain_maintenance_rebuild_trigram":
+            return try handleBrainMaintenanceRebuildTrigram(arguments)
         default:
             throw ToolError.unknownTool(name)
         }
@@ -582,6 +584,26 @@ final class MCPRouter: @unchecked Sendable {
         }
         let content = (chunk["content"] as? String ?? "").lowercased()
         return personalKeywords.contains(where: { content.contains($0) })
+    }
+
+    private func handleBrainMaintenanceRebuildTrigram(_ args: [String: Any]) throws -> ToolOutput {
+        guard let db = database else { throw ToolError.noDatabase }
+        let batchSize = args["batch_size"] as? Int ?? 1_000
+        let cancelRequested = args["cancel"] as? Bool ?? false
+        var events: [BrainDatabase.TrigramMaintenanceProgress] = []
+        let final = try db.triggerTrigramRebuild(
+            batchSize: batchSize,
+            shouldCancel: { cancelRequested },
+            progress: { event in events.append(event) }
+        )
+        let text = "brain_maintenance_rebuild_trigram: \(final.state.rawValue) \(final.processed)/\(final.total)"
+        return ToolOutput(
+            text: text,
+            metadata: [
+                "progress": final.metadata,
+                "events": events.map(\.metadata)
+            ]
+        )
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -981,6 +1003,18 @@ final class MCPRouter: @unchecked Sendable {
                 ] as [String: Any],
                 "required": ["agent_id", "seq"]
             ] as [String: Any])
+        ],
+        [
+            "name": "brain_maintenance_rebuild_trigram",
+            "description": "Operator-triggered maintenance command to rebuild the trigram FTS table in lock-aware batches.",
+            "annotations": MCPRouter.writeIdempotentAnnotations,
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "batch_size": ["type": "integer", "description": "Rows to backfill per write transaction (default: 1000)"],
+                    "cancel": ["type": "boolean", "description": "Return a cancelled state before starting work"],
+                ] as [String: Any]
+            ] as [String: Any]
         ],
     ]
 }
