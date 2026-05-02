@@ -186,6 +186,17 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testLargeTrigramDesyncDoesNotForceSynchronousStartupRebuild() {
+        let decision = BrainDatabase.trigramStartupRepairDecision(
+            tableExists: true,
+            schemaIsValid: true,
+            chunkCount: 359_890,
+            trigramCount: 0
+        )
+
+        XCTAssertEqual(decision, .skipBackfill)
+    }
+
     func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
         db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
         db.exec("DROP TABLE IF EXISTS brainbar_agents")

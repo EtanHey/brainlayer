@@ -15,12 +15,19 @@ final class BrainDatabase: @unchecked Sendable {
     private static let ftsColumns = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
     private static let trigramFTSOptions = "tokenize='trigram'"
+    private static let synchronousTrigramBackfillChunkLimit = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
     private static let lexicalDefenseReplacements: [String: [String]] = [
         "hershkovitz": ["Hershkovits"],
         "hershkovits": ["Hershkovitz"]
     ]
+
+    enum TrigramStartupRepairDecision: Equatable {
+        case noRepairNeeded
+        case rebuildSynchronously
+        case skipBackfill
+    }
 
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
@@ -1899,16 +1906,17 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func rebuildTrigramFTSTable() throws {
+        try ensureTrigramFTSSchemaAndTriggers()
+        try execute("DELETE FROM chunks_fts_trigram")
+        try backfillTrigramFTSTable()
+    }
+
+    private func ensureTrigramFTSSchemaAndTriggers() throws {
         try execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_trigram USING fts5(
                 \(Self.ftsColumns),
                 \(Self.trigramFTSOptions)
             )
-        """)
-        try execute("DELETE FROM chunks_fts_trigram")
-        try execute("""
-            INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
-            SELECT content, summary, tags, NULL, id FROM chunks
         """)
 
         try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
@@ -1936,26 +1944,69 @@ final class BrainDatabase: @unchecked Sendable {
         """)
     }
 
+    private func backfillTrigramFTSTable() throws {
+        try execute("""
+            INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+            SELECT content, summary, tags, NULL, id FROM chunks
+        """)
+    }
+
     private func rebuildTrigramFTSTableIfNeeded() throws {
-        if try trigramFTSTableNeedsRebuild() {
+        let status = try trigramFTSStatus()
+        let decision = Self.trigramStartupRepairDecision(
+            tableExists: status.tableExists,
+            schemaIsValid: status.schemaIsValid,
+            chunkCount: status.chunkCount,
+            trigramCount: status.trigramCount
+        )
+
+        switch decision {
+        case .noRepairNeeded:
+            try ensureTrigramFTSSchemaAndTriggers()
+        case .rebuildSynchronously:
             try rebuildTrigramFTSTable()
+        case .skipBackfill:
+            try ensureTrigramFTSSchemaAndTriggers()
+            NSLog(
+                "[BrainBar] Skipping synchronous trigram FTS backfill at startup — chunks=%d trigram=%d. Run explicit maintenance to backfill.",
+                status.chunkCount,
+                status.trigramCount
+            )
         }
     }
 
-    private func trigramFTSTableNeedsRebuild() throws -> Bool {
-        guard let db else { throw DBError.notOpen }
-        guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else { return true }
-        let normalizedSQL = sql.lowercased()
-        guard normalizedSQL.contains("tokenize='trigram'"),
-              normalizedSQL.contains("summary"),
-              normalizedSQL.contains("resolved_query")
-        else {
-            return true
+    static func trigramStartupRepairDecision(
+        tableExists: Bool,
+        schemaIsValid: Bool,
+        chunkCount: Int,
+        trigramCount: Int
+    ) -> TrigramStartupRepairDecision {
+        if !tableExists || !schemaIsValid {
+            return .rebuildSynchronously
         }
+        if chunkCount == trigramCount {
+            return .noRepairNeeded
+        }
+        if chunkCount <= synchronousTrigramBackfillChunkLimit {
+            return .rebuildSynchronously
+        }
+        return .skipBackfill
+    }
+
+    private func trigramFTSStatus() throws -> (tableExists: Bool, schemaIsValid: Bool, chunkCount: Int, trigramCount: Int) {
+        guard let db else { throw DBError.notOpen }
+        guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else {
+            let chunkCount = try countRows(in: "chunks")
+            return (false, false, chunkCount, 0)
+        }
+        let normalizedSQL = sql.lowercased()
+        let schemaIsValid = normalizedSQL.contains("tokenize='trigram'") &&
+            normalizedSQL.contains("summary") &&
+            normalizedSQL.contains("resolved_query")
 
         let chunkCount = try countRows(in: "chunks")
         let trigramCount = try countRows(in: "chunks_fts_trigram")
-        return chunkCount != trigramCount
+        return (true, schemaIsValid, chunkCount, trigramCount)
     }
 
     private func countRows(in tableName: String) throws -> Int {
