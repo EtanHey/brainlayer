@@ -464,6 +464,45 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "Sagit meeting notes").count - 1, 1, "Only one matching source should be returned")
     }
 
+    func testBrainSearchSourceAllKeepsKGAugmentation() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-source-all-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertEntity(id: "person-sagit", type: "person", name: "Sagit Stern", metadata: "{}")
+        try db.insertEntity(id: "project-techgym", type: "project", name: "TechGym", metadata: "{}")
+        try db.insertRelation(sourceId: "person-sagit", targetId: "project-techgym", relationType: "lectures_at")
+        try db.insertChunk(
+            id: "kg-search-target",
+            content: "Sagit Stern delivered the TechGym lecture about retrieval quality.",
+            sessionId: "s1",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 26,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "Sagit Stern TechGym", "source": "all"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("### ◆ Sagit Stern"))
+        XCTAssertTrue(text.contains("→ LECTURES_AT: TechGym"))
+        XCTAssertTrue(text.contains("kg-search-ta"))
+    }
+
     func testBrainEntityUsesPythonSimpleEntityStructure() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-entity-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -804,6 +843,39 @@ final class MCPRouterTests: XCTestCase {
         let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
         XCTAssertTrue(text.contains("Enriched:"))
         XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-limit-target"))
+    }
+
+    func testBrainEnrichEmptyChunkIDsDoesNotBroadenScope() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-empty-ids-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "enrich-empty-ids-target",
+            content: "This chunk should stay untouched when brain_enrich receives an explicit empty chunk_ids list.",
+            sessionId: "s1",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 27,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_enrich",
+                "arguments": ["mode": "realtime", "limit": 5, "chunk_ids": []] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+        XCTAssertTrue(text.contains("Attempted: 0"))
+        XCTAssertTrue(text.contains("Enriched: 0"))
+        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-empty-ids-target"))
     }
 
     // MARK: - brain_store queue fallback

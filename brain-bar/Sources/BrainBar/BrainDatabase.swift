@@ -3196,6 +3196,15 @@ final class BrainDatabase: @unchecked Sendable {
         chunkIDs: [String]?
     ) throws -> [String: Any] {
         guard let db else { throw DBError.notOpen }
+        if let chunkIDs, chunkIDs.isEmpty {
+            return [
+                "mode": mode,
+                "attempted": 0,
+                "enriched": 0,
+                "skipped": 0,
+                "failed": 0,
+            ]
+        }
 
         var conditions = ["superseded_by IS NULL", "archived_at IS NULL"]
         if chunkIDs == nil {

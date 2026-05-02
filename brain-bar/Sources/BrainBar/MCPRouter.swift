@@ -223,6 +223,13 @@ final class MCPRouter: @unchecked Sendable {
         let tag = args["tag"] as? String
         let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
+        let sourceCountsAsFilter: Bool
+        if let source {
+            let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+            sourceCountsAsFilter = !trimmed.isEmpty && trimmed != "all"
+        } else {
+            sourceCountsAsFilter = false
+        }
         // importance_min may arrive as Int or Double from JSON
         let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
             else if let i = args["importance_min"] as? Int { Double(i) }
@@ -236,7 +243,7 @@ final class MCPRouter: @unchecked Sendable {
 
         // Entity detection → KG fact lookup
         var kgSection = ""
-        let hasActiveFilters = project != nil || source != nil || tag != nil || subscriberID != nil || importanceMin != nil
+        let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
         if !hasActiveFilters {
             let detected = entityCache.detectEntities(in: query)
             if let first = detected.first {
