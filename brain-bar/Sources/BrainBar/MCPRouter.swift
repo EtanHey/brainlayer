@@ -787,7 +787,7 @@ final class MCPRouter: @unchecked Sendable {
                     "query": ["type": "string", "description": "Natural language search query"],
                     "num_results": ["type": "integer", "description": "Number of results (default: 5, max: 100)"],
                     "project": ["type": "string", "description": "Filter by project name"],
-                    "source": ["type": "string", "enum": ["claude_code", "whatsapp", "youtube", "all"], "description": "Filter by data source (default: claude_code). Use 'all' to search everything."],
+                    "source": ["type": "string", "enum": ["claude_code", "whatsapp", "youtube", "mcp", "all"], "description": "Filter by data source. Omit or use 'all' to search everything."],
                     "tag": ["type": "string", "description": "Filter by tag"],
                     "importance_min": ["type": "number", "description": "Minimum importance score (1-10)"],
                     "agent_id": ["type": "string", "description": "Optional stable agent id for unread filtering"],

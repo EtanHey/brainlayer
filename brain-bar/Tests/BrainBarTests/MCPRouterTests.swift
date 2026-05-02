@@ -226,8 +226,10 @@ final class MCPRouterTests: XCTestCase {
         let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
         let source = try XCTUnwrap(properties["source"] as? [String: Any])
         let values = try XCTUnwrap(source["enum"] as? [String])
+        let description = try XCTUnwrap(source["description"] as? String)
 
-        XCTAssertEqual(values, ["claude_code", "whatsapp", "youtube", "all"])
+        XCTAssertEqual(values, ["claude_code", "whatsapp", "youtube", "mcp", "all"])
+        XCTAssertEqual(description, "Filter by data source. Omit or use 'all' to search everything.")
     }
 
     // MARK: - Tools call
