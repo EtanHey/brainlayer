@@ -437,27 +437,6 @@ async def _brain_search(
     if chunk_id is not None:
         return await _context(chunk_id=chunk_id, before=before, after=after)
 
-    store = _get_vector_store()
-    exact_chunk_hit = _exact_chunk_lookup_result(
-        query,
-        store,
-        detail,
-        project=project,
-        content_type=content_type,
-        tag=tag,
-        importance_min=importance_min,
-        date_from=date_from,
-        date_to=date_to,
-        source=source,
-        intent=intent,
-        sentiment=sentiment,
-        source_filter=source_filter,
-        correction_category=correction_category,
-    )
-    if exact_chunk_hit is not None:
-        return exact_chunk_hit
-    fts_query_override = _expanded_fts_query(query, store)
-
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
         recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
@@ -522,6 +501,27 @@ async def _brain_search(
 
     if _query_signals_recall(query):
         return await _recall(topic=query, project=project, max_results=max_results)
+
+    store = _get_vector_store()
+    exact_chunk_hit = _exact_chunk_lookup_result(
+        query,
+        store,
+        detail,
+        project=project,
+        content_type=content_type,
+        tag=tag,
+        importance_min=importance_min,
+        date_from=date_from,
+        date_to=date_to,
+        source=source,
+        intent=intent,
+        sentiment=sentiment,
+        source_filter=source_filter,
+        correction_category=correction_category,
+    )
+    if exact_chunk_hit is not None:
+        return exact_chunk_hit
+    fts_query_override = _expanded_fts_query(query, store)
 
     # Entity-aware routing: detect known entity names in query.
     # Path 1: Pure SQL KG lookup (no embeddings, always works).
