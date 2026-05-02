@@ -8,6 +8,7 @@ Target: 35+ tests per A-R2 acceptance criteria.
 """
 
 import json
+import plistlib
 import sqlite3
 import sys
 import threading
@@ -1160,45 +1161,42 @@ def test_enrichment_plist_uses_realtime_mode():
     assert "realtime" in content
 
 
-def test_enrichment_plist_uses_continuous_keepalive_shape():
+def _load_enrichment_plist():
     from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    content = plist_path.read_text()
-    assert "<key>KeepAlive</key>" in content
-    assert "<true/>" in content
-    assert "StartInterval" not in content
+    return plistlib.loads(plist_path.read_bytes())
+
+
+def test_enrichment_plist_uses_continuous_keepalive_shape():
+    plist = _load_enrichment_plist()
+
+    assert plist["KeepAlive"] is True
+    assert "StartInterval" not in plist
 
 
 def test_enrichment_plist_invokes_cli_enrich_entrypoint():
-    from pathlib import Path
+    plist = _load_enrichment_plist()
 
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    content = plist_path.read_text()
-    assert "__BRAINLAYER_BIN__" in content
-    assert "<string>enrich</string>" in content
-    assert "<string>realtime</string>" in content
-    assert "<string>200000</string>" in content
-    assert "<string>--since-hours</string>" in content
-    assert "<string>87600</string>" in content
+    args = plist["ProgramArguments"]
+    assert args[:2] == ["/bin/zsh", "-lc"]
+    command = args[2]
+    assert "__BRAINLAYER_BIN__" in command
+    assert "while true" in command
+    assert "enrich --mode realtime" in command
+    assert "--limit 200000" in command
+    assert "--since-hours 87600" in command
 
 
 def test_enrichment_plist_matches_validated_flex_realtime_profile():
-    from pathlib import Path
+    plist = _load_enrichment_plist()
+    env = plist["EnvironmentVariables"]
 
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    content = plist_path.read_text()
-    assert "<key>Nice</key>" in content
-    assert "<integer>10</integer>" in content
-    assert "__HOME__/Library/Logs/brainlayer-enrichment.log" in content
-    assert "BRAINLAYER_ENRICH_BACKEND" in content
-    assert "<string>gemini</string>" in content
-    assert "BRAINLAYER_ENRICH_RATE" in content
-    assert "<string>15</string>" in content
-    assert "BRAINLAYER_ENRICH_CONCURRENCY" in content
-    assert "<string>18</string>" in content
-    assert "BRAINLAYER_GEMINI_SERVICE_TIER" in content
-    assert "<string>flex</string>" in content
+    assert plist["Nice"] == 10
+    assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer-enrichment.log"
+    assert env["BRAINLAYER_ENRICH_RATE"] == "15"
+    assert env["BRAINLAYER_ENRICH_CONCURRENCY"] == "18"
+    assert env["BRAINLAYER_GEMINI_SERVICE_TIER"] == "flex"
 
 
 def test_launchd_installer_supports_enrichment_load_and_unload():
