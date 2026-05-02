@@ -774,6 +774,38 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-target"))
     }
 
+    func testBrainEnrichClampsNegativeLimit() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-limit-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "enrich-limit-target",
+            content: "This chunk is also long enough to qualify for enrichment even if the requested limit is negative.",
+            sessionId: "s1",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 25,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_enrich",
+                "arguments": ["mode": "realtime", "limit": -100] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+        XCTAssertTrue(text.contains("Enriched:"))
+        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-limit-target"))
+    }
+
     // MARK: - brain_store queue fallback
 
     func testBrainStoreQueuesWhenWriteHitsTransientSQLiteLock() throws {

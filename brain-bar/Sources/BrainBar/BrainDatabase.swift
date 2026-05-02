@@ -3044,6 +3044,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func archiveChunk(id: String, reason _: String? = nil) throws -> Bool {
+        // Keep the reason parameter for Python MCP contract parity; BrainBar
+        // does not persist archive reasons yet.
         guard try getChunk(id: id) != nil else { return false }
         try executeUpdate(
             """
@@ -3254,6 +3256,11 @@ final class BrainDatabase: @unchecked Sendable {
                 enriched += 1
             } catch {
                 failed += 1
+                NSLog(
+                    "[BrainBar] Enrichment summary backfill failed for chunk %@: %@",
+                    target.id,
+                    String(describing: error)
+                )
             }
         }
         refreshSearchStatisticsBestEffort()

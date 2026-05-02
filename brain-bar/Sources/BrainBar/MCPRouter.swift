@@ -511,7 +511,7 @@ final class MCPRouter: @unchecked Sendable {
 
     private func handleBrainEnrich(_ args: [String: Any]) throws -> ToolOutput {
         let mode = args["mode"] as? String ?? "realtime"
-        let limit = min(args["limit"] as? Int ?? 25, 5_000)
+        let limit = max(1, min(args["limit"] as? Int ?? 25, 5_000))
         let sinceHours = args["since_hours"] as? Int ?? 8_760
         let phase = args["phase"] as? String ?? "run"
         let chunkIDs = args["chunk_ids"] as? [String]
