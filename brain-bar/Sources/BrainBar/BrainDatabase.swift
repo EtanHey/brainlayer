@@ -2042,12 +2042,19 @@ final class BrainDatabase: @unchecked Sendable {
         try ensureTrigramFTSSchemaAndTriggers()
         let batchSize = max(1, requestedBatchSize)
         let total = try countRows(in: "chunks")
+        let maxChunkRowID = try maxChunkRowID()
+        var lastProcessedRowID: Int64 = 0
         var processed = 0
         let startedAt = Date()
 
         try clearTrigramFTSTableInBatches(batchSize: batchSize, shouldCancel: shouldCancel)
 
-        while processed < total {
+        while processed < total,
+              let upperRowID = try nextChunkBatchUpperRowID(
+                after: lastProcessedRowID,
+                maxRowID: maxChunkRowID,
+                batchSize: batchSize
+              ) {
             if shouldCancel() {
                 let cancelled = TrigramMaintenanceProgress(
                     state: .cancelled,
@@ -2059,23 +2066,35 @@ final class BrainDatabase: @unchecked Sendable {
                 return cancelled
             }
 
-            let offset = processed
             try withImmediateTransaction {
+                try executeUpdate(
+                    """
+                    DELETE FROM chunks_fts_trigram
+                    WHERE chunk_id IN (
+                        SELECT id FROM chunks WHERE rowid > ? AND rowid <= ?
+                    )
+                    """,
+                    binds: { stmt in
+                        sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
+                        sqlite3_bind_int64(stmt, 2, upperRowID)
+                    }
+                )
                 try executeUpdate(
                     """
                     INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
                     SELECT content, summary, tags, NULL, id
                     FROM chunks
+                    WHERE rowid > ? AND rowid <= ?
                     ORDER BY rowid ASC
-                    LIMIT ? OFFSET ?
                     """,
                     binds: { stmt in
-                        sqlite3_bind_int(stmt, 1, Int32(batchSize))
-                        sqlite3_bind_int(stmt, 2, Int32(offset))
+                        sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
+                        sqlite3_bind_int64(stmt, 2, upperRowID)
                     }
                 )
             }
 
+            lastProcessedRowID = upperRowID
             processed = min(processed + batchSize, total)
             let running = TrigramMaintenanceProgress(
                 state: .running,
@@ -2121,6 +2140,46 @@ final class BrainDatabase: @unchecked Sendable {
                 )
             }
         }
+    }
+
+    private func maxChunkRowID() throws -> Int64 {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(rowid), 0) FROM chunks", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int64(stmt, 0)
+    }
+
+    private func nextChunkBatchUpperRowID(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> Int64? {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(
+            db,
+            """
+            SELECT rowid
+            FROM (
+                SELECT rowid
+                FROM chunks
+                WHERE rowid > ? AND rowid <= ?
+                ORDER BY rowid ASC
+                LIMIT ?
+            )
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            -1,
+            &stmt,
+            nil
+        )
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, rowID)
+        sqlite3_bind_int64(stmt, 2, maxRowID)
+        sqlite3_bind_int(stmt, 3, Int32(batchSize))
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(stmt, 0)
     }
 
     private static func estimatedSecondsRemaining(startedAt: Date, processed: Int, total: Int) -> Double? {

@@ -270,6 +270,36 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
     }
 
+    func testTriggerTrigramRebuildDoesNotDuplicateRowsWhenChunkUpdatesBetweenBatches() throws {
+        try seedTrigramMaintenanceRows(count: 4)
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+
+        var updatedDuringProgress = false
+        let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
+            guard event.state == .running, !updatedDuringProgress else { return }
+            updatedDuringProgress = true
+            try? sqliteExecWrite(
+                path: self.tempDBPath,
+                sql: """
+                    UPDATE chunks
+                    SET content = 'Updated not-yet-processed chunk during trigram maintenance'
+                    WHERE id = 'trigram-maintenance-3'
+                """
+            )
+        })
+
+        XCTAssertEqual(final.state, .done)
+        XCTAssertTrue(updatedDuringProgress)
+        XCTAssertEqual(
+            try sqliteCount(
+                path: tempDBPath,
+                sql: "SELECT COUNT(*) FROM chunks_fts_trigram WHERE chunk_id = 'trigram-maintenance-3'"
+            ),
+            1
+        )
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 4)
+    }
+
     func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
         db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
         db.exec("DROP TABLE IF EXISTS brainbar_agents")
@@ -971,10 +1001,14 @@ private func sqliteExecWrite(path: String, sql: String) throws {
 }
 
 private func sqliteCount(path: String, table: String) throws -> Int {
+    try sqliteCount(path: path, sql: "SELECT COUNT(*) FROM \(table)")
+}
+
+private func sqliteCount(path: String, sql: String) throws -> Int {
     try withSQLiteConnection(path: path) { db in
         try scalarInt(
             db: db,
-            sql: "SELECT COUNT(*) FROM \(table)",
+            sql: sql,
             bind: { _ in }
         )
     }
