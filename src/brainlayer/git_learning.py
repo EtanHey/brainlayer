@@ -24,6 +24,11 @@ MIGRATION_PATTERNS = [
 BREAKING_RE = re.compile(r"BREAKING CHANGE:", re.IGNORECASE)
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Strip parent-repo Git hook variables before running Git in another repo."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 @dataclass(frozen=True)
 class ParsedCommit:
     kind: str | None
@@ -217,6 +222,7 @@ def _iter_commits(repo: Path, since: str) -> list[dict[str, Any]]:
     hashes = subprocess.run(
         ["git", "log", "--no-merges", f"--since={_git_since_arg(since)}", "--format=%H"],
         cwd=repo,
+        env=_clean_git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -225,6 +231,7 @@ def _iter_commits(repo: Path, since: str) -> list[dict[str, Any]]:
         metadata = subprocess.run(
             ["git", "show", "-s", "--format=%an%x1f%at%x1f%s%x1f%b", commit_hash],
             cwd=repo,
+            env=_clean_git_env(),
             check=True,
             capture_output=True,
             text=True,
@@ -233,6 +240,7 @@ def _iter_commits(repo: Path, since: str) -> list[dict[str, Any]]:
         file_listing = subprocess.run(
             ["git", "show", "--pretty=format:", "--name-only", commit_hash],
             cwd=repo,
+            env=_clean_git_env(),
             check=True,
             capture_output=True,
             text=True,
