@@ -6,7 +6,7 @@
     <string>com.brainlayer.enrichment</string>
 
     <!-- Realtime Gemini enrichment LaunchAgent.
-         Runs once at login/load and then every 10 minutes. -->
+         Runs continuously via KeepAlive using the validated flex tuning. -->
 
     <key>ProgramArguments</key>
     <array>
@@ -15,14 +15,16 @@
         <string>--mode</string>
         <string>realtime</string>
         <string>--limit</string>
-        <string>50</string>
+        <string>200000</string>
+        <string>--since-hours</string>
+        <string>87600</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>__BRAINLAYER_DIR__</string>
 
-    <key>StartInterval</key>
-    <integer>600</integer>
+    <key>KeepAlive</key>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
@@ -39,10 +41,12 @@
         <string>__BRAINLAYER_DIR__/src</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
+        <key>BRAINLAYER_ENRICH_BACKEND</key>
+        <string>gemini</string>
         <key>BRAINLAYER_ENRICH_RATE</key>
-        <string>50</string>
+        <string>15</string>
         <key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-        <string>10</string>
+        <string>18</string>
         <key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
         <string>flex</string>
         <key>GOOGLE_API_KEY</key>

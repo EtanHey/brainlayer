@@ -1160,13 +1160,14 @@ def test_enrichment_plist_uses_realtime_mode():
     assert "realtime" in content
 
 
-def test_enrichment_plist_has_start_interval():
+def test_enrichment_plist_uses_continuous_keepalive_shape():
     from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     content = plist_path.read_text()
-    assert "StartInterval" in content
-    assert "600" in content
+    assert "<key>KeepAlive</key>" in content
+    assert "<true/>" in content
+    assert "StartInterval" not in content
 
 
 def test_enrichment_plist_invokes_cli_enrich_entrypoint():
@@ -1177,10 +1178,12 @@ def test_enrichment_plist_invokes_cli_enrich_entrypoint():
     assert "__BRAINLAYER_BIN__" in content
     assert "<string>enrich</string>" in content
     assert "<string>realtime</string>" in content
-    assert "<string>50</string>" in content
+    assert "<string>200000</string>" in content
+    assert "<string>--since-hours</string>" in content
+    assert "<string>87600</string>" in content
 
 
-def test_enrichment_plist_uses_low_priority_library_logs_and_flex_tier():
+def test_enrichment_plist_matches_validated_flex_realtime_profile():
     from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
@@ -1188,6 +1191,12 @@ def test_enrichment_plist_uses_low_priority_library_logs_and_flex_tier():
     assert "<key>Nice</key>" in content
     assert "<integer>10</integer>" in content
     assert "__HOME__/Library/Logs/brainlayer-enrichment.log" in content
+    assert "BRAINLAYER_ENRICH_BACKEND" in content
+    assert "<string>gemini</string>" in content
+    assert "BRAINLAYER_ENRICH_RATE" in content
+    assert "<string>15</string>" in content
+    assert "BRAINLAYER_ENRICH_CONCURRENCY" in content
+    assert "<string>18</string>" in content
     assert "BRAINLAYER_GEMINI_SERVICE_TIER" in content
     assert "<string>flex</string>" in content
 
