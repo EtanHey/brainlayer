@@ -475,6 +475,7 @@ final class BrainDatabase: @unchecked Sendable {
         query: String,
         limit: Int,
         project: String? = nil,
+        source: String? = nil,
         tag: String? = nil,
         importanceMin: Double? = nil,
         subscriberID: String? = nil,
@@ -495,6 +496,7 @@ final class BrainDatabase: @unchecked Sendable {
                query: trimmedQuery,
                limit: limit,
                project: project,
+               source: source,
                tag: tag,
                importanceMin: importanceMin
            ) {
@@ -512,6 +514,7 @@ final class BrainDatabase: @unchecked Sendable {
                 matchQuery: sanitizeFTS5Query(expandedQuery),
                 limit: max(limit, 1),
                 project: project,
+                source: source,
                 tag: tag,
                 importanceMin: importanceMin,
                 subscribedTags: subscribedTags,
@@ -532,6 +535,7 @@ final class BrainDatabase: @unchecked Sendable {
                     matchQuery: trigramQuery,
                     limit: max(limit, 1),
                     project: project,
+                    source: source,
                     tag: tag,
                     importanceMin: importanceMin,
                     subscribedTags: subscribedTags,
@@ -556,6 +560,7 @@ final class BrainDatabase: @unchecked Sendable {
         matchQuery: String,
         limit: Int,
         project: String?,
+        source: String?,
         tag: String?,
         importanceMin: Double?,
         subscribedTags: [String],
@@ -567,8 +572,10 @@ final class BrainDatabase: @unchecked Sendable {
         guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid FTS table") }
 
         var subscribedTags = subscribedTags
-        var conditions = ["\(tableName) MATCH ?"]
+        let sourceFilter = normalizedSourceFilter(source)
+        var conditions = ["\(tableName) MATCH ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
         if project != nil { conditions.append("c.project = ?") }
+        if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
             conditions.append("c.tags LIKE ?")
             subscribedTags = [explicitTag]
@@ -584,7 +591,7 @@ final class BrainDatabase: @unchecked Sendable {
         let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
             SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.conversation_id, f.rank
+                   c.created_at, c.summary, c.tags, c.conversation_id, c.source, f.rank
             FROM \(tableName) f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE \(conditions.joined(separator: " AND "))
@@ -602,6 +609,10 @@ final class BrainDatabase: @unchecked Sendable {
         paramIdx += 1
         if let project {
             bindText(project, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let sourceFilter {
+            bindText(sourceFilter, to: stmt, index: paramIdx)
             paramIdx += 1
         }
         if let explicitTag = tag {
@@ -629,7 +640,7 @@ final class BrainDatabase: @unchecked Sendable {
             let rowID = sqlite3_column_int64(stmt, 0)
             maxRowID = max(maxRowID, rowID)
             // FTS5 rank is negative (lower = better match). Negate for a positive score.
-            let rawRank = sqlite3_column_double(stmt, 10)
+            let rawRank = sqlite3_column_double(stmt, 11)
             let score = max(0, -rawRank)
             results.append(searchRow(from: stmt, score: score))
         }
@@ -800,6 +811,7 @@ final class BrainDatabase: @unchecked Sendable {
         query: String,
         limit: Int,
         project: String? = nil,
+        source: String? = nil,
         tag: String? = nil,
         importanceMin: Double? = nil,
         subscriberID: String? = nil,
@@ -815,8 +827,10 @@ final class BrainDatabase: @unchecked Sendable {
             ackFloor = record.lastAckedSeq
         }
 
-        var conditions = ["chunks_fts MATCH ?"]
+        let sourceFilter = normalizedSourceFilter(source)
+        var conditions = ["chunks_fts MATCH ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
         if project != nil { conditions.append("c.project = ?") }
+        if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
             conditions.append("c.tags LIKE ?")
             subscribedTags = [explicitTag]
@@ -847,6 +861,10 @@ final class BrainDatabase: @unchecked Sendable {
         paramIdx += 1
         if let project {
             bindText(project, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let sourceFilter {
+            bindText(sourceFilter, to: stmt, index: paramIdx)
             paramIdx += 1
         }
         if let explicitTag = tag {
@@ -1601,6 +1619,13 @@ final class BrainDatabase: @unchecked Sendable {
         return "\"\(cleaned)\""
     }
 
+    private func normalizedSourceFilter(_ source: String?) -> String? {
+        guard let source = source?.trimmingCharacters(in: .whitespacesAndNewlines), !source.isEmpty else {
+            return nil
+        }
+        return source == "all" ? nil : source
+    }
+
     private func expandedSearchQueries(_ query: String) -> [String] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -1693,6 +1718,7 @@ final class BrainDatabase: @unchecked Sendable {
         query: String,
         limit: Int,
         project: String?,
+        source: String?,
         tag: String?,
         importanceMin: Double?
     ) throws -> [[String: Any]]? {
@@ -1701,14 +1727,16 @@ final class BrainDatabase: @unchecked Sendable {
             return nil
         }
 
-        var conditions = ["c.id = ?"]
+        let sourceFilter = normalizedSourceFilter(source)
+        var conditions = ["c.id = ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
         if project != nil { conditions.append("c.project = ?") }
+        if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
         if importanceMin != nil { conditions.append("c.importance >= ?") }
 
         let sql = """
             SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
-                   c.created_at, c.summary, c.tags, c.conversation_id
+                   c.created_at, c.summary, c.tags, c.conversation_id, c.source
             FROM chunks c
             WHERE \(conditions.joined(separator: " AND "))
             LIMIT 1
@@ -1724,6 +1752,10 @@ final class BrainDatabase: @unchecked Sendable {
         paramIdx += 1
         if let project {
             bindText(project, to: stmt, index: paramIdx)
+            paramIdx += 1
+        }
+        if let sourceFilter {
+            bindText(sourceFilter, to: stmt, index: paramIdx)
             paramIdx += 1
         }
         if let tag {
@@ -1766,6 +1798,7 @@ final class BrainDatabase: @unchecked Sendable {
             "preview_text": Self.previewText(summary: columnText(stmt, 7), content: columnText(stmt, 2)),
             "tags": columnText(stmt, 8) as Any,
             "session_id": columnText(stmt, 9) as Any,
+            "source": columnText(stmt, 10) as Any,
             "score": score
         ]
     }
@@ -1781,6 +1814,21 @@ final class BrainDatabase: @unchecked Sendable {
         }
         if !existingColumns.contains("preview_text") {
             try execute("ALTER TABLE chunks ADD COLUMN preview_text TEXT")
+        }
+        if !existingColumns.contains("source") {
+            try execute("ALTER TABLE chunks ADD COLUMN source TEXT DEFAULT 'claude_code'")
+        }
+        if !existingColumns.contains("enriched_at") {
+            try execute("ALTER TABLE chunks ADD COLUMN enriched_at TEXT")
+        }
+        if !existingColumns.contains("archived") {
+            try execute("ALTER TABLE chunks ADD COLUMN archived INTEGER DEFAULT 0")
+        }
+        if !existingColumns.contains("superseded_by") {
+            try execute("ALTER TABLE chunks ADD COLUMN superseded_by TEXT")
+        }
+        if !existingColumns.contains("archived_at") {
+            try execute("ALTER TABLE chunks ADD COLUMN archived_at TEXT")
         }
     }
 
@@ -2656,16 +2704,29 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    func lookupEntity(query: String) throws -> [String: Any]? {
+    func lookupEntity(query: String, entityType: String? = nil) throws -> [String: Any]? {
         guard let db else { throw DBError.notOpen }
 
         // First try exact name match
-        let exactSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name = ? LIMIT 1"
+        let exactSQL = """
+            SELECT id, entity_type, name, metadata, description
+            FROM kg_entities
+            WHERE name = ?
+              AND (? IS NULL OR entity_type = ?)
+            LIMIT 1
+        """
         var exactStmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, exactSQL, -1, &exactStmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         bindText(query, to: exactStmt, index: 1)
+        if let entityType {
+            bindText(entityType, to: exactStmt, index: 2)
+            bindText(entityType, to: exactStmt, index: 3)
+        } else {
+            sqlite3_bind_null(exactStmt, 2)
+            sqlite3_bind_null(exactStmt, 3)
+        }
 
         var entityId: String?
         var result: [String: Any]?
@@ -2684,12 +2745,25 @@ final class BrainDatabase: @unchecked Sendable {
 
         // If no exact match, try LIKE
         if result == nil {
-            let likeSQL = "SELECT id, entity_type, name, metadata, description FROM kg_entities WHERE name LIKE ? LIMIT 1"
+            let likeSQL = """
+                SELECT id, entity_type, name, metadata, description
+                FROM kg_entities
+                WHERE name LIKE ?
+                  AND (? IS NULL OR entity_type = ?)
+                LIMIT 1
+            """
             var likeStmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, likeSQL, -1, &likeStmt, nil) == SQLITE_OK else {
                 throw DBError.prepare(sqlite3_errcode(db))
             }
             bindText("%\(query)%", to: likeStmt, index: 1)
+            if let entityType {
+                bindText(entityType, to: likeStmt, index: 2)
+                bindText(entityType, to: likeStmt, index: 3)
+            } else {
+                sqlite3_bind_null(likeStmt, 2)
+                sqlite3_bind_null(likeStmt, 3)
+            }
 
             if sqlite3_step(likeStmt) == SQLITE_ROW {
                 entityId = columnText(likeStmt, 0)
@@ -2739,6 +2813,17 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return result
+    }
+
+    private static func decodedJSONObject(_ raw: String?) -> [String: Any] {
+        guard
+            let raw,
+            let data = raw.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+        return object
     }
 
     // MARK: - KG fact lookup for search augmentation
@@ -2816,6 +2901,19 @@ final class BrainDatabase: @unchecked Sendable {
         let snippet: String
         let importance: Int
         let relevance: Double
+    }
+
+    struct EnrichmentStatsSummary: Equatable {
+        let totalChunks: Int
+        let enriched: Int
+        let unenrichedEligible: Int
+        let skippedTooShort: Int
+        let enrichedLast24Hours: Int
+
+        var enrichedPercentText: String {
+            guard totalChunks > 0 else { return "0.0%" }
+            return String(format: "%.1f%%", (Double(enriched) / Double(totalChunks)) * 100.0)
+        }
     }
 
     func fetchKGEntities(limit: Int = 500) throws -> [KGEntityRow] {
@@ -2916,6 +3014,257 @@ final class BrainDatabase: @unchecked Sendable {
             ))
         }
         return rows
+    }
+
+    func getChunk(id: String) throws -> [String: Any]? {
+        guard let db else { throw DBError.notOpen }
+        let sql = """
+            SELECT id, content, content_type, source, summary, created_at, archived_at, superseded_by
+            FROM chunks
+            WHERE id = ?
+            LIMIT 1
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(id, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return [
+            "id": columnText(stmt, 0) as Any,
+            "content": columnText(stmt, 1) as Any,
+            "content_type": columnText(stmt, 2) as Any,
+            "source": columnText(stmt, 3) as Any,
+            "summary": columnText(stmt, 4) as Any,
+            "created_at": columnText(stmt, 5) as Any,
+            "archived_at": columnText(stmt, 6) as Any,
+            "superseded_by": columnText(stmt, 7) as Any,
+        ]
+    }
+
+    func archiveChunk(id: String, reason _: String? = nil) throws -> Bool {
+        guard try getChunk(id: id) != nil else { return false }
+        try executeUpdate(
+            """
+            UPDATE chunks
+            SET archived = 1,
+                archived_at = ?
+            WHERE id = ?
+            """
+        ) { stmt in
+            bindText(Self.timestamp(), to: stmt, index: 1)
+            bindText(id, to: stmt, index: 2)
+        }
+        refreshSearchStatisticsBestEffort()
+        return true
+    }
+
+    func supersedeChunk(oldChunkID: String, newChunkID: String) throws -> Bool {
+        guard try getChunk(id: oldChunkID) != nil, try getChunk(id: newChunkID) != nil else {
+            return false
+        }
+        try executeUpdate(
+            "UPDATE chunks SET superseded_by = ? WHERE id = ?"
+        ) { stmt in
+            bindText(newChunkID, to: stmt, index: 1)
+            bindText(oldChunkID, to: stmt, index: 2)
+        }
+        refreshSearchStatisticsBestEffort()
+        return true
+    }
+
+    func getPersonContext(name: String, context: String?, numMemories: Int) throws -> [String: Any]? {
+        guard let entity = try lookupEntity(query: name, entityType: "person") else {
+            return nil
+        }
+        guard let entityID = entity["entity_id"] as? String else {
+            return nil
+        }
+
+        let profile = Self.decodedJSONObject(entity["metadata"] as? String)
+        let relations = ((entity["relations"] as? [[String: Any]]) ?? []).map { relation in
+            [
+                "relation_type": relation["relation_type"] as Any,
+                "target": (relation["target_name"] as? String) ?? "",
+                "direction": relation["direction"] as Any,
+            ]
+        }
+        let memories = try fetchEntityMemories(entityID: entityID, context: context, limit: numMemories)
+
+        return [
+            "entity_id": entityID,
+            "name": entity["name"] as Any,
+            "entity_type": entity["entity_type"] as Any,
+            "profile": profile,
+            "hard_constraints": profile["hard_constraints"] as? [String: Any] ?? [:],
+            "preferences": profile["preferences"] as? [String: Any] ?? [:],
+            "contact_info": profile["contact_info"] as? [String: Any] ?? [:],
+            "relations": relations,
+            "memories": memories,
+            "memory_count": memories.count,
+        ]
+    }
+
+    private func fetchEntityMemories(entityID: String, context: String?, limit: Int) throws -> [[String: Any]] {
+        guard let db else { throw DBError.notOpen }
+        let hasContext = context?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let sql: String
+        if hasContext {
+            sql = """
+                SELECT c.content, c.content_type, c.created_at, c.summary, ec.relevance
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON c.id = ec.chunk_id
+                WHERE ec.entity_id = ?
+                  AND c.superseded_by IS NULL
+                  AND c.archived_at IS NULL
+                  AND (c.content LIKE ? OR COALESCE(c.summary, '') LIKE ?)
+                ORDER BY ec.relevance DESC, c.created_at DESC
+                LIMIT ?
+            """
+        } else {
+            sql = """
+                SELECT c.content, c.content_type, c.created_at, c.summary, ec.relevance
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON c.id = ec.chunk_id
+                WHERE ec.entity_id = ?
+                  AND c.superseded_by IS NULL
+                  AND c.archived_at IS NULL
+                ORDER BY ec.relevance DESC, c.created_at DESC
+                LIMIT ?
+            """
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(entityID, to: stmt, index: 1)
+        var bindIndex: Int32 = 2
+        if let context, hasContext {
+            let pattern = "%\(context)%"
+            bindText(pattern, to: stmt, index: bindIndex)
+            bindIndex += 1
+            bindText(pattern, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(limit))
+
+        var memories: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            memories.append([
+                "content": String((columnText(stmt, 0) ?? "").prefix(500)),
+                "type": columnText(stmt, 1) ?? "unknown",
+                "date": String((columnText(stmt, 2) ?? "").prefix(10)),
+                "summary": columnText(stmt, 3) as Any,
+                "relevance": sqlite3_column_double(stmt, 4),
+            ])
+        }
+        return memories
+    }
+
+    func enrichmentStats() throws -> EnrichmentStatsSummary {
+        guard let db else { throw DBError.notOpen }
+
+        func queryInt(_ sql: String) throws -> Int {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw DBError.prepare(sqlite3_errcode(db))
+            }
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+
+        return EnrichmentStatsSummary(
+            totalChunks: try queryInt("SELECT COUNT(*) FROM chunks"),
+            enriched: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"),
+            unenrichedEligible: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count >= 50"),
+            skippedTooShort: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count < 50"),
+            enrichedLast24Hours: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at > datetime('now', '-24 hours')")
+        )
+    }
+
+    func enrichChunks(
+        mode: String,
+        limit: Int,
+        sinceHours: Int,
+        phase _: String,
+        chunkIDs: [String]?
+    ) throws -> [String: Any] {
+        guard let db else { throw DBError.notOpen }
+
+        var conditions = ["superseded_by IS NULL", "archived_at IS NULL"]
+        if chunkIDs == nil {
+            conditions.append("enriched_at IS NULL")
+            conditions.append("char_count >= 50")
+        }
+        if mode == "realtime", chunkIDs == nil {
+            conditions.append("created_at >= datetime('now', ?)")
+        }
+        if let chunkIDs, !chunkIDs.isEmpty {
+            let placeholders = Array(repeating: "?", count: chunkIDs.count).joined(separator: ", ")
+            conditions.append("id IN (\(placeholders))")
+        }
+
+        let sql = """
+            SELECT id, content, summary
+            FROM chunks
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var bindIndex: Int32 = 1
+        if mode == "realtime", chunkIDs == nil {
+            bindText("-\(sinceHours) hours", to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        if let chunkIDs, !chunkIDs.isEmpty {
+            for chunkID in chunkIDs {
+                bindText(chunkID, to: stmt, index: bindIndex)
+                bindIndex += 1
+            }
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(limit))
+
+        var targets: [(id: String, content: String)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            targets.append((columnText(stmt, 0) ?? "", columnText(stmt, 1) ?? ""))
+        }
+
+        var enriched = 0
+        var failed = 0
+        for target in targets {
+            let summary = Self.previewText(summary: nil, content: target.content)
+            do {
+                try executeUpdate(
+                    "UPDATE chunks SET summary = ?, enriched_at = ? WHERE id = ?"
+                ) { stmt in
+                    bindText(summary, to: stmt, index: 1)
+                    bindText(Self.timestamp(), to: stmt, index: 2)
+                    bindText(target.id, to: stmt, index: 3)
+                }
+                enriched += 1
+            } catch {
+                failed += 1
+            }
+        }
+        refreshSearchStatisticsBestEffort()
+
+        return [
+            "mode": mode,
+            "attempted": targets.count,
+            "enriched": enriched,
+            "skipped": max(0, targets.count - enriched - failed),
+            "failed": failed,
+        ]
     }
 
     // MARK: - brain_recall

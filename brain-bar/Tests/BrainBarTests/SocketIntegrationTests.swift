@@ -91,7 +91,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 11)
+        XCTAssertEqual(tools?.count, 15)
 
         let toolsByName = Dictionary(
             uniqueKeysWithValues: (tools ?? []).compactMap { tool -> (String, [String: Any])? in
@@ -103,12 +103,16 @@ final class SocketIntegrationTests: XCTestCase {
         let expected: [String: (readOnly: Bool, destructive: Bool, idempotent: Bool, openWorld: Bool)] = [
             "brain_search": (true, false, true, false),
             "brain_store": (false, false, false, false),
+            "brain_get_person": (true, false, true, false),
             "brain_recall": (true, false, true, false),
             "brain_entity": (true, false, true, false),
             "brain_digest": (false, false, false, false),
             "brain_update": (false, false, true, false),
             "brain_expand": (true, false, true, false),
             "brain_tags": (true, false, true, false),
+            "brain_supersede": (false, true, false, false),
+            "brain_archive": (false, true, false, false),
+            "brain_enrich": (false, false, false, false),
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
@@ -685,7 +689,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let toolsResponse = try JSONSerialization.jsonObject(with: Data(outputLines[1].utf8)) as? [String: Any]
         let tools = (toolsResponse?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 11)
+        XCTAssertEqual(tools?.count, 15)
     }
 
     // MARK: - C2: Socket path length validation
