@@ -31,12 +31,18 @@ final class MCPRouter: @unchecked Sendable {
         "content": 200_000,
         "detail": 16,
         "mode": 32,
+        "name": 256,
+        "new_chunk_id": 128,
+        "old_chunk_id": 128,
         "project": 256,
         "query": 4_096,
+        "reason": 1_024,
         "session_id": 128,
+        "source": 32,
         "tag": 128
     ]
     private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
+        "chunk_ids": (maxItems: 500, itemMaxLength: 128),
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
 
@@ -174,6 +180,8 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainSearch(arguments)
         case "brain_store":
             return try handleBrainStore(arguments)
+        case "brain_get_person":
+            return try handleBrainGetPerson(arguments)
         case "brain_recall":
             return try handleBrainRecall(arguments)
         case "brain_entity":
@@ -186,6 +194,12 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainExpand(arguments)
         case "brain_tags":
             return try handleBrainTags(arguments)
+        case "brain_supersede":
+            return try handleBrainSupersede(arguments)
+        case "brain_archive":
+            return try handleBrainArchive(arguments)
+        case "brain_enrich":
+            return try handleBrainEnrich(arguments)
         case "brain_subscribe":
             return try handleBrainSubscribe(arguments)
         case "brain_unsubscribe":
@@ -205,9 +219,17 @@ final class MCPRouter: @unchecked Sendable {
         }
         let limit = min(args["num_results"] as? Int ?? 5, 100)
         let project = args["project"] as? String
+        let source = args["source"] as? String
         let tag = args["tag"] as? String
         let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
+        let sourceCountsAsFilter: Bool
+        if let source {
+            let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+            sourceCountsAsFilter = !trimmed.isEmpty && trimmed != "all"
+        } else {
+            sourceCountsAsFilter = false
+        }
         // importance_min may arrive as Int or Double from JSON
         let importanceMin: Double? = if let d = args["importance_min"] as? Double { d }
             else if let i = args["importance_min"] as? Int { Double(i) }
@@ -221,7 +243,7 @@ final class MCPRouter: @unchecked Sendable {
 
         // Entity detection → KG fact lookup
         var kgSection = ""
-        let hasActiveFilters = project != nil || tag != nil || subscriberID != nil || importanceMin != nil
+        let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
         if !hasActiveFilters {
             let detected = entityCache.detectEntities(in: query)
             if let first = detected.first {
@@ -236,6 +258,7 @@ final class MCPRouter: @unchecked Sendable {
             query: query,
             limit: limit,
             project: project,
+            source: source,
             tag: tag,
             importanceMin: importanceMin,
             subscriberID: subscriberID,
@@ -293,6 +316,19 @@ final class MCPRouter: @unchecked Sendable {
                 metadata: ["queued": true]
             )
         }
+    }
+
+    private func handleBrainGetPerson(_ args: [String: Any]) throws -> ToolOutput {
+        guard let name = args["name"] as? String else {
+            throw ToolError.missingParameter("name")
+        }
+        let context = args["context"] as? String
+        let numMemories = min(args["num_memories"] as? Int ?? 10, 50)
+        guard let db = database else { throw ToolError.noDatabase }
+        guard let person = try db.getPersonContext(name: name, context: context, numMemories: numMemories) else {
+            return ToolOutput(text: "No person entity found matching '\(name)'.")
+        }
+        return ToolOutput(text: Formatters.formatEntityCard(entity: person, useColor: false))
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
@@ -413,6 +449,103 @@ final class MCPRouter: @unchecked Sendable {
         return ToolOutput(text: lines.joined(separator: "\n"))
     }
 
+    private func handleBrainSupersede(_ args: [String: Any]) throws -> ToolOutput {
+        guard let oldChunkID = args["old_chunk_id"] as? String else {
+            throw ToolError.missingParameter("old_chunk_id")
+        }
+        guard let newChunkID = args["new_chunk_id"] as? String else {
+            throw ToolError.missingParameter("new_chunk_id")
+        }
+        let safetyCheck = args["safety_check"] as? String ?? "auto"
+        let confirm = args["confirm"] as? Bool ?? false
+        guard let db = database else { throw ToolError.noDatabase }
+
+        guard let oldChunk = try db.getChunk(id: oldChunkID) else {
+            throw ToolError.notFound("Old chunk not found: \(oldChunkID)")
+        }
+        guard try db.getChunk(id: newChunkID) != nil else {
+            throw ToolError.notFound("New chunk not found: \(newChunkID)")
+        }
+
+        if safetyCheck == "auto", requiresSupersedeConfirmation(chunk: oldChunk) {
+            return ToolOutput(text: jsonEncode([
+                "action": "confirm_required",
+                "reason": "Old chunk contains personal data — requires safety_check='confirm' and confirm=true",
+                "old_chunk_id": oldChunkID,
+                "old_preview": String((oldChunk["content"] as? String ?? "").prefix(200)),
+                "new_chunk_id": newChunkID,
+            ] as [String: String]))
+        }
+
+        if safetyCheck == "confirm", !confirm {
+            return ToolOutput(text: jsonEncode([
+                "action": "confirm_required",
+                "old_chunk_id": oldChunkID,
+                "old_preview": String((oldChunk["content"] as? String ?? "").prefix(200)),
+                "new_chunk_id": newChunkID,
+                "instruction": "Re-call with confirm=true to proceed",
+            ] as [String: String]))
+        }
+
+        guard try db.supersedeChunk(oldChunkID: oldChunkID, newChunkID: newChunkID) else {
+            throw ToolError.notFound("Supersede failed for: \(oldChunkID)")
+        }
+        return ToolOutput(text: jsonEncode([
+            "action": "superseded",
+            "old_chunk_id": oldChunkID,
+            "new_chunk_id": newChunkID,
+        ] as [String: String]))
+    }
+
+    private func handleBrainArchive(_ args: [String: Any]) throws -> ToolOutput {
+        guard let chunkID = args["chunk_id"] as? String else {
+            throw ToolError.missingParameter("chunk_id")
+        }
+        let reason = args["reason"] as? String
+        guard let db = database else { throw ToolError.noDatabase }
+        guard try db.archiveChunk(id: chunkID, reason: reason) else {
+            throw ToolError.notFound("Chunk not found: \(chunkID)")
+        }
+        var payload: [String: String] = [
+            "action": "archived",
+            "chunk_id": chunkID,
+        ]
+        if let reason {
+            payload["reason"] = reason
+        }
+        return ToolOutput(text: jsonEncode(payload))
+    }
+
+    private func handleBrainEnrich(_ args: [String: Any]) throws -> ToolOutput {
+        let mode = args["mode"] as? String ?? "realtime"
+        let limit = max(1, min(args["limit"] as? Int ?? 25, 5_000))
+        let sinceHours = args["since_hours"] as? Int ?? 8_760
+        let phase = args["phase"] as? String ?? "run"
+        let chunkIDs = args["chunk_ids"] as? [String]
+        let stats = args["stats"] as? Bool ?? false
+        guard let db = database else { throw ToolError.noDatabase }
+
+        if stats {
+            let summary = try db.enrichmentStats()
+            let lines = [
+                "\u{250c}\u{2500} Enrichment Stats",
+                "\u{2502} Total: \(summary.totalChunks)  Enriched: \(summary.enriched) (\(summary.enrichedPercentText))  Remaining: \(summary.unenrichedEligible)  Skipped: \(summary.skippedTooShort)",
+                "\u{2502} Last 24h: \(summary.enrichedLast24Hours) enriched",
+                "\u{2514}\u{2500}",
+            ]
+            return ToolOutput(text: lines.joined(separator: "\n"))
+        }
+
+        let result = try db.enrichChunks(
+            mode: mode,
+            limit: limit,
+            sinceHours: sinceHours,
+            phase: phase,
+            chunkIDs: chunkIDs
+        )
+        return ToolOutput(text: Formatters.formatDigestResult(result: result, useColor: false))
+    }
+
     private func handleBrainSubscribe(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
@@ -438,6 +571,17 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("seq")
         }
         throw ToolError.notImplemented("brain_ack")
+    }
+
+    private func requiresSupersedeConfirmation(chunk: [String: Any]) -> Bool {
+        let personalTypes = Set(["journal", "note", "bookmark"])
+        let personalKeywords = ["health", "family", "relationship", "finance", "personal", "therapy", "medical"]
+        let contentType = (chunk["content_type"] as? String ?? "").lowercased()
+        if personalTypes.contains(contentType) {
+            return true
+        }
+        let content = (chunk["content"] as? String ?? "").lowercased()
+        return personalKeywords.contains(where: { content.contains($0) })
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -582,6 +726,7 @@ final class MCPRouter: @unchecked Sendable {
         case unknownTool(String)
         case missingParameter(String)
         case noDatabase
+        case notFound(String)
         case notImplemented(String)
         case schemaValidation(String)
 
@@ -590,6 +735,7 @@ final class MCPRouter: @unchecked Sendable {
             case .unknownTool(let name): return "Unknown tool: \(name)"
             case .missingParameter(let param): return "Missing required parameter: \(param)"
             case .noDatabase: return "Database not available"
+            case .notFound(let message): return message
             case .notImplemented(let tool): return "\(tool) not yet implemented in BrainBar (use Python MCP server)"
             case .schemaValidation(let message): return "Schema validation error: \(message)"
             }
@@ -641,6 +787,7 @@ final class MCPRouter: @unchecked Sendable {
                     "query": ["type": "string", "description": "Natural language search query"],
                     "num_results": ["type": "integer", "description": "Number of results (default: 5, max: 100)"],
                     "project": ["type": "string", "description": "Filter by project name"],
+                    "source": ["type": "string", "enum": ["claude_code", "whatsapp", "youtube", "mcp", "all"], "description": "Filter by data source. Omit or use 'all' to search everything."],
                     "tag": ["type": "string", "description": "Filter by tag"],
                     "importance_min": ["type": "number", "description": "Minimum importance score (1-10)"],
                     "agent_id": ["type": "string", "description": "Optional stable agent id for unread filtering"],
@@ -686,6 +833,20 @@ final class MCPRouter: @unchecked Sendable {
                     "query": ["type": "string", "description": "Entity name to look up"],
                 ] as [String: Any],
                 "required": ["query"]
+            ] as [String: Any])
+        ],
+        [
+            "name": "brain_get_person",
+            "description": "Get a person's profile, relations, and linked memories in one call.",
+            "annotations": MCPRouter.readOnlyAnnotations,
+            "inputSchema": MCPRouter.limitedInputSchema([
+                "type": "object",
+                "properties": [
+                    "name": ["type": "string", "description": "Person name to look up"],
+                    "context": ["type": "string", "description": "Optional context to rank memories by relevance"],
+                    "num_memories": ["type": "integer", "description": "Number of memory chunks to return (default: 10, max: 50)"],
+                ] as [String: Any],
+                "required": ["name"]
             ] as [String: Any])
         ],
         [
@@ -735,6 +896,50 @@ final class MCPRouter: @unchecked Sendable {
                 "type": "object",
                 "properties": [
                     "query": ["type": "string", "description": "Optional search query to filter tags"],
+                ] as [String: Any],
+            ] as [String: Any])
+        ],
+        [
+            "name": "brain_supersede",
+            "description": "Mark an old chunk as replaced by a newer one and hide it from default search.",
+            "annotations": MCPRouter.toolAnnotations(readOnly: false, destructive: true, idempotent: false),
+            "inputSchema": MCPRouter.limitedInputSchema([
+                "type": "object",
+                "properties": [
+                    "old_chunk_id": ["type": "string", "description": "The chunk ID to mark as superseded"],
+                    "new_chunk_id": ["type": "string", "description": "The chunk ID that replaces the old one"],
+                    "safety_check": ["type": "string", "enum": ["auto", "confirm"], "description": "Safety mode: auto or confirm"],
+                    "confirm": ["type": "boolean", "description": "Confirm superseding personal data when required"],
+                ] as [String: Any],
+                "required": ["old_chunk_id", "new_chunk_id"]
+            ] as [String: Any])
+        ],
+        [
+            "name": "brain_archive",
+            "description": "Archive a chunk so it stops appearing in default search but remains recoverable.",
+            "annotations": MCPRouter.toolAnnotations(readOnly: false, destructive: true, idempotent: false),
+            "inputSchema": MCPRouter.limitedInputSchema([
+                "type": "object",
+                "properties": [
+                    "chunk_id": ["type": "string", "description": "The chunk ID to archive"],
+                    "reason": ["type": "string", "description": "Optional reason for archiving"],
+                ] as [String: Any],
+                "required": ["chunk_id"]
+            ] as [String: Any])
+        ],
+        [
+            "name": "brain_enrich",
+            "description": "Backfill summaries and enrichment metadata on existing chunks.",
+            "annotations": MCPRouter.writeAnnotations,
+            "inputSchema": MCPRouter.limitedInputSchema([
+                "type": "object",
+                "properties": [
+                    "mode": ["type": "string", "enum": ["realtime", "batch"], "description": "Enrichment mode"],
+                    "limit": ["type": "integer", "description": "Maximum number of chunks to process"],
+                    "since_hours": ["type": "integer", "description": "Only enrich chunks from the last N hours in realtime mode"],
+                    "phase": ["type": "string", "enum": ["submit", "poll", "import", "run"], "description": "Batch phase"],
+                    "chunk_ids": ["type": "array", "items": ["type": "string"], "description": "Optional explicit chunk IDs to enrich"],
+                    "stats": ["type": "boolean", "description": "Return progress statistics only"],
                 ] as [String: Any],
             ] as [String: Any])
         ],
