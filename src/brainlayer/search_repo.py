@@ -41,7 +41,7 @@ META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_P
 AUDIT_RECURSION_TAG_PATTERNS = (
     "LOWER(tag) LIKE '%audit%'",
     "LOWER(tag) = 'r02'",
-    "LOWER(tag) GLOB '*r0[0-9]*'",
+    "LOWER(tag) GLOB 'r0[0-9]'",
     "LOWER(tag) = 'audit-pollution-source'",
     "LOWER(tag) = 'agent=auditor'",
 )
@@ -145,10 +145,7 @@ def _is_audit_recursion_metadata(meta: dict) -> bool:
             return True
         if normalized == "r02":
             return True
-        if len(normalized) >= 3 and any(
-            normalized[index : index + 2] == "r0" and normalized[index + 2].isdigit()
-            for index in range(len(normalized) - 2)
-        ):
+        if len(normalized) == 3 and normalized[:2] == "r0" and normalized[2].isdigit():
             return True
         if normalized in {"audit-pollution-source", "agent=auditor"}:
             return True

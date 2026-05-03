@@ -10,6 +10,7 @@ from mcp.types import TextContent
 
 from .._helpers import _escape_fts5_query
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
+from ..search_repo import _is_audit_recursion_metadata
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -163,6 +164,7 @@ def _exact_chunk_lookup_result(
     sentiment: str | None = None,
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -192,6 +194,8 @@ def _exact_chunk_lookup_result(
         except (json.JSONDecodeError, TypeError):
             parsed_tags = None
     if tag is not None and tag not in (parsed_tags or []):
+        return None
+    if not include_audit and _is_audit_recursion_metadata({"tags": parsed_tags or []}):
         return None
     if importance_min is not None:
         chunk_importance = chunk.get("importance")
@@ -520,8 +524,9 @@ async def _brain_search(
         intent=intent,
         sentiment=sentiment,
         source_filter=source_filter,
-        correction_category=correction_category,
-    )
+            correction_category=correction_category,
+            include_audit=include_audit,
+        )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)
@@ -566,6 +571,7 @@ async def _brain_search(
                 n_results=num_results,
                 entity_name=entity_name,
                 project_filter=normalized_project,
+                include_audit=include_audit,
             )
             chunk_results = kg_results.get("chunks", {})
 

@@ -58,3 +58,26 @@ def test_hybrid_search_excludes_audit_recursion_by_default(tmp_path):
         assert "audit-recursion-source" in audit_results["ids"][0]
     finally:
         store.close()
+
+
+def test_hybrid_search_does_not_exclude_r0x_substrings_inside_normal_tags(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-substring.db")
+    try:
+        query_embedding = [0.03] * 1024
+        _insert_chunk(
+            store,
+            "ordinary-mirror07-memory",
+            "mirror07 normal operational memory should remain searchable",
+            ["mirror07", "reliability"],
+            query_embedding,
+        )
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="mirror07 normal operational memory",
+            n_results=3,
+        )
+
+        assert "ordinary-mirror07-memory" in results["ids"][0]
+    finally:
+        store.close()

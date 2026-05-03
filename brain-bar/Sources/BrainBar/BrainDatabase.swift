@@ -1496,11 +1496,16 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private static func auditRecursionTagExclusionSQL(alias: String) -> String {
-        let tags = "LOWER(COALESCE(\(alias).tags, ''))"
+        let tagsJSON = "CASE WHEN json_valid(\(alias).tags) THEN \(alias).tags ELSE '[]' END"
+        let tagValue = "LOWER(CAST(audit_tags.value AS TEXT))"
         return """
-        \(tags) NOT LIKE '%audit%'
-        AND \(tags) NOT LIKE '%agent=auditor%'
-        AND \(tags) NOT GLOB '*r0[0-9]*'
+        NOT EXISTS (
+            SELECT 1
+            FROM json_each(\(tagsJSON)) audit_tags
+            WHERE \(tagValue) LIKE '%audit%'
+               OR \(tagValue) = 'agent=auditor'
+               OR \(tagValue) GLOB 'r0[0-9]'
+        )
         """
     }
 

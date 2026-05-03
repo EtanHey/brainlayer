@@ -629,6 +629,38 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(optInText.contains("audit-recurs"), optInText)
     }
 
+    func testBrainSearchDoesNotTreatR0xSubstringTagsAsAudit() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-audit-substring-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "ordinary-mirror07-memory",
+            content: "mirror07 normal operational memory should remain searchable",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8,
+            tags: "[\"mirror07\", \"reliability\"]"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 162,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "mirror07 normal operational memory", "num_results": 3] as [String: Any]
+            ] as [String: Any]
+        ])
+        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("ordinary-mir"), text)
+    }
+
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-source-all-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
