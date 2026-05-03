@@ -532,7 +532,8 @@ final class BrainDatabase: @unchecked Sendable {
         tag: String? = nil,
         importanceMin: Double? = nil,
         subscriberID: String? = nil,
-        unreadOnly: Bool = false
+        unreadOnly: Bool = false,
+        includeAudit: Bool = false
     ) throws -> [[String: Any]] {
         guard db != nil else { throw DBError.notOpen }
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -551,7 +552,8 @@ final class BrainDatabase: @unchecked Sendable {
                project: project,
                source: source,
                tag: tag,
-               importanceMin: importanceMin
+               importanceMin: importanceMin,
+               includeAudit: includeAudit
            ) {
             return exact
         }
@@ -572,7 +574,8 @@ final class BrainDatabase: @unchecked Sendable {
                 importanceMin: importanceMin,
                 subscribedTags: subscribedTags,
                 ackFloor: ackFloor,
-                unreadOnly: unreadOnly
+                unreadOnly: unreadOnly,
+                includeAudit: includeAudit
             )
             maxRowID = max(maxRowID, searchResult.maxRowID)
             appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
@@ -593,7 +596,8 @@ final class BrainDatabase: @unchecked Sendable {
                     importanceMin: importanceMin,
                     subscribedTags: subscribedTags,
                     ackFloor: ackFloor,
-                    unreadOnly: unreadOnly
+                    unreadOnly: unreadOnly,
+                    includeAudit: includeAudit
                 )
                 maxRowID = max(maxRowID, searchResult.maxRowID)
                 appendDeduped(searchResult.rows, to: &results, seenChunkIDs: &seenChunkIDs, limit: limit)
@@ -618,7 +622,8 @@ final class BrainDatabase: @unchecked Sendable {
         importanceMin: Double?,
         subscribedTags: [String],
         ackFloor: Int64,
-        unreadOnly: Bool
+        unreadOnly: Bool,
+        includeAudit: Bool
     ) throws -> (rows: [[String: Any]], maxRowID: Int64) {
         guard let db else { throw DBError.notOpen }
         let allowedTables = ["chunks_fts", "chunks_fts_trigram"]
@@ -636,6 +641,7 @@ final class BrainDatabase: @unchecked Sendable {
             let tagTerms = Array(repeating: "c.tags LIKE ?", count: subscribedTags.count).joined(separator: " OR ")
             conditions.append("(\(tagTerms))")
         }
+        if !includeAudit { conditions.append(Self.auditRecursionTagExclusionSQL(alias: "c")) }
         if importanceMin != nil { conditions.append("c.importance >= ?") }
         if unreadOnly { conditions.append("c.rowid > ?") }
 
@@ -907,7 +913,8 @@ final class BrainDatabase: @unchecked Sendable {
         tag: String? = nil,
         importanceMin: Double? = nil,
         subscriberID: String? = nil,
-        unreadOnly: Bool = false
+        unreadOnly: Bool = false,
+        includeAudit: Bool = false
     ) throws -> [SearchQueryCandidate] {
         guard let db else { throw DBError.notOpen }
         let sanitized = sanitizeFTS5Query(query)
@@ -930,6 +937,7 @@ final class BrainDatabase: @unchecked Sendable {
             let tagTerms = Array(repeating: "c.tags LIKE ?", count: subscribedTags.count).joined(separator: " OR ")
             conditions.append("(\(tagTerms))")
         }
+        if !includeAudit { conditions.append(Self.auditRecursionTagExclusionSQL(alias: "c")) }
         if importanceMin != nil { conditions.append("c.importance >= ?") }
         if unreadOnly { conditions.append("c.rowid > ?") }
 
@@ -1487,6 +1495,15 @@ final class BrainDatabase: @unchecked Sendable {
         """
     }
 
+    private static func auditRecursionTagExclusionSQL(alias: String) -> String {
+        let tags = "LOWER(COALESCE(\(alias).tags, ''))"
+        return """
+        \(tags) NOT LIKE '%audit%'
+        AND \(tags) NOT LIKE '%agent=auditor%'
+        AND \(tags) NOT GLOB '*r0[0-9]*'
+        """
+    }
+
     private func databaseSizeBytes() -> Int64 {
         let candidates = [path, "\(path)-wal", "\(path)-shm"]
         return candidates.reduce(into: Int64(0)) { total, candidate in
@@ -1813,7 +1830,8 @@ final class BrainDatabase: @unchecked Sendable {
         project: String?,
         source: String?,
         tag: String?,
-        importanceMin: Double?
+        importanceMin: Double?,
+        includeAudit: Bool
     ) throws -> [[String: Any]]? {
         guard let db else { throw DBError.notOpen }
         guard limit > 0, !query.contains(where: { $0.isWhitespace }), query.contains("-") else {
@@ -1825,6 +1843,7 @@ final class BrainDatabase: @unchecked Sendable {
         if project != nil { conditions.append("c.project = ?") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
+        if !includeAudit { conditions.append(Self.auditRecursionTagExclusionSQL(alias: "c")) }
         if importanceMin != nil { conditions.append("c.importance >= ?") }
 
         let sql = """

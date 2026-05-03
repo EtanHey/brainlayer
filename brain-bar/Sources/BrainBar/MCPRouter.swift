@@ -225,6 +225,7 @@ final class MCPRouter: @unchecked Sendable {
         let tag = args["tag"] as? String
         let subscriberID = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String)
         let unreadOnly = args["unread_only"] as? Bool ?? false
+        let includeAudit = args["include_audit"] as? Bool ?? false
         let sourceCountsAsFilter: Bool
         if let source {
             let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -264,7 +265,8 @@ final class MCPRouter: @unchecked Sendable {
             tag: tag,
             importanceMin: importanceMin,
             subscriberID: subscriberID,
-            unreadOnly: unreadOnly
+            unreadOnly: unreadOnly,
+            includeAudit: includeAudit
         )
         let typedResults = results.map(SearchResult.init(payload:))
         let textSection = TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count)
@@ -820,7 +822,7 @@ final class MCPRouter: @unchecked Sendable {
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [
             "name": "brain_search",
-            "description": "Search through past conversations and learnings. Hybrid semantic + keyword search.",
+            "description": "Search through past conversations and learnings. Hybrid semantic + keyword search. Audit/eval chunks tagged audit, r02/r0x, audit-pollution-source, or agent=auditor are excluded by default; set include_audit=true only when explicitly looking up audit history.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -833,6 +835,7 @@ final class MCPRouter: @unchecked Sendable {
                     "importance_min": ["type": "number", "description": "Minimum importance score (1-10)"],
                     "agent_id": ["type": "string", "description": "Optional stable agent id for unread filtering"],
                     "unread_only": ["type": "boolean", "description": "Return only chunks not yet acknowledged by agent_id"],
+                    "include_audit": ["type": "boolean", "description": "Opt in to audit/eval memories. Defaults false to prevent audit-recursion pollution."],
                     "detail": ["type": "string", "enum": ["compact", "full"], "description": "Result detail level"],
                 ] as [String: Any],
                 "required": ["query"]

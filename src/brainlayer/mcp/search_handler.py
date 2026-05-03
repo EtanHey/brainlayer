@@ -397,6 +397,7 @@ async def _brain_search(
     detail: str = "compact",
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -432,6 +433,7 @@ async def _brain_search(
             detail=detail,
             source_filter_like=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if chunk_id is not None:
@@ -480,6 +482,7 @@ async def _brain_search(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if _query_signals_current_context(query):
@@ -634,6 +637,7 @@ async def _brain_search(
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
         correction_category=correction_category,
+        include_audit=include_audit,
     )
 
 
@@ -732,6 +736,7 @@ async def _brain_recall(
     # --- T3 filter additions ---
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -789,6 +794,7 @@ async def _brain_recall(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if resolved_mode == "entity":
@@ -849,6 +855,7 @@ async def _search(
     # --- T3 filter additions ---
     source_filter_like: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -909,6 +916,7 @@ async def _search(
                     entity_id=entity_id,
                     source_filter_like=source_filter_like,
                     correction_category=correction_category,
+                    include_audit=include_audit,
                 )
                 break
             except Exception as e:
