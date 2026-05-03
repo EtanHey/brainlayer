@@ -285,8 +285,8 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
-        do {
-            let stored = try db.store(content: content, tags: tags, importance: importance, source: "mcp")
+        switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp") {
+        case .stored(let stored):
             let flushedStores = db.flushPendingStores()
             return ToolOutput(
                 text: Formatters.formatStoreResult(chunkId: stored.chunkID),
@@ -308,11 +308,7 @@ final class MCPRouter: @unchecked Sendable {
                     }
                 ]
             )
-        } catch {
-            guard db.shouldQueueStoreError(error) else {
-                throw error
-            }
-            try db.queuePendingStore(content: content, tags: tags, importance: importance, source: "mcp")
+        case .queued:
             return ToolOutput(
                 text: Formatters.formatStoreResult(chunkId: "", queued: true),
                 metadata: ["queued": true]
