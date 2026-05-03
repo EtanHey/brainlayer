@@ -402,7 +402,7 @@ final class BrainBarServer: @unchecked Sendable {
             framed = data
         } else {
             // Newline-delimited JSON-RPC (Claude Code v2.1+ / MCP 2025-11-25)
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: response) else { return false }
+            guard let jsonData = try? MCPFraming.encodeJSONResponse(response) else { return false }
             var data = jsonData
             data.append(0x0A) // trailing \n
             framed = data

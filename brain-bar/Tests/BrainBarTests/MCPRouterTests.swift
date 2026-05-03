@@ -140,6 +140,24 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(toolNames, expected)
     }
 
+    func testEncodedToolsListEnvelopeStartsWithJSONRPC() throws {
+        let router = MCPRouter()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ])
+
+        let framed = try MCPFraming.encode(response)
+        let frame = try XCTUnwrap(String(data: framed, encoding: .utf8))
+        let body = try XCTUnwrap(frame.components(separatedBy: "\r\n\r\n").last)
+
+        XCTAssertTrue(
+            body.hasPrefix(#"{"jsonrpc":"2.0","id":2,"result":"#),
+            "Claude Desktop expects jsonrpc to be the first envelope key for tools/list; got: \(body.prefix(80))"
+        )
+    }
+
     func testEachToolHasInputSchema() throws {
         let router = MCPRouter()
         let request: [String: Any] = [
