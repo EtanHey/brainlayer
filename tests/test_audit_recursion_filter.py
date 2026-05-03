@@ -42,6 +42,7 @@ def test_hybrid_search_excludes_audit_recursion_by_default(tmp_path):
             ["brainbar", "reliability"],
             [0.02] * 1024,
         )
+        store.build_binary_index()
 
         default_results = store.hybrid_search(
             query_embedding=query_embedding,
@@ -76,6 +77,7 @@ def test_hybrid_search_does_not_exclude_r0x_substrings_inside_normal_tags(tmp_pa
             ["mirror07", "reliability"],
             query_embedding,
         )
+        store.build_binary_index()
 
         results = store.hybrid_search(
             query_embedding=query_embedding,
@@ -107,6 +109,7 @@ def test_readonly_legacy_db_without_chunk_tags_uses_json_tag_fallback(tmp_path):
             ["brainbar", "reliability"],
             [0.05] * 1024,
         )
+        store.build_binary_index()
         cursor = store.conn.cursor()
         for trigger in (
             "chunk_tags_insert",
@@ -134,6 +137,71 @@ def test_readonly_legacy_db_without_chunk_tags_uses_json_tag_fallback(tmp_path):
     finally:
         readonly_store.close()
         db_path.chmod(0o644)
+
+
+def test_hybrid_search_overfetches_when_audit_chunks_dominate_knn(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-overfetch.db")
+    try:
+        query_embedding = [0.06] * 1024
+        for index in range(60):
+            _insert_chunk(
+                store,
+                f"audit-neighbor-{index}",
+                f"audit recursion neighbor {index}",
+                ["r02", "audit"],
+                query_embedding,
+            )
+        _insert_chunk(
+            store,
+            "ordinary-after-audit-neighbors",
+            "ordinary BrainBar restart decision should survive audit-heavy nearest neighbors",
+            ["brainbar", "reliability"],
+            [0.061] * 1024,
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="ordinary BrainBar restart decision",
+            n_results=3,
+        )
+
+        assert "ordinary-after-audit-neighbors" in results["ids"][0]
+        assert all(not chunk_id.startswith("audit-neighbor-") for chunk_id in results["ids"][0])
+    finally:
+        store.close()
+
+
+def test_exact_r0x_tag_is_filtered_as_audit_shorthand(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-r0x.db")
+    try:
+        query_embedding = [0.07] * 1024
+        _insert_chunk(
+            store,
+            "audit-r0x-source",
+            "r0x audit shorthand memory should be filtered",
+            ["r0x"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "ordinary-r0x-control",
+            "ordinary control memory should remain searchable",
+            ["brainbar"],
+            [0.071] * 1024,
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="ordinary control memory",
+            n_results=3,
+        )
+
+        assert "audit-r0x-source" not in results["ids"][0]
+        assert "ordinary-r0x-control" in results["ids"][0]
+    finally:
+        store.close()
 
 
 def test_engine_think_and_recall_forward_include_audit():

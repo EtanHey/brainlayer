@@ -40,6 +40,7 @@ META_NOISE_PATTERNS = [
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
 AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} LIKE '%audit%'",
+    "{tag_expr} = 'r0x'",
     "{tag_expr} = 'r02'",
     "{tag_expr} GLOB 'r0[0-9]'",
 )
@@ -154,7 +155,7 @@ def _is_audit_recursion_metadata(meta: dict) -> bool:
         normalized = str(tag).casefold()
         if "audit" in normalized:
             return True
-        if normalized == "r02":
+        if normalized in {"r02", "r0x"}:
             return True
         if len(normalized) == 3 and normalized[:2] == "r0" and normalized[2].isdigit():
             return True
@@ -422,11 +423,13 @@ class SearchMixin:
             # Bump k to over-fetch when post-KNN filters may discard most results:
             # - entity_id: entity filter applied post-KNN, most candidates won't match
             # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
+            # - audit filter: audit-recursion chunks can dominate the nearest neighbors
             needs_overfetch = (
                 entity_id
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
                 or correction_category
+                or not include_audit
             )
             effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
@@ -759,8 +762,14 @@ class SearchMixin:
         if where_clauses:
             where_sql = "AND " + " AND ".join(where_clauses)
 
+        # These predicates are applied after sqlite-vec KNN, so fetch extra candidates
+        # when they may discard nearest neighbors before the final result cap.
         needs_overfetch = (
-            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
+            entity_id
+            or (source_filter and source_filter != "claude_code")
+            or source_filter_like
+            or correction_category
+            or not include_audit
         )
         effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
         params = [query_bytes, effective_k] + filter_params
