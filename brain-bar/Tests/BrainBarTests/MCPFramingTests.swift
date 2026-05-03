@@ -113,6 +113,27 @@ final class MCPFramingTests: XCTestCase {
         XCTAssertTrue(str.contains("protocolVersion"))
     }
 
+    func testEncodesJSONRPCEnvelopeWithJSONRPCFirst() throws {
+        let response: [String: Any] = [
+            "id": 2,
+            "jsonrpc": "2.0",
+            "result": [
+                "tools": [
+                    ["name": "brain_search"]
+                ]
+            ] as [String: Any]
+        ]
+
+        let framed = try MCPFraming.encode(response)
+        let frame = try XCTUnwrap(String(data: framed, encoding: .utf8))
+        let body = try XCTUnwrap(frame.components(separatedBy: "\r\n\r\n").last)
+
+        XCTAssertTrue(
+            body.hasPrefix(#"{"jsonrpc":"2.0","id":2,"result":"#),
+            "Claude Desktop expects the JSON-RPC envelope to serialize with jsonrpc first; got: \(body.prefix(80))"
+        )
+    }
+
     // MARK: - Empty body
 
     func testRejectsZeroContentLength() {

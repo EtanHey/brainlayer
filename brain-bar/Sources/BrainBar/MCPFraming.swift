@@ -113,14 +113,44 @@ struct MCPFraming: Sendable {
 
     /// Encode a JSON-RPC response with Content-Length framing.
     static func encode(_ response: [String: Any]) throws -> Data {
-        let jsonData = try JSONSerialization.data(withJSONObject: response)
+        let jsonData = try encodeJSONResponse(response)
         let header = "Content-Length: \(jsonData.count)\r\n\r\n"
         var frame = Data(header.utf8)
         frame.append(jsonData)
         return frame
     }
 
+    /// Encode JSON-RPC envelopes with a deterministic top-level key order.
+    ///
+    /// Claude Desktop currently rejects otherwise-valid JSON-RPC objects when
+    /// Foundation serializes `result` or `id` before `jsonrpc`.
+    static func encodeJSONResponse(_ response: [String: Any]) throws -> Data {
+        guard let jsonrpc = response["jsonrpc"],
+              let id = response["id"],
+              response["result"] != nil || response["error"] != nil else {
+            return try JSONSerialization.data(withJSONObject: response)
+        }
+
+        var data = Data("{\"jsonrpc\":".utf8)
+        data.append(try encodeJSONValue(jsonrpc))
+        data.append(Data(",\"id\":".utf8))
+        data.append(try encodeJSONValue(id))
+        if let result = response["result"] {
+            data.append(Data(",\"result\":".utf8))
+            data.append(try encodeJSONValue(result))
+        } else if let error = response["error"] {
+            data.append(Data(",\"error\":".utf8))
+            data.append(try encodeJSONValue(error))
+        }
+        data.append(0x7D) // }
+        return data
+    }
+
     // MARK: - Private
+
+    private static func encodeJSONValue(_ value: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+    }
 
     private func parseContentLength(_ header: String) -> Int? {
         for line in header.split(separator: "\r\n") {
