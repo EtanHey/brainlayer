@@ -91,7 +91,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 15)
+        XCTAssertEqual(tools?.count, 16)
 
         let toolsByName = Dictionary(
             uniqueKeysWithValues: (tools ?? []).compactMap { tool -> (String, [String: Any])? in
@@ -116,6 +116,7 @@ final class SocketIntegrationTests: XCTestCase {
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
+            "brain_maintenance_rebuild_trigram": (false, false, true, false),
         ]
 
         for (name, taxonomy) in expected {
@@ -689,7 +690,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let toolsResponse = try JSONSerialization.jsonObject(with: Data(outputLines[1].utf8)) as? [String: Any]
         let tools = (toolsResponse?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 15)
+        XCTAssertEqual(tools?.count, 16)
     }
 
     // MARK: - C2: Socket path length validation

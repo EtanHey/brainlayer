@@ -16,6 +16,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
     private static let trigramFTSOptions = "tokenize='trigram'"
     private static let synchronousTrigramBackfillChunkLimit = 10_000
+    static let maximumTrigramMaintenanceBatchSize = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
     private static let lexicalDefenseReplacements: [String: [String]] = [
@@ -27,6 +28,32 @@ final class BrainDatabase: @unchecked Sendable {
         case noRepairNeeded
         case rebuildSynchronously
         case skipBackfill
+    }
+
+    struct TrigramMaintenanceProgress: Sendable, Equatable {
+        enum State: String, Sendable, Equatable {
+            case running
+            case done
+            case cancelled
+            case failed
+        }
+
+        let state: State
+        let processed: Int
+        let total: Int
+        let etaSeconds: Double?
+
+        var metadata: [String: Any] {
+            var payload: [String: Any] = [
+                "state": state.rawValue,
+                "processed": processed,
+                "total": total,
+            ]
+            if let etaSeconds {
+                payload["eta_seconds"] = etaSeconds
+            }
+            return payload
+        }
     }
 
     struct DashboardStats: Sendable, Equatable {
@@ -43,6 +70,7 @@ final class BrainDatabase: @unchecked Sendable {
         let liveWindowMinutes: Int
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
+        let trigramIndexedChunkCount: Int
 
         init(
             chunkCount: Int,
@@ -57,7 +85,8 @@ final class BrainDatabase: @unchecked Sendable {
             bucketCount: Int = 12,
             liveWindowMinutes: Int = 1,
             lastWriteAt: Date? = nil,
-            lastEnrichedAt: Date? = nil
+            lastEnrichedAt: Date? = nil,
+            trigramIndexedChunkCount: Int = 0
         ) {
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
@@ -72,6 +101,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.liveWindowMinutes = liveWindowMinutes
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
+            self.trigramIndexedChunkCount = trigramIndexedChunkCount
         }
 
         var recentWriteCount: Int {
@@ -99,6 +129,11 @@ final class BrainDatabase: @unchecked Sendable {
 
         func hasRecentEnrichmentActivity(now: Date = Date()) -> Bool {
             eventIsLive(lastEnrichedAt, now: now) || recentEnrichmentCount > 0
+        }
+
+        var trigramCoveragePercent: Double {
+            guard chunkCount > 0 else { return 100 }
+            return (Double(trigramIndexedChunkCount) / Double(chunkCount)) * 100
         }
     }
 
@@ -1174,7 +1209,8 @@ final class BrainDatabase: @unchecked Sendable {
             bucketCount: bucketCount,
             liveWindowMinutes: liveWindowMinutes,
             lastWriteAt: lastEvents.lastWriteAt,
-            lastEnrichedAt: lastEvents.lastEnrichedAt
+            lastEnrichedAt: lastEvents.lastEnrichedAt,
+            trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0
         )
     }
 
@@ -1997,6 +2033,142 @@ final class BrainDatabase: @unchecked Sendable {
             INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
             SELECT content, summary, tags, NULL, id FROM chunks
         """)
+    }
+
+    func triggerTrigramRebuild(
+        batchSize requestedBatchSize: Int = 1_000,
+        shouldCancel: () -> Bool = { false },
+        progress: (TrigramMaintenanceProgress) -> Void = { _ in }
+    ) throws -> TrigramMaintenanceProgress {
+        try ensureTrigramFTSSchemaAndTriggers()
+        let batchSize = Self.normalizedTrigramMaintenanceBatchSize(requestedBatchSize)
+        let total = try countRows(in: "chunks")
+        let maxChunkRowID = try maxChunkRowID()
+        var lastProcessedRowID: Int64 = 0
+        var processed = 0
+        let startedAt = Date()
+
+        while processed < total,
+              let upperRowID = try nextChunkBatchUpperRowID(
+                after: lastProcessedRowID,
+                maxRowID: maxChunkRowID,
+                batchSize: batchSize
+              ) {
+            if shouldCancel() {
+                let cancelled = TrigramMaintenanceProgress(
+                    state: .cancelled,
+                    processed: processed,
+                    total: total,
+                    etaSeconds: nil
+                )
+                progress(cancelled)
+                return cancelled
+            }
+
+            try withImmediateTransaction {
+                try executeUpdate(
+                    """
+                    DELETE FROM chunks_fts_trigram
+                    WHERE chunk_id IN (
+                        SELECT id FROM chunks WHERE rowid > ? AND rowid <= ?
+                    )
+                    """,
+                    binds: { stmt in
+                        sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
+                        sqlite3_bind_int64(stmt, 2, upperRowID)
+                    }
+                )
+                try executeUpdate(
+                    """
+                    INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
+                    SELECT content, summary, tags, NULL, id
+                    FROM chunks
+                    WHERE rowid > ? AND rowid <= ?
+                    ORDER BY rowid ASC
+                    """,
+                    binds: { stmt in
+                        sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
+                        sqlite3_bind_int64(stmt, 2, upperRowID)
+                    }
+                )
+            }
+
+            lastProcessedRowID = upperRowID
+            processed = min(processed + batchSize, total)
+            let running = TrigramMaintenanceProgress(
+                state: .running,
+                processed: processed,
+                total: total,
+                etaSeconds: Self.estimatedSecondsRemaining(
+                    startedAt: startedAt,
+                    processed: processed,
+                    total: total
+                )
+            )
+            progress(running)
+        }
+
+        try execute("ANALYZE chunks_fts_trigram", retries: 3)
+        let done = TrigramMaintenanceProgress(
+            state: .done,
+            processed: total,
+            total: total,
+            etaSeconds: 0
+        )
+        progress(done)
+        return done
+    }
+
+    private func maxChunkRowID() throws -> Int64 {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(rowid), 0) FROM chunks", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_ROW else { throw DBError.step(stepRC) }
+        return sqlite3_column_int64(stmt, 0)
+    }
+
+    static func normalizedTrigramMaintenanceBatchSize(_ requestedBatchSize: Int) -> Int {
+        min(max(1, requestedBatchSize), maximumTrigramMaintenanceBatchSize)
+    }
+
+    private func nextChunkBatchUpperRowID(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> Int64? {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(
+            db,
+            """
+            SELECT rowid
+            FROM (
+                SELECT rowid
+                FROM chunks
+                WHERE rowid > ? AND rowid <= ?
+                ORDER BY rowid ASC
+                LIMIT ?
+            )
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            -1,
+            &stmt,
+            nil
+        )
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, rowID)
+        sqlite3_bind_int64(stmt, 2, maxRowID)
+        sqlite3_bind_int(stmt, 3, Int32(batchSize))
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(stmt, 0)
+    }
+
+    private static func estimatedSecondsRemaining(startedAt: Date, processed: Int, total: Int) -> Double? {
+        guard processed > 0, total > processed else { return nil }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let rate = Double(processed) / max(elapsed, 0.001)
+        return Double(total - processed) / rate
     }
 
     private func rebuildTrigramFTSTableIfNeeded() throws {

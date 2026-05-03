@@ -197,6 +197,146 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(decision, .skipBackfill)
     }
 
+    func testTrigramMaintenanceBatchSizeIsClampedForExternalInput() {
+        XCTAssertEqual(BrainDatabase.normalizedTrigramMaintenanceBatchSize(0), 1)
+        XCTAssertEqual(BrainDatabase.normalizedTrigramMaintenanceBatchSize(42), 42)
+        XCTAssertEqual(
+            BrainDatabase.normalizedTrigramMaintenanceBatchSize(Int.max),
+            BrainDatabase.maximumTrigramMaintenanceBatchSize
+        )
+    }
+
+    func testTriggerTrigramRebuildBackfillsInBatchesWithProgress() throws {
+        try seedTrigramMaintenanceRows(count: 5)
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 0)
+
+        var events: [BrainDatabase.TrigramMaintenanceProgress] = []
+        let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
+            events.append(event)
+        })
+
+        XCTAssertEqual(final.state, .done)
+        XCTAssertEqual(final.total, 5)
+        XCTAssertEqual(final.processed, 5)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+        XCTAssertGreaterThanOrEqual(events.filter { $0.state == .running }.count, 2)
+        XCTAssertEqual(events.last?.state, .done)
+    }
+
+    func testTriggerTrigramRebuildHonorsCancellationBetweenBatches() throws {
+        try seedTrigramMaintenanceRows(count: 5)
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+
+        var events: [BrainDatabase.TrigramMaintenanceProgress] = []
+        let final = try db.triggerTrigramRebuild(
+            batchSize: 2,
+            shouldCancel: { !events.isEmpty },
+            progress: { event in events.append(event) }
+        )
+
+        XCTAssertEqual(final.state, .cancelled)
+        XCTAssertEqual(final.processed, 2)
+        XCTAssertEqual(final.total, 5)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 2)
+        XCTAssertEqual(events.last?.state, .cancelled)
+    }
+
+    func testTriggerTrigramRebuildCancellationPreservesUnprocessedLiveRows() throws {
+        try seedTrigramMaintenanceRows(count: 5)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+
+        var events: [BrainDatabase.TrigramMaintenanceProgress] = []
+        let final = try db.triggerTrigramRebuild(
+            batchSize: 2,
+            shouldCancel: { !events.isEmpty },
+            progress: { event in events.append(event) }
+        )
+
+        XCTAssertEqual(final.state, .cancelled)
+        XCTAssertEqual(final.processed, 2)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+    }
+
+    func testTriggerTrigramRebuildAllowsWritersBetweenBatches() throws {
+        try seedTrigramMaintenanceRows(count: 4)
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+
+        var insertedDuringProgress = false
+        var concurrentInsertError: Error?
+        let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
+            guard event.state == .running, !insertedDuringProgress else { return }
+            do {
+                try sqliteExecWrite(
+                    path: self.tempDBPath,
+                    sql: """
+                        INSERT INTO chunks (
+                            id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary, preview_text
+                        ) VALUES (
+                            'trigram-concurrent-writer',
+                            'Concurrent writer should acquire the lock between trigram batches',
+                            '{}',
+                            'brainbar',
+                            'brainlayer',
+                            'assistant_text',
+                            5,
+                            'trigram-maintenance',
+                            67,
+                            '[]',
+                            '',
+                            'Concurrent writer should acquire the lock between trigram batches'
+                        )
+                    """
+                )
+                insertedDuringProgress = true
+            } catch {
+                concurrentInsertError = error
+            }
+        })
+
+        XCTAssertEqual(final.state, .done)
+        XCTAssertNil(concurrentInsertError)
+        XCTAssertTrue(insertedDuringProgress)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks"), 5)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
+    }
+
+    func testTriggerTrigramRebuildDoesNotDuplicateRowsWhenChunkUpdatesBetweenBatches() throws {
+        try seedTrigramMaintenanceRows(count: 4)
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+
+        var updatedDuringProgress = false
+        var concurrentUpdateError: Error?
+        let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
+            guard event.state == .running, !updatedDuringProgress else { return }
+            do {
+                try sqliteExecWrite(
+                    path: self.tempDBPath,
+                    sql: """
+                        UPDATE chunks
+                        SET content = 'Updated not-yet-processed chunk during trigram maintenance'
+                        WHERE id = 'trigram-maintenance-3'
+                    """
+                )
+                updatedDuringProgress = true
+            } catch {
+                concurrentUpdateError = error
+            }
+        })
+
+        XCTAssertEqual(final.state, .done)
+        XCTAssertNil(concurrentUpdateError)
+        XCTAssertTrue(updatedDuringProgress)
+        XCTAssertEqual(
+            try sqliteCount(
+                path: tempDBPath,
+                sql: "SELECT COUNT(*) FROM chunks_fts_trigram WHERE chunk_id = 'trigram-maintenance-3'"
+            ),
+            1
+        )
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 4)
+    }
+
     func testUpsertSubscriptionRecoversMissingPubSubTables() throws {
         db.exec("DROP TABLE IF EXISTS brainbar_subscriptions")
         db.exec("DROP TABLE IF EXISTS brainbar_agents")
@@ -791,6 +931,19 @@ final class DatabaseTests: XCTestCase {
         let result = try db.digest(content: content)
         XCTAssertNotNil(result["chunks_created"])
     }
+
+    private func seedTrigramMaintenanceRows(count: Int) throws {
+        for index in 0..<count {
+            try db.insertChunk(
+                id: "trigram-maintenance-\(index)",
+                content: "Trigram maintenance fixture \(index)",
+                sessionId: "trigram-maintenance",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+        }
+    }
 }
 
 private func sqliteMasterSQL(name: String, path: String) throws -> String {
@@ -881,6 +1034,20 @@ private func sqliteExecWrite(path: String, sql: String) throws {
     let execRC = sqlite3_exec(db, sql, nil, nil, nil)
     guard execRC == SQLITE_OK else {
         throw NSError(domain: "DatabaseTests", code: Int(execRC))
+    }
+}
+
+private func sqliteCount(path: String, table: String) throws -> Int {
+    try sqliteCount(path: path, sql: "SELECT COUNT(*) FROM \(table)")
+}
+
+private func sqliteCount(path: String, sql: String) throws -> Int {
+    try withSQLiteConnection(path: path) { db in
+        try scalarInt(
+            db: db,
+            sql: sql,
+            bind: { _ in }
+        )
     }
 }
 

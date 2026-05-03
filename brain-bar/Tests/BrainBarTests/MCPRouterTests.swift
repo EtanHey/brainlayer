@@ -127,14 +127,15 @@ final class MCPRouterTests: XCTestCase {
         let tools = result?["tools"] as? [[String: Any]]
 
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 15, "Should have exactly 15 tools")
+        XCTAssertEqual(tools?.count, 16, "Should have exactly 16 tools")
 
         let toolNames = Set(tools?.compactMap { $0["name"] as? String } ?? [])
         let expected: Set<String> = [
             "brain_search", "brain_store", "brain_recall", "brain_entity",
             "brain_digest", "brain_update", "brain_expand", "brain_tags",
             "brain_subscribe", "brain_unsubscribe", "brain_ack",
-            "brain_get_person", "brain_supersede", "brain_archive", "brain_enrich"
+            "brain_get_person", "brain_supersede", "brain_archive", "brain_enrich",
+            "brain_maintenance_rebuild_trigram",
         ]
         XCTAssertEqual(toolNames, expected)
     }
@@ -190,6 +191,7 @@ final class MCPRouterTests: XCTestCase {
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
+            "brain_maintenance_rebuild_trigram": (false, false, true, false),
         ]
 
         XCTAssertEqual(toolsByName.count, expected.count)
@@ -252,6 +254,77 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNil(response["error"], "brain_search should not return error")
         XCTAssertNotNil(response["result"], "brain_search should return result")
         XCTAssertEqual(response["id"] as? Int, 4)
+    }
+
+    func testBrainMaintenanceRebuildTrigramToolReturnsProgressMetadata() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        for index in 0..<30 {
+            try db.insertChunk(id: "mcp-trigram-\(index)", content: "MCP trigram maintenance fixture \(index)", sessionId: "mcp", project: "brainlayer", contentType: "assistant_text", importance: 5)
+        }
+        try sqliteExec(path: tempDB, sql: "DELETE FROM chunks_fts_trigram")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_maintenance_rebuild_trigram",
+                "arguments": ["batch_size": 1]
+            ]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNotEqual(result?["isError"] as? Bool, true)
+        let progress = result?["progress"] as? [String: Any]
+        XCTAssertEqual(progress?["state"] as? String, "done")
+        XCTAssertEqual(progress?["processed"] as? Int, 30)
+        XCTAssertEqual(progress?["total"] as? Int, 30)
+        let events = result?["events"] as? [[String: Any]] ?? []
+        XCTAssertLessThanOrEqual(events.count, 25)
+        XCTAssertEqual(events.last?["state"] as? String, "done")
+    }
+
+    func testBrainMaintenanceRebuildTrigramCancelReturnsBeforeSchemaWrites() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-cancel-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try sqliteExec(path: tempDB, sql: "DROP TABLE IF EXISTS chunks_fts_trigram")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_maintenance_rebuild_trigram",
+                "arguments": ["cancel": true]
+            ]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNotEqual(result?["isError"] as? Bool, true)
+        let progress = result?["progress"] as? [String: Any]
+        XCTAssertEqual(progress?["state"] as? String, "cancelled")
+        XCTAssertEqual(progress?["processed"] as? Int, 0)
+        XCTAssertEqual(progress?["total"] as? Int, 0)
+        XCTAssertFalse(try db.tableExists("chunks_fts_trigram"))
     }
 
     func testToolsCallUnknownToolReturnsError() throws {
