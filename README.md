@@ -138,13 +138,51 @@ graph LR
 
 ## BrainBar — macOS Companion
 
-Optional 209KB native Swift menu bar app. Quick capture (F4), live dashboard, knowledge graph viewer — all over a Unix socket. Auto-restarts after quit via LaunchAgent.
+Optional native Swift menu bar app. Quick capture, live dashboard, knowledge graph viewer — all over a Unix socket. Auto-restarts after quit via LaunchAgent.
 
 ```bash
 bash brain-bar/build-app.sh    # Build, sign, install LaunchAgent
 ```
 
-Requires the BrainLayer MCP server.
+Requires the BrainLayer MCP server. The build script refuses non-canonical checkouts and dirty trees by default ([#265](https://github.com/EtanHey/brainlayer/pull/265)) and stamps each bundle with `GitCommit`, `GitDescribe`, and `BuildTimeUTC` in `Info.plist` ([#264](https://github.com/EtanHey/brainlayer/pull/264)) so a stale install is diagnosable in seconds.
+
+## Recent Hardening (2026-04-15 → 2026-05-02)
+
+Two-week stability sprint behind the next presentation. Every line below traces to a merged PR.
+
+**Search recall & dedup**
+- FTS recall hardened across Python, Swift BrainBar, and the watcher pipeline ([#263](https://github.com/EtanHey/brainlayer/pull/263)).
+- Lexical defense dictionary exports for fragile-token recovery ([#262](https://github.com/EtanHey/brainlayer/pull/262)).
+- MMR post-retrieval dedup on `brain_search` ([#242](https://github.com/EtanHey/brainlayer/pull/242)).
+- Legacy unique `content_hash` index dropped — was blocking re-enrichment writes ([#245](https://github.com/EtanHey/brainlayer/pull/245)).
+- Swift `brain_store` queue fallback so BrainBar can persist when the daemon is mid-restart ([#261](https://github.com/EtanHey/brainlayer/pull/261)).
+
+**BrainBar reliability & UX**
+- MenuBarExtra(.window) rewrite with live-state sparklines and full-width hero ([#248](https://github.com/EtanHey/brainlayer/pull/248)).
+- Dashboard UX overhaul ([#246](https://github.com/EtanHey/brainlayer/pull/246)).
+- MCP `initialize` handshake preserved under backpressure ([#247](https://github.com/EtanHey/brainlayer/pull/247)).
+- KG force-sim early-exit + `onAppear` timer reset — kills CPU pegging when the graph tab is idle ([#249](https://github.com/EtanHey/brainlayer/pull/249)).
+
+**Phase B preventive infra (2026-05-01)** — one canonical artifact per environment
+- `/post-merge-deploy-check` skill + initial `canonical-deploy-registry.json` ([orchestrator#60](https://github.com/EtanHey/orchestrator/pull/60)) cross-checks GitHub merge metadata, the registry, and the deployed app's `Info.plist` so a merged PR cannot be declared shipped while the local bundle still points at the wrong build.
+- Canonical app paths corrected in the deploy registry schema ([orchestrator#58](https://github.com/EtanHey/orchestrator/pull/58)).
+- Build-stamp + canonical-build guards land together so future BrainBar bundles carry provenance and refuse silent worktree overwrites ([#264](https://github.com/EtanHey/brainlayer/pull/264), [#265](https://github.com/EtanHey/brainlayer/pull/265)).
+
+**Test gates** — pre-push gate is mandatory before any push to `main`
+- Pre-push regression gate ([#257](https://github.com/EtanHey/brainlayer/pull/257)) plus exit-0 fix on the success path ([#260](https://github.com/EtanHey/brainlayer/pull/260)).
+- `scripts/run_tests.sh` orchestrator unifies Python + Swift + isolation test runs ([#256](https://github.com/EtanHey/brainlayer/pull/256)).
+- Stale-index regression fixture ([#255](https://github.com/EtanHey/brainlayer/pull/255)) and Deepchecks regression harness ([#259](https://github.com/EtanHey/brainlayer/pull/259)).
+
+**Security**
+- All 11 Swift `MCPRouter` tools exposed via BrainBar now ship `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)).
+
+**In flight (2026-05-02 reliability sprint)** — [PR #251](https://github.com/EtanHey/brainlayer/pull/251)
+- Restores the resizable dashboard panel via a floating `NSPanel` (`BrainBarDashboardPanelController`) instead of MenuBarExtra(.window).
+- Adds trigram FTS5 (`chunks_fts_trigram`) with a startup-safety guard: synchronous backfill is skipped when the desynced trigram table exceeds 10K chunks, so BrainBar never blocks the live ~360K-chunk database before `/tmp/brainbar.sock` opens.
+- KG atlas presentation (importance-based altitude filtering, region backdrops, deterministic seeding) and `AgentActivityMonitor` for live CLI presence on the dashboard.
+- Pub/sub plane on `/tmp/brainbar.sock` is explicitly preserved (`brain_subscribe`, `brain_unsubscribe`, `notifications/claude/channel`) — only search/store handlers move to the Python MCP path.
+
+
 
 ## Data Sources
 
