@@ -402,8 +402,7 @@ final class BrainBarServer: @unchecked Sendable {
             framed = data
         } else {
             // Newline-delimited JSON-RPC (Claude Code v2.1+ / MCP 2025-11-25)
-            let rawResponse = Self.compactRawJSONResponseIfNeeded(response)
-            guard let jsonData = try? MCPFraming.encodeJSONResponse(rawResponse) else { return false }
+            guard let jsonData = Self.encodeRawJSONResponse(response) else { return false }
             var data = jsonData
             data.append(0x0A) // trailing \n
             framed = data
@@ -440,10 +439,22 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
-    private static func compactRawJSONResponseIfNeeded(_ response: [String: Any]) -> [String: Any] {
+    private static let claudeExtensionRawChunkLimit = 8192
+
+    private static func encodeRawJSONResponse(_ response: [String: Any]) -> Data? {
+        guard let jsonData = try? MCPFraming.encodeJSONResponse(response) else { return nil }
+        guard jsonData.count >= claudeExtensionRawChunkLimit else { return jsonData }
+        guard let compacted = compactRawJSONResponseIfNeeded(response),
+              let compactData = try? MCPFraming.encodeJSONResponse(compacted) else {
+            return jsonData
+        }
+        return compactData
+    }
+
+    private static func compactRawJSONResponseIfNeeded(_ response: [String: Any]) -> [String: Any]? {
         guard let result = response["result"] as? [String: Any],
               let tools = result["tools"] as? [[String: Any]] else {
-            return response
+            return nil
         }
 
         // Claude Desktop's MCPB utility process currently parses raw extension
