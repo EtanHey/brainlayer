@@ -1,6 +1,7 @@
 import json
 
 from brainlayer._helpers import serialize_f32
+from brainlayer.engine import recall, think
 from brainlayer.vector_store import VectorStore
 
 
@@ -85,3 +86,84 @@ def test_hybrid_search_does_not_exclude_r0x_substrings_inside_normal_tags(tmp_pa
         assert "ordinary-mirror07-memory" in results["ids"][0]
     finally:
         store.close()
+
+
+def test_readonly_legacy_db_without_chunk_tags_uses_json_tag_fallback(tmp_path):
+    db_path = tmp_path / "legacy-readonly-audit-filter.db"
+    store = VectorStore(db_path)
+    try:
+        query_embedding = [0.04] * 1024
+        _insert_chunk(
+            store,
+            "legacy-audit-source",
+            "legacy readonly audit memory should be filtered",
+            ["r02", "audit"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "legacy-ordinary-memory",
+            "legacy readonly ordinary memory should be searchable",
+            ["brainbar", "reliability"],
+            [0.05] * 1024,
+        )
+        cursor = store.conn.cursor()
+        for trigger in (
+            "chunk_tags_insert",
+            "chunk_tags_update",
+            "chunk_tags_update_clear",
+            "chunk_tags_delete",
+        ):
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        cursor.execute("DROP TABLE chunk_tags")
+    finally:
+        store.close()
+
+    db_path.chmod(0o444)
+    readonly_store = VectorStore(db_path)
+    try:
+        assert readonly_store._chunk_tags_available is False
+        results = readonly_store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="legacy readonly memory",
+            n_results=3,
+        )
+        ids = results["ids"][0]
+        assert "legacy-audit-source" not in ids
+        assert "legacy-ordinary-memory" in ids
+    finally:
+        readonly_store.close()
+        db_path.chmod(0o644)
+
+
+def test_engine_think_and_recall_forward_include_audit():
+    class MockStore:
+        def __init__(self):
+            self.calls = []
+
+        def hybrid_search(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "documents": [["ordinary memory"]],
+                "metadatas": [[{"intent": "decision", "project": "brainlayer"}]],
+            }
+
+        def get_file_timeline(self, *_args, **_kwargs):
+            return []
+
+    mock_store = MockStore()
+    think(
+        "think about audit history",
+        store=mock_store,
+        embed_fn=lambda _text: [0.1] * 1024,
+        include_audit=True,
+    )
+    recall(
+        store=mock_store,
+        embed_fn=lambda _text: [0.1] * 1024,
+        topic="audit history",
+        include_audit=True,
+    )
+
+    assert mock_store.calls[0]["include_audit"] is True
+    assert mock_store.calls[1]["include_audit"] is True

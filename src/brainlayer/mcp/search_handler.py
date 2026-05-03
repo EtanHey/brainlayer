@@ -450,7 +450,12 @@ async def _brain_search(
 
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(regression_result, list):
             merged_text.extend(regression_result)
@@ -462,7 +467,12 @@ async def _brain_search(
 
     if file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(timeline, list):
             merged_text.extend(timeline)
@@ -496,7 +506,9 @@ async def _brain_search(
 
     if _query_signals_current_context(query):
         ctx = await _current_context(hours=24)
-        think_result = await _think(context=query, project=project, max_results=max_results)
+        think_result = await _think(
+            context=query, project=project, max_results=max_results, include_audit=include_audit
+        )
         merged_text = []
         if isinstance(ctx, tuple):
             merged_text.extend(ctx[0])
@@ -509,10 +521,10 @@ async def _brain_search(
         return merged_text
 
     if _query_signals_think(query):
-        return await _think(context=query, project=project, max_results=max_results)
+        return await _think(context=query, project=project, max_results=max_results, include_audit=include_audit)
 
     if _query_signals_recall(query):
-        return await _recall(topic=query, project=project, max_results=max_results)
+        return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
 
     store = _get_vector_store()
     exact_chunk_hit = _exact_chunk_lookup_result(
@@ -1210,7 +1222,12 @@ async def _plan_links(
         return _error_result(f"Plan links error: {str(e)}")
 
 
-async def _think(context: str, project: str | None = None, max_results: int = 10):
+async def _think(
+    context: str,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
+):
     """Execute think -- retrieve relevant memories for current task."""
     try:
         from ..engine import think
@@ -1226,7 +1243,12 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
         result = await loop.run_in_executor(
             None,
             lambda: think(
-                context=context, store=store, embed_fn=_embed, project=normalized_project, max_results=max_results
+                context=context,
+                store=store,
+                embed_fn=_embed,
+                project=normalized_project,
+                max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {
@@ -1243,7 +1265,11 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
 
 
 async def _recall(
-    file_path: str | None = None, topic: str | None = None, project: str | None = None, max_results: int = 10
+    file_path: str | None = None,
+    topic: str | None = None,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1266,6 +1292,7 @@ async def _recall(
                 topic=topic,
                 project=normalized_project,
                 max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {

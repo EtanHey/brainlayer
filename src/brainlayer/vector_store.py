@@ -94,6 +94,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         }
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
+        self._chunk_tags_available = "chunk_tags" in existing_tables
         self._local = threading.local()
 
     def _init_db_with_retry(self) -> None:
@@ -380,6 +381,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 PRIMARY KEY (chunk_id, tag)
             )
         """)
+        self._chunk_tags_available = True
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag)")
 
         # Sync triggers: keep chunk_tags in sync with chunks.tags JSON

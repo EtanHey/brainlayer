@@ -39,18 +39,9 @@ META_NOISE_PATTERNS = [
 ]
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
 AUDIT_RECURSION_TAG_PATTERNS = (
-    "LOWER(tag) LIKE '%audit%'",
-    "LOWER(tag) = 'r02'",
-    "LOWER(tag) GLOB 'r0[0-9]'",
-    "LOWER(tag) = 'audit-pollution-source'",
-    "LOWER(tag) = 'agent=auditor'",
-)
-AUDIT_RECURSION_TAG_SQL = (
-    "NOT EXISTS ("
-    "SELECT 1 FROM chunk_tags audit_tags "
-    "WHERE audit_tags.chunk_id = {chunk_id_expr} "
-    f"AND ({' OR '.join(AUDIT_RECURSION_TAG_PATTERNS)})"
-    ")"
+    "{tag_expr} LIKE '%audit%'",
+    "{tag_expr} = 'r02'",
+    "{tag_expr} GLOB 'r0[0-9]'",
 )
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
@@ -131,8 +122,28 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
     return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
 
 
-def _audit_recursion_exclusion_sql(chunk_id_expr: str) -> str:
-    return AUDIT_RECURSION_TAG_SQL.format(chunk_id_expr=chunk_id_expr)
+def _audit_recursion_tag_predicate(tag_expr: str) -> str:
+    lowered = f"LOWER(CAST({tag_expr} AS TEXT))"
+    return "(" + " OR ".join(pattern.format(tag_expr=lowered) for pattern in AUDIT_RECURSION_TAG_PATTERNS) + ")"
+
+
+def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_chunk_tags: bool = True) -> str:
+    if use_chunk_tags:
+        return (
+            "NOT EXISTS ("
+            "SELECT 1 FROM chunk_tags audit_tags "
+            f"WHERE audit_tags.chunk_id = {chunk_id_expr} "
+            f"AND {_audit_recursion_tag_predicate('audit_tags.tag')}"
+            ")"
+        )
+
+    tags_json = f"CASE WHEN json_valid({tags_expr}) THEN {tags_expr} ELSE '[]' END"
+    return (
+        "NOT EXISTS ("
+        f"SELECT 1 FROM json_each({tags_json}) audit_tags "
+        f"WHERE {_audit_recursion_tag_predicate('audit_tags.value')}"
+        ")"
+    )
 
 
 def _is_audit_recursion_metadata(meta: dict) -> bool:
@@ -147,13 +158,18 @@ def _is_audit_recursion_metadata(meta: dict) -> bool:
             return True
         if len(normalized) == 3 and normalized[:2] == "r0" and normalized[2].isdigit():
             return True
-        if normalized in {"audit-pollution-source", "agent=auditor"}:
-            return True
     return False
 
 
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str) -> str:
+        return _audit_recursion_exclusion_sql(
+            chunk_id_expr,
+            tags_expr,
+            use_chunk_tags=getattr(self, "_chunk_tags_available", True),
+        )
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -392,7 +408,7 @@ class SearchMixin:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
             if not include_audit:
-                where_clauses.append(_audit_recursion_exclusion_sql("c.id"))
+                where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
             if not include_archived:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
@@ -411,7 +427,6 @@ class SearchMixin:
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
                 or correction_category
-                or not include_audit
             )
             effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
@@ -474,7 +489,7 @@ class SearchMixin:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
             if not include_audit:
-                where_clauses.append(_audit_recursion_exclusion_sql("id"))
+                where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags"))
             if not include_archived:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
@@ -734,7 +749,7 @@ class SearchMixin:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
         if not include_audit:
-            where_clauses.append(_audit_recursion_exclusion_sql("c.id"))
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
         if not include_archived:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
@@ -745,11 +760,7 @@ class SearchMixin:
             where_sql = "AND " + " AND ".join(where_clauses)
 
         needs_overfetch = (
-            entity_id
-            or (source_filter and source_filter != "claude_code")
-            or source_filter_like
-            or correction_category
-            or not include_audit
+            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
         )
         effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
         params = [query_bytes, effective_k] + filter_params
@@ -1045,7 +1056,7 @@ class SearchMixin:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
             if not include_audit:
-                fts_extra.append(f"AND {_audit_recursion_exclusion_sql('c.id')}")
+                fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags')}")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
