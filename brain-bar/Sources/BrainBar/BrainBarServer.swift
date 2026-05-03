@@ -91,6 +91,7 @@ final class BrainBarServer: @unchecked Sendable {
     private let dbPath: String
     private let providedDatabase: BrainDatabase?
     private let databaseRecoveryPolicy: DatabaseRecoveryPolicy
+    private let instanceLockPath: String
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
     private var listenFD: Int32 = -1
     private var listenSource: DispatchSourceRead?
@@ -99,7 +100,10 @@ final class BrainBarServer: @unchecked Sendable {
     private var database: BrainDatabase!
     private var databaseRetryWorkItem: DispatchWorkItem?
     private var lastDatabaseRetryDelayMillis: UInt64?
+    private var databaseOpenInProgress = false
+    private var instanceLock: BrainBarInstanceLock?
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
+    var onStartRejected: (@Sendable (String) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
     static let maxWriteRetries = 10
@@ -137,12 +141,14 @@ final class BrainBarServer: @unchecked Sendable {
         socketPath: String? = nil,
         dbPath: String? = nil,
         database: BrainDatabase? = nil,
-        databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy()
+        databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
+        instanceLockPath: String? = nil
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
         providedDatabase = database
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
+        self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
     }
 
     static func defaultSocketPath() -> String {
@@ -162,6 +168,10 @@ final class BrainBarServer: @unchecked Sendable {
         return "\(home)/.local/share/brainlayer/brainlayer.db"
     }
 
+    static func defaultInstanceLockPath(socketPath: String = defaultSocketPath()) -> String {
+        "\(socketPath).lock"
+    }
+
     func start() {
         queue.async { [weak self] in
             self?.startOnQueue()
@@ -175,6 +185,18 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func startOnQueue() {
+        do {
+            instanceLock = try BrainBarInstanceLock.acquire(lockPath: instanceLockPath)
+        } catch BrainBarInstanceLock.AcquireError.alreadyRunning {
+            NSLog("[BrainBar] Another BrainBar instance owns %@. Exiting this server.", instanceLockPath)
+            onStartRejected?("another BrainBar instance owns \(instanceLockPath)")
+            return
+        } catch {
+            NSLog("[BrainBar] Failed to acquire single-instance lock %@: %@", instanceLockPath, String(describing: error))
+            onStartRejected?("failed to acquire single-instance lock \(instanceLockPath): \(error)")
+            return
+        }
+
         // 1. Create router FIRST (no DB dependency).
         //    initialize + tools/list work without a database.
         router = MCPRouter()
@@ -253,12 +275,36 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func attemptDatabaseOpen() {
-        guard database == nil else { return }
+        guard database == nil, !databaseOpenInProgress else { return }
 
-        let db = providedDatabase ?? BrainDatabase(
-            path: dbPath,
-            openConfiguration: .init(busyTimeoutMillis: databaseRecoveryPolicy.busyTimeoutMillis)
-        )
+        if let providedDatabase {
+            finishDatabaseOpen(providedDatabase)
+            return
+        }
+
+        databaseOpenInProgress = true
+        let dbPath = self.dbPath
+        let busyTimeoutMillis = databaseRecoveryPolicy.busyTimeoutMillis
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let db = BrainDatabase(
+                path: dbPath,
+                openConfiguration: .init(busyTimeoutMillis: busyTimeoutMillis)
+            )
+            self?.queue.async { [weak self] in
+                self?.databaseOpenInProgress = false
+                self?.finishDatabaseOpen(db)
+            }
+        }
+    }
+
+    private func finishDatabaseOpen(_ db: BrainDatabase) {
+        guard listenSource != nil else {
+            if providedDatabase == nil {
+                db.close()
+            }
+            return
+        }
+
         if db.isOpen {
             databaseRetryWorkItem?.cancel()
             databaseRetryWorkItem = nil
@@ -496,6 +542,9 @@ final class BrainBarServer: @unchecked Sendable {
             database?.close()
         }
         database = nil
+        databaseOpenInProgress = false
+        instanceLock?.release()
+        instanceLock = nil
         NSLog("[BrainBar] Server stopped")
     }
 

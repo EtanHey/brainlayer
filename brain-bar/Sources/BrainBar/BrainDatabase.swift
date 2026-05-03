@@ -168,6 +168,11 @@ final class BrainDatabase: @unchecked Sendable {
         let importance: Int
     }
 
+    enum StoreWriteOutcome: Sendable {
+        case stored(StoredChunk)
+        case queued
+    }
+
     struct PendingStoreItem: Codable, Sendable {
         let content: String
         let tags: [String]
@@ -702,7 +707,9 @@ final class BrainDatabase: @unchecked Sendable {
         importance: Int,
         source: String,
         queueID: String? = nil,
-        refreshStatistics: Bool = true
+        refreshStatistics: Bool = true,
+        retries: Int = 3,
+        busyTimeoutMillis: Int32? = nil
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
         let chunkID = "brainbar-\(UUID().uuidString.lowercased().prefix(12))"
@@ -712,7 +719,17 @@ final class BrainDatabase: @unchecked Sendable {
             INSERT INTO chunks (id, content, metadata, source_file, tags, importance, source, content_type, char_count, preview_text)
             VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, 'user_message', ?, ?)
         """
-        try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
+        let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
+        if let busyTimeoutMillis {
+            try executeOnHandle(db, sql: "PRAGMA busy_timeout = \(max(1, busyTimeoutMillis))")
+        }
+        defer {
+            if let previousBusyTimeout {
+                try? executeOnHandle(db, sql: "PRAGMA busy_timeout = \(previousBusyTimeout)")
+            }
+        }
+
+        try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
             bindText(chunkID, to: stmt, index: 1)
             bindText(content, to: stmt, index: 2)
             bindText(metadataJSON, to: stmt, index: 3)
@@ -729,6 +746,33 @@ final class BrainDatabase: @unchecked Sendable {
             refreshSearchStatisticsBestEffort()
         }
         return StoredChunk(chunkID: chunkID, rowID: rowID)
+    }
+
+    func storeOrQueueWithinBudget(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        busyTimeoutMillis: Int32 = 50
+    ) throws -> StoreWriteOutcome {
+        do {
+            let stored = try store(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: source,
+                refreshStatistics: true,
+                retries: 0,
+                busyTimeoutMillis: busyTimeoutMillis
+            )
+            return .stored(stored)
+        } catch {
+            guard shouldQueueStoreError(error) else {
+                throw error
+            }
+            try queuePendingStore(content: content, tags: tags, importance: importance, source: source)
+            return .queued
+        }
     }
 
     /// Async wrapper for store() — runs DB write off the main thread.

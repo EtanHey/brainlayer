@@ -73,50 +73,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             createLegacyStatusItem()
         }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-
-            let dbPath = BrainBarServer.defaultDBPath()
-            NSLog("[BrainBar] Opening database at %@", dbPath)
-            let sharedDatabase = BrainDatabase(path: dbPath)
-
-            let server = BrainBarServer(database: sharedDatabase)
-            server.onDatabaseReady = { [weak self] database in
-                Task { @MainActor in
-                    self?.configureQuickCapture(database: database)
-                }
-            }
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let collector = StatsCollector(
-                    dbPath: dbPath,
-                    daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-                )
-                let injectionStore = try? InjectionStore(databasePath: dbPath)
-
-                self.sharedDatabase = sharedDatabase
-                self.server = server
-                self.collector = collector
-                self.injectionStore = injectionStore
-
-                server.start()
-                runtime.install(
-                    collector: collector,
-                    injectionStore: injectionStore,
-                    database: sharedDatabase
-                )
-                flushPendingBrainBarURLs()
-
-                if launchMode == .legacyStatusItem {
-                    installLegacyMenuBarSurface(with: collector)
-                }
-
-                collector.start()
-                configureQuickCaptureHotkey()
-                NSLog("[BrainBar] Backend ready — launchMode=%@", String(describing: launchMode))
+        let dbPath = BrainBarServer.defaultDBPath()
+        NSLog("[BrainBar] Starting server before database readiness at %@", dbPath)
+        let server = BrainBarServer(dbPath: dbPath)
+        server.onStartRejected = { reason in
+            NSLog("[BrainBar] Startup rejected: %@", reason)
+            Task { @MainActor in
+                NSApp.terminate(nil)
             }
         }
+        server.onDatabaseReady = { [weak self] database in
+            Task { @MainActor in
+                guard let self else { return }
+                self.sharedDatabase = database
+                self.configureQuickCapture(database: database)
+                self.runtime.install(
+                    collector: self.collector ?? StatsCollector(
+                        dbPath: dbPath,
+                        daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+                    ),
+                    injectionStore: self.injectionStore,
+                    database: database
+                )
+                self.flushPendingBrainBarURLs()
+            }
+        }
+
+        let collector = StatsCollector(
+            dbPath: dbPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        let injectionStore = try? InjectionStore(databasePath: dbPath)
+
+        self.server = server
+        self.collector = collector
+        self.injectionStore = injectionStore
+
+        server.start()
+
+        if launchMode == .legacyStatusItem {
+            installLegacyMenuBarSurface(with: collector)
+        }
+
+        collector.start()
+        configureQuickCaptureHotkey()
+        NSLog("[BrainBar] Socket ready; database will self-heal — launchMode=%@", String(describing: launchMode))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
