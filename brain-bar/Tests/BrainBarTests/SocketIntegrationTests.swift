@@ -93,39 +93,54 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNotNil(tools)
         XCTAssertEqual(tools?.count, 16)
 
-        let toolsByName = Dictionary(
-            uniqueKeysWithValues: (tools ?? []).compactMap { tool -> (String, [String: Any])? in
-                guard let name = tool["name"] as? String else { return nil }
-                return (name, tool)
-            }
+        let encodedResponse = try MCPFraming.encodeJSONResponse(response)
+        XCTAssertGreaterThan(encodedResponse.count, 8192)
+
+        for tool in tools ?? [] {
+            XCTAssertNotNil(
+                tool["annotations"],
+                "\(tool["name"] ?? "unknown") should keep annotations over framed socket transport"
+            )
+        }
+    }
+
+    func testRawLineToolsListCompactsForClaudeExtensionLimit() throws {
+        let fd = try connectClient()
+        defer { close(fd) }
+
+        try sendRawLineJSON(on: fd, object: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [:] as [String: Any],
+                "clientInfo": ["name": "claude-extension-test", "version": "1.0"]
+            ]
+        ])
+        _ = try readRawLineJSONData(fd: fd)
+
+        try sendRawLineJSON(on: fd, object: [
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ])
+
+        let line = try readRawLineJSONData(fd: fd)
+        let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+
+        XCTAssertLessThan(
+            line.count,
+            8192,
+            "Claude Desktop's MCPB utility process parses raw extension stdout in 8192-byte chunks"
         )
-
-        let expected: [String: (readOnly: Bool, destructive: Bool, idempotent: Bool, openWorld: Bool)] = [
-            "brain_search": (true, false, true, false),
-            "brain_store": (false, false, false, false),
-            "brain_get_person": (true, false, true, false),
-            "brain_recall": (true, false, true, false),
-            "brain_entity": (true, false, true, false),
-            "brain_digest": (false, false, false, false),
-            "brain_update": (false, false, true, false),
-            "brain_expand": (true, false, true, false),
-            "brain_tags": (true, false, true, false),
-            "brain_supersede": (false, true, false, false),
-            "brain_archive": (false, true, false, false),
-            "brain_enrich": (false, false, false, false),
-            "brain_subscribe": (false, false, false, false),
-            "brain_unsubscribe": (false, false, true, false),
-            "brain_ack": (false, false, true, false),
-            "brain_maintenance_rebuild_trigram": (false, false, true, false),
-        ]
-
-        for (name, taxonomy) in expected {
-            let annotations = toolsByName[name]?["annotations"] as? [String: Any]
-            XCTAssertNotNil(annotations, "\(name) must expose MCP tool annotations over socket transport")
-            XCTAssertEqual(annotations?["readOnlyHint"] as? Bool, taxonomy.readOnly, "\(name) readOnlyHint mismatch")
-            XCTAssertEqual(annotations?["destructiveHint"] as? Bool, taxonomy.destructive, "\(name) destructiveHint mismatch")
-            XCTAssertEqual(annotations?["idempotentHint"] as? Bool, taxonomy.idempotent, "\(name) idempotentHint mismatch")
-            XCTAssertEqual(annotations?["openWorldHint"] as? Bool, taxonomy.openWorld, "\(name) openWorldHint mismatch")
+        XCTAssertEqual(tools?.count, 16)
+        for tool in tools ?? [] {
+            XCTAssertNil(
+                tool["annotations"],
+                "\(tool["name"] ?? "unknown") should omit optional annotations over raw newline transport"
+            )
         }
     }
 
@@ -780,6 +795,40 @@ final class SocketIntegrationTests: XCTestCase {
         guard sent == frame.count else {
             throw NSError(domain: "test", code: 3, userInfo: [NSLocalizedDescriptionKey: "write() incomplete"])
         }
+    }
+
+    private func sendRawLineJSON(on fd: Int32, object: [String: Any]) throws {
+        var data = try JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        let sent = data.withUnsafeBytes { ptr in
+            write(fd, ptr.baseAddress!, data.count)
+        }
+        guard sent == data.count else {
+            throw NSError(domain: "test", code: 3, userInfo: [NSLocalizedDescriptionKey: "raw write() incomplete"])
+        }
+    }
+
+    private func readRawLineJSONData(fd: Int32, timeout: TimeInterval = 5.0) throws -> Data {
+        var buffer = Data()
+        var readBuf = [UInt8](repeating: 0, count: 65536)
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while Date() < deadline {
+            let n = read(fd, &readBuf, readBuf.count)
+            if n > 0 {
+                buffer.append(contentsOf: readBuf[0..<n])
+                if let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                    return Data(buffer[..<newlineIndex])
+                }
+            } else if n == 0 {
+                break
+            } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+
+        throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading raw line response"])
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {

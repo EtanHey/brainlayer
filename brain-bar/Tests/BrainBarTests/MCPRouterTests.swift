@@ -158,6 +158,25 @@ final class MCPRouterTests: XCTestCase {
         )
     }
 
+    func testToolsListPreservesCanonicalAnnotations() throws {
+        let router = MCPRouter()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ])
+
+        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+
+        XCTAssertEqual(tools.count, 16)
+        for tool in tools {
+            XCTAssertNotNil(
+                tool["annotations"],
+                "\(tool["name"] ?? "unknown") should keep annotations in the canonical tools/list response"
+            )
+        }
+    }
+
     func testEachToolHasInputSchema() throws {
         let router = MCPRouter()
         let request: [String: Any] = [
@@ -178,13 +197,11 @@ final class MCPRouterTests: XCTestCase {
 
     func testEachToolHasExpectedAnnotations() throws {
         let router = MCPRouter()
-        let request: [String: Any] = [
+        let response = router.handle([
             "jsonrpc": "2.0",
-            "id": 12,
+            "id": 3,
             "method": "tools/list",
-        ]
-
-        let response = router.handle(request)
+        ])
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
         let toolsByName = Dictionary(
             uniqueKeysWithValues: tools.compactMap { tool -> (String, [String: Any])? in
