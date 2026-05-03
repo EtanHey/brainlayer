@@ -9,6 +9,27 @@
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
+    struct DatabaseRecoveryPolicy: Sendable, Equatable {
+        let busyTimeoutMillis: Int32
+        let initialRetryDelayMillis: UInt64
+        let maximumRetryDelayMillis: UInt64
+
+        init(
+            busyTimeoutMillis: Int32 = 30_000,
+            initialRetryDelayMillis: UInt64 = 1_000,
+            maximumRetryDelayMillis: UInt64 = 30_000
+        ) {
+            self.busyTimeoutMillis = max(1, busyTimeoutMillis)
+            self.initialRetryDelayMillis = max(1, initialRetryDelayMillis)
+            self.maximumRetryDelayMillis = max(self.initialRetryDelayMillis, maximumRetryDelayMillis)
+        }
+
+        func nextDelay(after previousDelayMillis: UInt64?) -> UInt64 {
+            guard let previousDelayMillis else { return initialRetryDelayMillis }
+            return min(previousDelayMillis * 2, maximumRetryDelayMillis)
+        }
+    }
+
     private struct SubscriptionPayload: Encodable {
         let status: String
         let agentID: String
@@ -69,12 +90,15 @@ final class BrainBarServer: @unchecked Sendable {
     private let socketPath: String
     private let dbPath: String
     private let providedDatabase: BrainDatabase?
+    private let databaseRecoveryPolicy: DatabaseRecoveryPolicy
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
     private var listenFD: Int32 = -1
     private var listenSource: DispatchSourceRead?
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    private var databaseRetryWorkItem: DispatchWorkItem?
+    private var lastDatabaseRetryDelayMillis: UInt64?
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
@@ -109,10 +133,16 @@ final class BrainBarServer: @unchecked Sendable {
         var subscribedTags: Set<String> = []
     }
 
-    init(socketPath: String? = nil, dbPath: String? = nil, database: BrainDatabase? = nil) {
+    init(
+        socketPath: String? = nil,
+        dbPath: String? = nil,
+        database: BrainDatabase? = nil,
+        databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy()
+    ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
         providedDatabase = database
+        self.databaseRecoveryPolicy = databaseRecoveryPolicy
     }
 
     static func defaultSocketPath() -> String {
@@ -219,15 +249,54 @@ final class BrainBarServer: @unchecked Sendable {
         //    Connections accepted above queue in the listen backlog.
         //    initialize / tools/list already work; tools/call returns a
         //    graceful error until the DB is ready.
-        let db = providedDatabase ?? BrainDatabase(path: dbPath)
+        attemptDatabaseOpen()
+    }
+
+    private func attemptDatabaseOpen() {
+        guard database == nil else { return }
+
+        let db = providedDatabase ?? BrainDatabase(
+            path: dbPath,
+            openConfiguration: .init(busyTimeoutMillis: databaseRecoveryPolicy.busyTimeoutMillis)
+        )
         if db.isOpen {
+            databaseRetryWorkItem?.cancel()
+            databaseRetryWorkItem = nil
+            lastDatabaseRetryDelayMillis = nil
             database = db
             router.setDatabase(db)
             onDatabaseReady?(db)
             NSLog("[BrainBar] Database ready (%@)", dbPath)
-        } else {
-            NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
+            return
         }
+
+        if providedDatabase == nil {
+            db.close()
+        }
+        NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
+        scheduleDatabaseRetry(lastError: db.lastOpenError)
+    }
+
+    private func scheduleDatabaseRetry(lastError: Error?) {
+        guard providedDatabase == nil, listenSource != nil, database == nil else { return }
+        let delayMillis = databaseRecoveryPolicy.nextDelay(after: lastDatabaseRetryDelayMillis)
+        lastDatabaseRetryDelayMillis = delayMillis
+        databaseRetryWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.databaseRetryWorkItem = nil
+            self.attemptDatabaseOpen()
+        }
+        databaseRetryWorkItem = workItem
+
+        let delaySeconds = Double(delayMillis) / 1_000
+        NSLog(
+            "[BrainBar] Scheduling database reopen retry in %.3fs after startup failure: %@",
+            delaySeconds,
+            String(describing: lastError)
+        )
+        queue.asyncAfter(deadline: .now() + delaySeconds, execute: workItem)
     }
 
     private func acceptClient() {
@@ -380,6 +449,8 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func cleanup() {
+        databaseRetryWorkItem?.cancel()
+        databaseRetryWorkItem = nil
         listenSource?.cancel()
         listenSource = nil
         for (_, state) in clients {
@@ -391,6 +462,7 @@ final class BrainBarServer: @unchecked Sendable {
         if providedDatabase == nil {
             database?.close()
         }
+        database = nil
         NSLog("[BrainBar] Server stopped")
     }
 

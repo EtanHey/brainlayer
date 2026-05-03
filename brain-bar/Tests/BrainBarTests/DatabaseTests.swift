@@ -301,6 +301,27 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 5)
     }
 
+    func testTriggerTrigramRebuildProgressTracksActualRowsAcrossSparseRowIDs() throws {
+        try seedTrigramMaintenanceRows(count: 5)
+        try sqliteExecWrite(
+            path: tempDBPath,
+            sql: "DELETE FROM chunks WHERE id IN ('trigram-maintenance-2', 'trigram-maintenance-4')"
+        )
+        try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
+
+        var runningProgress: [Int] = []
+        let final = try db.triggerTrigramRebuild(batchSize: 2, progress: { event in
+            guard event.state == .running else { return }
+            runningProgress.append(event.processed)
+        })
+
+        XCTAssertEqual(runningProgress, [2, 3])
+        XCTAssertEqual(final.state, .done)
+        XCTAssertEqual(final.processed, 3)
+        XCTAssertEqual(final.total, 3)
+        XCTAssertEqual(try sqliteCount(path: tempDBPath, table: "chunks_fts_trigram"), 3)
+    }
+
     func testTriggerTrigramRebuildDoesNotDuplicateRowsWhenChunkUpdatesBetweenBatches() throws {
         try seedTrigramMaintenanceRows(count: 4)
         try sqliteExecWrite(path: tempDBPath, sql: "DELETE FROM chunks_fts_trigram")
