@@ -610,7 +610,8 @@ final class MCPRouter: @unchecked Sendable {
         var events: [BrainDatabase.TrigramMaintenanceProgress] = []
         let final = try db.triggerTrigramRebuild(
             batchSize: batchSize,
-            shouldCancel: { cancelRequested },
+            // Preflight-only: cancellation never reaches the inner rebuild loop here.
+            shouldCancel: { false },
             progress: { event in
                 events.append(event)
                 if events.count > maxReturnedEvents {

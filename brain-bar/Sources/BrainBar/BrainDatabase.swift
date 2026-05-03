@@ -8,6 +8,14 @@ import Foundation
 import SQLite3
 
 final class BrainDatabase: @unchecked Sendable {
+    struct OpenConfiguration: Sendable, Equatable {
+        let busyTimeoutMillis: Int32
+
+        init(busyTimeoutMillis: Int32 = 30_000) {
+            self.busyTimeoutMillis = max(1, busyTimeoutMillis)
+        }
+    }
+
     static let dashboardDidChangeNotification = "com.brainlayer.brainbar.database-changed"
     private static let previewExpression = """
         trim(substr(replace(replace(replace(coalesce(nullif(summary, ''), content), char(10), ' '), char(13), ' '), char(9), ' '), 1, 220))
@@ -225,11 +233,14 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
+    private let openConfiguration: OpenConfiguration
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
+    private(set) var lastOpenError: Error?
 
-    init(path: String) {
+    init(path: String, openConfiguration: OpenConfiguration = OpenConfiguration()) {
         self.path = path
+        self.openConfiguration = openConfiguration
         openAndConfigure()
     }
 
@@ -248,9 +259,11 @@ final class BrainDatabase: @unchecked Sendable {
                 try ensureSchema()
                 NSLog("[BrainBar] Schema created")
             }
+            lastOpenError = nil
             isOpen = true
             NSLog("[BrainBar] Database ready")
         } catch {
+            lastOpenError = error
             NSLog("[BrainBar] Failed to open/configure database at %@: %@", path, String(describing: error))
         }
     }
@@ -1558,7 +1571,7 @@ final class BrainDatabase: @unchecked Sendable {
     private func configureConnection(_ handle: OpaquePointer?) throws {
         guard let handle else { throw DBError.notOpen }
         // AIDEV-NOTE: busy_timeout FIRST — 30s because watch agent holds locks during enrichment.
-        try executeOnHandle(handle, sql: "PRAGMA busy_timeout = 30000")
+        try executeOnHandle(handle, sql: "PRAGMA busy_timeout = \(openConfiguration.busyTimeoutMillis)")
         // AIDEV-NOTE: Skip journal_mode=WAL if already set — the PRAGMA itself needs a write lock
         // which blocks indefinitely when the watch agent is active. WAL is already set by Python.
         let currentMode = queryPragma(handle, name: "journal_mode")
@@ -2049,7 +2062,7 @@ final class BrainDatabase: @unchecked Sendable {
         let startedAt = Date()
 
         while processed < total,
-              let upperRowID = try nextChunkBatchUpperRowID(
+              let batch = try nextChunkBatch(
                 after: lastProcessedRowID,
                 maxRowID: maxChunkRowID,
                 batchSize: batchSize
@@ -2075,7 +2088,7 @@ final class BrainDatabase: @unchecked Sendable {
                     """,
                     binds: { stmt in
                         sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
-                        sqlite3_bind_int64(stmt, 2, upperRowID)
+                        sqlite3_bind_int64(stmt, 2, batch.upperRowID)
                     }
                 )
                 try executeUpdate(
@@ -2088,13 +2101,13 @@ final class BrainDatabase: @unchecked Sendable {
                     """,
                     binds: { stmt in
                         sqlite3_bind_int64(stmt, 1, lastProcessedRowID)
-                        sqlite3_bind_int64(stmt, 2, upperRowID)
+                        sqlite3_bind_int64(stmt, 2, batch.upperRowID)
                     }
                 )
             }
 
-            lastProcessedRowID = upperRowID
-            processed = min(processed + batchSize, total)
+            lastProcessedRowID = batch.upperRowID
+            processed = min(processed + batch.rowCount, total)
             let running = TrigramMaintenanceProgress(
                 state: .running,
                 processed: processed,
@@ -2134,13 +2147,13 @@ final class BrainDatabase: @unchecked Sendable {
         min(max(1, requestedBatchSize), maximumTrigramMaintenanceBatchSize)
     }
 
-    private func nextChunkBatchUpperRowID(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> Int64? {
+    private func nextChunkBatch(after rowID: Int64, maxRowID: Int64, batchSize: Int) throws -> (upperRowID: Int64, rowCount: Int)? {
         guard let db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(
             db,
             """
-            SELECT rowid
+            SELECT COALESCE(MAX(rowid), 0), COUNT(*)
             FROM (
                 SELECT rowid
                 FROM chunks
@@ -2148,8 +2161,6 @@ final class BrainDatabase: @unchecked Sendable {
                 ORDER BY rowid ASC
                 LIMIT ?
             )
-            ORDER BY rowid DESC
-            LIMIT 1
             """,
             -1,
             &stmt,
@@ -2161,7 +2172,10 @@ final class BrainDatabase: @unchecked Sendable {
         sqlite3_bind_int64(stmt, 2, maxRowID)
         sqlite3_bind_int(stmt, 3, Int32(batchSize))
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
-        return sqlite3_column_int64(stmt, 0)
+        let upperRowID = sqlite3_column_int64(stmt, 0)
+        let rowCount = Int(sqlite3_column_int(stmt, 1))
+        guard rowCount > 0 else { return nil }
+        return (upperRowID, rowCount)
     }
 
     private static func estimatedSecondsRemaining(startedAt: Date, processed: Int, total: Int) -> Double? {
