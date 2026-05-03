@@ -524,9 +524,9 @@ async def _brain_search(
         intent=intent,
         sentiment=sentiment,
         source_filter=source_filter,
-            correction_category=correction_category,
-            include_audit=include_audit,
-        )
+        correction_category=correction_category,
+        include_audit=include_audit,
+    )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)
