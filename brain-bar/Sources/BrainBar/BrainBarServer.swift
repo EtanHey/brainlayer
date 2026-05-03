@@ -402,7 +402,8 @@ final class BrainBarServer: @unchecked Sendable {
             framed = data
         } else {
             // Newline-delimited JSON-RPC (Claude Code v2.1+ / MCP 2025-11-25)
-            guard let jsonData = try? MCPFraming.encodeJSONResponse(response) else { return false }
+            let rawResponse = Self.compactRawJSONResponseIfNeeded(response)
+            guard let jsonData = try? MCPFraming.encodeJSONResponse(rawResponse) else { return false }
             var data = jsonData
             data.append(0x0A) // trailing \n
             framed = data
@@ -437,6 +438,27 @@ final class BrainBarServer: @unchecked Sendable {
             }
             return true
         }
+    }
+
+    private static func compactRawJSONResponseIfNeeded(_ response: [String: Any]) -> [String: Any] {
+        guard let result = response["result"] as? [String: Any],
+              let tools = result["tools"] as? [[String: Any]] else {
+            return response
+        }
+
+        // Claude Desktop's MCPB utility process currently parses raw extension
+        // stdout in 8192-byte chunks. Raw newline transport omits optional tool
+        // annotations; Content-Length transport keeps the canonical tools/list.
+        var compactResult = result
+        compactResult["tools"] = tools.map { tool in
+            var compact = tool
+            compact.removeValue(forKey: "annotations")
+            return compact
+        }
+
+        var compactResponse = response
+        compactResponse["result"] = compactResult
+        return compactResponse
     }
 
     private func disconnectClient(fd: Int32) {
