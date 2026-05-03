@@ -411,6 +411,7 @@ class SearchMixin:
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
                 or correction_category
+                or not include_audit
             )
             effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
@@ -744,7 +745,11 @@ class SearchMixin:
             where_sql = "AND " + " AND ".join(where_clauses)
 
         needs_overfetch = (
-            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
+            entity_id
+            or (source_filter and source_filter != "claude_code")
+            or source_filter_like
+            or correction_category
+            or not include_audit
         )
         effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
         params = [query_bytes, effective_k] + filter_params

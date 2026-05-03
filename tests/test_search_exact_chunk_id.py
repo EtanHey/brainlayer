@@ -77,7 +77,8 @@ def test_exact_chunk_lookup_skips_lifecycle_managed_chunks():
         "archived_at": "2026-04-30T09:15:00Z",
     }
 
-    assert _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact") is None
+    _, structured = _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact")
+    assert structured["total"] == 0
 
 
 def test_exact_chunk_lookup_excludes_audit_chunks_unless_opted_in():
@@ -90,7 +91,8 @@ def test_exact_chunk_lookup_excludes_audit_chunks_unless_opted_in():
         "tags": '["r02", "audit"]',
     }
 
-    assert _exact_chunk_lookup_result("brainbar-audit01", mock_store, "compact") is None
+    _, hidden = _exact_chunk_lookup_result("brainbar-audit01", mock_store, "compact")
+    assert hidden["total"] == 0
 
     _, structured = _exact_chunk_lookup_result(
         "brainbar-audit01",
@@ -125,6 +127,7 @@ async def test_brain_search_entity_path_forwards_include_audit():
     ):
         await _brain_search(query="BrainBar", include_audit=True)
 
+    mock_store.kg_hybrid_search.assert_called()
     assert mock_store.kg_hybrid_search.call_args.kwargs["include_audit"] is True
 
 
@@ -181,5 +184,6 @@ async def test_brain_search_exact_chunk_id_respects_project_scope():
     ):
         result = await _brain_search(query=chunk_id, project="brainlayer", detail="compact")
 
-    assert result == (["fallback"], {"total": 0, "results": []})
-    search_mock.assert_awaited_once()
+    _, structured = result
+    assert structured["total"] == 0
+    search_mock.assert_not_awaited()

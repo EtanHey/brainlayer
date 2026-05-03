@@ -17,6 +17,10 @@ def _insert_chunk(store: VectorStore, chunk_id: str, content: str, tags: list[st
         "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
         (chunk_id, serialize_f32(embedding)),
     )
+    cursor.executemany(
+        "INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)",
+        [(chunk_id, tag) for tag in tags],
+    )
 
 
 def test_hybrid_search_excludes_audit_recursion_by_default(tmp_path):

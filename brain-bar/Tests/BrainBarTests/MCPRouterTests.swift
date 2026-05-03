@@ -627,6 +627,7 @@ final class MCPRouterTests: XCTestCase {
         let optInText = ((optInResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(optInText.contains("audit-recurs"), optInText)
+        XCTAssertTrue(optInText.contains("ordinary-bra"), optInText)
     }
 
     func testBrainSearchDoesNotTreatR0xSubstringTagsAsAudit() throws {
