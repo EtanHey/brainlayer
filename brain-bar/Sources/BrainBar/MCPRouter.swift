@@ -119,7 +119,7 @@ final class MCPRouter: @unchecked Sendable {
             "jsonrpc": "2.0",
             "id": id,
             "result": [
-                "tools": Self.toolDefinitions
+                "tools": Self.compactToolDefinitions
             ]
         ]
     }
@@ -820,6 +820,15 @@ final class MCPRouter: @unchecked Sendable {
         destructive: false,
         idempotent: true
     )
+
+    // Claude Desktop's MCPB utility process currently parses extension stdout
+    // in 8192-byte chunks. Keep the raw newline tools/list response below that
+    // boundary by omitting optional annotations from the public list response.
+    nonisolated(unsafe) static let compactToolDefinitions: [[String: Any]] = toolDefinitions.map { tool in
+        var compact = tool
+        compact.removeValue(forKey: "annotations")
+        return compact
+    }
 
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [

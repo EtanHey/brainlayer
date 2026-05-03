@@ -158,6 +158,30 @@ final class MCPRouterTests: XCTestCase {
         )
     }
 
+    func testEncodedToolsListFitsClaudeExtensionRawMessageLimit() throws {
+        let router = MCPRouter()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        ])
+
+        let body = try MCPFraming.encodeJSONResponse(response)
+        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+
+        XCTAssertLessThan(
+            body.count,
+            8192,
+            "Claude Desktop's MCPB utility process parses raw extension stdout in 8192-byte chunks"
+        )
+        for tool in tools {
+            XCTAssertNil(
+                tool["annotations"],
+                "\(tool["name"] ?? "unknown") should omit optional annotations from tools/list to keep the raw MCPB response under 8 KiB"
+            )
+        }
+    }
+
     func testEachToolHasInputSchema() throws {
         let router = MCPRouter()
         let request: [String: Any] = [
@@ -177,17 +201,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testEachToolHasExpectedAnnotations() throws {
-        let router = MCPRouter()
-        let request: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 12,
-            "method": "tools/list",
-        ]
-
-        let response = router.handle(request)
-        let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
         let toolsByName = Dictionary(
-            uniqueKeysWithValues: tools.compactMap { tool -> (String, [String: Any])? in
+            uniqueKeysWithValues: MCPRouter.toolDefinitions.compactMap { tool -> (String, [String: Any])? in
                 guard let name = tool["name"] as? String else { return nil }
                 return (name, tool)
             }

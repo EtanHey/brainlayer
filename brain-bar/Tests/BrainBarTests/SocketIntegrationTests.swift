@@ -93,39 +93,18 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertNotNil(tools)
         XCTAssertEqual(tools?.count, 16)
 
-        let toolsByName = Dictionary(
-            uniqueKeysWithValues: (tools ?? []).compactMap { tool -> (String, [String: Any])? in
-                guard let name = tool["name"] as? String else { return nil }
-                return (name, tool)
-            }
+        let encodedResponse = try MCPFraming.encodeJSONResponse(response)
+        XCTAssertLessThan(
+            encodedResponse.count,
+            8192,
+            "Socket tools/list must stay below Claude Desktop MCPB's raw 8192-byte parse boundary"
         )
 
-        let expected: [String: (readOnly: Bool, destructive: Bool, idempotent: Bool, openWorld: Bool)] = [
-            "brain_search": (true, false, true, false),
-            "brain_store": (false, false, false, false),
-            "brain_get_person": (true, false, true, false),
-            "brain_recall": (true, false, true, false),
-            "brain_entity": (true, false, true, false),
-            "brain_digest": (false, false, false, false),
-            "brain_update": (false, false, true, false),
-            "brain_expand": (true, false, true, false),
-            "brain_tags": (true, false, true, false),
-            "brain_supersede": (false, true, false, false),
-            "brain_archive": (false, true, false, false),
-            "brain_enrich": (false, false, false, false),
-            "brain_subscribe": (false, false, false, false),
-            "brain_unsubscribe": (false, false, true, false),
-            "brain_ack": (false, false, true, false),
-            "brain_maintenance_rebuild_trigram": (false, false, true, false),
-        ]
-
-        for (name, taxonomy) in expected {
-            let annotations = toolsByName[name]?["annotations"] as? [String: Any]
-            XCTAssertNotNil(annotations, "\(name) must expose MCP tool annotations over socket transport")
-            XCTAssertEqual(annotations?["readOnlyHint"] as? Bool, taxonomy.readOnly, "\(name) readOnlyHint mismatch")
-            XCTAssertEqual(annotations?["destructiveHint"] as? Bool, taxonomy.destructive, "\(name) destructiveHint mismatch")
-            XCTAssertEqual(annotations?["idempotentHint"] as? Bool, taxonomy.idempotent, "\(name) idempotentHint mismatch")
-            XCTAssertEqual(annotations?["openWorldHint"] as? Bool, taxonomy.openWorld, "\(name) openWorldHint mismatch")
+        for tool in tools ?? [] {
+            XCTAssertNil(
+                tool["annotations"],
+                "\(tool["name"] ?? "unknown") should omit optional annotations over socket transport"
+            )
         }
     }
 
