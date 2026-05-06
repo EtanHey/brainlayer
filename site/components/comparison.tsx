@@ -67,7 +67,7 @@ export function Comparison() {
                   className="flex items-start gap-3 text-[15px] leading-relaxed text-text"
                 >
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent text-xs font-bold">
-                    &check;
+                    ✓
                   </span>
                   <span>{item}</span>
                 </li>
