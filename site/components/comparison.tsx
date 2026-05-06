@@ -41,7 +41,7 @@ export function Comparison() {
                   className="flex items-start gap-3 text-[15px] leading-relaxed text-text-secondary"
                 >
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red/10 text-red text-xs font-bold">
-                    &times;
+                    ×
                   </span>
                   <span>{item}</span>
                 </li>
