@@ -10,6 +10,7 @@ from mcp.types import TextContent
 
 from .._helpers import _escape_fts5_query
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
+from ..search_repo import _is_audit_recursion_metadata
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -35,6 +36,11 @@ from ._shared import (
 )
 
 _CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")
+
+
+def _empty_exact_chunk_lookup_result(query: str) -> tuple[list[TextContent], dict]:
+    structured: dict[str, Any] = {"query": query, "total": 0, "results": []}
+    return ([TextContent(type="text", text=format_search_results(query, [], 0))], structured)
 
 
 def _quote_fts_phrase(value: str) -> str:
@@ -163,6 +169,7 @@ def _exact_chunk_lookup_result(
     sentiment: str | None = None,
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -173,16 +180,16 @@ def _exact_chunk_lookup_result(
     if not chunk:
         return None
     if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
     if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
     if project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
         normalized_project = _normalize_project_name(project) or project
         if chunk_project not in (normalized_project, None):
-            return None
+            return _empty_exact_chunk_lookup_result(query)
     if content_type is not None and chunk.get("content_type") != content_type:
-        return None
+        return _empty_exact_chunk_lookup_result(query)
 
     tags = chunk.get("tags")
     parsed_tags = None
@@ -192,16 +199,18 @@ def _exact_chunk_lookup_result(
         except (json.JSONDecodeError, TypeError):
             parsed_tags = None
     if tag is not None and tag not in (parsed_tags or []):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
+    if not include_audit and _is_audit_recursion_metadata({"tags": parsed_tags or []}):
+        return _empty_exact_chunk_lookup_result(query)
     if importance_min is not None:
         chunk_importance = chunk.get("importance")
         if not isinstance(chunk_importance, (int, float)) or float(chunk_importance) < float(importance_min):
-            return None
+            return _empty_exact_chunk_lookup_result(query)
     chunk_date = chunk.get("created_at", "")[:10] if chunk.get("created_at") else None
     if date_from is not None and (chunk_date is None or chunk_date < date_from):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
     if date_to is not None and (chunk_date is None or chunk_date > date_to):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
 
     item = {
         "score": 1.0,
@@ -397,6 +406,7 @@ async def _brain_search(
     detail: str = "compact",
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -432,6 +442,7 @@ async def _brain_search(
             detail=detail,
             source_filter_like=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if chunk_id is not None:
@@ -439,7 +450,12 @@ async def _brain_search(
 
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(regression_result, list):
             merged_text.extend(regression_result)
@@ -451,7 +467,12 @@ async def _brain_search(
 
     if file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(timeline, list):
             merged_text.extend(timeline)
@@ -480,11 +501,14 @@ async def _brain_search(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if _query_signals_current_context(query):
         ctx = await _current_context(hours=24)
-        think_result = await _think(context=query, project=project, max_results=max_results)
+        think_result = await _think(
+            context=query, project=project, max_results=max_results, include_audit=include_audit
+        )
         merged_text = []
         if isinstance(ctx, tuple):
             merged_text.extend(ctx[0])
@@ -497,10 +521,10 @@ async def _brain_search(
         return merged_text
 
     if _query_signals_think(query):
-        return await _think(context=query, project=project, max_results=max_results)
+        return await _think(context=query, project=project, max_results=max_results, include_audit=include_audit)
 
     if _query_signals_recall(query):
-        return await _recall(topic=query, project=project, max_results=max_results)
+        return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
 
     store = _get_vector_store()
     exact_chunk_hit = _exact_chunk_lookup_result(
@@ -518,6 +542,7 @@ async def _brain_search(
         sentiment=sentiment,
         source_filter=source_filter,
         correction_category=correction_category,
+        include_audit=include_audit,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -563,6 +588,7 @@ async def _brain_search(
                 n_results=num_results,
                 entity_name=entity_name,
                 project_filter=normalized_project,
+                include_audit=include_audit,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -634,6 +660,7 @@ async def _brain_search(
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
         correction_category=correction_category,
+        include_audit=include_audit,
     )
 
 
@@ -732,6 +759,7 @@ async def _brain_recall(
     # --- T3 filter additions ---
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -789,6 +817,7 @@ async def _brain_recall(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_audit=include_audit,
         )
 
     if resolved_mode == "entity":
@@ -849,6 +878,7 @@ async def _search(
     # --- T3 filter additions ---
     source_filter_like: str | None = None,
     correction_category: str | None = None,
+    include_audit: bool = False,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -909,6 +939,7 @@ async def _search(
                     entity_id=entity_id,
                     source_filter_like=source_filter_like,
                     correction_category=correction_category,
+                    include_audit=include_audit,
                 )
                 break
             except Exception as e:
@@ -1191,7 +1222,12 @@ async def _plan_links(
         return _error_result(f"Plan links error: {str(e)}")
 
 
-async def _think(context: str, project: str | None = None, max_results: int = 10):
+async def _think(
+    context: str,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
+):
     """Execute think -- retrieve relevant memories for current task."""
     try:
         from ..engine import think
@@ -1207,7 +1243,12 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
         result = await loop.run_in_executor(
             None,
             lambda: think(
-                context=context, store=store, embed_fn=_embed, project=normalized_project, max_results=max_results
+                context=context,
+                store=store,
+                embed_fn=_embed,
+                project=normalized_project,
+                max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {
@@ -1224,7 +1265,11 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
 
 
 async def _recall(
-    file_path: str | None = None, topic: str | None = None, project: str | None = None, max_results: int = 10
+    file_path: str | None = None,
+    topic: str | None = None,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1247,6 +1292,7 @@ async def _recall(
                 topic=topic,
                 project=normalized_project,
                 max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {

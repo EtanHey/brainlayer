@@ -377,7 +377,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="brain_search",
             title="Search Knowledge Base",
-            description="""Search BrainLayer's persistent memory for past decisions, project history, debugging notes, preferences, and other stored knowledge. Use when: the user asks what was decided before, how something was implemented, what happened to a file, or what you are working on. Don't use when: you need current session context or stats (use brain_recall), a named entity graph lookup (use brain_entity), or to save new information (use brain_store). query should be a natural-language lookup phrase; file_path switches to file-history routing, chunk_id expands a known result, and project narrows scope. num_results defaults to 5 and detail defaults to 'compact'; add date, tag, intent, or source filters only when they materially narrow the search. Returns ranked matches with scores, metadata, and compact snippets or full content; after finding a promising chunk, call brain_search with chunk_id or use brain_recall for session-level context.""",
+            description="""Search BrainLayer's persistent memory for decisions, project history, debugging notes, preferences, and stored knowledge. Use when: the user asks what was decided before, how something was implemented, what happened to a file, or what you are working on. Don't use when: you need current session context or stats (use brain_recall), a named entity graph lookup (use brain_entity), or to save new information (use brain_store). query is natural language; file_path switches to file-history routing, chunk_id expands a known result, and project narrows scope. num_results defaults to 5 and detail defaults to 'compact'; add date, tag, intent, or source filters only when useful. Audit/eval chunks tagged audit, r02/r0x, audit-pollution-source, or agent=auditor are excluded by default; set include_audit=true only for audit history. Returns ranked matches with scores, metadata, snippets, or full content.""",
             annotations=_READ_ONLY,
             inputSchema=_bounded_input_schema(
                 {
@@ -504,6 +504,11 @@ async def list_tools() -> list[Tool]:
                         "correction_category": {
                             "type": "string",
                             "description": "Filter by correction type tag (e.g. 'correction:preference', 'correction:factual', 'correction:naming'). Matches chunks tagged with the given correction category.",
+                        },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval memories tagged audit, r02/r0x, audit-pollution-source, or agent=auditor. Defaults false to prevent audit-recursion pollution.",
                         },
                         "detail": {
                             "type": "string",
@@ -652,7 +657,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="brain_recall",
             title="Recall / Search / Entity Lookup",
-            description="""Get working context, recent sessions, plan/session links, per-session operations, summaries, stats, or routed search from one entry point. Use when: you need 'what am I working on', recent session history, plan linkage, operation groups for a session, or knowledge-base health stats. Don't use when: you already know you want topical memory search (use brain_search), a direct entity graph lookup (use brain_entity), or to store or digest new content (use brain_store or brain_digest). mode can be explicit or auto-detected from query; session_id is required for operations and summary, plan_name targets plan mode, and hours, days, and limit control context windows. In search mode, file_path, chunk_id, content filters, num_results, and detail='compact'|'full' behave like brain_search. Returns structured context, search results, or stats depending on mode; use brain_search after broad routing when you need tighter topical retrieval.""",
+            description="""Get working context, recent sessions, plan/session links, per-session operations, summaries, stats, or routed search from one entry point. Use when: you need 'what am I working on', recent session history, plan linkage, operation groups for a session, or knowledge-base health stats. Don't use when: you already know you want topical memory search (use brain_search), a direct entity graph lookup (use brain_entity), or to store or digest new content (use brain_store or brain_digest). mode can be explicit or auto-detected from query; session_id is required for operations and summary, plan_name targets plan mode, and hours, days, and limit control context windows. In search mode, file_path, chunk_id, content filters, num_results, include_audit, and detail='compact'|'full' behave like brain_search. Returns structured context, search results, or stats depending on mode; use brain_search after broad routing when you need tighter topical retrieval.""",
             annotations=_READ_ONLY,
             inputSchema=_bounded_input_schema(
                 {
@@ -791,6 +796,11 @@ async def list_tools() -> list[Tool]:
                             "enum": ["compact", "full"],
                             "default": "compact",
                             "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
+                        },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval memories in search mode. Defaults false to prevent audit-recursion pollution.",
                         },
                     },
                 }
@@ -1218,6 +1228,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 detail=arguments.get("detail", "compact"),
                 source_filter=resolved_source_filter,
                 correction_category=arguments.get("correction_category"),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 
@@ -1297,6 +1308,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 max_results=arguments.get("max_results", 10),
                 detail=arguments.get("detail", "compact"),
                 entity_type=arguments.get("entity_type"),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 

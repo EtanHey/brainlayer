@@ -574,6 +574,94 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "Sagit meeting notes").count - 1, 1, "Only one matching source should be returned")
     }
 
+    func testBrainSearchExcludesAuditRecursionByDefaultAndAllowsOptIn() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-audit-filter-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "audit-recursion-source",
+            content: "why restart BrainBar audit recursion contamination exact match",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8,
+            tags: "[\"r02\", \"audit\"]"
+        )
+        try db.insertChunk(
+            id: "ordinary-brainbar-memory",
+            content: "why restart BrainBar because launchd replaced the old degraded binary",
+            sessionId: "s2",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8,
+            tags: "[\"brainbar\", \"reliability\"]"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let defaultResponse = router.handle([
+            "jsonrpc": "2.0",
+            "id": 160,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "why restart BrainBar", "num_results": 3] as [String: Any]
+            ] as [String: Any]
+        ])
+        let defaultText = ((defaultResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(defaultText.contains("ordinary-bra"), defaultText)
+        XCTAssertFalse(defaultText.contains("audit-recurs"), defaultText)
+
+        let optInResponse = router.handle([
+            "jsonrpc": "2.0",
+            "id": 161,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "why restart BrainBar", "num_results": 3, "include_audit": true] as [String: Any]
+            ] as [String: Any]
+        ])
+        let optInText = ((optInResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(optInText.contains("audit-recurs"), optInText)
+        XCTAssertTrue(optInText.contains("ordinary-bra"), optInText)
+    }
+
+    func testBrainSearchDoesNotTreatR0xSubstringTagsAsAudit() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-audit-substring-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "ordinary-mirror07-memory",
+            content: "mirror07 normal operational memory should remain searchable",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8,
+            tags: "[\"mirror07\", \"reliability\"]"
+        )
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 162,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "mirror07 normal operational memory", "num_results": 3] as [String: Any]
+            ] as [String: Any]
+        ])
+        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("ordinary-mir"), text)
+    }
+
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-source-all-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

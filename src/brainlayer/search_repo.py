@@ -38,6 +38,12 @@ META_NOISE_PATTERNS = [
     "Grounding Results — Prompt",
 ]
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
+AUDIT_RECURSION_TAG_PATTERNS = (
+    "{tag_expr} LIKE '%audit%'",
+    "{tag_expr} = 'r0x'",
+    "{tag_expr} = 'r02'",
+    "{tag_expr} GLOB 'r0[0-9]'",
+)
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
@@ -117,8 +123,54 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
     return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
 
 
+def _audit_recursion_tag_predicate(tag_expr: str) -> str:
+    lowered = f"LOWER(CAST({tag_expr} AS TEXT))"
+    return "(" + " OR ".join(pattern.format(tag_expr=lowered) for pattern in AUDIT_RECURSION_TAG_PATTERNS) + ")"
+
+
+def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_chunk_tags: bool = True) -> str:
+    if use_chunk_tags:
+        return (
+            "NOT EXISTS ("
+            "SELECT 1 FROM chunk_tags audit_tags "
+            f"WHERE audit_tags.chunk_id = {chunk_id_expr} "
+            f"AND {_audit_recursion_tag_predicate('audit_tags.tag')}"
+            ")"
+        )
+
+    tags_json = f"CASE WHEN json_valid({tags_expr}) THEN {tags_expr} ELSE '[]' END"
+    return (
+        "NOT EXISTS ("
+        f"SELECT 1 FROM json_each({tags_json}) audit_tags "
+        f"WHERE {_audit_recursion_tag_predicate('audit_tags.value')}"
+        ")"
+    )
+
+
+def _is_audit_recursion_metadata(meta: dict) -> bool:
+    tags = meta.get("tags")
+    if not isinstance(tags, list):
+        return False
+    for tag in tags:
+        normalized = str(tag).casefold()
+        if "audit" in normalized:
+            return True
+        if normalized in {"r02", "r0x"}:
+            return True
+        if len(normalized) == 3 and normalized[:2] == "r0" and normalized[2].isdigit():
+            return True
+    return False
+
+
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str) -> str:
+        return _audit_recursion_exclusion_sql(
+            chunk_id_expr,
+            tags_expr,
+            use_chunk_tags=getattr(self, "_chunk_tags_available", True),
+        )
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -294,6 +346,7 @@ class SearchMixin:
         include_archived: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
@@ -355,6 +408,8 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
             if not include_archived:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
@@ -368,11 +423,13 @@ class SearchMixin:
             # Bump k to over-fetch when post-KNN filters may discard most results:
             # - entity_id: entity filter applied post-KNN, most candidates won't match
             # - non-default source: rare sources (youtube, whatsapp) are <0.01% of chunks
+            # - audit filter: audit-recursion chunks can dominate the nearest neighbors
             needs_overfetch = (
                 entity_id
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
                 or correction_category
+                or not include_audit
             )
             effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
             params = [query_bytes, effective_k] + filter_params
@@ -434,6 +491,8 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags"))
             if not include_archived:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
@@ -641,6 +700,7 @@ class SearchMixin:
         include_archived: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
         cursor = self._read_cursor()
@@ -691,6 +751,8 @@ class SearchMixin:
         if correction_category:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
+        if not include_audit:
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
         if not include_archived:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
@@ -700,8 +762,14 @@ class SearchMixin:
         if where_clauses:
             where_sql = "AND " + " AND ".join(where_clauses)
 
+        # These predicates are applied after sqlite-vec KNN, so fetch extra candidates
+        # when they may discard nearest neighbors before the final result cap.
         needs_overfetch = (
-            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
+            entity_id
+            or (source_filter and source_filter != "claude_code")
+            or source_filter_like
+            or correction_category
+            or not include_audit
         )
         effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
         params = [query_bytes, effective_k] + filter_params
@@ -845,6 +913,7 @@ class SearchMixin:
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         filter_meta_noise: bool = True,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -878,7 +947,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
-        ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise)
+        ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise, include_audit)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -912,6 +981,7 @@ class SearchMixin:
                 include_archived=include_archived,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
+                include_audit=include_audit,
             )
             semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
         else:
@@ -933,6 +1003,7 @@ class SearchMixin:
                 include_archived=include_archived,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
+                include_audit=include_audit,
             )
 
         # Build semantic rank map: chunk_content -> rank
@@ -993,6 +1064,8 @@ class SearchMixin:
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags')}")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
@@ -1135,6 +1208,8 @@ class SearchMixin:
                 continue
 
             if filter_meta_noise and _contains_meta_noise(doc):
+                continue
+            if not include_audit and _is_audit_recursion_metadata(meta):
                 continue
 
             # Apply filters to FTS-only results

@@ -178,6 +178,7 @@ def think(
     embed_fn: Any,
     project: str | None = None,
     max_results: int = 10,
+    include_audit: bool = False,
 ) -> ThinkResult:
     """Given current task context, retrieve relevant past knowledge.
 
@@ -206,6 +207,7 @@ def think(
         n_results=max_results,
         project_filter=project,
         importance_min=3.0,  # Skip low-importance noise
+        include_audit=include_audit,
     )
 
     if not results["documents"][0]:
@@ -239,6 +241,7 @@ def recall(
     topic: str | None = None,
     project: str | None = None,
     max_results: int = 10,
+    include_audit: bool = False,
 ) -> RecallResult:
     """Proactive smart retrieval based on file or topic.
 
@@ -278,6 +281,7 @@ def recall(
                 query_text=fname,
                 n_results=max_results,
                 project_filter=project,
+                include_audit=include_audit,
             )
             for doc, meta in zip(search_results["documents"][0], search_results["metadatas"][0]):
                 result.related_chunks.append(
@@ -299,6 +303,7 @@ def recall(
             query_text=topic,
             n_results=max_results,
             project_filter=project,
+            include_audit=include_audit,
         )
         for doc, meta in zip(search_results["documents"][0], search_results["metadatas"][0]):
             result.related_chunks.append(
