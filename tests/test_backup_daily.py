@@ -2,6 +2,8 @@ import gzip
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 
 def test_create_snapshot_gzip_is_restorable(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
@@ -31,6 +33,24 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
         assert restored_conn.execute("SELECT content FROM chunks WHERE id = 'c1'").fetchone()[0] == "hello"
     finally:
         restored_conn.close()
+
+
+def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(source)
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
+    conn.commit()
+    conn.close()
+
+    class LowDisk:
+        free = 1
+
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: LowDisk())
+
+    with pytest.raises(RuntimeError, match="Insufficient free space"):
+        backup_daily.create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13")
 
 
 def test_upload_to_drive_creates_missing_folder_chain(tmp_path):

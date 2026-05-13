@@ -8,6 +8,7 @@ snapshot without stopping BrainBar or the enrichment jobs.
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import gzip
 import http.client
 import json
@@ -16,6 +17,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +34,7 @@ DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 def _today() -> str:
-    return dt.date.today().isoformat()
+    return dt.datetime.now(dt.UTC).date().isoformat()
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -49,6 +51,13 @@ def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str |
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    required_bytes = (db_path.stat().st_size * 2) + (512 * 1024 * 1024)
+    free_bytes = shutil.disk_usage(output_dir).free
+    if free_bytes < required_bytes:
+        raise RuntimeError(
+            f"Insufficient free space for backup in {output_dir}: "
+            f"{free_bytes} bytes free, {required_bytes} bytes required"
+        )
     final_gz = output_dir / f"{date_stamp}.db.gz"
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
@@ -57,7 +66,7 @@ def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str |
         target = sqlite3.connect(raw_snapshot)
         try:
             source.backup(target, pages=10_000, sleep=0.1)
-            target.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            target.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             integrity = target.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":
                 raise RuntimeError(f"Backup integrity check failed: {integrity!r}")
@@ -73,6 +82,15 @@ def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str |
     return final_gz
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temp_path.write_text(content)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Path = DEFAULT_CLIENT_PATH):
     """Load and refresh Google Drive OAuth credentials from the existing MCP auth files."""
     from google.auth.transport.requests import Request
@@ -85,33 +103,36 @@ def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Pa
     if not client_path.exists():
         raise FileNotFoundError(f"Google OAuth client file not found: {client_path}")
 
-    token_data = json.loads(token_path.read_text())
-    client_data = json.loads(client_path.read_text())["installed"]
+    lock_path = token_path.with_suffix(token_path.suffix + ".lock")
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        token_data = json.loads(token_path.read_text())
+        client_data = json.loads(client_path.read_text())["installed"]
 
-    expiry = token_data.get("expiry")
-    if not expiry and token_data.get("expiry_date"):
-        expiry = dt.datetime.fromtimestamp(int(token_data["expiry_date"]) / 1000, tz=dt.UTC).isoformat()
+        expiry = token_data.get("expiry")
+        if not expiry and token_data.get("expiry_date"):
+            expiry = dt.datetime.fromtimestamp(int(token_data["expiry_date"]) / 1000, tz=dt.UTC).isoformat()
 
-    parsed_expiry = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
-    if parsed_expiry and parsed_expiry.tzinfo:
-        parsed_expiry = parsed_expiry.astimezone(dt.UTC).replace(tzinfo=None)
+        parsed_expiry = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
+        if parsed_expiry and parsed_expiry.tzinfo:
+            parsed_expiry = parsed_expiry.astimezone(dt.UTC).replace(tzinfo=None)
 
-    creds = Credentials(
-        token=token_data.get("access_token"),
-        refresh_token=token_data.get("refresh_token"),
-        token_uri=client_data["token_uri"],
-        client_id=client_data["client_id"],
-        client_secret=client_data["client_secret"],
-        scopes=token_data.get("scope", " ".join(DRIVE_SCOPES)).split(),
-        expiry=parsed_expiry,
-    )
+        creds = Credentials(
+            token=token_data.get("access_token"),
+            refresh_token=token_data.get("refresh_token"),
+            token_uri=client_data["token_uri"],
+            client_id=client_data["client_id"],
+            client_secret=client_data["client_secret"],
+            scopes=token_data.get("scope", " ".join(DRIVE_SCOPES)).split(),
+            expiry=parsed_expiry,
+        )
 
-    refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
-    if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
-        creds.refresh(Request())
-        token_data["access_token"] = creds.token
-        token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
-        token_path.write_text(json.dumps(token_data, indent=2, sort_keys=True) + "\n")
+        refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
+        if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
+            creds.refresh(Request())
+            token_data["access_token"] = creds.token
+            token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
+            _atomic_write_text(token_path, json.dumps(token_data, indent=2, sort_keys=True) + "\n")
 
     return creds
 
@@ -228,7 +249,10 @@ def upload_file_to_drive_raw(
     with file_path.open("rb") as handle:
         while sent < total:
             handle.seek(sent)
-            chunk = handle.read(min(chunk_size, total - sent))
+            expected = min(chunk_size, total - sent)
+            chunk = handle.read(expected)
+            if len(chunk) != expected:
+                raise RuntimeError(f"Backup file changed during upload: expected {expected} bytes, got {len(chunk)}")
             start = sent
             end = sent + len(chunk) - 1
             headers = {
@@ -247,6 +271,7 @@ def upload_file_to_drive_raw(
                             sent = int(uploaded_range.rsplit("-", 1)[1]) + 1
                         else:
                             sent = end + 1
+                        print(f"drive upload progress: {sent}/{total} bytes", flush=True)
                         break
                     if response.status_code in {429, 500, 502, 503, 504}:
                         raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
@@ -358,7 +383,7 @@ def main() -> int:
             ).split("/"),
         )
     except Exception as exc:
-        print(f"brainlayer backup failed: {exc}", flush=True)
+        print(f"brainlayer backup failed: {exc}\n{traceback.format_exc()}", flush=True)
         return 1
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0
