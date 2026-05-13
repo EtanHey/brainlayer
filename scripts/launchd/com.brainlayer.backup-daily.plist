@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brainlayer.backup-daily</string>
+
+    <!-- __HOME__ and __BRAINLAYER_DIR__ are expanded by scripts/launchd/install.sh
+         before this template is copied into ~/Library/LaunchAgents. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/lib/brainlayer/backup-daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/share/brainlayer/logs/backup-daily.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/share/brainlayer/logs/backup-daily.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>__BRAINLAYER_DIR__/src</string>
+        <key>BRAINLAYER_BACKUP_DRIVE_FOLDER</key>
+        <string>Brain Drive/06_ARCHIVE/backups/brainlayer-db</string>
+    </dict>
+
+    <key>Nice</key>
+    <integer>15</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

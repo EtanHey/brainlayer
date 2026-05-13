@@ -9,6 +9,7 @@
 #   ./scripts/launchd/install.sh load enrichment
 #   ./scripts/launchd/install.sh unload enrichment
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
+#   ./scripts/launchd/install.sh backup       # Install daily DB backup only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
 
@@ -16,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
 BRAINLAYER_LOG_DIR="$HOME/.local/share/brainlayer/logs"
+BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
 BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
@@ -27,7 +29,7 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
-mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$BRAINLAYER_LOG_DIR"
+mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
 
 resolve_google_api_key() {
     if [ -n "${GOOGLE_API_KEY:-}" ]; then
@@ -95,6 +97,20 @@ install_plist() {
     load_plist "$name"
 }
 
+install_backup_script() {
+    local src="$SCRIPT_DIR/backup-daily.sh"
+    local dst="$BRAINLAYER_LIB_DIR/backup-daily.sh"
+
+    if [ ! -f "$src" ]; then
+        echo "ERROR: $src not found"
+        return 1
+    fi
+
+    cp "$src" "$dst"
+    chmod 755 "$dst"
+    echo "Installed: $dst"
+}
+
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -127,11 +143,17 @@ case "${1:-all}" in
     checkpoint)
         install_plist wal-checkpoint
         ;;
+    backup)
+        install_backup_script
+        install_plist backup-daily
+        ;;
     all)
         install_plist index
         install_plist enrichment
         install_plist decay
         install_plist wal-checkpoint
+        install_backup_script
+        install_plist backup-daily
         # Remove old enrich plist if present
         remove_plist enrich 2>/dev/null || true
         ;;
@@ -141,9 +163,11 @@ case "${1:-all}" in
         remove_plist enrichment 2>/dev/null || true
         remove_plist decay 2>/dev/null || true
         remove_plist wal-checkpoint
+        remove_plist backup-daily 2>/dev/null || true
+        rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         ;;
     *)
-        echo "Usage: $0 [index|enrich|enrichment|decay|load [name]|unload [name]|checkpoint|all|remove]"
+        echo "Usage: $0 [index|enrich|enrichment|decay|load [name]|unload [name]|checkpoint|backup|all|remove]"
         exit 1
         ;;
 esac
