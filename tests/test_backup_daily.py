@@ -100,16 +100,23 @@ def test_ensure_drive_folder_chain_creates_missing_folders():
 
 def test_launchd_installer_knows_backup_target():
     install_path = Path("scripts/launchd/install.sh")
+    wrapper_path = Path("scripts/launchd/backup-daily.sh")
     plist_path = Path("scripts/launchd/com.brainlayer.backup-daily.plist")
 
     assert install_path.is_file(), f"Installer not found at {install_path}; check test working directory"
+    assert wrapper_path.is_file(), f"Backup wrapper not found at {wrapper_path}; check launchd wrapper is committed"
     assert plist_path.is_file(), f"Backup plist not found at {plist_path}; check launchd template is committed"
 
     install = install_path.read_text()
+    wrapper = wrapper_path.read_text()
     plist = plist_path.read_text()
 
     assert "backup-daily" in install
     assert "install_backup_script" in install
+    assert "escaped_brainlayer_dir" in install
+    assert "__BRAINLAYER_DIR_VALUE__" in install
+    assert "PYTHONPATH" in wrapper
+    assert "__BRAINLAYER_DIR_VALUE__" in wrapper
     assert "<string>com.brainlayer.backup-daily</string>" in plist
     assert "<integer>3</integer>" in plist
     assert "<integer>17</integer>" in plist
