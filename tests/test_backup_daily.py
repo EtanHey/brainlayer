@@ -113,9 +113,10 @@ def test_launchd_installer_knows_backup_target():
 
     assert "backup-daily" in install
     assert "install_backup_script" in install
-    assert "__BRAINLAYER_DIR__" in install
+    assert "escaped_brainlayer_dir" in install
+    assert "__BRAINLAYER_DIR_VALUE__" in install
     assert "PYTHONPATH" in wrapper
-    assert "__BRAINLAYER_DIR__" in wrapper
+    assert "__BRAINLAYER_DIR_VALUE__" in wrapper
     assert "<string>com.brainlayer.backup-daily</string>" in plist
     assert "<integer>3</integer>" in plist
     assert "<integer>17</integer>" in plist

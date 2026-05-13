@@ -100,14 +100,16 @@ install_plist() {
 install_backup_script() {
     local src="$SCRIPT_DIR/backup-daily.sh"
     local dst="$BRAINLAYER_LIB_DIR/backup-daily.sh"
+    local escaped_brainlayer_dir
 
     if [ ! -f "$src" ]; then
         echo "ERROR: $src not found"
         return 1
     fi
 
+    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')"
     sed \
-        -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
+        -e "s|__BRAINLAYER_DIR_VALUE__|$escaped_brainlayer_dir|g" \
         "$src" > "$dst"
     chmod 755 "$dst"
     echo "Installed: $dst"
