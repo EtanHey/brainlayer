@@ -84,9 +84,15 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
    ```bash
    ts="$(date +%Y%m%d-%H%M%S)"
    mkdir -p ~/.local/share/brainlayer/corrupt-$ts
+   ls -lh ~/.local/share/brainlayer/brainlayer.db ~/.local/share/brainlayer/brainlayer.db-wal ~/.local/share/brainlayer/brainlayer.db-shm 2>/dev/null || true
    mv ~/.local/share/brainlayer/brainlayer.db* ~/.local/share/brainlayer/corrupt-$ts/
+   ls -lh ~/.local/share/brainlayer/corrupt-$ts/
    cp /tmp/brainlayer-restore/brainlayer.db ~/.local/share/brainlayer/brainlayer.db
    ```
+
+   The `brainlayer.db*` move preserves the main database plus SQLite auxiliary files: `brainlayer.db`,
+   `brainlayer.db-wal`, and `brainlayer.db-shm`. Verify the `ls` output before and after the move; the
+   wildcard will also move any other similarly named files in that directory.
 
 6. Verify the restored DB before re-enabling services:
 

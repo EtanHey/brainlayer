@@ -53,8 +53,8 @@ def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
         backup_daily.create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13")
 
 
-def test_upload_to_drive_creates_missing_folder_chain(tmp_path):
-    from brainlayer.backup_daily import upload_file_to_drive
+def test_ensure_drive_folder_chain_creates_missing_folders():
+    from brainlayer.backup_daily import ensure_drive_folder_chain
 
     class FakeExecute:
         def __init__(self, value):
@@ -62,9 +62,6 @@ def test_upload_to_drive_creates_missing_folder_chain(tmp_path):
 
         def execute(self):
             return self.value
-
-        def next_chunk(self):
-            return None, self.value
 
     class FakeFiles:
         def __init__(self):
@@ -76,13 +73,10 @@ def test_upload_to_drive_creates_missing_folder_chain(tmp_path):
                 return FakeExecute({"files": [{"id": "brain-drive"}]})
             return FakeExecute({"files": []})
 
-        def create(self, body, media_body=None, fields=None, **kwargs):  # noqa: ARG002
-            if media_body is None:
-                folder_id = f"folder-{body['name']}"
-                self.created.append((body["name"], body["parents"][0]))
-                return FakeExecute({"id": folder_id})
-            self.created.append((body["name"], body["parents"][0], "file"))
-            return FakeExecute({"id": "backup-file", "name": body["name"]})
+        def create(self, body, fields=None, **kwargs):  # noqa: ARG002
+            folder_id = f"folder-{body['name']}"
+            self.created.append((body["name"], body["parents"][0]))
+            return FakeExecute({"id": folder_id})
 
     class FakeService:
         def __init__(self):
@@ -91,21 +85,17 @@ def test_upload_to_drive_creates_missing_folder_chain(tmp_path):
         def files(self):
             return self._files
 
-    gz = tmp_path / "2026-05-13.db.gz"
-    gz.write_bytes(b"backup")
     service = FakeService()
 
-    result = upload_file_to_drive(
+    result = ensure_drive_folder_chain(
         service,
-        gz,
-        folder_parts=["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"],
+        ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"],
     )
 
-    assert result == {"id": "backup-file", "name": "2026-05-13.db.gz"}
+    assert result == "folder-brainlayer-db"
     assert ("06_ARCHIVE", "brain-drive") in service.files().created
     assert ("backups", "folder-06_ARCHIVE") in service.files().created
     assert ("brainlayer-db", "folder-backups") in service.files().created
-    assert ("2026-05-13.db.gz", "folder-brainlayer-db", "file") in service.files().created
 
 
 def test_launchd_installer_knows_backup_target():

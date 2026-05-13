@@ -10,7 +10,6 @@ from __future__ import annotations
 import datetime as dt
 import fcntl
 import gzip
-import http.client
 import json
 import os
 import shutil
@@ -116,6 +115,8 @@ def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Pa
         parsed_expiry = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
         if parsed_expiry and parsed_expiry.tzinfo:
             parsed_expiry = parsed_expiry.astimezone(dt.UTC).replace(tzinfo=None)
+        elif parsed_expiry:
+            parsed_expiry = parsed_expiry.replace(tzinfo=None)
 
         creds = Credentials(
             token=token_data.get("access_token"),
@@ -127,6 +128,7 @@ def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Pa
             expiry=parsed_expiry,
         )
 
+        # google-auth Credentials.expired compares against a naive UTC helper, so keep expiry comparisons naive UTC.
         refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
         if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
             creds.refresh(Request())
@@ -177,47 +179,6 @@ def ensure_drive_folder_chain(service: Any, folder_parts: list[str]) -> str:
     if parent_id is None:
         raise ValueError("folder_parts must not be empty")
     return parent_id
-
-
-def _execute_resumable_upload(request: Any, max_attempts: int = 30) -> dict[str, Any]:
-    import httplib2
-    from google.auth.exceptions import TransportError
-    from googleapiclient.errors import HttpError
-
-    response = None
-    attempt = 0
-    while response is None:
-        try:
-            _, response = request.next_chunk()
-            attempt = 0
-        except HttpError as exc:
-            if exc.resp.status not in {429, 500, 502, 503, 504}:
-                raise
-            attempt += 1
-            if attempt >= max_attempts:
-                raise
-            sleep_seconds = min(60, 2**attempt)
-            print(f"drive upload retry {attempt}/{max_attempts - 1}: {exc}; sleeping {sleep_seconds}s", flush=True)
-            time.sleep(sleep_seconds)
-        except (TransportError, http.client.HTTPException, httplib2.HttpLib2Error, OSError, TimeoutError) as exc:
-            attempt += 1
-            if attempt >= max_attempts:
-                raise
-            sleep_seconds = min(60, 2**attempt)
-            print(f"drive upload retry {attempt}/{max_attempts - 1}: {exc}; sleeping {sleep_seconds}s", flush=True)
-            time.sleep(sleep_seconds)
-    return response
-
-
-def upload_file_to_drive(service: Any, file_path: Path, folder_parts: list[str] = DEFAULT_FOLDER_PARTS) -> dict[str, Any]:
-    from googleapiclient.http import MediaFileUpload
-
-    file_path = Path(file_path)
-    folder_id = ensure_drive_folder_chain(service, folder_parts)
-    media = MediaFileUpload(str(file_path), mimetype="application/gzip", chunksize=1024 * 1024, resumable=True)
-    metadata = {"name": file_path.name, "parents": [folder_id]}
-    request = service.files().create(body=metadata, media_body=media, fields="id,name", supportsAllDrives=True)
-    return _execute_resumable_upload(request)
 
 
 def upload_file_to_drive_raw(
@@ -377,6 +338,7 @@ def main() -> int:
     try:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
+            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH is a legacy alias before DEFAULT_FOLDER_PARTS.
             folder_parts=os.environ.get(
                 "BRAINLAYER_BACKUP_DRIVE_FOLDER",
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
