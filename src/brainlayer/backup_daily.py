@@ -106,7 +106,7 @@ def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Pa
         expiry=parsed_expiry,
     )
 
-    refresh_before = dt.datetime.utcnow() + dt.timedelta(hours=2)
+    refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
     if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
         creds.refresh(Request())
         token_data["access_token"] = creds.token
@@ -243,7 +243,10 @@ def upload_file_to_drive_raw(
                         return response.json()
                     if response.status_code == 308:
                         uploaded_range = response.headers.get("Range")
-                        sent = int(uploaded_range.rsplit("-", 1)[1]) + 1 if uploaded_range else end + 1
+                        if uploaded_range and "-" in uploaded_range:
+                            sent = int(uploaded_range.rsplit("-", 1)[1]) + 1
+                        else:
+                            sent = end + 1
                         break
                     if response.status_code in {429, 500, 502, 503, 504}:
                         raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
@@ -274,19 +277,27 @@ def _parse_snapshot_date(name: str) -> dt.date | None:
 def prune_drive_backups(service: Any, folder_parts: list[str] = DEFAULT_FOLDER_PARTS) -> list[str]:
     """Keep 30 latest daily snapshots plus latest snapshot for each of 12 months."""
     folder_id = ensure_drive_folder_chain(service, folder_parts)
-    result = (
-        service.files()
-        .list(
-            q=f"'{folder_id}' in parents and trashed = false",
-            spaces="drive",
-            fields="files(id,name)",
-            pageSize=1000,
-            supportsAllDrives=True,
+    files: list[dict[str, str]] = []
+    page_token = None
+    while True:
+        result = (
+            service.files()
+            .list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                spaces="drive",
+                fields="nextPageToken,files(id,name)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+            )
+            .execute()
         )
-        .execute()
-    )
+        files.extend(result.get("files", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
     dated = []
-    for item in result.get("files", []):
+    for item in files:
         parsed = _parse_snapshot_date(item.get("name", ""))
         if parsed:
             dated.append((parsed, item))
@@ -341,7 +352,10 @@ def main() -> int:
     try:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
-            folder_parts=os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)).split("/"),
+            folder_parts=os.environ.get(
+                "BRAINLAYER_BACKUP_DRIVE_FOLDER",
+                os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
+            ).split("/"),
         )
     except Exception as exc:
         print(f"brainlayer backup failed: {exc}", flush=True)

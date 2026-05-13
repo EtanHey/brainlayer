@@ -5,6 +5,9 @@
     <key>Label</key>
     <string>com.brainlayer.backup-daily</string>
 
+    <!-- __HOME__ and __BRAINLAYER_DIR__ are expanded by scripts/launchd/install.sh
+         before this template is copied into ~/Library/LaunchAgents. -->
+
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.local/lib/brainlayer/backup-daily.sh</string>
@@ -27,7 +30,7 @@
     <dict>
         <key>PYTHONPATH</key>
         <string>__BRAINLAYER_DIR__/src</string>
-        <key>BRAINLAYER_BACKUP_DRIVE_PATH</key>
+        <key>BRAINLAYER_BACKUP_DRIVE_FOLDER</key>
         <string>Brain Drive/06_ARCHIVE/backups/brainlayer-db</string>
     </dict>
 

@@ -8,7 +8,8 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
 
     source = tmp_path / "brainlayer.db"
     conn = sqlite3.connect(source)
-    conn.execute("PRAGMA journal_mode=WAL")
+    journal_mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    assert journal_mode.upper() == "WAL"
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
     conn.execute("INSERT INTO chunks VALUES ('c1', 'hello')")
     conn.commit()
@@ -88,8 +89,14 @@ def test_upload_to_drive_creates_missing_folder_chain(tmp_path):
 
 
 def test_launchd_installer_knows_backup_target():
-    install = Path("scripts/launchd/install.sh").read_text()
-    plist = Path("scripts/launchd/com.brainlayer.backup-daily.plist").read_text()
+    install_path = Path("scripts/launchd/install.sh")
+    plist_path = Path("scripts/launchd/com.brainlayer.backup-daily.plist")
+
+    assert install_path.is_file(), f"Installer not found at {install_path}; check test working directory"
+    assert plist_path.is_file(), f"Backup plist not found at {plist_path}; check launchd template is committed"
+
+    install = install_path.read_text()
+    plist = plist_path.read_text()
 
     assert "backup-daily" in install
     assert "install_backup_script" in install

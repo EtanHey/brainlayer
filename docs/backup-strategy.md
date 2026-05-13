@@ -10,6 +10,10 @@ Target folder:
 
 `Brain Drive/06_ARCHIVE/backups/brainlayer-db/YYYY-MM-DD.db.gz`
 
+Encryption posture:
+
+Backups are encrypted in transit by HTTPS and at rest by Google Drive. The database can contain user messages, code snippets, file paths, and agent memory, so client-side encryption should be added before upload if the threat model requires protection from the Drive account/provider layer. Recommended upgrade path: encrypt the gzip with `age` or GPG using a key stored in 1Password, then upload `YYYY-MM-DD.db.gz.age` and document the recovery key location.
+
 Schedule:
 
 Daily at 03:17 local time via `com.brainlayer.backup-daily`.
@@ -84,7 +88,13 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
    cp /tmp/brainlayer-restore/brainlayer.db ~/.local/share/brainlayer/brainlayer.db
    ```
 
-6. Re-enable services:
+6. Verify the restored DB before re-enabling services:
+
+   ```bash
+   sqlite3 ~/.local/share/brainlayer/brainlayer.db 'PRAGMA integrity_check; SELECT count(*) FROM chunks;'
+   ```
+
+7. Re-enable services:
 
    ```bash
    launchctl load ~/Library/LaunchAgents/com.brainlayer.brainbar.plist
@@ -93,10 +103,9 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
    launchctl load ~/Library/LaunchAgents/com.brainlayer.decay.plist
    ```
 
-7. Confirm the DB is usable:
+8. Run a post-restore WAL checkpoint:
 
    ```bash
-   sqlite3 ~/.local/share/brainlayer/brainlayer.db 'PRAGMA integrity_check; SELECT count(*) FROM chunks;'
    brainlayer wal-checkpoint --mode TRUNCATE
    ```
 
