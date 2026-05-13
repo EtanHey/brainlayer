@@ -106,7 +106,9 @@ install_backup_script() {
         return 1
     fi
 
-    cp "$src" "$dst"
+    sed \
+        -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
+        "$src" > "$dst"
     chmod 755 "$dst"
     echo "Installed: $dst"
 }
