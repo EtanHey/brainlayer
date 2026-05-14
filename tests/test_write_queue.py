@@ -244,6 +244,35 @@ class TestStoreRetryOnLock:
         assert item["kind"] == "store_memory"
         assert item["content"] == "test memory"
 
+    @pytest.mark.asyncio
+    async def test_arbitrated_store_validates_before_queueing(self, tmp_path, monkeypatch):
+        """Arbitrated store should not report queued success for invalid content."""
+        from brainlayer.mcp.store_handler import _store
+
+        monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+        with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
+            result = await _store(content="  ", memory_type="note", project="test")
+
+        assert result.isError is True
+        assert "content must be non-empty" in result.content[0].text
+        assert not list(tmp_path.glob("mcp-*.jsonl"))
+
+    @pytest.mark.asyncio
+    async def test_arbitrated_store_clears_search_cache(self, tmp_path, monkeypatch):
+        """Queued stores invalidate local search cache even before the drain writes."""
+        from brainlayer.mcp.store_handler import _store
+
+        monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+        with (
+            patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path),
+            patch("brainlayer.search_repo.clear_hybrid_search_cache") as clear_cache,
+        ):
+            texts, structured = await _store(content="queued cache invalidation", memory_type="note", project="test")
+
+        assert structured["chunk_id"] == "queued"
+        assert any("queued" in item.text.lower() for item in texts)
+        clear_cache.assert_called_once_with()
+
 
 class TestBrainUpdateRetryOnLock:
     """brain_update should retry on BusyError before failing."""

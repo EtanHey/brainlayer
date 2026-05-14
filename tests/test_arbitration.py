@@ -1,3 +1,4 @@
+import json
 import multiprocessing as mp
 import re
 import sqlite3
@@ -124,6 +125,17 @@ def _create_vec_db(path: Path) -> None:
         conn.close()
 
 
+def test_drain_default_queue_dir_expands_env_tilde(monkeypatch):
+    from brainlayer.drain import _default_queue_dir
+
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", "~/brainlayer-arbitration-test")
+
+    queue_dir = _default_queue_dir()
+
+    assert "~" not in str(queue_dir)
+    assert queue_dir == Path.home() / "brainlayer-arbitration-test"
+
+
 def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatch):
     from brainlayer.drain import drain_once
 
@@ -232,6 +244,35 @@ def test_drain_embeds_every_queued_store(tmp_path):
 
     assert vector_count == 3
     assert binary_count == 3
+
+
+def test_drain_ignores_non_object_store_metadata(tmp_path):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    (queue_dir / "store.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "bad-meta",
+                "content": "queued memory with bad metadata",
+                "memory_type": "note",
+                "metadata": "not-a-dict",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        row = conn.execute("SELECT metadata FROM chunks WHERE id = 'bad-meta'").fetchone()
+
+    assert json.loads(row[0]) == {"memory_type": "note"}
 
 
 def test_drain_loads_sqlite_vec_for_vec0_tables(tmp_path):

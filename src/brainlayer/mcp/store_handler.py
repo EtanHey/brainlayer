@@ -501,6 +501,17 @@ async def _store(
     """
     try:
         if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+            from ..pipeline.classify import looks_like_system_prompt
+            from ..search_repo import clear_hybrid_search_cache
+            from ..store import VALID_MEMORY_TYPES
+
+            if not content or not content.strip():
+                raise ValueError("content must be non-empty")
+            content = content.strip()
+            if memory_type not in VALID_MEMORY_TYPES:
+                raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
+            if looks_like_system_prompt(content):
+                raise ValueError("system prompt content is not stored in BrainLayer")
             _queue_store(
                 {
                     "content": content,
@@ -521,6 +532,7 @@ async def _store(
                     "supersedes": supersedes,
                 }
             )
+            clear_hybrid_search_cache()
             structured = {"chunk_id": "queued", "related": []}
             return ([TextContent(type="text", text=format_store_result("queued", queued=True))], structured)
 

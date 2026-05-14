@@ -35,7 +35,9 @@ def _default_db_path() -> Path:
 
 
 def _default_queue_dir() -> Path:
-    return Path(os.environ.get("BRAINLAYER_QUEUE_DIR", Path.home() / ".brainlayer/queue"))
+    from .queue_io import get_queue_dir
+
+    return get_queue_dir()
 
 
 def _default_log_path() -> Path:
@@ -106,7 +108,11 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         return ApplyResult()
     now = datetime.now(timezone.utc).isoformat()
     metadata = {"memory_type": event.get("memory_type", "note")}
-    metadata.update(event.get("metadata") or {})
+    raw_metadata = event.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata.update(raw_metadata)
+    elif raw_metadata:
+        logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
     chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
