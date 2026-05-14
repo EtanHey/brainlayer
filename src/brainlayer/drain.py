@@ -8,16 +8,26 @@ import hashlib
 import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import apsw
+import sqlite_vec
+
+from ._helpers import serialize_f32
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ApplyResult:
+    chunk_id: str | None = None
+    collision_chunk_id: str | None = None
 
 
 def _default_db_path() -> Path:
@@ -39,11 +49,30 @@ def _log(path: Path, message: str) -> None:
         handle.write(f"{stamp} {message}\n")
 
 
-def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+def _open_connection(db_path: Path) -> apsw.Connection:
+    conn = apsw.Connection(str(db_path))
+    conn.setbusytimeout(200)
+    conn.enableloadextension(True)
+    conn.loadextension(sqlite_vec.loadable_path())
+    conn.enableloadextension(False)
+    return conn
+
+
+def _acquire_queue_lock(queue_dir: Path) -> int:
+    fd = os.open(queue_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _columns(conn: apsw.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def _insert_chunk(conn: sqlite3.Connection, values: dict[str, Any]) -> None:
+def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     cols = _columns(conn, "chunks")
     row = {key: value for key, value in values.items() if key in cols}
     if "id" not in row and "chunk_id" in cols:
@@ -66,19 +95,24 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown", **event}
 
 
-def _apply_store(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     raw_content = event.get("content")
     if raw_content is None:
         logger.warning("Skipping malformed store event without content")
-        return
+        return ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed store event with empty content")
-        return
+        return ApplyResult()
     now = datetime.now(timezone.utc).isoformat()
     metadata = {"memory_type": event.get("memory_type", "note")}
     metadata.update(event.get("metadata") or {})
     chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
+    existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    if existing:
+        if str(existing[0]).strip() == content:
+            return ApplyResult(chunk_id=chunk_id)
+        return ApplyResult(collision_chunk_id=chunk_id)
     tags = event.get("tags")
     _insert_chunk(
         conn,
@@ -120,9 +154,10 @@ def _apply_store(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
             )
         else:
             logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
+    return ApplyResult(chunk_id=chunk_id)
 
 
-def _apply_watcher(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
     chunk_id = event.get("chunk_id")
     raw_content = event.get("content")
     if not chunk_id or raw_content is None:
@@ -153,7 +188,7 @@ def _apply_watcher(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     )
 
 
-def _apply_hook(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     raw_content = event.get("content")
     if raw_content is None:
         logger.warning("Skipping malformed hook event without content")
@@ -190,7 +225,7 @@ def _apply_hook(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     )
 
 
-def _apply_enrichment(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     chunk_id = event.get("chunk_id")
     if not chunk_id:
         logger.warning("Skipping malformed enrichment event without chunk_id")
@@ -236,17 +271,18 @@ def _apply_enrichment(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
 
 
-def _apply_event(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
+def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     event = _event_payload(event)
     kind = event.get("kind")
     if kind == "store_memory":
-        _apply_store(conn, event)
+        return _apply_store(conn, event)
     elif kind == "watcher_chunk":
         _apply_watcher(conn, event)
     elif kind == "hook_chunk":
         _apply_hook(conn, event)
     elif kind == "enrichment_update":
         _apply_enrichment(conn, event)
+    return ApplyResult()
 
 
 def _read_events(path: Path) -> list[dict[str, Any]]:
@@ -265,12 +301,69 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
     return events
 
 
-def _table_names(conn: sqlite3.Connection) -> set[str]:
+def _table_names(conn: apsw.Connection) -> set[str]:
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual')")}
 
 
 def _is_busy_error(exc: BaseException) -> bool:
-    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+    return isinstance(exc, apsw.BusyError)
+
+
+def _default_embed_fn() -> Callable[[str], list[float]]:
+    from .embeddings import get_embedding_model
+
+    return get_embedding_model().embed_query
+
+
+def _embedding_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_DRAIN_EMBED", "1").lower() not in {"0", "false", "no"}
+
+
+def _embed_store_chunks(
+    conn: apsw.Connection,
+    chunk_ids: list[str],
+    embed_fn: Callable[[str], list[float]] | None,
+) -> None:
+    if not chunk_ids or "chunk_vectors" not in _table_names(conn):
+        return
+    resolved_embed_fn = embed_fn or _default_embed_fn()
+    unique_chunk_ids = list(dict.fromkeys(chunk_ids))
+    for chunk_id in unique_chunk_ids:
+        try:
+            row = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            if not row:
+                continue
+            embedding_bytes = serialize_f32(resolved_embed_fn(row[0]))
+            conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
+            conn.execute("INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)", (chunk_id, embedding_bytes))
+            if "chunk_vectors_binary" in _table_names(conn):
+                conn.execute("DELETE FROM chunk_vectors_binary WHERE chunk_id = ?", (chunk_id,))
+                conn.execute(
+                    "INSERT INTO chunk_vectors_binary (chunk_id, embedding) VALUES (?, vec_quantize_binary(?))",
+                    (chunk_id, embedding_bytes),
+                )
+        except Exception as exc:
+            logger.warning("Failed to embed drained chunk %s: %s", chunk_id, exc)
+
+
+def _quarantine_file(path: Path, log_path: Path, reason: BaseException) -> None:
+    target = path.with_name(f"{path.name}.bad")
+    if target.exists():
+        target = path.with_name(f"{path.name}.bad-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}")
+    try:
+        path.replace(target)
+        _log(log_path, f"skipped poison queue file {path.name}: {reason}; moved_to={target.name}")
+    except OSError as exc:
+        _log(log_path, f"skipped poison queue file {path.name}: {reason}; quarantine_failed={exc}")
+
+
+def _unlink_processed_file(path: Path, log_path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        _log(log_path, f"drain committed but could not unlink {path}: {exc}")
 
 
 def drain_once(
@@ -279,55 +372,76 @@ def drain_once(
     queue_dir: Path | None = None,
     batch_size: int = 250,
     log_path: Path | None = None,
+    embed_fn: Callable[[str], list[float]] | None = None,
 ) -> int:
     db_path = db_path or _default_db_path()
     queue_dir = queue_dir or _default_queue_dir()
     log_path = log_path or _default_log_path()
     queue_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = queue_dir / ".drain.lock"
 
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    lock_fd = _acquire_queue_lock(queue_dir)
+    try:
         files = sorted(queue_dir.glob("*.jsonl"))[:batch_size]
         if not files:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             return 0
+        _log(log_path, f"queue_depth={len(files)}")
 
         drained = 0
-        for attempt in range(5):
-            conn = sqlite3.connect(db_path, timeout=0.2)
-            attempt_drained = 0
+        collisions_dropped = 0
+        should_embed = _embedding_enabled()
+        for path in files:
             try:
-                conn.execute("PRAGMA busy_timeout=200")
-                conn.execute("BEGIN IMMEDIATE")
-                for path in files:
-                    for event in _read_events(path):
-                        _apply_event(conn, event)
+                events = _read_events(path)
+            except (UnicodeDecodeError, OSError) as exc:
+                _quarantine_file(path, log_path, exc)
+                continue
+            if not events:
+                _unlink_processed_file(path, log_path)
+                continue
+
+            for attempt in range(5):
+                conn = _open_connection(db_path)
+                attempt_drained = 0
+                collision_ids: list[str] = []
+                store_chunk_ids: list[str] = []
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    for event in events:
+                        result = _apply_event(conn, event)
+                        if result.chunk_id:
+                            store_chunk_ids.append(result.chunk_id)
+                        if result.collision_chunk_id:
+                            collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
-                conn.commit()
-                drained = attempt_drained
-                for path in files:
+                    if should_embed:
+                        _embed_store_chunks(conn, store_chunk_ids, embed_fn)
+                    conn.execute("COMMIT")
+                    drained += attempt_drained
+                    collisions_dropped += len(collision_ids)
+                    for chunk_id in collision_ids:
+                        _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
+                    _unlink_processed_file(path, log_path)
+                    break
+                except Exception as exc:
                     try:
-                        path.unlink()
-                    except FileNotFoundError:
+                        conn.execute("ROLLBACK")
+                    except Exception:
                         pass
-                    except OSError as exc:
-                        _log(log_path, f"drain committed but could not unlink {path}: {exc}")
-                break
-            except Exception as exc:
-                conn.rollback()
-                if _is_busy_error(exc) and attempt < 4:
-                    delay = 0.05 * (2**attempt)
-                    _log(log_path, f"drain busy; retrying in {delay:.2f}s")
-                    time.sleep(delay)
-                    continue
-                _log(log_path, f"drain failed: {exc}")
-                return 0
-            finally:
-                conn.close()
+                    if _is_busy_error(exc) and attempt < 4:
+                        delay = 0.05 * (2**attempt)
+                        _log(log_path, f"drain busy; retrying in {delay:.2f}s")
+                        time.sleep(delay)
+                        continue
+                    _log(log_path, f"drain failed for {path.name}: {exc}")
+                    break
+                finally:
+                    conn.close()
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
     if drained:
-        _log(log_path, f"drained={drained}")
+        _log(log_path, f"drained={drained} collisions_dropped={collisions_dropped}")
     return drained
 
 

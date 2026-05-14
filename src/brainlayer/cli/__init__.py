@@ -1,5 +1,6 @@
 """BrainLayer CLI - Command line interface for the knowledge pipeline."""
 
+import hashlib
 import json
 import re as _re
 import sys
@@ -2116,6 +2117,20 @@ def flush() -> None:
                 if not content:
                     skipped += 1
                     continue
+                stable_payload = {
+                    "content": content,
+                    "memory_type": item.get("memory_type", "note"),
+                    "project": item.get("project"),
+                    "tags": item.get("tags"),
+                    "importance": item.get("importance"),
+                }
+                chunk_id = (
+                    item.get("chunk_id")
+                    or "pending-"
+                    + hashlib.sha256(
+                        json.dumps(stable_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest()[:16]
+                )
                 enqueue_store(
                     content=content,
                     memory_type=item.get("memory_type", "note"),
@@ -2134,6 +2149,7 @@ def flush() -> None:
                     function_name=item.get("function_name"),
                     line_number=item.get("line_number"),
                     supersedes=item.get("supersedes"),
+                    chunk_id=chunk_id,
                 )
                 migrated += 1
             queue_path.unlink(missing_ok=True)
