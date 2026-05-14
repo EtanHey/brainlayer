@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brainlayer.drain</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_BIN__</string>
+        <string>__REPO_ROOT__/scripts/drain_daemon.py</string>
+        <string>--interval</string>
+        <string>0.5</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.brainlayer/logs/drain.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.brainlayer/logs/drain.err</string>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+

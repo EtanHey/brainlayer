@@ -61,7 +61,7 @@ def test_hybrid_search_uses_trigram_fts_for_identifier_substrings(tmp_path):
         store.close()
 
 
-def test_vector_store_repairs_partial_trigram_backfill_on_startup(tmp_path):
+def test_vector_store_repairs_partial_trigram_backfill_only_on_explicit_repair(tmp_path):
     db_path = tmp_path / "trigram-repair.db"
     store = VectorStore(db_path)
     try:
@@ -71,10 +71,15 @@ def test_vector_store_repairs_partial_trigram_backfill_on_startup(tmp_path):
     finally:
         store.close()
 
-    repaired = VectorStore(db_path)
+    opened = VectorStore(db_path)
     try:
-        trigram_count = repaired.conn.cursor().execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
-        chunk_count = repaired.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        assert trigram_count == chunk_count == 2
+        trigram_count = opened.conn.cursor().execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+        chunk_count = opened.conn.cursor().execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        assert trigram_count == 1
+        assert chunk_count == 2
+
+        repaired = opened.repair_fts()
+        trigram_count = opened.conn.cursor().execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+        assert repaired["chunks_fts_trigram"] == trigram_count == chunk_count == 2
     finally:
-        repaired.close()
+        opened.close()

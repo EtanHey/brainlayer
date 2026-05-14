@@ -36,6 +36,8 @@
         <string>__BRAINLAYER_DIR__/src</string>
         <key>BRAINLAYER_STALL_TIMEOUT</key>
         <string>300</string>
+        <key>BRAINLAYER_ARBITRATED</key>
+        <string>1</string>
         <key>BRAINLAYER_ENRICH_RATE</key>
         <string>15</string>
         <key>BRAINLAYER_ENRICH_CONCURRENCY</key>

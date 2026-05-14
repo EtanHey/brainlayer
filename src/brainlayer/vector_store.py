@@ -363,14 +363,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             END
         """)
 
-        trigram_count = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
-        chunk_count = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        if trigram_count != chunk_count:
-            cursor.execute("DELETE FROM chunks_fts_trigram")
-            cursor.execute("""
-                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-            """)
+        self._schema_user_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+        if os.environ.get("BRAINLAYER_REPAIR") == "1":
+            self.repair_fts(rebuild_trigram=True)
 
         # ── Tag junction table (replaces json_each scanning) ──────────
         cursor.execute("""
@@ -940,6 +935,19 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         # This prevents "Connection is busy in another thread" when parallel
         # MCP tool calls (e.g., brain_search) hit the same VectorStore.
         self._local = threading.local()
+
+    def repair_fts(self, *, rebuild_trigram: bool = True) -> dict[str, int]:
+        """Run explicit FTS repair work outside normal startup."""
+        cursor = self.conn.cursor()
+        repaired: dict[str, int] = {}
+        if rebuild_trigram:
+            cursor.execute("DELETE FROM chunks_fts_trigram")
+            cursor.execute("""
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+            """)
+            repaired["chunks_fts_trigram"] = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
+        return repaired
 
     def _get_read_conn(self) -> apsw.Connection:
         """Get or create a per-thread readonly connection."""

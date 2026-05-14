@@ -13,6 +13,7 @@ Filtering layers:
 import hashlib
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
+from .queue_io import enqueue_watcher_chunk
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -202,15 +204,15 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
     Returns a callable that takes a list[dict] of raw JSONL entries and
     inserts them as chunks into the database (deferred embedding).
     """
-    resolved_db = db_path or get_db_path()
-    store = VectorStore(resolved_db)
+    arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
+    store = None if arbitrated else VectorStore(db_path or get_db_path())
 
     def flush_to_db(entries: list[dict[str, Any]]) -> None:
         """Process raw JSONL entries through pipeline and insert into DB."""
         import time as _time
 
         flush_start = _time.monotonic()
-        cursor = store.conn.cursor()
+        cursor = None if store is None else store.conn.cursor()
         inserted = 0
         skipped = 0
         source_files_seen: set[str] = set()
@@ -268,34 +270,51 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                         tags = json.dumps(correction_tags)
 
                 try:
-                    cursor.execute(
-                        """INSERT OR IGNORE INTO chunks
-                           (id, content, metadata, source_file, project,
-                            content_type, value_type, char_count, source,
-                            created_at, conversation_id, sender, tags)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            chunk_id,
-                            clean_content,
-                            json.dumps(chunk.metadata),
-                            source_file,
-                            project,
-                            chunk.content_type.value,
-                            chunk.value.value,
-                            len(clean_content),
-                            "realtime_watcher",
-                            created_at,
-                            conversation_id,
-                            chunk.metadata.get("sender"),
-                            tags,
-                        ),
-                    )
-                    if store.conn.changes() > 0:
+                    if arbitrated:
+                        enqueue_watcher_chunk(
+                            chunk_id=chunk_id,
+                            content=clean_content,
+                            metadata=chunk.metadata,
+                            source_file=source_file,
+                            project=project,
+                            content_type=chunk.content_type.value,
+                            value_type=chunk.value.value,
+                            created_at=created_at,
+                            conversation_id=conversation_id,
+                            sender=chunk.metadata.get("sender"),
+                            tags=json.loads(tags) if tags else None,
+                        )
                         inserted += 1
                     else:
-                        skipped += 1
+                        assert cursor is not None and store is not None
+                        cursor.execute(
+                            """INSERT OR IGNORE INTO chunks
+                               (id, content, metadata, source_file, project,
+                                content_type, value_type, char_count, source,
+                                created_at, conversation_id, sender, tags)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                chunk_id,
+                                clean_content,
+                                json.dumps(chunk.metadata),
+                                source_file,
+                                project,
+                                chunk.content_type.value,
+                                chunk.value.value,
+                                len(clean_content),
+                                "realtime_watcher",
+                                created_at,
+                                conversation_id,
+                                chunk.metadata.get("sender"),
+                                tags,
+                            ),
+                        )
+                        if store.conn.changes() > 0:
+                            inserted += 1
+                        else:
+                            skipped += 1
                 except Exception as e:
-                    logger.warning("Insert failed for %s: %s", chunk_id, e)
+                    logger.warning("Queue/write failed for %s: %s", chunk_id, e)
                     skipped += 1
 
         latency_ms = (_time.monotonic() - flush_start) * 1000
