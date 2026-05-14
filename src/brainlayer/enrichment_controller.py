@@ -164,6 +164,39 @@ def _submit_write(store, name: str, callback) -> Any:
     return _get_store_write_queue(store).submit(name, callback).result()
 
 
+def _arbitrated_writes_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_ARBITRATED") == "1"
+
+
+def _enqueue_enrichment_write(chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+    from .queue_io import enqueue_enrichment_update
+
+    content = chunk.get("content", "")
+    try:
+        enqueue_enrichment_update(
+            chunk_id=chunk["id"],
+            enrichment=enrichment,
+            content_hash=_content_hash(content) if content else None,
+            entities=enrichment.get("entities", []),
+        )
+    except Exception:
+        logger.exception("Failed to enqueue enrichment update for chunk %s", chunk.get("id"))
+        raise
+
+
+def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
+    tags = _normalize_chunk_tags(chunk.get("tags"))
+    if "meta-research" not in tags:
+        tags.append("meta-research")
+    _enqueue_enrichment_write(
+        chunk,
+        {
+            "summary": None,
+            "tags": tags,
+        },
+    )
+
+
 def _ensure_enrichment_columns(store) -> None:
     key = _store_queue_key(store)
     with _ENRICHMENT_COLUMN_LOCK:
@@ -639,7 +672,10 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             return None
 
         if is_meta_research(chunk.get("content", "")):
-            _submit_write(store, f"mark-meta:{chunk_id}", lambda: _mark_meta_research(store, chunk))
+            if _arbitrated_writes_enabled():
+                _enqueue_meta_research_write(chunk)
+            else:
+                _submit_write(store, f"mark-meta:{chunk_id}", lambda: _mark_meta_research(store, chunk))
             logger.info("enrich_single: tagged %s as meta-research without Gemini", chunk_id)
             return None
 
@@ -680,7 +716,12 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             return None
 
         try:
-            _submit_write(store, f"apply-enrichment:{chunk_id}", lambda: _apply_enrichment(store, chunk, enrichment))
+            if _arbitrated_writes_enabled():
+                _enqueue_enrichment_write(chunk, enrichment)
+            else:
+                _submit_write(
+                    store, f"apply-enrichment:{chunk_id}", lambda: _apply_enrichment(store, chunk, enrichment)
+                )
         except Exception as exc:
             logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
             return None
@@ -811,9 +852,12 @@ def enrich_realtime(
                     result.skipped += 1
                     continue
                 if status == "meta":
-                    _submit_write(
-                        store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
-                    )
+                    if _arbitrated_writes_enabled():
+                        _enqueue_meta_research_write(chunk)
+                    else:
+                        _submit_write(
+                            store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                        )
                     result.skipped += 1
                     continue
                 if status == "error":
@@ -822,11 +866,14 @@ def enrich_realtime(
                     _emit_enrichment_error("realtime", chunk["id"], str(data))
                     continue
 
-                _submit_write(
-                    store,
-                    f"apply-enrichment:{chunk['id']}",
-                    lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
-                )
+                if _arbitrated_writes_enabled():
+                    _enqueue_enrichment_write(chunk, data)
+                else:
+                    _submit_write(
+                        store,
+                        f"apply-enrichment:{chunk['id']}",
+                        lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
+                    )
                 result.enriched += 1
 
         duration_ms = (time.monotonic() - start_time) * 1000
@@ -877,7 +924,12 @@ def enrich_batch(
 
         for chunk in candidates:
             if is_meta_research(chunk.get("content", "")):
-                _submit_write(store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk))
+                if _arbitrated_writes_enabled():
+                    _enqueue_meta_research_write(chunk)
+                else:
+                    _submit_write(
+                        store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                    )
                 result.skipped += 1
                 continue
             if _is_duplicate_content(store, chunk.get("content", "")):
@@ -908,11 +960,14 @@ def enrich_batch(
                     result.errors.append(f"{chunk['id']}: invalid_enrichment")
                     _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
                     continue
-                _submit_write(
-                    store,
-                    f"apply-enrichment:{chunk['id']}",
-                    lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
-                )
+                if _arbitrated_writes_enabled():
+                    _enqueue_enrichment_write(chunk, enrichment)
+                else:
+                    _submit_write(
+                        store,
+                        f"apply-enrichment:{chunk['id']}",
+                        lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
+                    )
                 result.enriched += 1
             except Exception as exc:
                 result.failed += 1

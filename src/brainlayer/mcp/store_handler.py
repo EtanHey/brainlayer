@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import threading
 
 import apsw
@@ -388,6 +389,14 @@ def _queue_store(item: dict) -> None:
     Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
     are dropped to make room.
     """
+    try:
+        from ..queue_io import enqueue_store
+
+        enqueue_store(**item, source="mcp")
+        return
+    except Exception:
+        logger.debug("Unified queue write failed; falling back to pending-stores.jsonl", exc_info=True)
+
     path = _get_pending_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -491,6 +500,42 @@ async def _store(
     A background task embeds pending chunks after the response is sent.
     """
     try:
+        if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
+            from ..pipeline.classify import looks_like_system_prompt
+            from ..search_repo import clear_hybrid_search_cache
+            from ..store import VALID_MEMORY_TYPES
+
+            if not content or not content.strip():
+                raise ValueError("content must be non-empty")
+            content = content.strip()
+            if memory_type not in VALID_MEMORY_TYPES:
+                raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
+            if looks_like_system_prompt(content):
+                raise ValueError("system prompt content is not stored in BrainLayer")
+            _queue_store(
+                {
+                    "content": content,
+                    "memory_type": memory_type,
+                    "project": _normalize_project_name(project),
+                    "tags": tags,
+                    "importance": importance,
+                    "confidence_score": confidence_score,
+                    "outcome": outcome,
+                    "reversibility": reversibility,
+                    "files_changed": files_changed,
+                    "entity_id": entity_id,
+                    "status": status,
+                    "severity": severity,
+                    "file_path": file_path,
+                    "function_name": function_name,
+                    "line_number": line_number,
+                    "supersedes": supersedes,
+                }
+            )
+            clear_hybrid_search_cache()
+            structured = {"chunk_id": "queued", "related": []}
+            return ([TextContent(type="text", text=format_store_result("queued", queued=True))], structured)
+
         from ..store import embed_pending_chunks, store_memory
 
         store = _get_vector_store()

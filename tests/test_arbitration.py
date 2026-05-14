@@ -1,0 +1,418 @@
+import json
+import multiprocessing as mp
+import re
+import sqlite3
+import time
+from pathlib import Path
+
+import apsw
+import sqlite_vec
+
+
+def _producer(queue_dir: str, worker_id: int, count: int) -> None:
+    from brainlayer.queue_io import enqueue_store
+
+    for index in range(count):
+        enqueue_store(
+            content=f"arbitration worker={worker_id} item={index}",
+            memory_type="note",
+            project="arbitration-test",
+            tags=["arbitration", f"worker-{worker_id}"],
+            importance=7,
+            queue_dir=Path(queue_dir),
+            source="test",
+        )
+
+
+def _create_minimal_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                enriched_at TEXT,
+                summary TEXT,
+                tags TEXT,
+                importance REAL,
+                superseded_by TEXT
+            );
+            CREATE TABLE kg_entities (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE kg_entity_chunks (
+                entity_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                relevance REAL DEFAULT 1.0,
+                context TEXT,
+                PRIMARY KEY (entity_id, chunk_id)
+            );
+            CREATE TABLE chunk_vectors (
+                chunk_id TEXT PRIMARY KEY,
+                embedding BLOB
+            );
+            CREATE TABLE chunk_vectors_binary (
+                chunk_id TEXT PRIMARY KEY,
+                embedding BLOB
+            );
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
+            );
+            CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(content, summary, tags, chunk_id)
+                VALUES (new.content, new.summary, new.tags, new.id);
+            END;
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _connect_apsw(path: Path) -> apsw.Connection:
+    conn = apsw.Connection(str(path))
+    conn.enableloadextension(True)
+    conn.loadextension(sqlite_vec.loadable_path())
+    conn.enableloadextension(False)
+    return conn
+
+
+def _create_vec_db(path: Path) -> None:
+    conn = _connect_apsw(path)
+    try:
+        conn.execute("""
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                enriched_at TEXT,
+                summary TEXT,
+                tags TEXT,
+                importance REAL
+            )
+        """)
+        conn.execute("""
+            CREATE VIRTUAL TABLE chunk_vectors USING vec0(
+                chunk_id TEXT PRIMARY KEY,
+                embedding FLOAT[1024]
+            )
+        """)
+        conn.execute("""
+            CREATE VIRTUAL TABLE chunk_vectors_binary USING vec0(
+                chunk_id TEXT PRIMARY KEY,
+                embedding BIT[1024]
+            )
+        """)
+    finally:
+        conn.close()
+
+
+def test_drain_default_queue_dir_expands_env_tilde(monkeypatch):
+    from brainlayer.drain import _default_queue_dir
+
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", "~/brainlayer-arbitration-test")
+
+    queue_dir = _default_queue_dir()
+
+    assert "~" not in str(queue_dir)
+    assert queue_dir == Path.home() / "brainlayer-arbitration-test"
+
+
+def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    workers = [mp.Process(target=_producer, args=(str(queue_dir), worker, 1000)) for worker in range(3)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    deadline = time.monotonic() + 15
+    total_drained = 0
+    while time.monotonic() < deadline:
+        total_drained += drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=250, log_path=log_path)
+        with _connect_apsw(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM chunks WHERE project = 'arbitration-test'").fetchone()[0]
+            fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'arbitration'").fetchone()[
+                0
+            ]
+        if count == 3000 and fts_count == 3000:
+            break
+        time.sleep(0.05)
+
+    assert total_drained == 3000
+    assert count == 3000
+    assert fts_count == 3000
+    assert not list(queue_dir.glob("*.jsonl"))
+    assert "database is locked" not in log_path.read_text(encoding="utf-8").lower()
+
+
+def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('old-id', 'old content', '{}', 'seed')
+            """
+        )
+        conn.execute("INSERT INTO kg_entities (id, name) VALUES ('person-1', 'Person One')")
+        conn.commit()
+
+    queued_path = enqueue_store(
+        content="replacement content",
+        project="arbitration-test",
+        source="../unsafe/source",
+        supersedes="old-id",
+        entity_id="person-1",
+        queue_dir=queue_dir,
+    )
+
+    assert queued_path.parent == queue_dir
+    assert ".." not in queued_path.name
+    assert "/" not in queued_path.name
+    assert re.fullmatch(r"[A-Za-z0-9_.-]+", queued_path.name)
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        replacement_id = conn.execute("SELECT id FROM chunks WHERE content = 'replacement content'").fetchone()[0]
+        superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
+        entity_link = conn.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'person-1'").fetchone()[0]
+
+    assert superseded_by == replacement_id
+    assert entity_link == replacement_id
+
+
+def test_drain_embeds_every_queued_store(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+
+    for index in range(3):
+        enqueue_store(
+            content=f"queued semantic memory {index}",
+            project="arbitration-test",
+            source="mcp",
+            queue_dir=queue_dir,
+        )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, embed_fn=lambda text: [0.1] * 1024) == 3
+
+    deadline = time.monotonic() + 2
+    vector_count = 0
+    binary_count = 0
+    while time.monotonic() < deadline:
+        with _connect_apsw(db_path) as conn:
+            vector_count = conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0]
+            binary_count = conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary").fetchone()[0]
+        if vector_count == 3 and binary_count == 3:
+            break
+        time.sleep(0.05)
+
+    assert vector_count == 3
+    assert binary_count == 3
+
+
+def test_drain_ignores_non_object_store_metadata(tmp_path):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    (queue_dir / "store.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "bad-meta",
+                "content": "queued memory with bad metadata",
+                "memory_type": "note",
+                "metadata": "not-a-dict",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        row = conn.execute("SELECT metadata FROM chunks WHERE id = 'bad-meta'").fetchone()
+
+    assert json.loads(row[0]) == {"memory_type": "note"}
+
+
+def test_drain_loads_sqlite_vec_for_vec0_tables(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_vec_db(db_path)
+
+    enqueue_store(
+        content="queued memory requiring sqlite vec",
+        project="arbitration-test",
+        source="mcp",
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM chunk_vectors_binary").fetchone()[0] == 1
+
+
+def test_poison_queue_file_does_not_rollback_good_file(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    _create_minimal_db(db_path)
+
+    good_path = enqueue_store(
+        content="good memory survives poison",
+        project="arbitration-test",
+        source="mcp",
+        queue_dir=queue_dir,
+    )
+    poison_path = queue_dir / "poison.jsonl"
+    poison_path.write_bytes(b"\xff\xff")
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, log_path=log_path, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        stored = conn.execute("SELECT COUNT(*) FROM chunks WHERE content = 'good memory survives poison'").fetchone()[0]
+
+    assert stored == 1
+    assert not good_path.exists()
+    assert not poison_path.exists()
+    assert list(queue_dir.glob("poison.jsonl.bad*"))
+    assert "poison" in log_path.read_text(encoding="utf-8").lower()
+
+
+def test_chunk_id_collision_is_logged_and_dropped(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    _create_minimal_db(db_path)
+    with _connect_apsw(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('coll', 'ORIGINAL', '{}', 'seed')
+            """
+        )
+
+    enqueue_store(
+        content="QUEUED REPLACEMENT",
+        project="arbitration-test",
+        source="mcp",
+        queue_dir=queue_dir,
+        chunk_id="coll",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, log_path=log_path, embed_fn=lambda text: [0.1] * 1024) == 1
+
+    with _connect_apsw(db_path) as conn:
+        content = conn.execute("SELECT content FROM chunks WHERE id = 'coll'").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM chunks WHERE id = 'coll'").fetchone()[0]
+
+    log_text = log_path.read_text(encoding="utf-8").lower()
+    assert content == "ORIGINAL"
+    assert count == 1
+    assert not list(queue_dir.glob("*.jsonl"))
+    assert "collided" in log_text
+    assert "collisions_dropped=1" in log_text
+
+
+def test_drain_lock_does_not_depend_on_deletable_lock_file(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    enqueue_store(
+        content="lock sentinel memory",
+        project="arbitration-test",
+        source="mcp",
+        queue_dir=queue_dir,
+    )
+
+    stale_lock = queue_dir / ".drain.lock"
+    stale_lock.write_text("stale", encoding="utf-8")
+    stale_lock.unlink()
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir) == 1
+    assert not stale_lock.exists()
+
+    with _connect_apsw(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM chunks WHERE content = 'lock sentinel memory'").fetchone()[0]
+    assert count == 1
+
+
+def test_flush_migrates_legacy_pending_stores_idempotently(tmp_path, monkeypatch):
+    from brainlayer.cli import flush
+    from brainlayer.paths import get_db_path
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    pending_path = db_path.parent / "pending-stores.jsonl"
+    pending_path.write_text('{"content":"legacy pending memory","memory_type":"note","project":"arbitration-test"}\n')
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    assert get_db_path() == db_path
+
+    flush()
+    pending_path.write_text('{"content":"legacy pending memory","memory_type":"note","project":"arbitration-test"}\n')
+    flush()
+
+    with _connect_apsw(db_path) as conn:
+        rows = conn.execute("SELECT id FROM chunks WHERE content = 'legacy pending memory'").fetchall()
+
+    assert len(rows) == 1

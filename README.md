@@ -146,6 +146,10 @@ bash brain-bar/build-app.sh    # Build, sign, install LaunchAgent
 
 Requires the BrainLayer MCP server. The build script refuses non-canonical checkouts and dirty trees by default ([#265](https://github.com/EtanHey/brainlayer/pull/265)) and stamps each bundle with `GitCommit`, `GitDescribe`, and `BuildTimeUTC` in `Info.plist` ([#264](https://github.com/EtanHey/brainlayer/pull/264)) so a stale install is diagnosable in seconds.
 
+## Writer Arbitration
+
+Background producers run with `BRAINLAYER_ARBITRATED=1` and append writes to `~/.brainlayer/queue/`; `com.brainlayer.drain.plist` drains that queue every 500ms as the single writer. Trigram FTS maintenance is explicit via `brainlayer repair-fts` and the weekly `com.brainlayer.repair-fts.plist`, not synchronous startup work. See [docs/arbitration.md](docs/arbitration.md).
+
 ## Recent Hardening (2026-04-15 → 2026-05-02)
 
 Two-week stability sprint behind the next presentation. Every line below traces to a merged PR.

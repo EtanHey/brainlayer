@@ -1,5 +1,7 @@
 """BrainLayer CLI - Command line interface for the knowledge pipeline."""
 
+import hashlib
+import json
 import re as _re
 import sys
 import time
@@ -1053,6 +1055,20 @@ def wal_checkpoint(
         raise typer.Exit(1)
 
 
+@app.command("repair-fts")
+def repair_fts() -> None:
+    """Explicitly rebuild FTS maintenance tables outside normal startup."""
+    from ..paths import get_db_path
+    from ..vector_store import VectorStore
+
+    store = VectorStore(get_db_path())
+    try:
+        result = store.repair_fts(rebuild_trigram=True)
+    finally:
+        store.close()
+    console.print_json(data=result)
+
+
 @app.command("enrich-sessions")
 def enrich_sessions(
     project: str = typer.Option(None, "--project", "-p", help="Only enrich sessions from this project"),
@@ -2077,36 +2093,82 @@ def hooks(
 
 @app.command("flush")
 def flush() -> None:
-    """Flush pending-stores.jsonl (queued items from DB lock errors)."""
-    from ..paths import DEFAULT_DB_PATH
+    """Flush pending store queues and the unified arbitration queue."""
+    from ..drain import drain_once
+    from ..paths import get_db_path
+    from ..queue_io import enqueue_store, get_queue_dir
 
-    queue_path = DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
-    if not queue_path.exists():
-        rprint("[dim]No pending stores to flush.[/]")
-        return
+    db_path = get_db_path()
+    queue_path = db_path.parent / "pending-stores.jsonl"
+    migrated = 0
+    skipped = 0
+    try:
+        if queue_path.exists():
+            lines = queue_path.read_text().strip().splitlines()
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped += 1
+                    continue
+                content = item.get("content")
+                if not content:
+                    skipped += 1
+                    continue
+                stable_payload = {
+                    "content": content,
+                    "memory_type": item.get("memory_type", "note"),
+                    "project": item.get("project"),
+                    "tags": item.get("tags"),
+                    "importance": item.get("importance"),
+                }
+                chunk_id = (
+                    item.get("chunk_id")
+                    or "pending-"
+                    + hashlib.sha256(
+                        json.dumps(stable_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest()[:16]
+                )
+                enqueue_store(
+                    content=content,
+                    memory_type=item.get("memory_type", "note"),
+                    project=item.get("project"),
+                    tags=item.get("tags"),
+                    importance=item.get("importance"),
+                    source="pending",
+                    confidence_score=item.get("confidence_score"),
+                    outcome=item.get("outcome"),
+                    reversibility=item.get("reversibility"),
+                    files_changed=item.get("files_changed"),
+                    entity_id=item.get("entity_id"),
+                    status=item.get("status"),
+                    severity=item.get("severity"),
+                    file_path=item.get("file_path"),
+                    function_name=item.get("function_name"),
+                    line_number=item.get("line_number"),
+                    supersedes=item.get("supersedes"),
+                    chunk_id=chunk_id,
+                )
+                migrated += 1
+            queue_path.unlink(missing_ok=True)
 
-    lines = queue_path.read_text().strip().splitlines()
-    if not lines:
-        rprint("[dim]Queue is empty.[/]")
-        queue_path.unlink(missing_ok=True)
-        return
+        queue_dir = get_queue_dir()
+        drained = 0
+        while True:
+            count = drain_once(db_path=db_path, queue_dir=queue_dir)
+            if count == 0:
+                break
+            drained += count
+    except Exception as exc:
+        rprint(f"[bold red]Error flushing queues:[/] {exc}")
+        raise typer.Exit(1)
 
-    rprint(f"[bold]Flushing {len(lines)} queued store(s)...[/]")
-
-    from ..embeddings import get_embedding_model
-    from ..mcp import _flush_pending_stores
-    from ..vector_store import VectorStore
-
-    store = VectorStore(DEFAULT_DB_PATH)
-    model = get_embedding_model()
-
-    flushed = _flush_pending_stores(store, model.embed_query)
-    store.close()
-
-    rprint(f"[green]Flushed {flushed} item(s).[/]")
-    remaining = len(lines) - flushed
-    if remaining > 0:
-        rprint(f"[yellow]{remaining} item(s) still pending (DB may still be locked).[/]")
+    rprint(
+        f"[green]Migrated {migrated} pending store(s); drained {drained} unified queue item(s); "
+        f"skipped {skipped} malformed item(s).[/]"
+    )
 
 
 @app.command("code-intel")

@@ -27,53 +27,37 @@ class TestQueueStore:
     """JSONL queue for buffering writes when DB is locked."""
 
     def test_queue_store_writes_jsonl(self, tmp_path):
-        """_queue_store writes a JSONL line to the pending file."""
-        with patch(
-            "brainlayer.mcp.store_handler._get_pending_store_path",
-            return_value=tmp_path / "pending-stores.jsonl",
-        ):
+        """_queue_store writes to the unified arbitration queue."""
+        with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
             _queue_store({"content": "test memory", "memory_type": "note"})
 
-        path = tmp_path / "pending-stores.jsonl"
-        assert path.exists()
-        lines = path.read_text().strip().splitlines()
+        files = list(tmp_path.glob("mcp-*.jsonl"))
+        assert len(files) == 1
+        lines = files[0].read_text().strip().splitlines()
         assert len(lines) == 1
         item = json.loads(lines[0])
+        assert item["kind"] == "store_memory"
         assert item["content"] == "test memory"
         assert item["memory_type"] == "note"
 
     def test_queue_store_appends(self, tmp_path):
-        """Multiple queue calls append, not overwrite."""
-        with patch(
-            "brainlayer.mcp.store_handler._get_pending_store_path",
-            return_value=tmp_path / "pending-stores.jsonl",
-        ):
+        """Multiple queue calls create independent durable files."""
+        with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
             _queue_store({"content": "first", "memory_type": "note"})
             _queue_store({"content": "second", "memory_type": "learning"})
 
-        lines = (tmp_path / "pending-stores.jsonl").read_text().strip().splitlines()
-        assert len(lines) == 2
+        files = sorted(tmp_path.glob("mcp-*.jsonl"))
+        assert len(files) == 2
+        contents = {json.loads(path.read_text())["content"] for path in files}
+        assert contents == {"first", "second"}
 
-    def test_queue_max_size_drops_oldest(self, tmp_path):
-        """Queue respects max size limit and drops oldest items."""
-        pending_path = tmp_path / "pending-stores.jsonl"
-        with patch(
-            "brainlayer.mcp.store_handler._get_pending_store_path",
-            return_value=pending_path,
-        ):
-            # Queue 105 items (over the 100 limit)
+    def test_queue_store_keeps_burst_items(self, tmp_path):
+        """Unified queue keeps burst items as separate files."""
+        with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
             for i in range(105):
                 _queue_store({"content": f"item-{i}", "memory_type": "note"})
 
-        lines = pending_path.read_text().strip().splitlines()
-        # Should be exactly 100, with oldest 5 dropped
-        assert len(lines) == 100
-        # First retained item should be item-5 (oldest 5 dropped)
-        first_item = json.loads(lines[0])
-        assert first_item["content"] == "item-5"
-        # Last item should be the newest
-        last_item = json.loads(lines[-1])
-        assert last_item["content"] == "item-104"
+        assert len(list(tmp_path.glob("mcp-*.jsonl"))) == 105
 
 
 class TestSingleWriterQueue:
@@ -230,7 +214,7 @@ class TestStoreRetryOnLock:
         """When store_memory raises BusyError, the item is queued to JSONL."""
         from brainlayer.mcp.store_handler import _store
 
-        pending_path = tmp_path / "pending-stores.jsonl"
+        queue_dir = tmp_path / "queue"
 
         with (
             patch("brainlayer.mcp.store_handler._get_vector_store") as mock_vs,
@@ -238,10 +222,7 @@ class TestStoreRetryOnLock:
             patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
             # store_memory is imported inside _store via `from ..store import store_memory`
             patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("locked")),
-            patch(
-                "brainlayer.mcp.store_handler._get_pending_store_path",
-                return_value=pending_path,
-            ),
+            patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
         ):
             mock_em.return_value.embed_query.return_value = [0.1] * 1024
 
@@ -256,10 +237,41 @@ class TestStoreRetryOnLock:
         assert structured["chunk_id"] == "queued"
         assert any("queued" in t.text.lower() for t in texts)
 
-        # Should have written to JSONL
-        assert pending_path.exists()
-        item = json.loads(pending_path.read_text().strip())
+        # Should have written to the unified queue
+        files = list(queue_dir.glob("mcp-*.jsonl"))
+        assert len(files) == 1
+        item = json.loads(files[0].read_text().strip())
+        assert item["kind"] == "store_memory"
         assert item["content"] == "test memory"
+
+    @pytest.mark.asyncio
+    async def test_arbitrated_store_validates_before_queueing(self, tmp_path, monkeypatch):
+        """Arbitrated store should not report queued success for invalid content."""
+        from brainlayer.mcp.store_handler import _store
+
+        monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+        with patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path):
+            result = await _store(content="  ", memory_type="note", project="test")
+
+        assert result.isError is True
+        assert "content must be non-empty" in result.content[0].text
+        assert not list(tmp_path.glob("mcp-*.jsonl"))
+
+    @pytest.mark.asyncio
+    async def test_arbitrated_store_clears_search_cache(self, tmp_path, monkeypatch):
+        """Queued stores invalidate local search cache even before the drain writes."""
+        from brainlayer.mcp.store_handler import _store
+
+        monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+        with (
+            patch("brainlayer.queue_io.get_queue_dir", return_value=tmp_path),
+            patch("brainlayer.search_repo.clear_hybrid_search_cache") as clear_cache,
+        ):
+            texts, structured = await _store(content="queued cache invalidation", memory_type="note", project="test")
+
+        assert structured["chunk_id"] == "queued"
+        assert any("queued" in item.text.lower() for item in texts)
+        clear_cache.assert_called_once_with()
 
 
 class TestBrainUpdateRetryOnLock:

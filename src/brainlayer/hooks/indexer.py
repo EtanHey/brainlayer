@@ -13,11 +13,12 @@ Designed to swap backend from direct DB to BrainBar socket when it merges.
 """
 
 import hashlib
-import json
 import logging
 import sqlite3
 import time
 from pathlib import Path
+
+from ..queue_io import enqueue_hook_chunk, get_queue_dir
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class RealtimeIndexer:
 
     def __init__(self, db_path: str | None = None, queue_dir: str | None = None):
         self.db_path = db_path
-        self.queue_dir = queue_dir
+        self.queue_dir = queue_dir or str(get_queue_dir())
         self.pending_prompts: dict[str, dict] = {}
         self._db: sqlite3.Connection | None = None
         self._init_db()
@@ -204,18 +205,14 @@ class RealtimeIndexer:
         """Fallback: write to queue directory when DB is unavailable."""
         if not self.queue_dir:
             return
-        queue_path = Path(self.queue_dir)
-        queue_path.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "session_id": session_id,
-            "content": content,
-            "content_hash": content_hash,
-            "project": project,
-            "timestamp": time.time(),
-        }
-        queue_file = queue_path / f"{session_id}.jsonl"
-        with open(queue_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        enqueue_hook_chunk(
+            session_id=session_id,
+            content=content,
+            content_hash=content_hash,
+            project=project,
+            timestamp=time.time(),
+            queue_dir=Path(self.queue_dir),
+        )
 
     def close(self):
         """Close the database connection."""
