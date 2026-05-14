@@ -1057,10 +1057,10 @@ def wal_checkpoint(
 @app.command("repair-fts")
 def repair_fts() -> None:
     """Explicitly rebuild FTS maintenance tables outside normal startup."""
-    from ..paths import DEFAULT_DB_PATH
+    from ..paths import get_db_path
     from ..vector_store import VectorStore
 
-    store = VectorStore(DEFAULT_DB_PATH)
+    store = VectorStore(get_db_path())
     try:
         result = store.repair_fts(rebuild_trigram=True)
     finally:
@@ -2094,10 +2094,11 @@ def hooks(
 def flush() -> None:
     """Flush pending store queues and the unified arbitration queue."""
     from ..drain import drain_once
-    from ..paths import DEFAULT_DB_PATH
+    from ..paths import get_db_path
     from ..queue_io import enqueue_store, get_queue_dir
 
-    queue_path = DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
+    db_path = get_db_path()
+    queue_path = db_path.parent / "pending-stores.jsonl"
     migrated = 0
     skipped = 0
     try:
@@ -2106,7 +2107,11 @@ def flush() -> None:
             for line in lines:
                 if not line.strip():
                     continue
-                item = json.loads(line)
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped += 1
+                    continue
                 content = item.get("content")
                 if not content:
                     skipped += 1
@@ -2136,7 +2141,7 @@ def flush() -> None:
         queue_dir = get_queue_dir()
         drained = 0
         while True:
-            count = drain_once(db_path=DEFAULT_DB_PATH, queue_dir=queue_dir)
+            count = drain_once(db_path=db_path, queue_dir=queue_dir)
             if count == 0:
                 break
             drained += count

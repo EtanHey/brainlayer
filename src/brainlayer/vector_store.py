@@ -938,16 +938,38 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def repair_fts(self, *, rebuild_trigram: bool = True) -> dict[str, int]:
         """Run explicit FTS repair work outside normal startup."""
-        cursor = self.conn.cursor()
-        repaired: dict[str, int] = {}
-        if rebuild_trigram:
-            cursor.execute("DELETE FROM chunks_fts_trigram")
-            cursor.execute("""
-                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
-                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
-            """)
-            repaired["chunks_fts_trigram"] = cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram").fetchone()[0]
-        return repaired
+        for attempt in range(5):
+            cursor = self.conn.cursor()
+            repaired: dict[str, int] = {}
+            transaction_started = False
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(FULL)")
+                cursor.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                if rebuild_trigram:
+                    cursor.execute("DELETE FROM chunks_fts_trigram")
+                    cursor.execute("""
+                        INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                        SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+                    """)
+                    repaired["chunks_fts_trigram"] = cursor.execute(
+                        "SELECT COUNT(*) FROM chunks_fts_trigram"
+                    ).fetchone()[0]
+                cursor.execute("COMMIT")
+                transaction_started = False
+                cursor.execute("PRAGMA wal_checkpoint(FULL)")
+                return repaired
+            except apsw.BusyError:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                if attempt == 4:
+                    raise
+                time.sleep(0.2 * (2**attempt))
+            except Exception:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                raise
+        return {}
 
     def _get_read_conn(self) -> apsw.Connection:
         """Get or create a per-thread readonly connection."""

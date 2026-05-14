@@ -15,11 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .paths import get_db_path
+
 logger = logging.getLogger(__name__)
 
 
 def _default_db_path() -> Path:
-    return Path(os.environ.get("BRAINLAYER_DB", Path.home() / ".local/share/brainlayer/brainlayer.db"))
+    return get_db_path()
 
 
 def _default_queue_dir() -> Path:
@@ -101,11 +103,23 @@ def _apply_store(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     cols = _columns(conn, "chunks")
     if supersedes and "superseded_by" in cols:
         conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (chunk_id, supersedes))
-        for vector_table in ("chunk_vectors_dense", "chunk_vectors_binary"):
+        for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
             if conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
             ).fetchone():
                 conn.execute(f"DELETE FROM {vector_table} WHERE chunk_id = ?", (supersedes,))
+    entity_id = event.get("entity_id") or metadata.get("entity_id")
+    if entity_id and {"kg_entities", "kg_entity_chunks"}.issubset(_table_names(conn)):
+        if conn.execute("SELECT id FROM kg_entities WHERE id = ?", (entity_id,)).fetchone():
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
+                VALUES (?, ?, ?, ?)
+                """,
+                (entity_id, chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
+            )
+        else:
+            logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
 
 
 def _apply_watcher(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
@@ -151,6 +165,12 @@ def _apply_hook(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     content_hash = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
     session_id = event.get("session_id") or "unknown"
     chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{content_hash}"
+    ts_raw = event.get("timestamp")
+    try:
+        timestamp = float(ts_raw) if ts_raw is not None else time.time()
+    except (TypeError, ValueError):
+        logger.warning("Invalid hook timestamp %r; using current time", ts_raw)
+        timestamp = time.time()
     _insert_chunk(
         conn,
         {
@@ -163,9 +183,7 @@ def _apply_hook(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
             "value_type": "HIGH",
             "char_count": len(content),
             "source": "realtime",
-            "created_at": datetime.fromtimestamp(
-                float(event.get("timestamp") or time.time()), timezone.utc
-            ).isoformat(),
+            "created_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
             "conversation_id": session_id,
             "importance": 5,
         },
@@ -191,7 +209,7 @@ def _apply_enrichment(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
         "sentiment_score": "sentiment_score",
     }
     for key, col in mappings.items():
-        if col in cols and enrichment.get(key) is not None:
+        if col in cols and key in enrichment:
             updates[col] = enrichment[key]
     for key in ("tags", "primary_symbols", "external_deps", "key_facts", "resolved_queries", "sentiment_signals"):
         if key in cols and enrichment.get(key) is not None:
@@ -236,10 +254,23 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if line.strip():
             try:
-                events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError as exc:
                 logger.warning("Skipping malformed JSON in %s:%d: %s", path, lineno, exc)
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+            else:
+                logger.warning("Skipping non-object JSON in %s:%d", path, lineno)
     return events
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual')")}
+
+
+def _is_busy_error(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
 
 def drain_once(
@@ -254,7 +285,6 @@ def drain_once(
     log_path = log_path or _default_log_path()
     queue_dir.mkdir(parents=True, exist_ok=True)
     lock_path = queue_dir / ".drain.lock"
-    drained = 0
 
     with lock_path.open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -263,27 +293,38 @@ def drain_once(
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             return 0
 
-        conn = sqlite3.connect(db_path, timeout=0.2)
-        try:
-            conn.execute("PRAGMA busy_timeout=200")
-            conn.execute("BEGIN IMMEDIATE")
-            for path in files:
-                for event in _read_events(path):
-                    _apply_event(conn, event)
-                    drained += 1
-            conn.commit()
-            for path in files:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-        except Exception as exc:
-            conn.rollback()
-            _log(log_path, f"drain failed: {exc}")
-            return 0
-        finally:
-            conn.close()
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        drained = 0
+        for attempt in range(5):
+            conn = sqlite3.connect(db_path, timeout=0.2)
+            attempt_drained = 0
+            try:
+                conn.execute("PRAGMA busy_timeout=200")
+                conn.execute("BEGIN IMMEDIATE")
+                for path in files:
+                    for event in _read_events(path):
+                        _apply_event(conn, event)
+                        attempt_drained += 1
+                conn.commit()
+                drained = attempt_drained
+                for path in files:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        _log(log_path, f"drain committed but could not unlink {path}: {exc}")
+                break
+            except Exception as exc:
+                conn.rollback()
+                if _is_busy_error(exc) and attempt < 4:
+                    delay = 0.05 * (2**attempt)
+                    _log(log_path, f"drain busy; retrying in {delay:.2f}s")
+                    time.sleep(delay)
+                    continue
+                _log(log_path, f"drain failed: {exc}")
+                return 0
+            finally:
+                conn.close()
 
     if drained:
         _log(log_path, f"drained={drained}")

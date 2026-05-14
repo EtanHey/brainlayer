@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -41,6 +42,17 @@ def _create_minimal_db(path: Path) -> None:
                 tags TEXT,
                 importance REAL,
                 superseded_by TEXT
+            );
+            CREATE TABLE kg_entities (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE kg_entity_chunks (
+                entity_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                relevance REAL DEFAULT 1.0,
+                context TEXT,
+                PRIMARY KEY (entity_id, chunk_id)
             );
             CREATE VIRTUAL TABLE chunks_fts USING fts5(
                 content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
@@ -105,6 +117,7 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
             VALUES ('old-id', 'old content', '{}', 'seed')
             """
         )
+        conn.execute("INSERT INTO kg_entities (id, name) VALUES ('person-1', 'Person One')")
         conn.commit()
 
     queued_path = enqueue_store(
@@ -112,16 +125,20 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
         project="arbitration-test",
         source="../unsafe/source",
         supersedes="old-id",
+        entity_id="person-1",
         queue_dir=queue_dir,
     )
 
     assert queued_path.parent == queue_dir
     assert ".." not in queued_path.name
     assert "/" not in queued_path.name
+    assert re.fullmatch(r"[A-Za-z0-9_.-]+", queued_path.name)
     assert drain_once(db_path=db_path, queue_dir=queue_dir) == 1
 
     with sqlite3.connect(db_path) as conn:
         replacement_id = conn.execute("SELECT id FROM chunks WHERE content = 'replacement content'").fetchone()[0]
         superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
+        entity_link = conn.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'person-1'").fetchone()[0]
 
     assert superseded_by == replacement_id
+    assert entity_link == replacement_id

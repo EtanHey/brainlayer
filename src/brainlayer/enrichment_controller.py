@@ -664,8 +664,7 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 
     _begin_store_operation(store)
     try:
-        if not _arbitrated_writes_enabled():
-            _ensure_enrichment_columns(store)
+        _ensure_enrichment_columns(store)
 
         chunk = _get_chunk_readonly(store, chunk_id)
         if not chunk:
@@ -820,8 +819,7 @@ def enrich_realtime(
             _emit_enrichment_complete(result, 0)
             return result
 
-        if not _arbitrated_writes_enabled():
-            _ensure_enrichment_columns(store)
+        _ensure_enrichment_columns(store)
 
         client = _get_gemini_client()
         sanitizer = Sanitizer.from_env()
@@ -910,8 +908,7 @@ def enrich_batch(
             _emit_enrichment_complete(result, duration_ms)
             return result
 
-        if not _arbitrated_writes_enabled():
-            _ensure_enrichment_columns(store)
+        _ensure_enrichment_columns(store)
 
         try:
             client = _get_gemini_client()

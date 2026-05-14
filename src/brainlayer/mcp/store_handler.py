@@ -501,26 +501,25 @@ async def _store(
     """
     try:
         if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
-            from ..queue_io import enqueue_store
-
-            enqueue_store(
-                content=content,
-                memory_type=memory_type,
-                project=_normalize_project_name(project),
-                tags=tags,
-                importance=importance,
-                confidence_score=confidence_score,
-                outcome=outcome,
-                reversibility=reversibility,
-                files_changed=files_changed,
-                entity_id=entity_id,
-                status=status,
-                severity=severity,
-                file_path=file_path,
-                function_name=function_name,
-                line_number=line_number,
-                supersedes=supersedes,
-                source="mcp",
+            _queue_store(
+                {
+                    "content": content,
+                    "memory_type": memory_type,
+                    "project": _normalize_project_name(project),
+                    "tags": tags,
+                    "importance": importance,
+                    "confidence_score": confidence_score,
+                    "outcome": outcome,
+                    "reversibility": reversibility,
+                    "files_changed": files_changed,
+                    "entity_id": entity_id,
+                    "status": status,
+                    "severity": severity,
+                    "file_path": file_path,
+                    "function_name": function_name,
+                    "line_number": line_number,
+                    "supersedes": supersedes,
+                }
             )
             structured = {"chunk_id": "queued", "related": []}
             return ([TextContent(type="text", text=format_store_result("queued", queued=True))], structured)

@@ -29,9 +29,9 @@ def enqueue_jsonl(event: dict[str, Any], *, source: str, queue_dir: Path | None 
     now_ms = int(time.time() * 1000)
     safe_source = _safe_source_name(source)
     event = {
+        **event,
         "source": source,
         "queued_at": time.time(),
-        **event,
     }
     final_path = resolved_dir / f"{safe_source}-{now_ms}-{uuid.uuid4().hex}.jsonl"
     tmp_path = final_path.with_suffix(".tmp")
@@ -52,9 +52,11 @@ def enqueue_store(
     **metadata: Any,
 ) -> Path:
     supersedes = metadata.pop("supersedes", None)
+    chunk_id = metadata.pop("chunk_id", None) or f"manual-{uuid.uuid4().hex[:16]}"
     return enqueue_jsonl(
         {
             "kind": "store_memory",
+            "chunk_id": chunk_id,
             "content": content,
             "memory_type": memory_type,
             "project": project,
