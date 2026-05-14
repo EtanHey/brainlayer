@@ -102,7 +102,9 @@ def _apply_store(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
     if supersedes and "superseded_by" in cols:
         conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (chunk_id, supersedes))
         for vector_table in ("chunk_vectors_dense", "chunk_vectors_binary"):
-            if conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)).fetchone():
+            if conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
+            ).fetchone():
                 conn.execute(f"DELETE FROM {vector_table} WHERE chunk_id = ?", (supersedes,))
 
 
@@ -161,7 +163,9 @@ def _apply_hook(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
             "value_type": "HIGH",
             "char_count": len(content),
             "source": "realtime",
-            "created_at": datetime.fromtimestamp(float(event.get("timestamp") or time.time()), timezone.utc).isoformat(),
+            "created_at": datetime.fromtimestamp(
+                float(event.get("timestamp") or time.time()), timezone.utc
+            ).isoformat(),
             "conversation_id": session_id,
             "importance": 5,
         },
@@ -194,7 +198,11 @@ def _apply_enrichment(conn: sqlite3.Connection, event: dict[str, Any]) -> None:
             updates[key] = json.dumps(enrichment[key])
     if "resolved_query" in cols:
         resolved_query = enrichment.get("resolved_query")
-        if not resolved_query and isinstance(enrichment.get("resolved_queries"), list) and enrichment["resolved_queries"]:
+        if (
+            not resolved_query
+            and isinstance(enrichment.get("resolved_queries"), list)
+            and enrichment["resolved_queries"]
+        ):
             resolved_query = enrichment["resolved_queries"][0]
         if resolved_query:
             updates["resolved_query"] = resolved_query

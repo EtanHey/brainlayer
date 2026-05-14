@@ -720,7 +720,9 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             if _arbitrated_writes_enabled():
                 _enqueue_enrichment_write(chunk, enrichment)
             else:
-                _submit_write(store, f"apply-enrichment:{chunk_id}", lambda: _apply_enrichment(store, chunk, enrichment))
+                _submit_write(
+                    store, f"apply-enrichment:{chunk_id}", lambda: _apply_enrichment(store, chunk, enrichment)
+                )
         except Exception as exc:
             logger.warning("enrich_single: apply failed for %s: %s", chunk_id, exc)
             return None

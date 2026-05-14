@@ -77,7 +77,9 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path):
         total_drained += drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=250, log_path=log_path)
         with sqlite3.connect(db_path) as conn:
             count = conn.execute("SELECT COUNT(*) FROM chunks WHERE project = 'arbitration-test'").fetchone()[0]
-            fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'arbitration'").fetchone()[0]
+            fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'arbitration'").fetchone()[
+                0
+            ]
         if count == 3000 and fts_count == 3000:
             break
         time.sleep(0.05)
@@ -119,9 +121,7 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
     assert drain_once(db_path=db_path, queue_dir=queue_dir) == 1
 
     with sqlite3.connect(db_path) as conn:
-        replacement_id = conn.execute(
-            "SELECT id FROM chunks WHERE content = 'replacement content'"
-        ).fetchone()[0]
+        replacement_id = conn.execute("SELECT id FROM chunks WHERE content = 'replacement content'").fetchone()[0]
         superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
 
     assert superseded_by == replacement_id
