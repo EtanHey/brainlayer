@@ -127,6 +127,19 @@ def test_exact_chunk_lookup_defers_when_unhandled_filters_are_active():
     assert result is None
 
 
+def test_exact_chunk_lookup_skips_status_archived_chunks():
+    """Exact chunk lookup must also respect status-only soft deletes."""
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": "brainbar-status01",
+        "content": "Status archived chunk",
+        "project": "brainlayer",
+        "status": "archived",
+    }
+
+    assert _exact_chunk_lookup_result("brainbar-status01", mock_store, "compact") is None
+
+
 @pytest.mark.asyncio
 async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
     """Explicit chunk_id context expansion should run before exact-id short-circuiting."""

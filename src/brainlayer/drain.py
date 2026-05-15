@@ -217,7 +217,13 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     cols = _columns(conn, "chunks")
     if supersedes and "superseded_by" in cols:
-        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (stored_chunk_id, supersedes))
+        if "status" in cols:
+            conn.execute(
+                "UPDATE chunks SET superseded_by = ?, status = 'superseded' WHERE id = ?",
+                (stored_chunk_id, supersedes),
+            )
+        else:
+            conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (stored_chunk_id, supersedes))
         for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
             if conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)

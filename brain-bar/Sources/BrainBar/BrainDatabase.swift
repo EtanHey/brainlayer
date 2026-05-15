@@ -300,7 +300,13 @@ final class BrainDatabase: @unchecked Sendable {
                     importance REAL DEFAULT 5,
                     intent TEXT,
                     enriched_at TEXT,
-                    created_at TEXT DEFAULT (datetime('now'))
+                    created_at TEXT DEFAULT (datetime('now')),
+                    aggregated_into TEXT,
+                    brick_id TEXT,
+                    source_uri TEXT,
+                    status TEXT DEFAULT 'active',
+                    ingested_at INTEGER,
+                    topic_cluster TEXT
                 )
             """)
         }
@@ -507,8 +513,12 @@ final class BrainDatabase: @unchecked Sendable {
     ) throws {
         guard let db else { throw DBError.notOpen }
         let sql = """
-            INSERT OR REPLACE INTO chunks (id, content, metadata, source_file, project, content_type, importance, conversation_id, char_count, tags, summary, preview_text)
-            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '', ?)
+            INSERT OR REPLACE INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                importance, conversation_id, char_count, tags, summary,
+                preview_text, brick_id, source_uri, status, ingested_at
+            )
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '', ?, ?, 'brainbar', 'active', CAST(strftime('%s', 'now') AS INTEGER))
         """
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
             bindText(id, to: stmt, index: 1)
@@ -520,6 +530,7 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int(stmt, 7, Int32(content.count))
             bindText(tags, to: stmt, index: 8)
             bindText(Self.previewText(summary: "", content: content), to: stmt, index: 9)
+            bindText(id, to: stmt, index: 10)
         }
         try refreshSearchStatistics()
     }
@@ -626,7 +637,14 @@ final class BrainDatabase: @unchecked Sendable {
 
         var subscribedTags = subscribedTags
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = ["\(tableName) MATCH ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
+        var conditions = [
+            "\(tableName) MATCH ?",
+            "c.superseded_by IS NULL",
+            "c.aggregated_into IS NULL",
+            "c.archived_at IS NULL",
+            "COALESCE(c.archived, 0) = 0",
+            "COALESCE(c.status, 'active') = 'active'"
+        ]
         if project != nil { conditions.append("c.project = ?") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
@@ -920,7 +938,14 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = ["chunks_fts MATCH ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
+        var conditions = [
+            "chunks_fts MATCH ?",
+            "c.superseded_by IS NULL",
+            "c.aggregated_into IS NULL",
+            "c.archived_at IS NULL",
+            "COALESCE(c.archived, 0) = 0",
+            "COALESCE(c.status, 'active') = 'active'"
+        ]
         if project != nil { conditions.append("c.project = ?") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if let explicitTag = tag {
@@ -1821,7 +1846,14 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         let sourceFilter = normalizedSourceFilter(source)
-        var conditions = ["c.id = ?", "c.superseded_by IS NULL", "c.archived_at IS NULL"]
+        var conditions = [
+            "c.id = ?",
+            "c.superseded_by IS NULL",
+            "c.aggregated_into IS NULL",
+            "c.archived_at IS NULL",
+            "COALESCE(c.archived, 0) = 0",
+            "COALESCE(c.status, 'active') = 'active'"
+        ]
         if project != nil { conditions.append("c.project = ?") }
         if sourceFilter != nil { conditions.append("c.source = ?") }
         if tag != nil { conditions.append("c.tags LIKE ?") }
@@ -1898,7 +1930,16 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func ensureChunkColumns() throws {
         guard let db else { throw DBError.notOpen }
+        try execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+        """)
         let existingColumns = try tableColumns(name: "chunks", on: db)
+        let atomicColumns = ["brick_id", "source_uri", "status", "ingested_at", "topic_cluster"]
+        let atomicMigrationApplied = try schemaMigrationApplied(name: "atomic_brick_chunks_v1", on: db)
+        let needsAtomicBackfill = atomicColumns.contains { !existingColumns.contains($0) } || !atomicMigrationApplied
         if !existingColumns.contains("summary") {
             try execute("ALTER TABLE chunks ADD COLUMN summary TEXT")
         }
@@ -1911,6 +1952,16 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("source") {
             try execute("ALTER TABLE chunks ADD COLUMN source TEXT DEFAULT 'claude_code'")
         }
+        if !existingColumns.contains("source_file") {
+            try execute("ALTER TABLE chunks ADD COLUMN source_file TEXT DEFAULT 'brainbar'")
+        }
+        if !existingColumns.contains("value_type") {
+            try execute("ALTER TABLE chunks ADD COLUMN value_type TEXT")
+        }
+        if !existingColumns.contains("created_at") {
+            try execute("ALTER TABLE chunks ADD COLUMN created_at TEXT")
+            try execute("UPDATE chunks SET created_at = datetime('now') WHERE created_at IS NULL")
+        }
         if !existingColumns.contains("enriched_at") {
             try execute("ALTER TABLE chunks ADD COLUMN enriched_at TEXT")
         }
@@ -1922,6 +1973,69 @@ final class BrainDatabase: @unchecked Sendable {
         }
         if !existingColumns.contains("archived_at") {
             try execute("ALTER TABLE chunks ADD COLUMN archived_at TEXT")
+        }
+        if !existingColumns.contains("aggregated_into") {
+            try execute("ALTER TABLE chunks ADD COLUMN aggregated_into TEXT")
+        }
+        if !existingColumns.contains("brick_id") {
+            try execute("ALTER TABLE chunks ADD COLUMN brick_id TEXT")
+        }
+        if !existingColumns.contains("source_uri") {
+            try execute("ALTER TABLE chunks ADD COLUMN source_uri TEXT")
+        }
+        if !existingColumns.contains("status") {
+            try execute("ALTER TABLE chunks ADD COLUMN status TEXT DEFAULT 'active'")
+        }
+        if !existingColumns.contains("ingested_at") {
+            try execute("ALTER TABLE chunks ADD COLUMN ingested_at INTEGER")
+        }
+        if !existingColumns.contains("topic_cluster") {
+            try execute("ALTER TABLE chunks ADD COLUMN topic_cluster TEXT")
+        }
+        if needsAtomicBackfill {
+            try execute("UPDATE chunks SET brick_id = id WHERE brick_id IS NULL")
+            if existingColumns.contains("source_file") {
+                try execute("UPDATE chunks SET source_uri = source_file WHERE source_uri IS NULL AND source_file IS NOT NULL")
+            } else {
+                try execute("UPDATE chunks SET source_uri = 'brainbar' WHERE source_uri IS NULL")
+            }
+            try execute("""
+                UPDATE chunks
+                SET ingested_at = COALESCE(
+                    CAST(strftime('%s', created_at) AS INTEGER),
+                    CAST(strftime('%s', 'now') AS INTEGER)
+                )
+                WHERE ingested_at IS NULL
+            """)
+            try execute("""
+                UPDATE chunks
+                SET status = CASE
+                    WHEN COALESCE(archived, 0) = 1
+                      OR value_type = 'ARCHIVED'
+                      OR archived_at IS NOT NULL
+                        THEN 'archived'
+                    WHEN superseded_by IS NOT NULL
+                      OR aggregated_into IS NOT NULL
+                        THEN 'superseded'
+                    ELSE 'active'
+                END
+                WHERE status IS NULL
+                   OR status NOT IN ('active', 'superseded', 'archived')
+                   OR (
+                        status = 'active'
+                        AND (
+                            COALESCE(archived, 0) = 1
+                            OR value_type = 'ARCHIVED'
+                            OR archived_at IS NOT NULL
+                            OR superseded_by IS NOT NULL
+                            OR aggregated_into IS NOT NULL
+                        )
+                    )
+            """)
+            try execute("""
+                INSERT OR REPLACE INTO schema_migrations(name, applied_at)
+                VALUES ('atomic_brick_chunks_v1', datetime('now'))
+            """)
         }
     }
 
@@ -2676,6 +2790,16 @@ final class BrainDatabase: @unchecked Sendable {
         return columns
     }
 
+    private func schemaMigrationApplied(name: String, on db: OpaquePointer) throws -> Bool {
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT 1 FROM schema_migrations WHERE name = ? LIMIT 1", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(name, to: stmt, index: 1)
+        return sqlite3_step(stmt) == SQLITE_ROW
+    }
+
     private func sqliteMasterSQL(name: String, on db: OpaquePointer) throws -> String? {
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE name = ?", -1, &stmt, nil)
@@ -3281,7 +3405,8 @@ final class BrainDatabase: @unchecked Sendable {
             """
             UPDATE chunks
             SET archived = 1,
-                archived_at = ?
+                archived_at = ?,
+                status = 'archived'
             WHERE id = ?
             """
         ) { stmt in
@@ -3297,7 +3422,7 @@ final class BrainDatabase: @unchecked Sendable {
             return false
         }
         try executeUpdate(
-            "UPDATE chunks SET superseded_by = ? WHERE id = ?"
+            "UPDATE chunks SET superseded_by = ?, status = 'superseded' WHERE id = ?"
         ) { stmt in
             bindText(newChunkID, to: stmt, index: 1)
             bindText(oldChunkID, to: stmt, index: 2)
@@ -3436,7 +3561,13 @@ final class BrainDatabase: @unchecked Sendable {
             ]
         }
 
-        var conditions = ["superseded_by IS NULL", "archived_at IS NULL"]
+        var conditions = [
+            "superseded_by IS NULL",
+            "aggregated_into IS NULL",
+            "archived_at IS NULL",
+            "COALESCE(archived, 0) = 0",
+            "COALESCE(status, 'active') = 'active'"
+        ]
         if chunkIDs == nil {
             conditions.append("enriched_at IS NULL")
             conditions.append("char_count >= 50")

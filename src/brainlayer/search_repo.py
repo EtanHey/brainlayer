@@ -607,6 +607,8 @@ class SearchMixin:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
                 where_clauses.append("c.archived_at IS NULL")
+                where_clauses.append("COALESCE(c.archived, 0) = 0")
+                where_clauses.append("COALESCE(c.status, 'active') = 'active'")
 
             where_sql = ""
             if where_clauses:
@@ -703,6 +705,8 @@ class SearchMixin:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
                 where_clauses.append("archived_at IS NULL")
+                where_clauses.append("COALESCE(archived, 0) = 0")
+                where_clauses.append("COALESCE(status, 'active') = 'active'")
 
             params.append(n_results)
 
@@ -968,6 +972,8 @@ class SearchMixin:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
             where_clauses.append("c.archived_at IS NULL")
+            where_clauses.append("COALESCE(c.archived, 0) = 0")
+            where_clauses.append("COALESCE(c.status, 'active') = 'active'")
 
         where_sql = ""
         if where_clauses:
@@ -1295,6 +1301,8 @@ class SearchMixin:
                 fts_extra.append("AND c.superseded_by IS NULL")
                 fts_extra.append("AND c.aggregated_into IS NULL")
                 fts_extra.append("AND c.archived_at IS NULL")
+                fts_extra.append("AND COALESCE(c.archived, 0) = 0")
+                fts_extra.append("AND COALESCE(c.status, 'active') = 'active'")
 
             def _fetch_fts_rows(table_name: str) -> list[tuple]:
                 params = [fts_query, *fts_filter_params, candidate_fetch_count]
