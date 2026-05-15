@@ -14,6 +14,7 @@ class QueueMergeResult:
     skipped_exact: list[str] = field(default_factory=list)
     skipped_non_jsonl: list[str] = field(default_factory=list)
     collisions: list[str] = field(default_factory=list)
+    collision_renames: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def total_actions(self) -> int:
@@ -30,7 +31,11 @@ def _read_existing_hashes(queue_dir: Path) -> dict[str, str]:
         return hashes
     for path in sorted(queue_dir.glob("*.jsonl")):
         if path.is_file():
-            hashes[_sha256(path.read_bytes())] = path.name
+            try:
+                hashes[_sha256(path.read_bytes())] = path.name
+            except FileNotFoundError:
+                # The drain daemon may consume files while an operator is preparing a merge.
+                continue
     return hashes
 
 
@@ -85,10 +90,11 @@ def merge_queue_dirs(source_dir: Path, dest_dir: Path, *, dry_run: bool = False)
         if target_path.exists():
             result.collisions.append(source_path.name)
             target_path = _collision_target(dest_dir, source_path.name, content_hash, content)
+            result.collision_renames.append((source_path.name, target_path.name))
 
         result.copied.append(target_path.name)
+        existing_hashes[content_hash] = target_path.name
         if not dry_run:
             _copy_atomic(source_path, target_path)
-            existing_hashes[content_hash] = target_path.name
 
     return result

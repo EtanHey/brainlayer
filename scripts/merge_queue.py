@@ -43,8 +43,8 @@ def main() -> int:
     print(f"{mode}: source={args.source.expanduser()} dest={dest}")
     for name in result.copied:
         print(f"copy {name}")
-    for name in result.collisions:
-        print(f"collision-renamed {name}")
+    for old_name, new_name in result.collision_renames:
+        print(f"collision-renamed {old_name} -> {new_name}")
     for name in result.skipped_exact:
         print(f"skip-exact {name}")
     for name in result.skipped_non_jsonl:
