@@ -83,6 +83,7 @@ def enqueue_watcher_chunk(
     conversation_id: str,
     sender: str | None = None,
     tags: list[str] | None = None,
+    chunk_origin: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
     return enqueue_jsonl(
@@ -99,6 +100,7 @@ def enqueue_watcher_chunk(
             "conversation_id": conversation_id,
             "sender": sender,
             "tags": tags,
+            "chunk_origin": chunk_origin,
         },
         source="watcher",
         queue_dir=queue_dir,

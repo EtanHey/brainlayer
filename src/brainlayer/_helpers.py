@@ -4,6 +4,8 @@ import json
 import struct
 from typing import Any, List, Optional
 
+import apsw
+
 _SOURCE_MIN_CHARS = {
     "whatsapp": 15,
     "telegram": 15,
@@ -63,6 +65,14 @@ def _escape_fts5_query(query: str, *, match_mode: str = "auto") -> str:
         # Space-separated terms in FTS5 are implicit AND.
         joiner = " "
     return joiner.join(terms)
+
+
+def _is_sqlite_busy_error(exc: BaseException) -> bool:
+    """Return True for APSW busy/locked errors, including wrapped messages."""
+    if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
+        return True
+    message = str(exc).casefold()
+    return "database is locked" in message or "database table is locked" in message or "database is busy" in message
 
 
 def serialize_f32(vector: List[float]) -> bytes:

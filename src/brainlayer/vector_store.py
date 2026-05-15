@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,11 @@ from ._helpers import (
 )
 from ._helpers import (
     source_aware_min_chars as source_aware_min_chars,
+)
+from .chunk_origin import (
+    CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
+    CHUNK_ORIGIN_UNKNOWN,
+    detect_chunk_origin,
 )
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
@@ -74,6 +80,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._retrieval_strengthening_query_count = 0
         self._retrieval_strengthening_flush_threshold = 100
         self._retrieval_strengthening_lock = threading.Lock()
+        self._checkpoint_count_cache: int | None = None
+        self._checkpoint_count_cache_data_version: int | None = None
         self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
         if self._readonly:
             self._init_readonly_db()
@@ -92,9 +100,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         existing_tables = {
             row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
         }
+        chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+        self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._local = threading.local()
+
+    def _invalidate_checkpoint_count_cache(self) -> None:
+        self._checkpoint_count_cache = None
+        self._checkpoint_count_cache_data_version = None
+
+    def _checkpoint_wal_full(self, cursor) -> None:
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        except apsw.Error:
+            pass
 
     def _init_db_with_retry(self) -> None:
         """Initialize DB with retry on BusyError.
@@ -155,7 +175,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 language TEXT,
                 conversation_id TEXT,
                 position INTEGER,
-                context_summary TEXT
+                context_summary TEXT,
+                chunk_origin TEXT DEFAULT 'unknown'
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                details TEXT
             )
         """)
 
@@ -198,9 +227,60 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("superseded_by", "TEXT"),
             ("aggregated_into", "TEXT"),
             ("archived_at", "TEXT"),
+            ("chunk_origin", "TEXT DEFAULT 'unknown'"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
+        self._has_chunk_origin = True
+
+        migration_name = "2026_05_16_fm6_chunk_origin"
+        migration_done = cursor.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (migration_name,),
+        ).fetchone()
+        if migration_done is None:
+            self._checkpoint_wal_full(cursor)
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET chunk_origin = ?
+                WHERE COALESCE(chunk_origin, ?) != ?
+                  AND (
+                    LOWER(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)))
+                        LIKE '[precompact checkpoint]%'
+                    OR LOWER(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)))
+                        LIKE '# precompact checkpoint%'
+                    OR LOWER(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)))
+                        LIKE 'session-restore%'
+                    OR LOWER(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)))
+                        LIKE '# session-restore%'
+                    OR LOWER(SUBSTR(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)), 1, 1024))
+                        LIKE '%content="[precompact checkpoint]%'
+                    OR LOWER(SUBSTR(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)), 1, 1024))
+                        LIKE '%content=''[precompact checkpoint]%'
+                    OR LOWER(SUBSTR(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)), 1, 1024))
+                        LIKE '%"content": "[precompact checkpoint]%'
+                    OR LOWER(SUBSTR(LTRIM(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)), 1, 1024))
+                        LIKE '%''content'': ''[precompact checkpoint]%'
+                  )
+                """,
+                (
+                    CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
+                    CHUNK_ORIGIN_UNKNOWN,
+                    CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
+                ),
+            )
+            backfilled = self.conn.changes()
+            cursor.execute(
+                "INSERT OR IGNORE INTO schema_migrations (name, applied_at, details) VALUES (?, ?, ?)",
+                (
+                    migration_name,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps({"backfilled_precompact_checkpoints": backfilled}),
+                ),
+            )
+            self._checkpoint_wal_full(cursor)
+            self._invalidate_checkpoint_count_cache()
 
         cursor.execute("""
             UPDATE chunks
@@ -221,6 +301,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_project", "project"),
             ("idx_chunks_content_type", "content_type"),
             ("idx_chunks_language", "language"),
+            ("idx_chunks_chunk_origin", "chunk_origin"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_decay_score ON chunks(decay_score) WHERE archived = 0")
@@ -1246,8 +1327,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 INSERT INTO chunks
                 (id, content, metadata, source_file, project,
                  content_type, value_type, char_count, source, created_at,
-                 conversation_id, position, sender)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 conversation_id, position, sender, chunk_origin)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     content = excluded.content,
                     metadata = excluded.metadata,
@@ -1260,7 +1341,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     created_at = COALESCE(chunks.created_at, excluded.created_at),
                     conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
                     position = COALESCE(excluded.position, chunks.position),
-                    sender = COALESCE(excluded.sender, chunks.sender)
+                    sender = COALESCE(excluded.sender, chunks.sender),
+                    chunk_origin = CASE
+                        WHEN excluded.content != chunks.content
+                            THEN COALESCE(excluded.chunk_origin, 'unknown')
+                        WHEN excluded.chunk_origin IS NOT NULL AND excluded.chunk_origin != 'unknown'
+                            THEN excluded.chunk_origin
+                        WHEN chunks.chunk_origin IS NULL
+                            THEN COALESCE(excluded.chunk_origin, 'unknown')
+                        ELSE chunks.chunk_origin
+                    END
             """,
                 (
                     chunk_id,
@@ -1276,6 +1366,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     chunk.get("conversation_id"),
                     chunk.get("position"),
                     chunk.get("sender"),
+                    detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
                 ),
             )
 
@@ -1284,6 +1375,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_checkpoint_count_cache()
 
         return len(chunks)
 
@@ -1303,8 +1395,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         if content is not None:
             cursor.execute(
-                "UPDATE chunks SET content = ?, char_count = ?, summary = ? WHERE id = ?",
-                (content, len(content), content[:200], chunk_id),
+                "UPDATE chunks SET content = ?, char_count = ?, summary = ?, chunk_origin = ? WHERE id = ?",
+                (content, len(content), content[:200], detect_chunk_origin(content), chunk_id),
             )
         if tags is not None:
             cursor.execute(
@@ -1321,6 +1413,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_checkpoint_count_cache()
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
@@ -1364,11 +1457,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Get a single chunk by ID."""
         cursor = self.conn.cursor()
+        has_chunk_origin = getattr(self, "_has_chunk_origin", True)
+        chunk_origin_select = ", chunk_origin" if has_chunk_origin else ""
         rows = list(
             cursor.execute(
-                """SELECT id, content, metadata, source_file, project, content_type,
+                f"""SELECT id, content, metadata, source_file, project, content_type,
                       value_type, tags, importance, created_at, summary,
-                      superseded_by, aggregated_into, archived_at
+                      superseded_by, aggregated_into, archived_at{chunk_origin_select}
                FROM chunks WHERE id = ?""",
                 (chunk_id,),
             )
@@ -1391,6 +1486,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "superseded_by": r[11],
             "aggregated_into": r[12],
             "archived_at": r[13],
+            "chunk_origin": r[14] if has_chunk_origin else CHUNK_ORIGIN_UNKNOWN,
         }
 
     # ── Chunk events audit ─────────────────────────────────────────────

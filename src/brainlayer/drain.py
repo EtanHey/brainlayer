@@ -19,6 +19,7 @@ import apsw
 import sqlite_vec
 
 from ._helpers import serialize_f32
+from .chunk_origin import detect_chunk_origin
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "summary": content[:200],
             "tags": json.dumps(tags) if tags else None,
             "importance": float(event["importance"]) if event.get("importance") is not None else None,
+            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
     supersedes = event.get("supersedes") or metadata.get("supersedes")
@@ -190,6 +192,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
+            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
 
@@ -227,6 +230,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "created_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
             "conversation_id": session_id,
             "importance": 5,
+            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
 

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .chunk_origin import detect_chunk_origin
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
@@ -268,6 +269,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                     correction_tags = build_correction_tags(clean_content)
                     if correction_tags:
                         tags = json.dumps(correction_tags)
+                chunk_origin = detect_chunk_origin(clean_content)
 
                 try:
                     if arbitrated:
@@ -283,6 +285,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                             conversation_id=conversation_id,
                             sender=chunk.metadata.get("sender"),
                             tags=json.loads(tags) if tags else None,
+                            chunk_origin=chunk_origin,
                         )
                         inserted += 1
                     else:
@@ -291,8 +294,8 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                             """INSERT OR IGNORE INTO chunks
                                (id, content, metadata, source_file, project,
                                 content_type, value_type, char_count, source,
-                                created_at, conversation_id, sender, tags)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                created_at, conversation_id, sender, tags, chunk_origin)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 chunk_id,
                                 clean_content,
@@ -307,6 +310,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                 conversation_id,
                                 chunk.metadata.get("sender"),
                                 tags,
+                                chunk_origin,
                             ),
                         )
                         if store.conn.changes() > 0:

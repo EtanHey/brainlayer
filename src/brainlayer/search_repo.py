@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Optional
 import apsw
 import numpy as np
 
-from ._helpers import _escape_fts5_query, serialize_f32
+from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
+from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
 
 # ── hybrid_search result cache ───────────────────────────────────────────────
 # Caches identical (store, query_text, filters) → results for 60s.
@@ -82,6 +83,7 @@ def _hybrid_cache_key(
     entity_id: Optional[str],
     k: int,
     include_archived: bool = False,
+    include_checkpoints: bool = False,
 ) -> tuple:
     return (
         store_key,
@@ -102,6 +104,7 @@ def _hybrid_cache_key(
         entity_id,
         k,
         include_archived,
+        include_checkpoints,
     )
 
 
@@ -119,6 +122,64 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
 
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _checkpoint_exclusion_clause(self, table_alias: str | None = None) -> str | None:
+        if not getattr(self, "_has_chunk_origin", True):
+            return None
+        column = f"{table_alias}.chunk_origin" if table_alias else "chunk_origin"
+        return f"COALESCE({column}, 'unknown') != 'precompact_checkpoint'"
+
+    def _checkpoint_cache_data_version(self) -> int | None:
+        for attempt in range(3):
+            try:
+                row = self._read_cursor().execute("PRAGMA data_version").fetchone()
+                return int(row[0]) if row else None
+            except (apsw.Error, TypeError, IndexError, ValueError) as exc:
+                if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                    return None
+                time.sleep(0.05 * (2**attempt))
+        return None
+
+    def _checkpoint_filtered_knn_k(self, n_results: int, include_checkpoints: bool) -> int:
+        if include_checkpoints or not getattr(self, "_has_chunk_origin", True):
+            return n_results
+
+        cached_count = getattr(self, "_checkpoint_count_cache", None)
+        current_data_version = self._checkpoint_cache_data_version()
+        cached_data_version = getattr(self, "_checkpoint_count_cache_data_version", None)
+        if cached_count is not None and (current_data_version is None or cached_data_version == current_data_version):
+            checkpoint_count = cached_count
+        else:
+            checkpoint_count = 0
+            for attempt in range(3):
+                try:
+                    checkpoint_count = int(
+                        self._read_cursor()
+                        .execute(
+                            "SELECT COUNT(*) FROM chunks WHERE chunk_origin = ?",
+                            (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,),
+                        )
+                        .fetchone()[0]
+                        or 0
+                    )
+                    setattr(self, "_checkpoint_count_cache", checkpoint_count)
+                    setattr(self, "_checkpoint_count_cache_data_version", current_data_version)
+                    break
+                except (apsw.Error, TypeError, IndexError) as exc:
+                    if not isinstance(exc, apsw.Error) or not _is_sqlite_busy_error(exc) or attempt == 2:
+                        checkpoint_count = 0
+                        break
+                    time.sleep(0.05 * (2**attempt))
+
+        if checkpoint_count <= 0:
+            return n_results
+        return n_results + checkpoint_count
+
+    def _effective_knn_k(self, n_results: int, needs_overfetch: bool, include_checkpoints: bool) -> int:
+        effective_k = n_results
+        if needs_overfetch:
+            effective_k = max(effective_k, min(n_results * 10, 1000))
+        return self._checkpoint_filtered_knn_k(effective_k, include_checkpoints)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -292,6 +353,7 @@ class SearchMixin:
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
         include_archived: bool = False,
+        include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
     ) -> Dict[str, List]:
@@ -355,6 +417,10 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
+            if not include_checkpoints:
+                checkpoint_clause = self._checkpoint_exclusion_clause("c")
+                if checkpoint_clause:
+                    where_clauses.append(checkpoint_clause)
             if not include_archived:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
@@ -374,7 +440,7 @@ class SearchMixin:
                 or source_filter_like
                 or correction_category
             )
-            effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
+            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
@@ -389,6 +455,7 @@ class SearchMixin:
             """
 
             results = list(cursor.execute(query, params))
+            results = results[:n_results]
 
         elif query_text is not None:
             # Text search using LIKE
@@ -434,6 +501,10 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
+            if not include_checkpoints:
+                checkpoint_clause = self._checkpoint_exclusion_clause()
+                if checkpoint_clause:
+                    where_clauses.append(checkpoint_clause)
             if not include_archived:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
@@ -639,6 +710,7 @@ class SearchMixin:
         sentiment_filter: Optional[str] = None,
         entity_id: Optional[str] = None,
         include_archived: bool = False,
+        include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
     ) -> Dict[str, List]:
@@ -691,6 +763,10 @@ class SearchMixin:
         if correction_category:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
+        if not include_checkpoints:
+            checkpoint_clause = self._checkpoint_exclusion_clause("c")
+            if checkpoint_clause:
+                where_clauses.append(checkpoint_clause)
         if not include_archived:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
@@ -703,7 +779,7 @@ class SearchMixin:
         needs_overfetch = (
             entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
         )
-        effective_k = min(n_results * 10, 1000) if needs_overfetch else n_results
+        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
         params = [query_bytes, effective_k] + filter_params
         results = list(
             cursor.execute(
@@ -721,6 +797,7 @@ class SearchMixin:
                 params,
             )
         )
+        results = results[:n_results]
 
         ids = []
         documents = []
@@ -841,6 +918,7 @@ class SearchMixin:
         entity_id: Optional[str] = None,
         k: int = 60,
         include_archived: bool = False,
+        include_checkpoints: bool = False,
         kg_boost: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
@@ -878,6 +956,7 @@ class SearchMixin:
             entity_id,
             k,
             include_archived,
+            include_checkpoints,
         ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
@@ -910,6 +989,7 @@ class SearchMixin:
                 sentiment_filter=sentiment_filter,
                 entity_id=entity_id,
                 include_archived=include_archived,
+                include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
             )
@@ -931,6 +1011,7 @@ class SearchMixin:
                 sentiment_filter=sentiment_filter,
                 entity_id=entity_id,
                 include_archived=include_archived,
+                include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
             )
@@ -993,6 +1074,10 @@ class SearchMixin:
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
+            if not include_checkpoints:
+                checkpoint_clause = self._checkpoint_exclusion_clause("c")
+                if checkpoint_clause:
+                    fts_extra.append(f"AND {checkpoint_clause}")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")

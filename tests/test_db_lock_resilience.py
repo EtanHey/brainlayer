@@ -6,7 +6,12 @@ from unittest.mock import patch
 import apsw
 import pytest
 
+from brainlayer._helpers import _is_sqlite_busy_error
 from brainlayer.vector_store import VectorStore
+
+
+def test_sqlite_busy_helper_treats_locked_error_as_busy():
+    assert _is_sqlite_busy_error(apsw.LockedError("database table is locked")) is True
 
 
 class TestVectorStoreInitRetry:

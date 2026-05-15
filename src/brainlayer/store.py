@@ -36,6 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
 from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
@@ -143,13 +144,14 @@ def store_memory(
 
     # Insert into chunks table
     cursor = store.conn.cursor()
+    chunk_origin = detect_chunk_origin(content)
     cursor.execute(
         """
         INSERT INTO chunks
         (id, content, metadata, source_file, project, content_type,
          value_type, char_count, source, created_at, enriched_at,
-         summary, tags, importance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         summary, tags, importance, chunk_origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             chunk_id,
@@ -166,6 +168,7 @@ def store_memory(
             content[:200],  # summary = first 200 chars
             json.dumps(tags) if tags else None,
             float(importance) if importance is not None else None,
+            chunk_origin,
         ),
     )
 
@@ -189,6 +192,8 @@ def store_memory(
     from .search_repo import clear_hybrid_search_cache
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
+    if chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
+        store._invalidate_checkpoint_count_cache()
 
     return {
         "id": chunk_id,

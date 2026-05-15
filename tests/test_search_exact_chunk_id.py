@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from brainlayer.chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
 from brainlayer.mcp.search_handler import _brain_search, _exact_chunk_lookup_result
 
 
@@ -65,6 +66,34 @@ async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown()
         _, structured = await _brain_search(query=chunk_id, detail="compact")
 
     assert structured["results"][0]["project"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_exact_checkpoint_chunk_id_returns_empty_without_fallback():
+    """Default exact chunk-id lookup must not leak checkpoint chunks via fallback search."""
+    chunk_id = "brainbar-checkpt01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": "[PreCompact checkpoint]\nCurrent task: hidden from default search",
+        "source_file": "watcher.jsonl",
+        "project": "brainlayer",
+        "content_type": "assistant_text",
+        "created_at": "2026-05-16T09:15:00Z",
+        "chunk_origin": CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("excluded checkpoint chunk-id query should not fall back")),
+        ),
+    ):
+        content, structured = await _brain_search(query=chunk_id, detail="compact")
+
+    assert content[0].text == "No results found."
+    assert structured == {"query": chunk_id, "total": 0, "results": []}
 
 
 def test_exact_chunk_lookup_skips_lifecycle_managed_chunks():
