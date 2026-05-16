@@ -48,6 +48,7 @@ from .dedupe import (
     merge_existing_chunk_seen,
     resolve_chunk_id,
 )
+from .ingest_guard import reject_recursive_mcp_output
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
@@ -113,6 +114,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
+        self._chunk_tags_available = "chunk_tags" in existing_tables
         self._local = threading.local()
 
     def _invalidate_checkpoint_count_cache(self) -> None:
@@ -522,6 +524,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 SELECT c.id, j.value FROM chunks c, json_each(c.tags) j
                 WHERE c.tags IS NOT NULL AND json_valid(c.tags) = 1
             """)
+        self._chunk_tags_available = True
 
         # Session context table
         cursor.execute("""
@@ -1358,6 +1361,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 transaction_started = True
                 for chunk, embedding in zip(chunks, embeddings):
                     chunk_id = chunk["id"]
+                    reject_recursive_mcp_output(chunk.get("content"))
                     created_at = chunk.get("created_at")
                     tags_value = chunk.get("tags")
                     tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value

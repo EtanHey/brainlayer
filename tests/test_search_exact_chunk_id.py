@@ -92,7 +92,7 @@ async def test_brain_search_exact_checkpoint_chunk_id_returns_empty_without_fall
     ):
         content, structured = await _brain_search(query=chunk_id, detail="compact")
 
-    assert content[0].text == "No results found."
+    assert "No results found." in content[0].text
     assert structured == {"query": chunk_id, "total": 0, "results": []}
 
 
@@ -106,7 +106,8 @@ def test_exact_chunk_lookup_skips_lifecycle_managed_chunks():
         "archived_at": "2026-04-30T09:15:00Z",
     }
 
-    assert _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact") is None
+    _, structured = _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact")
+    assert structured["total"] == 0
 
 
 @pytest.mark.asyncio
@@ -162,8 +163,9 @@ async def test_brain_search_exact_chunk_id_respects_project_scope():
     ):
         result = await _brain_search(query=chunk_id, project="brainlayer", detail="compact")
 
-    assert result == (["fallback"], {"total": 0, "results": []})
-    search_mock.assert_awaited_once()
+    _, structured = result
+    assert structured["total"] == 0
+    search_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

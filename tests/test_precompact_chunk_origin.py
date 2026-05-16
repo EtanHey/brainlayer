@@ -338,6 +338,44 @@ def test_search_excludes_checkpoints_by_default_and_can_include_them(tmp_path):
     assert {"checkpoint", "normal"}.issubset(set(hybrid_with_checkpoints["ids"][0]))
 
 
+def test_search_excludes_checkpoint_content_even_when_origin_backfill_missed_it(tmp_path):
+    _hybrid_cache.clear()
+    store = VectorStore(tmp_path / "search-missed-origin.db")
+    _insert_chunk(
+        store,
+        chunk_id="missed-origin-checkpoint",
+        content="[PreCompact checkpoint]\nCurrent task: should not leak through default search",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    _insert_chunk(
+        store,
+        chunk_id="normal-missed-origin-control",
+        content="Current task memory that should remain visible in default search",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    store.build_binary_index()
+
+    text_default = store.search(query_text="Current task", n_results=10)
+    hybrid_default = store.hybrid_search(
+        query_embedding=_embed("Current task"),
+        query_text="Current task",
+        n_results=10,
+    )
+    text_with_checkpoints = store.search(query_text="Current task", n_results=10, include_checkpoints=True)
+    hybrid_with_checkpoints = store.hybrid_search(
+        query_embedding=_embed("Current task"),
+        query_text="Current task",
+        n_results=10,
+        include_checkpoints=True,
+    )
+    store.close()
+
+    assert text_default["ids"][0] == ["normal-missed-origin-control"]
+    assert "missed-origin-checkpoint" not in hybrid_default["ids"][0]
+    assert {"missed-origin-checkpoint", "normal-missed-origin-control"}.issubset(set(text_with_checkpoints["ids"][0]))
+    assert {"missed-origin-checkpoint", "normal-missed-origin-control"}.issubset(set(hybrid_with_checkpoints["ids"][0]))
+
+
 def test_vector_search_overfetches_when_checkpoint_filter_discards_nearest_neighbors(tmp_path):
     store = VectorStore(tmp_path / "vector-overfetch.db")
     query_embedding = [0.0] * 1024
