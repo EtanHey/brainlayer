@@ -16,7 +16,7 @@ DEFAULT_LOG_DIR = Path.home() / ".brainlayer-p0-counter"
 P0_SQL = """
 SELECT date(datetime(created_at)) AS day, COUNT(*) AS new_audit_chunks
 FROM chunks
-WHERE datetime(created_at) > datetime('2026-05-16T16:56:00+03:00')
+WHERE datetime(created_at) > datetime(?)
   AND (content GLOB '┌─brain_search:*'
        OR content GLOB '┌─brain_*:*'
        OR content GLOB '┌─ brain_search:*'
@@ -36,12 +36,14 @@ def _log_dir() -> Path:
     return Path(os.environ.get("BRAINLAYER_P0_COUNTER_DIR", DEFAULT_LOG_DIR)).expanduser()
 
 
-def run_count(db_path: Path) -> list[dict[str, object]]:
+def run_count(db_path: Path, since: str = SINCE) -> list[dict[str, object]]:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
     try:
         conn.execute("PRAGMA query_only=true")
         conn.execute("PRAGMA busy_timeout=5000")
-        return [{"day": day, "new_audit_chunks": int(count)} for day, count in conn.execute(P0_SQL).fetchall()]
+        return [
+            {"day": day, "new_audit_chunks": int(count)} for day, count in conn.execute(P0_SQL, (since,)).fetchall()
+        ]
     finally:
         conn.close()
 
@@ -58,14 +60,15 @@ def build_payload(db_path: Path) -> dict[str, object]:
         "since": SINCE,
         "db_path": str(db_path),
         "sql": P0_SQL,
+        "sql_params": [SINCE],
         "rows": rows,
         "total_new_audit_chunks": total,
         "elapsed_days": elapsed_days,
         "verdict_ready": verdict_ready,
         "structural_fix_p_lt_0_001": structural_fix,
         "brain_store_verdict_content": (
-            "P0 longitudinal counter verdict: 0 audit-recursion chunks across 7 days "
-            "since 2026-05-16T16:56:00+03:00; structural fix p<0.001 per R51."
+            f"P0 longitudinal counter verdict: 0 audit-recursion chunks across 7 days "
+            f"since {SINCE}; structural fix p<0.001 per R51."
             if structural_fix
             else None
         ),

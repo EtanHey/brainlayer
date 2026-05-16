@@ -42,3 +42,18 @@ def test_p0_counter_counts_spaced_brain_search_box(tmp_path):
     rows = counter.run_count(db_path)
 
     assert rows == [{"day": "2026-05-16", "new_audit_chunks": 1}]
+
+
+def test_p0_counter_cutoff_uses_since_parameter(tmp_path):
+    counter = _load_counter_module()
+    db_path = tmp_path / "counter.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE chunks (created_at TEXT, content TEXT)")
+        conn.execute(
+            "INSERT INTO chunks (created_at, content) VALUES (?, ?)",
+            ("2026-05-16T14:00:00+00:00", 'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0"}'),
+        )
+
+    rows = counter.run_count(db_path, since="2026-05-16T14:30:00+00:00")
+
+    assert rows == []
