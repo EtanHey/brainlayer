@@ -190,7 +190,8 @@ def _is_audit_recursion_metadata(meta: dict, content: str | None = None) -> bool
 
 
 def _precompact_content_exclusion_sql(content_expr: str) -> str:
-    normalized = f"LOWER(LTRIM(COALESCE(CAST({content_expr} AS TEXT), '')))"
+    whitespace_chars = "char(9) || char(10) || char(11) || char(12) || char(13) || char(32)"
+    normalized = f"LOWER(LTRIM(COALESCE(CAST({content_expr} AS TEXT), ''), {whitespace_chars}))"
     prefix = f"SUBSTR({normalized}, 1, 1024)"
     return (
         f"{normalized} NOT LIKE '[precompact checkpoint]%' "

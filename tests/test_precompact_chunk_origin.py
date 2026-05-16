@@ -344,7 +344,7 @@ def test_search_excludes_checkpoint_content_even_when_origin_backfill_missed_it(
     _insert_chunk(
         store,
         chunk_id="missed-origin-checkpoint",
-        content="[PreCompact checkpoint]\nCurrent task: should not leak through default search",
+        content="\t\n[PreCompact checkpoint]\nCurrent task: should not leak through default search",
         chunk_origin=CHUNK_ORIGIN_UNKNOWN,
     )
     _insert_chunk(
