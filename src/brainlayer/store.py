@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
+from .dedupe import compute_dedupe_fields, find_duplicate, merge_duplicate_chunk
 from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
@@ -145,35 +146,65 @@ def store_memory(
     # Insert into chunks table
     cursor = store.conn.cursor()
     chunk_origin = detect_chunk_origin(content)
-    cursor.execute(
-        """
-        INSERT INTO chunks
-        (id, content, metadata, source_file, project, content_type,
-         value_type, char_count, source, created_at, enriched_at,
-         summary, tags, importance, chunk_origin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            chunk_id,
-            content,
-            json.dumps(meta),
-            "brainlayer-store",
-            project,
-            memory_type,  # content_type = memory_type for easy filtering
-            "HIGH",
-            len(content),
-            "manual",
-            now,
-            now,  # enriched_at = now (user-provided content is pre-enriched)
-            content[:200],  # summary = first 200 chars
-            json.dumps(tags) if tags else None,
-            float(importance) if importance is not None else None,
-            chunk_origin,
-        ),
-    )
+    tags_json = json.dumps(tags) if tags else None
+    duplicate, dedupe_fields = find_duplicate(store.conn, chunk_id=chunk_id, content=content, created_at=now)
+    if duplicate is not None:
+        merge_duplicate_chunk(
+            store.conn,
+            canonical_id=duplicate.canonical_chunk_id,
+            duplicate_id=chunk_id,
+            incoming={
+                "id": chunk_id,
+                "content": content,
+                "tags": tags_json,
+                "importance": float(importance) if importance is not None else None,
+                "created_at": now,
+                "last_seen_at": now,
+            },
+            mechanism=duplicate.mechanism,
+            hamming_distance_value=duplicate.hamming_distance,
+        )
+        chunk_id = duplicate.canonical_chunk_id
+    else:
+        dedupe_fields = compute_dedupe_fields(content, now)
+        cursor.execute(
+            """
+            INSERT INTO chunks
+            (id, content, metadata, source_file, project, content_type,
+             value_type, char_count, source, created_at, enriched_at,
+             summary, tags, importance, chunk_origin, seen_count, last_seen_at,
+             content_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                chunk_id,
+                content,
+                json.dumps(meta),
+                "brainlayer-store",
+                project,
+                memory_type,  # content_type = memory_type for easy filtering
+                "HIGH",
+                len(content),
+                "manual",
+                now,
+                now,  # enriched_at = now (user-provided content is pre-enriched)
+                content[:200],  # summary = first 200 chars
+                tags_json,
+                float(importance) if importance is not None else None,
+                chunk_origin,
+                1,
+                now,
+                dedupe_fields.content_hash,
+                dedupe_fields.simhash,
+                dedupe_fields.bands[0],
+                dedupe_fields.bands[1],
+                dedupe_fields.bands[2],
+                dedupe_fields.bands[3],
+            ),
+        )
 
     # Insert embedding into chunk_vectors (only if we have one)
-    if embedding is not None:
+    if embedding is not None and duplicate is None:
         store._upsert_chunk_vector(cursor, chunk_id, embedding)
 
     # Link to entity if entity_id provided (per-person memory tagging)

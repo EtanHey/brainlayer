@@ -10,7 +10,6 @@ Filtering layers:
   4. Post-chunk: strip system-reminder injections from content, skip file deletion diffs
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .chunk_origin import detect_chunk_origin
+from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
@@ -255,7 +255,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                     skipped += 1
                     continue
 
-                content_hash = hashlib.sha256(clean_content.encode()).hexdigest()[:16]
+                content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
                 chunk_id = f"rt-{file_stem[:8]}-{content_hash}"
 
@@ -290,12 +290,50 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                         inserted += 1
                     else:
                         assert cursor is not None and store is not None
+                        duplicate, dedupe_fields = find_duplicate(
+                            store.conn,
+                            chunk_id=chunk_id,
+                            content=clean_content,
+                            created_at=created_at,
+                        )
+                        if duplicate is not None:
+                            merge_duplicate_chunk(
+                                store.conn,
+                                canonical_id=duplicate.canonical_chunk_id,
+                                duplicate_id=chunk_id,
+                                incoming={
+                                    "id": chunk_id,
+                                    "content": clean_content,
+                                    "tags": tags,
+                                    "created_at": created_at,
+                                    "last_seen_at": created_at,
+                                },
+                                mechanism=duplicate.mechanism,
+                                hamming_distance_value=duplicate.hamming_distance,
+                            )
+                            inserted += 1
+                            continue
+                        if merge_existing_chunk_seen(
+                            store.conn,
+                            chunk_id=chunk_id,
+                            incoming={
+                                "id": chunk_id,
+                                "content": clean_content,
+                                "tags": tags,
+                                "created_at": created_at,
+                                "last_seen_at": created_at,
+                            },
+                        ):
+                            inserted += 1
+                            continue
                         cursor.execute(
                             """INSERT OR IGNORE INTO chunks
                                (id, content, metadata, source_file, project,
                                 content_type, value_type, char_count, source,
-                                created_at, conversation_id, sender, tags, chunk_origin)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                created_at, conversation_id, sender, tags, chunk_origin,
+                                seen_count, last_seen_at, content_hash, simhash,
+                                simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 chunk_id,
                                 clean_content,
@@ -311,6 +349,14 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                 chunk.metadata.get("sender"),
                                 tags,
                                 chunk_origin,
+                                1,
+                                created_at,
+                                dedupe_fields.content_hash,
+                                dedupe_fields.simhash,
+                                dedupe_fields.bands[0],
+                                dedupe_fields.bands[1],
+                                dedupe_fields.bands[2],
+                                dedupe_fields.bands[3],
                             ),
                         )
                         if store.conn.changes() > 0:

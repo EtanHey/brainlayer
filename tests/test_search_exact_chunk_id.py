@@ -164,3 +164,35 @@ async def test_brain_search_exact_chunk_id_respects_project_scope():
 
     assert result == (["fallback"], {"total": 0, "results": []})
     search_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_brain_search_exact_chunk_id_resolves_recent_alias():
+    """Old duplicate chunk IDs should resolve through chunk_id_alias during grace period."""
+    old_chunk_id = "brainbar-olddup01"
+    canonical_id = "brainbar-canon01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": canonical_id,
+        "content": "Canonical duplicate cluster content",
+        "source_file": "docs/repro.md",
+        "project": "brainlayer",
+        "content_type": "note",
+        "importance": 8,
+        "created_at": "2026-05-16T09:15:00Z",
+        "summary": "Canonical duplicate",
+        "tags": '["dedupe"]',
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("alias chunk-id query should bypass hybrid search")),
+        ),
+    ):
+        _, structured = await _brain_search(query=old_chunk_id, detail="compact")
+
+    mock_store.get_chunk.assert_called_once_with(old_chunk_id)
+    assert structured["total"] == 1
+    assert structured["results"][0]["chunk_id"] == canonical_id

@@ -209,6 +209,41 @@ class TestStoreMemory:
         # May or may not find related depending on mock embedding similarity
         assert isinstance(result["related"], list)
 
+    def test_store_merges_duplicate_memory(self, store, mock_embed):
+        """Duplicate brain_store writes collapse into one canonical chunk."""
+        from brainlayer.store import store_memory
+
+        content = "Duplicate manual memory should merge through direct brain_store writes"
+        first = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["first"],
+            importance=4,
+        )
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["second"],
+            importance=9,
+        )
+
+        row = (
+            store.conn.cursor()
+            .execute("SELECT id, seen_count, importance, tags FROM chunks WHERE source = 'manual'")
+            .fetchone()
+        )
+        alias = store.conn.cursor().execute("SELECT canonical_chunk_id FROM chunk_id_alias").fetchone()
+
+        assert second["id"] == first["id"]
+        assert row == (first["id"], 2, 9.0, '["first", "second"]')
+        assert alias == (first["id"],)
+
 
 class TestStoreValidation:
     """Test input validation for store_memory."""

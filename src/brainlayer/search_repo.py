@@ -16,6 +16,7 @@ import numpy as np
 
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+from .dedupe import resolve_chunk_id
 
 # ── hybrid_search result cache ───────────────────────────────────────────────
 # Caches identical (store, query_text, filters) → results for 60s.
@@ -1329,6 +1330,7 @@ class SearchMixin:
     def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
         cursor = self._read_cursor()
+        chunk_id = resolve_chunk_id(self.conn, chunk_id)
 
         # Get the target chunk's conversation_id and position
         target = list(

@@ -39,6 +39,13 @@ from .chunk_origin import (
     CHUNK_ORIGIN_UNKNOWN,
     detect_chunk_origin,
 )
+from .dedupe import (
+    ensure_dedupe_schema,
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_seen,
+    resolve_chunk_id,
+)
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
@@ -228,10 +235,19 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("aggregated_into", "TEXT"),
             ("archived_at", "TEXT"),
             ("chunk_origin", "TEXT DEFAULT 'unknown'"),
+            ("seen_count", "INTEGER DEFAULT 1"),
+            ("last_seen_at", "TEXT"),
+            ("content_hash", "TEXT"),
+            ("simhash", "TEXT"),
+            ("simhash_band_0", "TEXT"),
+            ("simhash_band_1", "TEXT"),
+            ("simhash_band_2", "TEXT"),
+            ("simhash_band_3", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
         self._has_chunk_origin = True
+        ensure_dedupe_schema(self.conn)
 
         migration_name = "2026_05_16_fm6_chunk_origin"
         migration_done = cursor.execute(
@@ -1321,14 +1337,51 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         for chunk, embedding in zip(chunks, embeddings):
             chunk_id = chunk["id"]
+            created_at = chunk.get("created_at")
+            tags_value = chunk.get("tags")
+            tags_json = json.dumps(tags_value) if isinstance(tags_value, list) else tags_value
+            duplicate, dedupe_fields = find_duplicate(
+                self.conn,
+                chunk_id=chunk_id,
+                content=chunk["content"],
+                created_at=created_at,
+            )
+            if duplicate is not None:
+                merge_duplicate_chunk(
+                    self.conn,
+                    canonical_id=duplicate.canonical_chunk_id,
+                    duplicate_id=chunk_id,
+                    incoming={
+                        **chunk,
+                        "tags": tags_json,
+                        "created_at": created_at,
+                        "last_seen_at": chunk.get("last_seen_at") or created_at,
+                    },
+                    mechanism=duplicate.mechanism,
+                    hamming_distance_value=duplicate.hamming_distance,
+                )
+                continue
+            if merge_existing_chunk_seen(
+                self.conn,
+                chunk_id=chunk_id,
+                incoming={
+                    **chunk,
+                    "tags": tags_json,
+                    "created_at": created_at,
+                    "last_seen_at": chunk.get("last_seen_at") or created_at,
+                },
+            ):
+                continue
 
             cursor.execute(
                 """
                 INSERT INTO chunks
                 (id, content, metadata, source_file, project,
                  content_type, value_type, char_count, source, created_at,
-                 conversation_id, position, sender, chunk_origin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 conversation_id, position, sender, chunk_origin, tags, importance,
+                 half_life_days, seen_count, last_seen_at, content_hash, simhash,
+                 simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     content = excluded.content,
                     metadata = excluded.metadata,
@@ -1342,6 +1395,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
                     position = COALESCE(excluded.position, chunks.position),
                     sender = COALESCE(excluded.sender, chunks.sender),
+                    tags = COALESCE(excluded.tags, chunks.tags),
+                    importance = COALESCE(excluded.importance, chunks.importance),
+                    half_life_days = MAX(COALESCE(chunks.half_life_days, 30.0), COALESCE(excluded.half_life_days, 30.0)),
+                    seen_count = COALESCE(chunks.seen_count, 1),
+                    last_seen_at = COALESCE(chunks.last_seen_at, excluded.last_seen_at),
+                    content_hash = excluded.content_hash,
+                    simhash = excluded.simhash,
+                    simhash_band_0 = excluded.simhash_band_0,
+                    simhash_band_1 = excluded.simhash_band_1,
+                    simhash_band_2 = excluded.simhash_band_2,
+                    simhash_band_3 = excluded.simhash_band_3,
                     chunk_origin = CASE
                         WHEN excluded.content != chunks.content
                             THEN COALESCE(excluded.chunk_origin, 'unknown')
@@ -1367,6 +1431,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     chunk.get("position"),
                     chunk.get("sender"),
                     detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
+                    tags_json,
+                    float(chunk["importance"]) if chunk.get("importance") is not None else None,
+                    float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None,
+                    int(chunk.get("seen_count") or 1),
+                    chunk.get("last_seen_at") or created_at,
+                    dedupe_fields.content_hash,
+                    dedupe_fields.simhash,
+                    dedupe_fields.bands[0],
+                    dedupe_fields.bands[1],
+                    dedupe_fields.bands[2],
+                    dedupe_fields.bands[3],
                 ),
             )
 
@@ -1457,6 +1532,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Get a single chunk by ID."""
         cursor = self.conn.cursor()
+        chunk_id = resolve_chunk_id(self.conn, chunk_id)
         has_chunk_origin = getattr(self, "_has_chunk_origin", True)
         chunk_origin_select = ", chunk_origin" if has_chunk_origin else ""
         rows = list(
@@ -1488,6 +1564,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "archived_at": r[13],
             "chunk_origin": r[14] if has_chunk_origin else CHUNK_ORIGIN_UNKNOWN,
         }
+
+    def resolve_chunk_id(self, chunk_id: str) -> str:
+        """Resolve a duplicate chunk alias within the 90-day grace period."""
+        return resolve_chunk_id(self.conn, chunk_id)
 
     # ── Chunk events audit ─────────────────────────────────────────────
 

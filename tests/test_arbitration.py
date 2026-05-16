@@ -213,6 +213,48 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
     assert entity_link == replacement_id
 
 
+def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+
+    enqueue_store(
+        chunk_id="store-a",
+        content="Duplicate store memory should merge through the single-writer drain",
+        project="arbitration-test",
+        tags=["first"],
+        importance=3,
+        queue_dir=queue_dir,
+    )
+    enqueue_store(
+        chunk_id="store-b",
+        content="Duplicate store memory should merge through the single-writer drain",
+        project="arbitration-test",
+        tags=["second"],
+        importance=9,
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, seen_count, importance, tags FROM chunks WHERE COALESCE(archived, 0) = 0"
+        ).fetchall()
+        alias = conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchone()
+
+    assert len(rows) == 1
+    canonical_id, seen_count, importance, tags = rows[0]
+    assert seen_count == 2
+    assert importance == 9.0
+    assert tags == '["first", "second"]'
+    assert alias[0] != canonical_id
+    assert alias[1] == canonical_id
+
+
 def test_drain_embeds_every_queued_store(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store

@@ -3,6 +3,7 @@
 import importlib.util
 import io
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,12 @@ def make_hook_db(db_path: Path) -> None:
 
 def run_hook(module, hook_input: dict, monkeypatch, capsys):
     monkeypatch.setattr(module.sys, "stdin", io.StringIO(__import__("json").dumps(hook_input)))
+    if str(HOOK_PATH.parent) not in sys.path:
+        sys.path.insert(0, str(HOOK_PATH.parent))
+    import dedup_coordination
+
+    coord_dir = Path(module.get_db_path()).parent if module.get_db_path() else Path.cwd()
+    monkeypatch.setattr(dedup_coordination, "_COORD_DIR", str(coord_dir))
     with pytest.raises(SystemExit):
         module.main()
     return capsys.readouterr().out
