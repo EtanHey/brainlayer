@@ -260,6 +260,8 @@ def test_audit_overfetch_scales_with_filtered_row_count(tmp_path, monkeypatch):
         monkeypatch.setattr(store, "_audit_recursion_count", lambda: 1500)
 
         assert store._effective_knn_k(3, needs_overfetch=False, include_checkpoints=True, include_audit=False) == 1503
+        monkeypatch.setattr(store, "_audit_recursion_count", lambda: 5000)
+        assert store._effective_knn_k(3, needs_overfetch=False, include_checkpoints=True, include_audit=False) == 2000
     finally:
         store.close()
 

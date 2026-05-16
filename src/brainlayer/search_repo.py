@@ -32,6 +32,7 @@ _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 _MMR_CANDIDATE_LIMIT = 50
 _MMR_LAMBDA = 0.65
+_FILTERED_KNN_MAX = 2000
 META_NOISE_PATTERNS = [
     "brain_search(",
     "brain_entity(",
@@ -318,7 +319,7 @@ class SearchMixin:
 
         if checkpoint_count <= 0:
             return n_results
-        return n_results + checkpoint_count
+        return min(n_results + checkpoint_count, max(n_results, _FILTERED_KNN_MAX))
 
     def _audit_filtered_knn_k(self, n_results: int, include_audit: bool) -> int:
         if include_audit:
@@ -326,7 +327,7 @@ class SearchMixin:
         audit_count = self._audit_recursion_count()
         if audit_count <= 0:
             return n_results
-        return n_results + audit_count
+        return min(n_results + audit_count, max(n_results, _FILTERED_KNN_MAX))
 
     def _effective_knn_k(
         self,
