@@ -157,13 +157,12 @@ def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_ch
         f"COALESCE(CAST({tags_expr.replace('.tags', '.content') if '.tags' in tags_expr else 'content'} AS TEXT), '')"
     )
     compact_content_expr = (
-        f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), "
-        "char(9), ''), char(10), ''), char(13), '')"
+        f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), char(9), ''), char(10), ''), char(13), '')"
     )
     recursive_content_filter = (
         f"LTRIM({content_expr}) NOT LIKE '┌─ brain_search:%' "
         f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
-        f"AND {compact_content_expr} NOT LIKE '%\"jsonrpc\":\"2.0\"%'"
+        f'AND {compact_content_expr} NOT LIKE \'%"jsonrpc":"2.0"%\''
     )
     return f"({tag_filter} AND {recursive_content_filter})"
 
