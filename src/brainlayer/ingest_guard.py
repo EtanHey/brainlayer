@@ -11,7 +11,7 @@ _BRAINLAYER_BOX_PREFIX_RE = re.compile(
     r"^┌─\s*(?:brain_[a-z_]+|entity(?:\s+search)?):",
     re.IGNORECASE,
 )
-_RT_AGENT_CHUNK_ID_RE = re.compile(r"^rt-agent-a[0-9a-f]+-[0-9a-f]+$", re.IGNORECASE)
+_RT_AGENT_CHUNK_ID_RE = re.compile(r"^rt-agent-a[0-9a-f]+-[A-Za-z0-9_-]+$", re.IGNORECASE)
 _RT_AGENT_SOURCE_FILE_RE = re.compile(r"/subagents/agent-a[0-9a-f]+\.jsonl$", re.IGNORECASE)
 _JUDGE_NOTE_MARKERS = (
     "judge_agent_name",

@@ -160,7 +160,12 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed store event with empty content")
         return ApplyResult()
-    recursive_reason = recursive_mcp_output_reason(content)
+    chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
+    recursive_reason = recursive_mcp_output_reason(
+        content,
+        chunk_id=chunk_id,
+        source_file=event.get("source_file"),
+    )
     if recursive_reason:
         logger.warning("Skipping recursive MCP store event: %s", recursive_reason)
         return ApplyResult()
@@ -171,7 +176,6 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         metadata.update(raw_metadata)
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
-    chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
     tags = event.get("tags")
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
@@ -244,7 +248,8 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if not content:
         logger.warning("Skipping malformed watcher event with empty content")
         return
-    recursive_reason = recursive_mcp_output_reason(content)
+    source_file = event.get("source_file") or "realtime-watcher"
+    recursive_reason = recursive_mcp_output_reason(content, chunk_id=chunk_id, source_file=source_file)
     if recursive_reason:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
         return
@@ -255,7 +260,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "id": chunk_id,
             "content": content,
             "metadata": json.dumps(event.get("metadata") or {}),
-            "source_file": event.get("source_file") or "realtime-watcher",
+            "source_file": source_file,
             "project": event.get("project"),
             "content_type": event.get("content_type") or "assistant_text",
             "value_type": event.get("value_type") or "HIGH",
@@ -279,13 +284,14 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
         return
-    recursive_reason = recursive_mcp_output_reason(content)
-    if recursive_reason:
-        logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
-        return
     content_hash = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
     session_id = event.get("session_id") or "unknown"
     chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{content_hash}"
+    source_file = event.get("source_file") or "realtime-hook"
+    recursive_reason = recursive_mcp_output_reason(content, chunk_id=chunk_id, source_file=source_file)
+    if recursive_reason:
+        logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
+        return
     ts_raw = event.get("timestamp")
     try:
         timestamp = float(ts_raw) if ts_raw is not None else time.time()
@@ -298,7 +304,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "id": chunk_id,
             "content": content,
             "metadata": json.dumps({"session_id": session_id, "content_hash": content_hash}),
-            "source_file": "realtime-hook",
+            "source_file": source_file,
             "project": event.get("project"),
             "content_type": "assistant_text",
             "value_type": "HIGH",

@@ -111,8 +111,10 @@ def enqueue_hook_chunk(
     *,
     session_id: str,
     content: str,
+    chunk_id: str | None = None,
     content_hash: str | None = None,
     project: str | None = None,
+    source_file: str | None = None,
     timestamp: float | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
@@ -120,9 +122,11 @@ def enqueue_hook_chunk(
         {
             "kind": "hook_chunk",
             "session_id": session_id,
+            "chunk_id": chunk_id,
             "content": content,
             "content_hash": content_hash,
             "project": project,
+            "source_file": source_file,
             "timestamp": timestamp or time.time(),
         },
         source="hook",

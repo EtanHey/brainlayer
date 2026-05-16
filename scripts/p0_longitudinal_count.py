@@ -19,6 +19,8 @@ FROM chunks
 WHERE created_at > '2026-05-16T16:56:00+03:00'
   AND (content GLOB '┌─brain_search:*'
        OR content GLOB '┌─brain_*:*'
+       OR content GLOB '┌─ brain_search:*'
+       OR content GLOB '┌─ brain_*:*'
        OR content GLOB '*"jsonrpc"*"2.0"*'
        OR content GLOB '*MCP BrainLayer Memory: Invalid JSON-RPC*')
 GROUP BY day
@@ -39,10 +41,7 @@ def run_count(db_path: Path) -> list[dict[str, object]]:
     try:
         conn.execute("PRAGMA query_only=true")
         conn.execute("PRAGMA busy_timeout=5000")
-        return [
-            {"day": day, "new_audit_chunks": int(count)}
-            for day, count in conn.execute(P0_SQL).fetchall()
-        ]
+        return [{"day": day, "new_audit_chunks": int(count)} for day, count in conn.execute(P0_SQL).fetchall()]
     finally:
         conn.close()
 

@@ -21,6 +21,13 @@ RT_AGENT_A7_JUDGE_NOTES_CONTENT = (
     "Final JSONL fields: judge_agent_name, failure_modes_observed, judge_reasoning."
 )
 
+RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT = (
+    "Final judge pass summary:\n"
+    "judge_agent_name=rt-eval-a7\n"
+    "failure_modes_observed=[FM6, FM11]\n"
+    "judge_reasoning=These are benchmark comparison notes, not durable user memory."
+)
+
 
 def _make_entry(text: str) -> dict:
     return {
@@ -117,6 +124,28 @@ def test_vector_upsert_rejects_rt_agent_a7_qid_judge_notes(tmp_path):
                         "project": "brainlayer",
                         "content_type": "assistant_text",
                         "char_count": len(RT_AGENT_A7_JUDGE_NOTES_CONTENT),
+                    }
+                ],
+                [[0.1] * 1024],
+            )
+
+
+def test_vector_upsert_rejects_rt_agent_context_only_judge_notes(tmp_path):
+    with VectorStore(tmp_path / "upsert-rt-agent-context-guard.db") as store:
+        with pytest.raises(ValueError, match="rt-agent judge notes"):
+            store.upsert_chunks(
+                [
+                    {
+                        "id": "rt-agent-a7-contextonly",
+                        "content": RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+                        "metadata": {},
+                        "source_file": (
+                            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+                            "session/subagents/agent-a7823570938b54ccd.jsonl"
+                        ),
+                        "project": "brainlayer",
+                        "content_type": "assistant_text",
+                        "char_count": len(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT),
                     }
                 ],
                 [[0.1] * 1024],
@@ -305,6 +334,57 @@ def test_drain_drops_rt_agent_qid_judge_note_events(tmp_path, monkeypatch):
         session_id="33abe108-session",
         content=RT_AGENT_A7_JUDGE_NOTES_CONTENT,
         project="brainlayer",
+        queue_dir=queue_dir,
+    )
+
+    drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=tmp_path / "drain.log")
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT id, content FROM chunks").fetchall()
+
+    assert drained == 3
+    assert rows == []
+    assert not list(queue_dir.glob("*.jsonl"))
+
+
+def test_drain_passes_rt_agent_context_to_judge_note_guard(tmp_path, monkeypatch):
+    db_path = tmp_path / "drain-rt-agent-context-guard.db"
+    queue_dir = tmp_path / "queue"
+    VectorStore(db_path).close()
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    enqueue_store(
+        chunk_id="rt-agent-a7-drainstore",
+        content=RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+        project="brainlayer",
+        tags=["correction:factual", "auto-detected"],
+        queue_dir=queue_dir,
+    )
+    enqueue_watcher_chunk(
+        chunk_id="ordinary-drainwatcher-id",
+        content=RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+        metadata={},
+        source_file=(
+            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+            "session/subagents/agent-a7823570938b54ccd.jsonl"
+        ),
+        project="brainlayer",
+        content_type="assistant_text",
+        value_type="HIGH",
+        created_at="2026-05-16T12:00:00Z",
+        conversation_id="session",
+        tags=["correction:factual", "auto-detected"],
+        queue_dir=queue_dir,
+    )
+    enqueue_hook_chunk(
+        session_id="33abe108-session",
+        chunk_id="rt-agent-a7-drainhook",
+        content=RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+        project="brainlayer",
+        source_file=(
+            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+            "session/subagents/agent-a7823570938b54ccd.jsonl"
+        ),
         queue_dir=queue_dir,
     )
 
