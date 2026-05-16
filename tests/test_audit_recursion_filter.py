@@ -204,6 +204,61 @@ def test_audit_recursion_count_uses_cached_value_on_busy_retry_exhaustion(tmp_pa
         store.close()
 
 
+def test_audit_overfetch_scales_with_filtered_row_count(tmp_path, monkeypatch):
+    store = VectorStore(tmp_path / "audit-filter-overfetch-size.db")
+    try:
+        monkeypatch.setattr(store, "_audit_recursion_count", lambda: 1500)
+
+        assert store._effective_knn_k(3, needs_overfetch=False, include_checkpoints=True, include_audit=False) == 1503
+    finally:
+        store.close()
+
+
+def test_audit_count_cache_invalidates_after_same_connection_upsert(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-cache-invalidation.db")
+    try:
+        query_embedding = [0.066] * 1024
+
+        assert store._audit_recursion_count() == 0
+        assert store._audit_recursion_count_cache == 0
+
+        audit_chunks = [
+            {
+                "id": f"audit-cache-neighbor-{index}",
+                "content": f"audit cache neighbor {index}",
+                "metadata": {},
+                "source_file": "audit-cache.jsonl",
+                "project": "brainlayer",
+                "content_type": "assistant_text",
+                "source": "claude_code",
+                "char_count": len(f"audit cache neighbor {index}"),
+                "tags": ["audit"],
+            }
+            for index in range(30)
+        ]
+        normal_content = "ordinary same connection audit cache invalidation target"
+        normal_chunk = {
+            "id": "ordinary-after-same-connection-audit-cache",
+            "content": normal_content,
+            "metadata": {},
+            "source_file": "audit-cache.jsonl",
+            "project": "brainlayer",
+            "content_type": "assistant_text",
+            "source": "claude_code",
+            "char_count": len(normal_content),
+            "tags": ["brainbar"],
+        }
+        store.upsert_chunks(audit_chunks + [normal_chunk], [query_embedding] * 30 + [[0.067] * 1024])
+
+        assert store._audit_recursion_count_cache is None
+
+        results = store.search(query_embedding=query_embedding, n_results=3)
+        assert "ordinary-after-same-connection-audit-cache" in results["ids"][0]
+        assert all(not chunk_id.startswith("audit-cache-neighbor-") for chunk_id in results["ids"][0])
+    finally:
+        store.close()
+
+
 def test_exact_r0x_tag_is_filtered_as_audit_shorthand(tmp_path):
     store = VectorStore(tmp_path / "audit-filter-r0x.db")
     try:

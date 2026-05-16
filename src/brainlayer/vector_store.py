@@ -92,6 +92,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._retrieval_strengthening_lock = threading.Lock()
         self._checkpoint_count_cache: int | None = None
         self._checkpoint_count_cache_data_version: int | None = None
+        self._audit_recursion_count_cache: int | None = None
+        self._audit_recursion_count_cache_data_version: int | None = None
         self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
         if self._readonly:
             self._init_readonly_db()
@@ -120,6 +122,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _invalidate_checkpoint_count_cache(self) -> None:
         self._checkpoint_count_cache = None
         self._checkpoint_count_cache_data_version = None
+
+    def _invalidate_audit_recursion_count_cache(self) -> None:
+        self._audit_recursion_count_cache = None
+        self._audit_recursion_count_cache_data_version = None
+
+    def _invalidate_filtered_count_caches(self) -> None:
+        self._invalidate_checkpoint_count_cache()
+        self._invalidate_audit_recursion_count_cache()
 
     def _checkpoint_wal_full(self, cursor) -> None:
         try:
@@ -301,7 +311,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 ),
             )
             self._checkpoint_wal_full(cursor)
-            self._invalidate_checkpoint_count_cache()
+            self._invalidate_filtered_count_caches()
 
         cursor.execute("""
             UPDATE chunks
@@ -1500,7 +1510,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
-        self._invalidate_checkpoint_count_cache()
+        self._invalidate_filtered_count_caches()
 
         return len(chunks)
 
@@ -1565,7 +1575,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
-        self._invalidate_checkpoint_count_cache()
+        self._invalidate_filtered_count_caches()
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
@@ -1585,6 +1595,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_filtered_count_caches()
         return True
 
     def supersede_chunk(self, old_chunk_id: str, new_chunk_id: str) -> bool:
@@ -1604,6 +1615,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_filtered_count_caches()
         return True
 
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:

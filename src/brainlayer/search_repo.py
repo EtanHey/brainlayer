@@ -307,11 +307,26 @@ class SearchMixin:
             return n_results
         return n_results + checkpoint_count
 
-    def _effective_knn_k(self, n_results: int, needs_overfetch: bool, include_checkpoints: bool) -> int:
+    def _audit_filtered_knn_k(self, n_results: int, include_audit: bool) -> int:
+        if include_audit:
+            return n_results
+        audit_count = self._audit_recursion_count()
+        if audit_count <= 0:
+            return n_results
+        return n_results + audit_count
+
+    def _effective_knn_k(
+        self,
+        n_results: int,
+        needs_overfetch: bool,
+        include_checkpoints: bool,
+        include_audit: bool,
+    ) -> int:
         effective_k = n_results
         if needs_overfetch:
             effective_k = max(effective_k, min(n_results * 10, 1000))
-        return self._checkpoint_filtered_knn_k(effective_k, include_checkpoints)
+        effective_k = self._checkpoint_filtered_knn_k(effective_k, include_checkpoints)
+        return self._audit_filtered_knn_k(effective_k, include_audit)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -574,9 +589,8 @@ class SearchMixin:
                 or (source_filter and source_filter != "claude_code")
                 or source_filter_like
                 or correction_category
-                or (not include_audit and self._audit_recursion_count() > 0)
             )
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
+            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
@@ -918,13 +932,9 @@ class SearchMixin:
             where_sql = "AND " + " AND ".join(where_clauses)
 
         needs_overfetch = (
-            entity_id
-            or (source_filter and source_filter != "claude_code")
-            or source_filter_like
-            or correction_category
-            or (not include_audit and self._audit_recursion_count() > 0)
+            entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
         )
-        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
+        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
         results = list(
             cursor.execute(

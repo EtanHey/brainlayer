@@ -286,6 +286,7 @@ def store_memory(
     from .search_repo import clear_hybrid_search_cache
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
+    store._invalidate_audit_recursion_count_cache()
     if chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
         store._invalidate_checkpoint_count_cache()
 
@@ -342,6 +343,7 @@ def embed_pending_chunks(
     from .search_repo import clear_hybrid_search_cache
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
+    store._invalidate_audit_recursion_count_cache()
     return count
 
 
