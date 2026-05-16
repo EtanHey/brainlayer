@@ -199,7 +199,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     cols = _columns(conn, "chunks")
     if supersedes and "superseded_by" in cols:
-        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (chunk_id, supersedes))
+        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (stored_chunk_id, supersedes))
         for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
             if conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
@@ -213,7 +213,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
                 INSERT OR REPLACE INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
                 VALUES (?, ?, ?, ?)
                 """,
-                (entity_id, chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
+                (entity_id, stored_chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
             )
         else:
             logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)

@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
-from .dedupe import compute_dedupe_fields, find_duplicate, merge_duplicate_chunk
+from .dedupe import find_duplicate, merge_duplicate_chunk
 from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
@@ -149,7 +149,7 @@ def store_memory(
     tags_json = json.dumps(tags) if tags else None
     duplicate, dedupe_fields = find_duplicate(store.conn, chunk_id=chunk_id, content=content, created_at=now)
     if duplicate is not None:
-        merge_duplicate_chunk(
+        content_changed = merge_duplicate_chunk(
             store.conn,
             canonical_id=duplicate.canonical_chunk_id,
             duplicate_id=chunk_id,
@@ -165,8 +165,11 @@ def store_memory(
             hamming_distance_value=duplicate.hamming_distance,
         )
         chunk_id = duplicate.canonical_chunk_id
+        if embedding is not None and content_changed:
+            merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            if merged_row:
+                store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
     else:
-        dedupe_fields = compute_dedupe_fields(content, now)
         cursor.execute(
             """
             INSERT INTO chunks

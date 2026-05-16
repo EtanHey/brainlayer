@@ -255,6 +255,49 @@ def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
     assert alias[1] == canonical_id
 
 
+def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('old-id', 'old content', '{}', 'seed')
+            """
+        )
+        conn.execute("INSERT INTO kg_entities (id, name) VALUES ('person-1', 'Person One')")
+        conn.commit()
+
+    duplicate_content = "Duplicate store memory should route references to the canonical row"
+    enqueue_store(
+        chunk_id="store-a",
+        content=duplicate_content,
+        project="arbitration-test",
+        queue_dir=queue_dir,
+    )
+    enqueue_store(
+        chunk_id="store-b",
+        content=duplicate_content,
+        project="arbitration-test",
+        supersedes="old-id",
+        entity_id="person-1",
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
+        entity_link = conn.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'person-1'").fetchone()[0]
+
+    assert superseded_by == "store-a"
+    assert entity_link == "store-a"
+
+
 def test_drain_embeds_every_queued_store(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store

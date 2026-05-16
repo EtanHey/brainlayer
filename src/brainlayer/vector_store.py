@@ -1329,7 +1329,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
-        """Upsert chunks with embeddings."""
+        """Upsert chunks with embeddings, returning the number of input chunks processed."""
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
@@ -1347,7 +1347,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 created_at=created_at,
             )
             if duplicate is not None:
-                merge_duplicate_chunk(
+                content_changed = merge_duplicate_chunk(
                     self.conn,
                     canonical_id=duplicate.canonical_chunk_id,
                     duplicate_id=chunk_id,
@@ -1360,6 +1360,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     mechanism=duplicate.mechanism,
                     hamming_distance_value=duplicate.hamming_distance,
                 )
+                if content_changed:
+                    self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
                 continue
             if merge_existing_chunk_seen(
                 self.conn,

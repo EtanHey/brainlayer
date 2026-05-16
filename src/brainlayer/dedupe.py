@@ -15,7 +15,7 @@ from typing import Any, Iterable
 import apsw
 import sqlite_vec
 
-from .paths import DEFAULT_DB_PATH
+from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +354,8 @@ def _merged_content(existing: str, incoming: str) -> str:
     marker = "[Merged duplicate originals]"
     originals: list[str] = []
     if existing.startswith(marker):
-        parts = re.split(r"\n\n\d+\. ", existing[len(marker) :].strip())
+        numbered = existing[len(marker) :].strip()
+        parts = re.split(r"(?:^|\n\n)\d+\. ", numbered)
         originals.extend(part.strip() for part in parts if part.strip())
     else:
         originals.append(existing.strip())
@@ -427,9 +428,9 @@ def merge_duplicate_chunk(
     mechanism: str,
     hamming_distance_value: int | None,
     archive_existing_duplicate: bool = False,
-) -> None:
+) -> bool:
     if canonical_id == duplicate_id:
-        return
+        return False
     ensure_dedupe_schema(conn)
     cursor = conn.cursor()
     row = cursor.execute(
@@ -440,7 +441,7 @@ def merge_duplicate_chunk(
         (canonical_id,),
     ).fetchone()
     if not row:
-        return
+        return False
     (
         existing_content,
         existing_tags,
@@ -455,6 +456,7 @@ def merge_duplicate_chunk(
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
     merged_content = _merged_content(str(existing_content), str(incoming.get("content") or ""))
+    content_changed = merged_content != str(existing_content)
     fields = compute_dedupe_fields(merged_content, existing_created)
     last_seen_at = _latest_timestamp(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
@@ -478,34 +480,43 @@ def merge_duplicate_chunk(
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     assignments = ", ".join(f"{column} = ?" for column in updates)
-    cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
+    cursor.execute("SAVEPOINT dedupe_merge")
+    try:
+        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
 
-    write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
-    record_dedupe_audit(
-        conn,
-        dropped_id=duplicate_id,
-        kept_id=canonical_id,
-        mechanism=mechanism,
-        hamming_distance_value=hamming_distance_value,
-    )
-    if archive_existing_duplicate:
-        now = datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            """
-            UPDATE chunks
-            SET value_type = 'ARCHIVED',
-                archived = 1,
-                archived_at = COALESCE(archived_at, ?),
-                superseded_by = COALESCE(superseded_by, ?)
-            WHERE id = ?
-            """,
-            (now, canonical_id, duplicate_id),
+        write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
+        record_dedupe_audit(
+            conn,
+            dropped_id=duplicate_id,
+            kept_id=canonical_id,
+            mechanism=mechanism,
+            hamming_distance_value=hamming_distance_value,
         )
-        for table in ("chunk_vectors", "chunk_vectors_binary"):
-            if cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)
-            ).fetchone():
-                cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (duplicate_id,))
+        if archive_existing_duplicate:
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET value_type = 'ARCHIVED',
+                    archived = 1,
+                    archived_at = COALESCE(archived_at, ?),
+                    superseded_by = COALESCE(superseded_by, ?)
+                WHERE id = ?
+                """,
+                (now, canonical_id, duplicate_id),
+            )
+            for table in ("chunk_vectors", "chunk_vectors_binary"):
+                if cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)
+                ).fetchone():
+                    cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (duplicate_id,))
+    except Exception:
+        cursor.execute("ROLLBACK TO dedupe_merge")
+        cursor.execute("RELEASE dedupe_merge")
+        raise
+    else:
+        cursor.execute("RELEASE dedupe_merge")
+    return content_changed
 
 
 def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, Any]) -> bool:
@@ -553,14 +564,23 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     assignments = ", ".join(f"{column} = ?" for column in updates)
-    conn.cursor().execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    record_dedupe_audit(
-        conn,
-        dropped_id=chunk_id,
-        kept_id=chunk_id,
-        mechanism="sha256_same_id",
-        hamming_distance_value=0,
-    )
+    cursor = conn.cursor()
+    cursor.execute("SAVEPOINT dedupe_seen")
+    try:
+        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+        record_dedupe_audit(
+            conn,
+            dropped_id=chunk_id,
+            kept_id=chunk_id,
+            mechanism="sha256_same_id",
+            hamming_distance_value=0,
+        )
+    except Exception:
+        cursor.execute("ROLLBACK TO dedupe_seen")
+        cursor.execute("RELEASE dedupe_seen")
+        raise
+    else:
+        cursor.execute("RELEASE dedupe_seen")
     return True
 
 
@@ -584,7 +604,7 @@ def backfill_dedupe_database(
     allow_live: bool = False,
 ) -> BackfillResult:
     path = Path(db_path).expanduser().resolve()
-    if path == Path(DEFAULT_DB_PATH).expanduser().resolve() and not allow_live:
+    if path == Path(get_db_path()).expanduser().resolve() and not allow_live:
         raise ValueError(
             "Refusing to dedupe-backfill the default live DB; run against a snapshot or pass allow_live=True"
         )
@@ -597,84 +617,101 @@ def backfill_dedupe_database(
     try:
         ensure_dedupe_schema(conn)
         cursor = conn.cursor()
-        rows = list(
-            cursor.execute(
-                f"""
-                SELECT id, content, created_at, tags, importance, half_life_days,
-                       COALESCE(seen_count, 1), last_seen_at
-                FROM chunks
-                WHERE {_active_clause()}
-                ORDER BY created_at ASC, id ASC
-                """
-            )
-        )
+        cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        total = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_active_clause()}").fetchone()[0]
         seen_hashes: dict[str, str] = {}
         band_index: dict[str, set[str]] = {}
         fingerprints: dict[str, str] = {}
         numeric_index: dict[str, set[str]] = {}
         merged = 0
         hashed = 0
-        for index, row in enumerate(rows, start=1):
-            incoming = row_to_incoming(row)
-            chunk_id = str(incoming["id"])
-            still_active = cursor.execute(
-                f"SELECT 1 FROM chunks WHERE id = ? AND {_active_clause()}",
-                (chunk_id,),
-            ).fetchone()
-            if not still_active:
-                continue
-            fields = compute_dedupe_fields(str(incoming["content"]), incoming.get("created_at"))
-            cursor.execute(
-                """
-                UPDATE chunks
-                SET content_hash = ?, simhash = ?,
-                    simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ?
-                WHERE id = ?
+        scanned = 0
+        batch_number = 0
+        last_created_at = ""
+        last_id = ""
+        while True:
+            rows = cursor.execute(
+                f"""
+                SELECT id, content, created_at, tags, importance, half_life_days,
+                       COALESCE(seen_count, 1), last_seen_at
+                FROM chunks
+                WHERE {_active_clause()}
+                  AND (COALESCE(created_at, '') > ?
+                       OR (COALESCE(created_at, '') = ? AND id > ?))
+                ORDER BY COALESCE(created_at, '') ASC, id ASC
+                LIMIT ?
                 """,
-                (fields.content_hash, fields.simhash, *fields.bands, chunk_id),
-            )
-            hashed += 1
-            hit: DuplicateHit | None = None
-            if fields.content_hash in seen_hashes:
-                hit = DuplicateHit(seen_hashes[fields.content_hash], "sha256", 0)
-            elif len(normalize_for_dedupe(str(incoming["content"])).split()) >= MIN_SIMHASH_TOKENS:
-                candidate_ids: set[str] = set()
-                for band in fields.bands:
-                    candidate_ids.update(band_index.get(band, set()))
-                best_id = None
-                best_distance = SIMHASH_BITS
-                for candidate_id in candidate_ids:
-                    if numeric_index.get(candidate_id, set()) != _numeric_tokens(str(incoming["content"])):
-                        left_numbers = numeric_index.get(candidate_id, set())
-                        right_numbers = _numeric_tokens(str(incoming["content"]))
-                        if left_numbers or right_numbers:
-                            continue
-                    distance = hamming_distance(fields.simhash, fingerprints.get(candidate_id))
-                    if distance <= SIMHASH_THRESHOLD and distance < best_distance:
-                        best_id = candidate_id
-                        best_distance = distance
-                if best_id is not None:
-                    hit = DuplicateHit(best_id, "simhash", best_distance)
-            if hit is not None:
-                merge_duplicate_chunk(
-                    conn,
-                    canonical_id=hit.canonical_chunk_id,
-                    duplicate_id=chunk_id,
-                    incoming=incoming,
-                    mechanism=hit.mechanism,
-                    hamming_distance_value=hit.hamming_distance,
-                    archive_existing_duplicate=True,
+                (last_created_at, last_created_at, last_id, batch_size),
+            ).fetchall()
+            if not rows:
+                break
+            batch_number += 1
+            last_created_at = str(rows[-1][2] or "")
+            last_id = str(rows[-1][0])
+            for row in rows:
+                scanned += 1
+                incoming = row_to_incoming(row)
+                chunk_id = str(incoming["id"])
+                still_active = cursor.execute(
+                    f"SELECT 1 FROM chunks WHERE id = ? AND {_active_clause()}",
+                    (chunk_id,),
+                ).fetchone()
+                if not still_active:
+                    continue
+                fields = compute_dedupe_fields(str(incoming["content"]), incoming.get("created_at"))
+                cursor.execute(
+                    """
+                    UPDATE chunks
+                    SET content_hash = ?, simhash = ?,
+                        simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ?
+                    WHERE id = ?
+                    """,
+                    (fields.content_hash, fields.simhash, *fields.bands, chunk_id),
                 )
-                merged += 1
-            else:
-                seen_hashes[fields.content_hash] = chunk_id
-                fingerprints[chunk_id] = fields.simhash
-                numeric_index[chunk_id] = _numeric_tokens(str(incoming["content"]))
-                for band in fields.bands:
-                    band_index.setdefault(band, set()).add(chunk_id)
-            if index % batch_size == 0:
-                logger.info("dedupe backfill progress: scanned=%d merged=%d", index, merged)
-        return BackfillResult(scanned=len(rows), merged=merged, hashed=hashed)
+                hashed += 1
+                hit: DuplicateHit | None = None
+                if fields.content_hash in seen_hashes:
+                    hit = DuplicateHit(seen_hashes[fields.content_hash], "sha256", 0)
+                elif len(normalize_for_dedupe(str(incoming["content"])).split()) >= MIN_SIMHASH_TOKENS:
+                    candidate_ids: set[str] = set()
+                    for band in fields.bands:
+                        candidate_ids.update(band_index.get(band, set()))
+                    best_id = None
+                    best_distance = SIMHASH_BITS
+                    for candidate_id in candidate_ids:
+                        if numeric_index.get(candidate_id, set()) != _numeric_tokens(str(incoming["content"])):
+                            left_numbers = numeric_index.get(candidate_id, set())
+                            right_numbers = _numeric_tokens(str(incoming["content"]))
+                            if left_numbers or right_numbers:
+                                continue
+                        distance = hamming_distance(fields.simhash, fingerprints.get(candidate_id))
+                        if distance <= SIMHASH_THRESHOLD and distance < best_distance:
+                            best_id = candidate_id
+                            best_distance = distance
+                    if best_id is not None:
+                        hit = DuplicateHit(best_id, "simhash", best_distance)
+                if hit is not None:
+                    merge_duplicate_chunk(
+                        conn,
+                        canonical_id=hit.canonical_chunk_id,
+                        duplicate_id=chunk_id,
+                        incoming=incoming,
+                        mechanism=hit.mechanism,
+                        hamming_distance_value=hit.hamming_distance,
+                        archive_existing_duplicate=True,
+                    )
+                    merged += 1
+                else:
+                    seen_hashes[fields.content_hash] = chunk_id
+                    fingerprints[chunk_id] = fields.simhash
+                    numeric_index[chunk_id] = _numeric_tokens(str(incoming["content"]))
+                    for band in fields.bands:
+                        band_index.setdefault(band, set()).add(chunk_id)
+            logger.info("dedupe backfill progress: scanned=%d/%d merged=%d", scanned, total, merged)
+            if batch_number % 3 == 0:
+                cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        return BackfillResult(scanned=scanned, merged=merged, hashed=hashed)
     finally:
         conn.close()
 

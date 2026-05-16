@@ -2,6 +2,7 @@ import json
 import shutil
 import sqlite3
 
+from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
 
 
@@ -123,6 +124,41 @@ def test_same_chunk_id_reposts_increment_seen_count(tmp_path):
     store.close()
 
 
+def test_simhash_merge_refreshes_canonical_vector(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
+    first = " ".join(first_words)
+    second = " ".join(second_words)
+
+    store.upsert_chunks(
+        [
+            _chunk("near-a", first, created_at="2026-05-16T09:00:00Z"),
+            _chunk("near-b", second, created_at="2026-05-16T09:05:00Z"),
+        ],
+        [[0.1] * 1024, [0.7] * 1024],
+    )
+
+    rows = store.conn.cursor().execute("SELECT chunk_id, embedding FROM chunk_vectors").fetchall()
+
+    assert [(row[0], row[1]) for row in rows] == [("near-a", serialize_f32([0.7] * 1024))]
+    store.close()
+
+
+def test_merged_content_list_does_not_double_number_existing_items():
+    from brainlayer.dedupe import _merged_content
+
+    first = _merged_content("original milestone content", "second milestone content")
+    second = _merged_content(first, "third milestone content")
+
+    assert "1. 1." not in second
+    assert "\n\n1. original milestone content" in second
+    assert "\n\n2. second milestone content" in second
+    assert "\n\n3. third milestone content" in second
+
+
 def test_weekly_standups_remain_distinct_chunks(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
@@ -205,7 +241,7 @@ def test_backfill_refuses_default_live_db_without_explicit_allow(monkeypatch, tm
 
     live_path = tmp_path / "brainlayer.db"
     VectorStore(live_path).close()
-    monkeypatch.setattr(dedupe, "DEFAULT_DB_PATH", live_path)
+    monkeypatch.setattr(dedupe, "get_db_path", lambda: live_path)
 
     try:
         backfill_dedupe_database(live_path)

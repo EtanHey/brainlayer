@@ -4,6 +4,7 @@ import importlib.util
 import io
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -113,7 +114,7 @@ def run_hook(module, hook_input: dict, monkeypatch, capsys):
         sys.path.insert(0, str(HOOK_PATH.parent))
     import dedup_coordination
 
-    coord_dir = Path(module.get_db_path()).parent if module.get_db_path() else Path.cwd()
+    coord_dir = Path(module.get_db_path()).parent if module.get_db_path() else Path(tempfile.mkdtemp())
     monkeypatch.setattr(dedup_coordination, "_COORD_DIR", str(coord_dir))
     with pytest.raises(SystemExit):
         module.main()
