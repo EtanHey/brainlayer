@@ -1365,6 +1365,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 content_type=chunk.get("content_type"),
             )
             if duplicate is not None:
+                duplicate_row_exists = cursor.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
                 content_changed = merge_duplicate_chunk(
                     self.conn,
                     canonical_id=duplicate.canonical_chunk_id,
@@ -1377,6 +1378,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     },
                     mechanism=duplicate.mechanism,
                     hamming_distance_value=duplicate.hamming_distance,
+                    archive_existing_duplicate=duplicate_row_exists is not None,
                 )
                 if content_changed:
                     merged_embedding = self._blend_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
@@ -1394,6 +1396,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     "last_seen_at": chunk.get("last_seen_at") or created_at,
                 },
             ):
+                if not self._chunk_vector_exists(cursor, chunk_id):
+                    self._upsert_chunk_vector(cursor, chunk_id, embedding)
                 continue
 
             cursor.execute(

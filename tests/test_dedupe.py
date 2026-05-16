@@ -69,6 +69,26 @@ def test_simhash_week_bucket_prevents_weekly_milestone_collapse():
     )
 
 
+def test_simhash_numeric_guard_preserves_timestamp_only_changes_in_long_content():
+    from brainlayer.dedupe import is_near_duplicate
+
+    left = (
+        "Incident deploy checkpoint completed at 2026-05-16T10:00:00Z with rollout validation, "
+        "service smoke checks, alert review, owner handoff, recovery notes, and follow up tracking."
+    )
+    right = (
+        "Incident deploy checkpoint completed at 2026-05-17T14:00:00Z with rollout validation, "
+        "service smoke checks, alert review, owner handoff, recovery notes, and follow up tracking."
+    )
+
+    assert not is_near_duplicate(
+        left,
+        right,
+        created_at_a="2026-05-16T10:00:00Z",
+        created_at_b="2026-05-16T10:05:00Z",
+    )
+
+
 def test_identical_reposts_collapse_to_single_chunk_with_seen_count_and_alias(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
@@ -287,6 +307,45 @@ def test_enrichment_content_hash_does_not_disable_dedupe(tmp_path):
 
     assert row == ("hash-a", 2)
     assert alias == ("hash-a",)
+    store.close()
+
+
+def test_upsert_archives_existing_row_before_aliasing_same_id_to_canonical(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    canonical = "Canonical content that a deterministic id later duplicates"
+    stale = "Previously active stale content for the deterministic id"
+
+    store.upsert_chunks(
+        [
+            _chunk("canonical-row", canonical, created_at="2026-05-16T09:00:00Z"),
+            _chunk("deterministic-row", stale, created_at="2026-05-16T09:01:00Z"),
+        ],
+        [[0.1] * 1024, [0.8] * 1024],
+    )
+    store.upsert_chunks(
+        [_chunk("deterministic-row", canonical, created_at="2026-05-16T10:00:00Z")],
+        [[0.2] * 1024],
+    )
+
+    active_rows = (
+        store.conn.cursor().execute("SELECT id FROM chunks WHERE COALESCE(archived, 0) = 0 ORDER BY id").fetchall()
+    )
+    archived_row = (
+        store.conn.cursor()
+        .execute("SELECT archived, superseded_by FROM chunks WHERE id = 'deterministic-row'")
+        .fetchone()
+    )
+    alias = (
+        store.conn.cursor()
+        .execute("SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = 'deterministic-row'")
+        .fetchone()
+    )
+
+    assert active_rows == [("canonical-row",)]
+    assert archived_row == (1, "canonical-row")
+    assert alias == ("canonical-row",)
+    assert store.get_chunk("deterministic-row")["id"] == "canonical-row"
     store.close()
 
 

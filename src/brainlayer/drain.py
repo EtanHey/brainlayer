@@ -25,6 +25,7 @@ from .dedupe import (
     ensure_dedupe_schema,
     find_duplicate,
     merge_duplicate_chunk,
+    merge_existing_chunk_content,
     merge_existing_chunk_seen,
 )
 from .paths import get_db_path
@@ -130,6 +131,10 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         )
         return duplicate.canonical_chunk_id
     if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values):
+        return chunk_id
+    existing = conn.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    if existing:
+        merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=values)
         return chunk_id
     _insert_chunk(conn, values)
     return chunk_id

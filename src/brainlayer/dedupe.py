@@ -95,7 +95,7 @@ def normalize_for_exact_hash(content: str) -> str:
 
 
 def _numeric_tokens(content: str) -> set[str]:
-    return {token for token in normalize_for_exact_hash(content).split() if token.isdigit()}
+    return set(re.findall(r"\d+", content.lower()))
 
 
 def _numeric_tokens_conflict(left: str, right: str) -> bool:
@@ -385,7 +385,7 @@ def _latest_timestamp(*values: Any) -> str:
 
 
 def _merged_content(existing: str, incoming: str) -> str:
-    if normalize_for_dedupe(existing) == normalize_for_dedupe(incoming):
+    if normalize_for_exact_hash(existing) == normalize_for_exact_hash(incoming):
         return existing
     marker = "[Merged duplicate originals]"
     originals: list[str] = []
@@ -602,7 +602,7 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
         existing_last,
         existing_created,
     ) = row
-    if normalize_for_dedupe(str(existing_content)) != normalize_for_dedupe(str(incoming.get("content") or "")):
+    if normalize_for_exact_hash(str(existing_content)) != normalize_for_exact_hash(str(incoming.get("content") or "")):
         return False
 
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
@@ -639,6 +639,76 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
     else:
         cursor.execute("RELEASE dedupe_seen")
     return True
+
+
+def merge_existing_chunk_content(conn: Any, *, chunk_id: str, incoming: dict[str, Any]) -> bool:
+    """Merge a same-id content update without aliasing the chunk to itself."""
+    ensure_dedupe_schema(conn)
+    cursor = conn.cursor()
+    row = cursor.execute(
+        """
+        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
+        FROM chunks
+        WHERE id = ?
+        """,
+        (chunk_id,),
+    ).fetchone()
+    if not row:
+        return False
+    (
+        existing_content,
+        existing_tags,
+        existing_importance,
+        existing_half_life,
+        existing_seen,
+        existing_last,
+        existing_created,
+    ) = row
+    incoming_content = str(incoming.get("content") or "")
+    merged_content = _merged_content(str(existing_content), incoming_content)
+    content_changed = merged_content != str(existing_content)
+    fields = compute_dedupe_fields(merged_content, existing_created)
+    merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
+    merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
+    merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
+    last_seen_at = _latest_timestamp(
+        existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
+    )
+    updates: dict[str, Any] = {
+        "content": merged_content,
+        "char_count": len(merged_content),
+        "tags": json.dumps(merged_tags) if merged_tags else None,
+        "seen_count": int(existing_seen or 1) + int(incoming.get("seen_count") or 1),
+        "last_seen_at": last_seen_at,
+        "dedupe_hash": fields.content_hash,
+        "simhash": fields.simhash,
+        "simhash_band_0": fields.bands[0],
+        "simhash_band_1": fields.bands[1],
+        "simhash_band_2": fields.bands[2],
+        "simhash_band_3": fields.bands[3],
+    }
+    if merged_importance is not None:
+        updates["importance"] = merged_importance
+    if merged_half_life is not None:
+        updates["half_life_days"] = merged_half_life
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    cursor.execute("SAVEPOINT dedupe_same_id_content")
+    try:
+        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+        record_dedupe_audit(
+            conn,
+            dropped_id=chunk_id,
+            kept_id=chunk_id,
+            mechanism="same_id_content_merge",
+            hamming_distance_value=None,
+        )
+    except Exception:
+        cursor.execute("ROLLBACK TO dedupe_same_id_content")
+        cursor.execute("RELEASE dedupe_same_id_content")
+        raise
+    else:
+        cursor.execute("RELEASE dedupe_same_id_content")
+    return content_changed
 
 
 def row_to_incoming(row: Any) -> dict[str, Any]:
@@ -781,10 +851,7 @@ def backfill_dedupe_database(
                     best_distance = SIMHASH_BITS
                     for candidate_id in candidate_ids:
                         if numeric_index.get(candidate_id, set()) != incoming_numbers:
-                            left_numbers = numeric_index.get(candidate_id, set())
-                            right_numbers = incoming_numbers
-                            if left_numbers or right_numbers:
-                                continue
+                            continue
                         distance = hamming_distance(fields.simhash, fingerprints.get(candidate_id))
                         if distance <= SIMHASH_THRESHOLD and distance < best_distance:
                             best_id = candidate_id
@@ -801,6 +868,26 @@ def backfill_dedupe_database(
                         hamming_distance_value=hit.hamming_distance,
                         archive_existing_duplicate=True,
                     )
+                    alias_row = cursor.execute(
+                        """
+                        SELECT 1 FROM chunk_id_alias
+                        WHERE old_chunk_id = ? AND canonical_chunk_id = ?
+                        """,
+                        (chunk_id, hit.canonical_chunk_id),
+                    ).fetchone()
+                    if not alias_row:
+                        _add_backfill_index(
+                            chunk_id,
+                            str(incoming["content"]),
+                            incoming.get("created_at"),
+                            project=incoming.get("project"),
+                            content_type=incoming.get("content_type"),
+                            seen_hashes=seen_hashes,
+                            band_index=band_index,
+                            fingerprints=fingerprints,
+                            numeric_index=numeric_index,
+                        )
+                        continue
                     merged_row = cursor.execute(
                         "SELECT content, created_at FROM chunks WHERE id = ?",
                         (hit.canonical_chunk_id,),

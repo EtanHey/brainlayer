@@ -340,6 +340,42 @@ def test_drain_watcher_same_id_reposts_increment_seen_count(tmp_path, monkeypatc
     assert audit == ("watcher-same", "watcher-same", "sha256_same_id")
 
 
+def test_drain_watcher_same_id_timestamp_change_merges_originals(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    first = {
+        "kind": "watcher_chunk",
+        "chunk_id": "watcher-timestamp",
+        "content": "Deploy at 2026-05-16T10:00:00Z",
+        "created_at": "2026-05-16T09:00:00Z",
+    }
+    second = {
+        **first,
+        "content": "Deploy at 2026-05-17T10:00:00Z",
+        "created_at": "2026-05-16T10:00:00Z",
+    }
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(first) + "\n" + json.dumps(second) + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT content, seen_count FROM chunks WHERE id = 'watcher-timestamp'").fetchone()
+        audit = conn.execute("SELECT chunk_id_dropped, chunk_id_kept, mechanism FROM dedupe_audit").fetchone()
+
+    assert "2026-05-16T10:00:00Z" in row[0]
+    assert "2026-05-17T10:00:00Z" in row[0]
+    assert row[1] == 2
+    assert audit == ("watcher-timestamp", "watcher-timestamp", "same_id_content_merge")
+
+
 def test_drain_embeds_every_queued_store(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store
