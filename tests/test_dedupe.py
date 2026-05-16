@@ -349,6 +349,66 @@ def test_upsert_archives_existing_row_before_aliasing_same_id_to_canonical(tmp_p
     store.close()
 
 
+def test_archiving_canonical_duplicate_retargets_existing_aliases(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, merge_duplicate_chunk, write_alias
+
+    store = VectorStore(tmp_path / "alias-chain.db")
+    cursor = store.conn.cursor()
+    first_fields = compute_dedupe_fields("First canonical duplicate chain memory", "2026-05-16T09:00:00Z")
+    second_fields = compute_dedupe_fields("Second canonical duplicate chain memory", "2026-05-16T10:00:00Z")
+    cursor.execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "chain-a",
+            "First canonical duplicate chain memory",
+            "2026-05-16T09:00:00Z",
+            first_fields.dedupe_hash,
+            first_fields.simhash,
+            *first_fields.bands,
+        ),
+    )
+    cursor.execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "chain-c",
+            "Second canonical duplicate chain memory",
+            "2026-05-16T10:00:00Z",
+            second_fields.dedupe_hash,
+            second_fields.simhash,
+            *second_fields.bands,
+        ),
+    )
+    write_alias(store.conn, old_chunk_id="chain-b", canonical_chunk_id="chain-a")
+
+    merge_duplicate_chunk(
+        store.conn,
+        canonical_id="chain-c",
+        duplicate_id="chain-a",
+        incoming={
+            "id": "chain-a",
+            "content": "First canonical duplicate chain memory",
+            "tags": None,
+            "created_at": "2026-05-16T09:00:00Z",
+        },
+        mechanism="simhash",
+        hamming_distance_value=2,
+        archive_existing_duplicate=True,
+    )
+
+    aliases = dict(cursor.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias ORDER BY old_chunk_id"))
+    assert aliases == {"chain-a": "chain-c", "chain-b": "chain-c"}
+    assert store.resolve_chunk_id("chain-b") == "chain-c"
+    store.close()
+
+
 def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
     from brainlayer.dedupe import backfill_dedupe_database
 

@@ -365,7 +365,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                         chunk_origin,
                                         1,
                                         created_at,
-                                        dedupe_fields.content_hash,
+                                        dedupe_fields.dedupe_hash,
                                         dedupe_fields.simhash,
                                         dedupe_fields.bands[0],
                                         dedupe_fields.bands[1],

@@ -252,7 +252,7 @@ def test_update_chunk_recomputes_dedupe_fingerprints_when_content_changes(tmp_pa
     store.close()
 
     assert updated is True
-    assert row == (expected.content_hash, expected.simhash, *expected.bands)
+    assert row == (expected.dedupe_hash, expected.simhash, *expected.bands)
 
 
 def test_watcher_and_drain_tag_precompact_origin(tmp_path, monkeypatch):

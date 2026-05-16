@@ -64,7 +64,7 @@ _STOPWORDS = frozenset(
 
 @dataclass(frozen=True)
 class DedupeFields:
-    content_hash: str
+    dedupe_hash: str
     simhash: str
     bands: tuple[str, str, str, str]
 
@@ -225,7 +225,7 @@ def compute_dedupe_fields(content: str, created_at: str | None = None) -> Dedupe
     fingerprint = simhash64(content, created_at=created_at)
     simhash = _simhash_hex(fingerprint)
     return DedupeFields(
-        content_hash=normalized_exact_hash(content),
+        dedupe_hash=normalized_exact_hash(content),
         simhash=simhash,
         bands=(simhash[0:4], simhash[4:8], simhash[8:12], simhash[12:16]),
     )
@@ -325,7 +325,7 @@ def find_duplicate(
         ORDER BY created_at ASC, id ASC
         LIMIT 1
         """,
-        (fields.content_hash, chunk_id, *scope_params),
+        (fields.dedupe_hash, chunk_id, *scope_params),
     ).fetchone()
     if exact:
         return DuplicateHit(str(exact[0]), "sha256", 0), fields
@@ -445,6 +445,20 @@ def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprec
     )
 
 
+def retarget_aliases(conn: Any, *, old_canonical_chunk_id: str, new_canonical_chunk_id: str) -> None:
+    if old_canonical_chunk_id == new_canonical_chunk_id:
+        return
+    conn.cursor().execute(
+        """
+        UPDATE chunk_id_alias
+        SET canonical_chunk_id = ?
+        WHERE canonical_chunk_id = ?
+          AND old_chunk_id != ?
+        """,
+        (new_canonical_chunk_id, old_canonical_chunk_id, new_canonical_chunk_id),
+    )
+
+
 def resolve_chunk_id(conn: Any, chunk_id: str) -> str:
     try:
         row = (
@@ -516,7 +530,7 @@ def merge_duplicate_chunk(
         "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + incoming_seen,
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.content_hash,
+        "dedupe_hash": fields.dedupe_hash,
         "simhash": fields.simhash,
         "simhash_band_0": fields.bands[0],
         "simhash_band_1": fields.bands[1],
@@ -533,6 +547,8 @@ def merge_duplicate_chunk(
         cursor.execute("SAVEPOINT dedupe_merge")
         try:
             cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
+            if archive_existing_duplicate:
+                retarget_aliases(conn, old_canonical_chunk_id=duplicate_id, new_canonical_chunk_id=canonical_id)
             write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
             record_dedupe_audit(
                 conn,
@@ -702,7 +718,7 @@ def merge_existing_chunk_content(conn: Any, *, chunk_id: str, incoming: dict[str
         "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + int(incoming.get("seen_count") or 1),
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.content_hash,
+        "dedupe_hash": fields.dedupe_hash,
         "simhash": fields.simhash,
         "simhash_band_0": fields.bands[0],
         "simhash_band_1": fields.bands[1],
@@ -789,7 +805,7 @@ def _add_backfill_index(
 ) -> DedupeFields:
     fields = compute_dedupe_fields(content, created_at)
     scope = _scope_key(project, content_type)
-    seen_hashes[(*scope, fields.content_hash)] = chunk_id
+    seen_hashes[(*scope, fields.dedupe_hash)] = chunk_id
     fingerprints[chunk_id] = fields.simhash
     numeric_index[chunk_id] = _numeric_tokens(content)
     for band in fields.bands:
@@ -870,11 +886,11 @@ def backfill_dedupe_database(
                         simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ?
                     WHERE id = ?
                     """,
-                    (fields.content_hash, fields.simhash, *fields.bands, chunk_id),
+                    (fields.dedupe_hash, fields.simhash, *fields.bands, chunk_id),
                 )
                 hashed += 1
                 hit: DuplicateHit | None = None
-                hash_key = (*scope, fields.content_hash)
+                hash_key = (*scope, fields.dedupe_hash)
                 if hash_key in seen_hashes:
                     hit = DuplicateHit(seen_hashes[hash_key], "sha256", 0)
                 elif len(normalize_for_dedupe(str(incoming["content"])).split()) >= MIN_SIMHASH_TOKENS:

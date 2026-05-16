@@ -322,6 +322,40 @@ class TestStoreMemory:
         assert row == (2,)
         assert link == (first["id"],)
 
+    def test_changed_duplicate_embedding_runs_after_write_transaction(self, store):
+        """Merged-content embedding should not hold the write transaction open."""
+        from brainlayer.store import store_memory
+
+        calls = []
+
+        def embed(content: str):
+            calls.append((content, store.conn.getautocommit()))
+            return [0.1] * 1024
+
+        first_words = [f"token{i}" for i in range(100)]
+        second_words = first_words.copy()
+        second_words[0] = "changed0"
+
+        first = store_memory(
+            store=store,
+            embed_fn=embed,
+            content=" ".join(first_words),
+            memory_type="learning",
+            project="brainlayer",
+        )
+        second = store_memory(
+            store=store,
+            embed_fn=embed,
+            content=" ".join(second_words),
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        merged_embedding_calls = [call for call in calls if "\n\n2. " in call[0]]
+        assert second["id"] == first["id"]
+        assert merged_embedding_calls
+        assert all(autocommit for _, autocommit in merged_embedding_calls)
+
 
 class TestStoreValidation:
     """Test input validation for store_memory."""

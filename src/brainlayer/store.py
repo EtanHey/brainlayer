@@ -150,12 +150,14 @@ def store_memory(
     tags_json = json.dumps(tags) if tags else None
     incoming_chunk_id = chunk_id
     stored_chunk_id = chunk_id
+    pending_reembed: tuple[str, str] | None = None
     for attempt in range(5):
         cursor = store.conn.cursor()
         transaction_started = False
         try:
             cursor.execute("BEGIN IMMEDIATE")
             transaction_started = True
+            pending_reembed = None
             duplicate, dedupe_fields = find_duplicate(
                 store.conn,
                 chunk_id=incoming_chunk_id,
@@ -188,7 +190,7 @@ def store_memory(
                             (stored_chunk_id,),
                         ).fetchone()
                         if merged_row:
-                            store._upsert_chunk_vector(cursor, stored_chunk_id, embed_fn(str(merged_row[0])))
+                            pending_reembed = (stored_chunk_id, str(merged_row[0]))
                     elif not store._chunk_vector_exists(cursor, stored_chunk_id):
                         store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
             else:
@@ -220,7 +222,7 @@ def store_memory(
                         chunk_origin,
                         1,
                         now,
-                        dedupe_fields.content_hash,
+                        dedupe_fields.dedupe_hash,
                         dedupe_fields.simhash,
                         dedupe_fields.bands[0],
                         dedupe_fields.bands[1],
@@ -254,6 +256,30 @@ def store_memory(
             if transaction_started:
                 cursor.execute("ROLLBACK")
             raise
+
+    if pending_reembed is not None and embed_fn is not None:
+        reembed_chunk_id, reembed_content = pending_reembed
+        merged_embedding = embed_fn(reembed_content)
+        for attempt in range(5):
+            cursor = store.conn.cursor()
+            transaction_started = False
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                store._upsert_chunk_vector(cursor, reembed_chunk_id, merged_embedding)
+                cursor.execute("COMMIT")
+                transaction_started = False
+                break
+            except apsw.BusyError:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                if attempt == 4:
+                    raise
+                time.sleep(0.1 * (2**attempt))
+            except Exception:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                raise
 
     from .search_repo import clear_hybrid_search_cache
 
