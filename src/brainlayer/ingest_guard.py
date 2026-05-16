@@ -13,11 +13,14 @@ _BRAINLAYER_BOX_PREFIX_RE = re.compile(
 )
 _RT_AGENT_CHUNK_ID_RE = re.compile(r"^rt-agent-a[0-9a-f]+-[A-Za-z0-9_-]+$", re.IGNORECASE)
 _RT_AGENT_SOURCE_FILE_RE = re.compile(r"/subagents/agent-a[0-9a-f]+\.jsonl$", re.IGNORECASE)
-_JUDGE_NOTE_MARKERS = (
+_STRONG_JUDGE_NOTE_MARKERS = (
     "judge_agent_name",
     "failure_modes_observed",
     "judge_reasoning",
     "grade distribution",
+)
+_QID_JUDGE_NOTE_MARKERS = (
+    *_STRONG_JUDGE_NOTE_MARKERS,
     "fm11",
 )
 
@@ -25,15 +28,16 @@ _JUDGE_NOTE_MARKERS = (
 def _looks_like_rt_agent_judge_notes(content: str, chunk_id: str | None = None, source_file: str | None = None) -> bool:
     folded = content.casefold()
     has_qid = bool(re.search(r"\bqid\s*=", folded))
-    has_judge_marker = any(marker in folded for marker in _JUDGE_NOTE_MARKERS)
-    if has_qid and has_judge_marker:
+    if has_qid and any(marker in folded for marker in _QID_JUDGE_NOTE_MARKERS):
         return True
 
+    chunk_id_s = chunk_id if isinstance(chunk_id, str) else None
+    source_file_s = source_file if isinstance(source_file, str) else None
     has_rt_agent_context = bool(
-        (chunk_id and _RT_AGENT_CHUNK_ID_RE.match(chunk_id))
-        or (source_file and _RT_AGENT_SOURCE_FILE_RE.search(source_file))
+        (chunk_id_s and _RT_AGENT_CHUNK_ID_RE.match(chunk_id_s))
+        or (source_file_s and _RT_AGENT_SOURCE_FILE_RE.search(source_file_s))
     )
-    return has_rt_agent_context and has_judge_marker
+    return has_rt_agent_context and any(marker in folded for marker in _STRONG_JUDGE_NOTE_MARKERS)
 
 
 def recursive_mcp_output_reason(

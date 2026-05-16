@@ -9,8 +9,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from brainlayer.paths import get_db_path
+
 SINCE = "2026-05-16T16:56:00+03:00"
-DEFAULT_DB_PATH = Path.home() / ".local/share/brainlayer/brainlayer.db"
 DEFAULT_LOG_DIR = Path.home() / ".brainlayer-p0-counter"
 
 P0_SQL = """
@@ -29,7 +30,7 @@ ORDER BY day;
 
 
 def _db_path() -> Path:
-    return Path(os.environ.get("BRAINLAYER_DB", DEFAULT_DB_PATH)).expanduser()
+    return get_db_path().expanduser()
 
 
 def _log_dir() -> Path:

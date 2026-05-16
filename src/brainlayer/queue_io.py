@@ -127,7 +127,7 @@ def enqueue_hook_chunk(
             "content_hash": content_hash,
             "project": project,
             "source_file": source_file,
-            "timestamp": timestamp or time.time(),
+            "timestamp": timestamp if timestamp is not None else time.time(),
         },
         source="hook",
         queue_dir=queue_dir,

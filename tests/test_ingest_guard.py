@@ -28,6 +28,18 @@ RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT = (
     "judge_reasoning=These are benchmark comparison notes, not durable user memory."
 )
 
+RT_AGENT_FM11_ANALYSIS_CONTENT = (
+    "Investigate FM11 retrieval failure mode and summarize why recall missed a valid workshop memory."
+)
+
+RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE = (
+    "/Users/test-user/.claude/projects/-Users-test-user-Gits-orchestrator/"
+    "session/subagents/agent-a7823570938b54ccd.jsonl"
+)
+RT_AGENT_VOICELAYER_SUBAGENT_SOURCE_FILE = (
+    "/Users/test-user/.claude/projects/-Users-test-user-Gits-voicelayer/session/subagents/agent-a7c933d4439ab60b3.jsonl"
+)
+
 
 def _make_entry(text: str) -> dict:
     return {
@@ -65,25 +77,17 @@ def test_watcher_postchunk_rejects_rt_agent_qid_judge_notes():
 
 def test_watcher_preclassify_rejects_rt_agent_context_only_judge_notes_from_subagent_source():
     entry = _make_entry(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT)
-    entry["_source_file"] = (
-        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-        "session/subagents/agent-a7823570938b54ccd.jsonl"
-    )
+    entry["_source_file"] = RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE
 
     assert should_skip_entry(entry) == "recursive_mcp_output"
 
 
 def test_watcher_postchunk_rejects_rt_agent_context_only_judge_notes_from_source_context():
-    source_file = (
-        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-        "session/subagents/agent-a7823570938b54ccd.jsonl"
-    )
-
     assert (
         should_skip_chunk_content(
             RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
             chunk_id="ordinary-watcher-id",
-            source_file=source_file,
+            source_file=RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
         )
         == "recursive_mcp_output"
     )
@@ -94,10 +98,7 @@ def test_non_arbitrated_watcher_drops_rt_agent_context_only_judge_notes(tmp_path
     db_path = tmp_path / "watcher-direct-rt-agent-guard.db"
     flush = create_flush_callback(db_path)
     entry = _make_entry(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT)
-    entry["_source_file"] = (
-        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-        "session/subagents/agent-a7823570938b54ccd.jsonl"
-    )
+    entry["_source_file"] = RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE
 
     flush([entry])
 
@@ -105,6 +106,28 @@ def test_non_arbitrated_watcher_drops_rt_agent_context_only_judge_notes(tmp_path
         rows = conn.execute("SELECT id, content FROM chunks").fetchall()
 
     assert rows == []
+
+
+def test_rt_agent_fm11_analysis_without_judge_fields_is_allowed():
+    assert (
+        should_skip_chunk_content(
+            RT_AGENT_FM11_ANALYSIS_CONTENT,
+            chunk_id="rt-agent-a7-fm11analysis",
+            source_file=RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
+        )
+        is None
+    )
+
+
+def test_rt_agent_guard_ignores_non_string_context_values():
+    assert (
+        should_skip_chunk_content(
+            RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+            chunk_id=7,
+            source_file={"path": RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE},
+        )
+        is None
+    )
 
 
 def test_direct_store_rejects_recursive_mcp_output(tmp_path):
@@ -161,10 +184,7 @@ def test_vector_upsert_rejects_rt_agent_a7_qid_judge_notes(tmp_path):
                         "id": "rt-agent-a7-deadbeefcafefeed",
                         "content": RT_AGENT_A7_JUDGE_NOTES_CONTENT,
                         "metadata": {},
-                        "source_file": (
-                            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-                            "session/subagents/agent-a7823570938b54ccd.jsonl"
-                        ),
+                        "source_file": RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
                         "project": "brainlayer",
                         "content_type": "assistant_text",
                         "char_count": len(RT_AGENT_A7_JUDGE_NOTES_CONTENT),
@@ -183,10 +203,7 @@ def test_vector_upsert_rejects_rt_agent_context_only_judge_notes(tmp_path):
                         "id": "rt-agent-a7-contextonly",
                         "content": RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
                         "metadata": {},
-                        "source_file": (
-                            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-                            "session/subagents/agent-a7823570938b54ccd.jsonl"
-                        ),
+                        "source_file": RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
                         "project": "brainlayer",
                         "content_type": "assistant_text",
                         "char_count": len(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT),
@@ -204,10 +221,7 @@ def test_vector_upsert_allows_non_judge_rt_agent_chunk(tmp_path):
                     "id": "rt-agent-a7-feedfacecafebeef",
                     "content": "Explore the landing page animation and summarize the CSS keyframe structure.",
                     "metadata": {},
-                    "source_file": (
-                        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-voicelayer/"
-                        "session/subagents/agent-a7c933d4439ab60b3.jsonl"
-                    ),
+                    "source_file": RT_AGENT_VOICELAYER_SUBAGENT_SOURCE_FILE,
                     "project": "brainlayer",
                     "content_type": "assistant_text",
                     "char_count": 75,
@@ -282,10 +296,7 @@ def test_update_chunk_rejects_rt_agent_qid_judge_notes(tmp_path):
                     "id": "rt-agent-a7-update-target",
                     "content": "ordinary rt-agent memory before attempted judge-note update",
                     "metadata": {},
-                    "source_file": (
-                        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-                        "session/subagents/agent-a7823570938b54ccd.jsonl"
-                    ),
+                    "source_file": RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
                     "project": "brainlayer",
                     "content_type": "assistant_text",
                     "char_count": 57,
@@ -362,10 +373,7 @@ def test_drain_drops_rt_agent_qid_judge_note_events(tmp_path, monkeypatch):
         chunk_id="rt-agent-a7-drainwatcher",
         content=RT_AGENT_A7_JUDGE_NOTES_CONTENT,
         metadata={},
-        source_file=(
-            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-            "session/subagents/agent-a7823570938b54ccd.jsonl"
-        ),
+        source_file=RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
         project="brainlayer",
         content_type="assistant_text",
         value_type="HIGH",
@@ -408,10 +416,7 @@ def test_drain_passes_rt_agent_context_to_judge_note_guard(tmp_path, monkeypatch
         chunk_id="ordinary-drainwatcher-id",
         content=RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
         metadata={},
-        source_file=(
-            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-            "session/subagents/agent-a7823570938b54ccd.jsonl"
-        ),
+        source_file=RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
         project="brainlayer",
         content_type="assistant_text",
         value_type="HIGH",
@@ -425,10 +430,7 @@ def test_drain_passes_rt_agent_context_to_judge_note_guard(tmp_path, monkeypatch
         chunk_id="rt-agent-a7-drainhook",
         content=RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
         project="brainlayer",
-        source_file=(
-            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
-            "session/subagents/agent-a7823570938b54ccd.jsonl"
-        ),
+        source_file=RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE,
         queue_dir=queue_dir,
     )
 

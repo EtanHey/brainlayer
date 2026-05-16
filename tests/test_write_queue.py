@@ -17,6 +17,7 @@ from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
+from brainlayer.queue_io import enqueue_hook_chunk
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -58,6 +59,18 @@ class TestQueueStore:
                 _queue_store({"content": f"item-{i}", "memory_type": "note"})
 
         assert len(list(tmp_path.glob("mcp-*.jsonl"))) == 105
+
+    def test_enqueue_hook_chunk_preserves_zero_timestamp(self, tmp_path):
+        path = enqueue_hook_chunk(
+            session_id="session-zero",
+            content="hook memory with explicit epoch timestamp",
+            timestamp=0.0,
+            queue_dir=tmp_path,
+        )
+
+        item = json.loads(path.read_text())
+
+        assert item["timestamp"] == 0.0
 
 
 class TestSingleWriterQueue:
