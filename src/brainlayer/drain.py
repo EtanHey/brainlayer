@@ -127,6 +127,8 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
             hamming_distance_value=duplicate.hamming_distance,
         )
         return duplicate.canonical_chunk_id
+    if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values):
+        return chunk_id
     _insert_chunk(conn, values)
     return chunk_id
 

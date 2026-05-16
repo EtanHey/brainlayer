@@ -6,6 +6,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 
 import json
 import os
+import struct
 import threading
 import time
 from datetime import datetime, timezone
@@ -1321,6 +1322,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 (chunk_id, embedding_bytes),
             )
 
+    def _blend_chunk_vector(self, cursor, chunk_id: str, embedding: List[float]) -> List[float]:
+        """Approximate a merged duplicate by preserving canonical and incoming vectors."""
+        row = cursor.execute("SELECT embedding FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()
+        if not row or row[0] is None:
+            return embedding
+        existing_bytes = bytes(row[0])
+        if len(existing_bytes) != len(embedding) * 4:
+            return embedding
+        existing = struct.unpack(f"{len(embedding)}f", existing_bytes)
+        return [(float(left) + float(right)) / 2.0 for left, right in zip(existing, embedding)]
+
     def _delete_chunk_vector(self, cursor, chunk_id: str) -> None:
         """Delete a chunk from both float and binary vector tables."""
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
@@ -1362,7 +1374,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     hamming_distance_value=duplicate.hamming_distance,
                 )
                 if content_changed:
-                    self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                    merged_embedding = self._blend_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                    self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
                 continue
             if merge_existing_chunk_seen(
                 self.conn,

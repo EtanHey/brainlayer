@@ -147,7 +147,7 @@ def test_simhash_merge_refreshes_canonical_vector(tmp_path):
 
     rows = store.conn.cursor().execute("SELECT chunk_id, embedding FROM chunk_vectors").fetchall()
 
-    assert [(row[0], row[1]) for row in rows] == [("near-a", serialize_f32([0.7] * 1024))]
+    assert [(row[0], row[1]) for row in rows] == [("near-a", serialize_f32([0.4] * 1024))]
     store.close()
 
 

@@ -310,6 +310,36 @@ def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp
     assert entity_link == "store-a"
 
 
+def test_drain_watcher_same_id_reposts_increment_seen_count(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    event = {
+        "kind": "watcher_chunk",
+        "chunk_id": "watcher-same",
+        "content": "Same watcher chunk should count repeat sightings",
+        "created_at": "2026-05-16T09:00:00Z",
+        "tags": ["watcher"],
+    }
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(event) + "\n" + json.dumps({**event, "created_at": "2026-05-16T10:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT seen_count, last_seen_at FROM chunks WHERE id = 'watcher-same'").fetchone()
+        audit = conn.execute("SELECT chunk_id_dropped, chunk_id_kept, mechanism FROM dedupe_audit").fetchone()
+
+    assert row == (2, "2026-05-16T10:00:00Z")
+    assert audit == ("watcher-same", "watcher-same", "sha256_same_id")
+
+
 def test_drain_embeds_every_queued_store(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store

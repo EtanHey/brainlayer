@@ -625,6 +625,42 @@ def row_to_incoming(row: Any) -> dict[str, Any]:
     }
 
 
+def _drop_backfill_index(
+    chunk_id: str,
+    *,
+    seen_hashes: dict[str, str],
+    band_index: dict[str, set[str]],
+    fingerprints: dict[str, str],
+    numeric_index: dict[str, set[str]],
+) -> None:
+    fingerprints.pop(chunk_id, None)
+    numeric_index.pop(chunk_id, None)
+    for hash_value, indexed_id in list(seen_hashes.items()):
+        if indexed_id == chunk_id:
+            seen_hashes.pop(hash_value, None)
+    for indexed_ids in band_index.values():
+        indexed_ids.discard(chunk_id)
+
+
+def _add_backfill_index(
+    chunk_id: str,
+    content: str,
+    created_at: str | None,
+    *,
+    seen_hashes: dict[str, str],
+    band_index: dict[str, set[str]],
+    fingerprints: dict[str, str],
+    numeric_index: dict[str, set[str]],
+) -> DedupeFields:
+    fields = compute_dedupe_fields(content, created_at)
+    seen_hashes[fields.content_hash] = chunk_id
+    fingerprints[chunk_id] = fields.simhash
+    numeric_index[chunk_id] = _numeric_tokens(content)
+    for band in fields.bands:
+        band_index.setdefault(band, set()).add(chunk_id)
+    return fields
+
+
 def backfill_dedupe_database(
     db_path: str | Path,
     *,
@@ -728,13 +764,39 @@ def backfill_dedupe_database(
                         hamming_distance_value=hit.hamming_distance,
                         archive_existing_duplicate=True,
                     )
+                    merged_row = cursor.execute(
+                        "SELECT content, created_at FROM chunks WHERE id = ?",
+                        (hit.canonical_chunk_id,),
+                    ).fetchone()
+                    if merged_row:
+                        _drop_backfill_index(
+                            hit.canonical_chunk_id,
+                            seen_hashes=seen_hashes,
+                            band_index=band_index,
+                            fingerprints=fingerprints,
+                            numeric_index=numeric_index,
+                        )
+                        _add_backfill_index(
+                            hit.canonical_chunk_id,
+                            str(merged_row[0]),
+                            merged_row[1],
+                            seen_hashes=seen_hashes,
+                            band_index=band_index,
+                            fingerprints=fingerprints,
+                            numeric_index=numeric_index,
+                        )
+                        seen_hashes[fields.content_hash] = hit.canonical_chunk_id
                     merged += 1
                 else:
-                    seen_hashes[fields.content_hash] = chunk_id
-                    fingerprints[chunk_id] = fields.simhash
-                    numeric_index[chunk_id] = _numeric_tokens(str(incoming["content"]))
-                    for band in fields.bands:
-                        band_index.setdefault(band, set()).add(chunk_id)
+                    _add_backfill_index(
+                        chunk_id,
+                        str(incoming["content"]),
+                        incoming.get("created_at"),
+                        seen_hashes=seen_hashes,
+                        band_index=band_index,
+                        fingerprints=fingerprints,
+                        numeric_index=numeric_index,
+                    )
             logger.info("dedupe backfill progress: scanned=%d/%d merged=%d", scanned, total, merged)
             if batch_number % 3 == 0:
                 cursor.execute("PRAGMA wal_checkpoint(FULL)")
