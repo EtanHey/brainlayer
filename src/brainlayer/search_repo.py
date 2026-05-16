@@ -165,14 +165,14 @@ def _audit_recursion_exclusion_sql(
 
     content_expr = f"COALESCE(CAST({content_expr} AS TEXT), '')"
     compact_content_expr = (
-        f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), char(9), ''), char(10), ''), char(13), '')"
+        f"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), char(9), ''), "
+        "char(10), ''), char(11), ''), char(12), ''), char(13), '')"
     )
-    trimmed_content_expr = f"LTRIM({content_expr}, char(9) || char(10) || char(11) || char(12) || char(13) || char(32))"
     recursive_content_filter = (
-        f"LOWER({trimmed_content_expr}) NOT GLOB '┌─ brain_search:*' "
-        f"AND LOWER({trimmed_content_expr}) NOT GLOB '┌─ brain_*:*' "
-        f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity:%' "
-        f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity search:%' "
+        f"{compact_content_expr} NOT GLOB '┌─brain_search:*' "
+        f"AND {compact_content_expr} NOT GLOB '┌─brain_*:*' "
+        f"AND {compact_content_expr} NOT LIKE '┌─entity:%' "
+        f"AND {compact_content_expr} NOT LIKE '┌─entitysearch:%' "
         f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
         f'AND {compact_content_expr} NOT LIKE \'%"jsonrpc":"2.0"%\''
     )

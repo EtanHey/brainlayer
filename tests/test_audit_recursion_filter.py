@@ -473,6 +473,41 @@ def test_brain_search_box_with_leading_non_space_whitespace_is_filtered_by_sql_p
         store.close()
 
 
+def test_brain_search_box_without_space_is_filtered_by_sql_paths(tmp_path):
+    store = VectorStore(tmp_path / "recursive-no-space-box-filter.db")
+    try:
+        query_embedding = [0.0935] * 1024
+        _insert_chunk(
+            store,
+            "recursive-no-space-box",
+            '┌─brain_search: "BrainLayer audit recursion"\n│ recursive output',
+            ["auto-detected"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "ordinary-no-space-control",
+            "BrainLayer MCP guard should keep ordinary memories visible",
+            ["brainlayer", "mcp"],
+            [0.0936] * 1024,
+        )
+        store.build_binary_index()
+
+        vector_results = store.search(query_embedding=query_embedding, n_results=5)
+        hybrid_results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="BrainLayer MCP guard",
+            n_results=5,
+        )
+
+        assert "recursive-no-space-box" not in vector_results["ids"][0]
+        assert "ordinary-no-space-control" in vector_results["ids"][0]
+        assert "recursive-no-space-box" not in hybrid_results["ids"][0]
+        assert "ordinary-no-space-control" in hybrid_results["ids"][0]
+    finally:
+        store.close()
+
+
 def test_audit_recursion_sql_accepts_explicit_content_expression():
     clause = _audit_recursion_exclusion_sql(
         "c.id",
@@ -545,6 +580,40 @@ def test_kg_facts_exclude_audit_sourced_relations_by_default(tmp_path):
         assert {fact["target_entity"]["name"] for fact in hybrid_with_audit["facts"]} == {
             "Audit Project",
             "Normal Project",
+        }
+    finally:
+        store.close()
+
+
+def test_entity_chunks_exclude_audit_evidence_by_default(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-entity-evidence.db")
+    try:
+        query_embedding = [0.0945] * 1024
+        _insert_chunk(
+            store,
+            "audit-entity-evidence",
+            '┌─brain_search: "Etan recursive evidence"\n│ recursive output',
+            ["auto-detected"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "normal-entity-evidence",
+            "Etan owns a normal BrainLayer decision",
+            ["brainlayer"],
+            [0.0946] * 1024,
+        )
+        store.upsert_entity("person-etan", "person", "Etan")
+        store.link_entity_chunk("person-etan", "audit-entity-evidence", relevance=1.0)
+        store.link_entity_chunk("person-etan", "normal-entity-evidence", relevance=0.9)
+
+        default_chunks = store.get_entity_chunks("person-etan", limit=10)
+        audit_chunks = store.get_entity_chunks("person-etan", limit=10, include_audit=True)
+
+        assert [chunk["chunk_id"] for chunk in default_chunks] == ["normal-entity-evidence"]
+        assert {chunk["chunk_id"] for chunk in audit_chunks} == {
+            "audit-entity-evidence",
+            "normal-entity-evidence",
         }
     finally:
         store.close()

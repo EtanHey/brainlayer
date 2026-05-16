@@ -480,17 +480,27 @@ class KGMixin:
             (parent_id, entity_id),
         )
 
-    def get_entity_chunks(self, entity_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_entity_chunks(
+        self,
+        entity_id: str,
+        limit: int = 20,
+        *,
+        include_audit: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get chunks linked to an entity, ordered by relevance."""
         cursor = self._read_cursor()
+        where_clauses = ["ec.entity_id = ?"]
+        if not include_audit:
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
+        where_sql = " AND ".join(where_clauses)
         rows = list(
             cursor.execute(
-                """
+                f"""
                 SELECT ec.chunk_id, ec.relevance, ec.context, ec.mention_type,
                        c.content, c.source_file, c.project, c.content_type, c.created_at
                 FROM kg_entity_chunks ec
                 JOIN chunks c ON ec.chunk_id = c.id
-                WHERE ec.entity_id = ?
+                WHERE {where_sql}
                 ORDER BY ec.relevance DESC
                 LIMIT ?
                 """,

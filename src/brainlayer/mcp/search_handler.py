@@ -1018,7 +1018,7 @@ async def _brain_recall(
             return _error_result("query is required for mode=entity")
         from .entity_handler import _brain_entity as _entity_handler
 
-        return await _entity_handler(query=query, entity_type=entity_type)
+        return await _entity_handler(query=query, entity_type=entity_type, include_audit=include_audit)
 
     # --- Original modes ---
 

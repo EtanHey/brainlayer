@@ -795,6 +795,7 @@ def entity_lookup(
     store: VectorStore,
     embed_fn: Callable[[str], List[float]],
     entity_type: Optional[str] = None,
+    include_audit: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Look up an entity by name, returning structured info with relations and evidence.
 
@@ -838,7 +839,7 @@ def entity_lookup(
     ]
 
     # Get evidence chunks
-    evidence_raw = store.get_entity_chunks(entity_id, limit=10)
+    evidence_raw = store.get_entity_chunks(entity_id, limit=10, include_audit=include_audit)
     evidence = [
         {
             "chunk_id": e["chunk_id"],

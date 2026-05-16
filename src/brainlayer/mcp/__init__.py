@@ -944,6 +944,11 @@ async def list_tools() -> list[Tool]:
                             "minimum": 0,
                             "description": "Pagination offset for list action.",
                         },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval and recursive MCP-output evidence. Defaults false to prevent audit-recursion pollution.",
+                        },
                     },
                     "required": [],
                 }
@@ -1407,6 +1412,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 mode="entity",
                 query=query,
                 entity_type=arguments.get("entity_type"),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 

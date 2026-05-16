@@ -16,6 +16,7 @@ from ._shared import (
 async def _brain_entity(
     query: str,
     entity_type: str | None = None,
+    include_audit: bool = False,
 ) -> CallToolResult:
     """Handle brain_entity tool call."""
     from ..pipeline.digest import entity_lookup
@@ -32,6 +33,7 @@ async def _brain_entity(
                 store=store,
                 embed_fn=model.embed_query,
                 entity_type=entity_type,
+                include_audit=include_audit,
             ),
         )
     except Exception as e:
