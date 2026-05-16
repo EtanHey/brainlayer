@@ -379,14 +379,14 @@ def _kg_facts_sql(
         if needs_source_chunk:
             source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
         if not include_checkpoints and getattr(store, "_has_chunk_origin", True):
-            checkpoint_filter = """
+            checkpoint_clause = store._checkpoint_exclusion_clause("source_chunk")
+            checkpoint_filter = f"""
                      AND (
                          r.source_chunk_id IS NULL
                          OR source_chunk.id IS NULL
-                         OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                         OR ({checkpoint_clause})
                      )
             """
-            params.append(CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT)
         if not include_audit:
             audit_filter = f"""
                      AND (
@@ -524,7 +524,13 @@ async def _brain_search(
         ):
             empty = {"query": query, "total": 0, "results": []}
             return ([TextContent(type="text", text="No results found.")], empty)
-        return await _context(chunk_id=chunk_id, before=before, after=after)
+        return await _context(
+            chunk_id=chunk_id,
+            before=before,
+            after=after,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        )
 
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
@@ -1281,11 +1287,24 @@ async def _list_projects() -> list[TextContent]:
         return _error_result(f"Error listing projects: {str(e)}")
 
 
-async def _context(chunk_id: str, before: int = 3, after: int = 3) -> list[TextContent]:
+async def _context(
+    chunk_id: str,
+    before: int = 3,
+    after: int = 3,
+    *,
+    include_checkpoints: bool = False,
+    include_audit: bool = False,
+) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
         store = _get_vector_store()
-        result = store.get_context(chunk_id, before=before, after=after)
+        result = store.get_context(
+            chunk_id,
+            before=before,
+            after=after,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        )
         if result.get("error"):
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
         if not result.get("context"):

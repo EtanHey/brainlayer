@@ -1001,14 +1001,14 @@ class KGMixin:
             if needs_source_chunk:
                 source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
             if not include_checkpoints and getattr(self, "_has_chunk_origin", True):
-                checkpoint_filter = """
+                checkpoint_clause = self._checkpoint_exclusion_clause("source_chunk")
+                checkpoint_filter = f"""
                           AND (
                               r.source_chunk_id IS NULL
                               OR source_chunk.id IS NULL
-                              OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                              OR ({checkpoint_clause})
                           )
                 """
-                checkpoint_params.append("precompact_checkpoint")
             if not include_audit:
                 audit_filter = f"""
                           AND (

@@ -748,6 +748,69 @@ def test_kg_hybrid_search_facts_excludes_checkpoint_sourced_relations_by_default
     }
 
 
+def test_kg_facts_exclude_legacy_checkpoint_content_when_origin_unknown(tmp_path):
+    store = VectorStore(tmp_path / "kg-legacy-checkpoint-content-facts.db")
+    _insert_chunk(
+        store,
+        chunk_id="legacy-checkpoint-content-fact-chunk",
+        content="[PreCompact checkpoint]\nEtan builds legacy checkpoint-only project",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    _insert_chunk(
+        store,
+        chunk_id="normal-legacy-control-fact-chunk",
+        content="Etan builds durable legacy control project",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    store.upsert_entity("person-etan", "person", "Etan")
+    store.upsert_entity("project-legacy-checkpoint", "project", "Legacy Checkpoint Project")
+    store.upsert_entity("project-legacy-normal", "project", "Legacy Normal Project")
+    store.add_relation(
+        "rel-legacy-checkpoint-content",
+        "person-etan",
+        "project-legacy-checkpoint",
+        "builds",
+        fact="legacy checkpoint-only fact",
+        source_chunk_id="legacy-checkpoint-content-fact-chunk",
+    )
+    store.add_relation(
+        "rel-legacy-normal",
+        "person-etan",
+        "project-legacy-normal",
+        "maintains",
+        fact="legacy normal fact",
+        source_chunk_id="normal-legacy-control-fact-chunk",
+    )
+
+    sql_default_facts = _kg_facts_sql(store, "Etan")
+    sql_checkpoint_facts = _kg_facts_sql(store, "Etan", include_checkpoints=True)
+    hybrid_default = store.kg_hybrid_search(
+        query_embedding=_embed("Etan"),
+        query_text="Etan",
+        n_results=10,
+        entity_name="Etan",
+    )
+    hybrid_with_checkpoints = store.kg_hybrid_search(
+        query_embedding=_embed("Etan"),
+        query_text="Etan",
+        n_results=10,
+        entity_name="Etan",
+        include_checkpoints=True,
+    )
+    store.close()
+
+    assert {fact["target"] for fact in sql_default_facts} == {"Legacy Normal Project"}
+    assert {fact["target"] for fact in sql_checkpoint_facts} == {
+        "Legacy Checkpoint Project",
+        "Legacy Normal Project",
+    }
+    assert {fact["target_entity"]["name"] for fact in hybrid_default["facts"]} == {"Legacy Normal Project"}
+    assert {fact["target_entity"]["name"] for fact in hybrid_with_checkpoints["facts"]} == {
+        "Legacy Checkpoint Project",
+        "Legacy Normal Project",
+    }
+
+
 def test_binary_search_overfetches_when_checkpoint_filter_discards_nearest_neighbors(tmp_path):
     store = VectorStore(tmp_path / "binary-overfetch.db")
     query_embedding = [1.0] + ([0.0] * 1023)

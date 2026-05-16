@@ -15,7 +15,7 @@ import apsw
 import numpy as np
 
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
-from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
 
@@ -1495,7 +1495,38 @@ class SearchMixin:
 
         return result
 
-    def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
+    def _context_chunk_is_filtered(
+        self,
+        *,
+        content: str | None,
+        tags: Any,
+        chunk_origin: str | None,
+        include_checkpoints: bool,
+        include_audit: bool,
+    ) -> bool:
+        if not include_checkpoints and (
+            chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT or is_precompact_checkpoint_content(content)
+        ):
+            return True
+        if include_audit:
+            return False
+        parsed_tags = tags
+        if isinstance(tags, str):
+            try:
+                parsed_tags = json.loads(tags)
+            except (json.JSONDecodeError, TypeError):
+                parsed_tags = []
+        return _is_audit_recursion_metadata({"tags": parsed_tags if isinstance(parsed_tags, list) else []}, content)
+
+    def get_context(
+        self,
+        chunk_id: str,
+        before: int = 3,
+        after: int = 3,
+        *,
+        include_checkpoints: bool = False,
+        include_audit: bool = False,
+    ) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
         read_conn = self._get_read_conn()
         cursor = read_conn.cursor()
@@ -1505,7 +1536,7 @@ class SearchMixin:
         target = list(
             cursor.execute(
                 """
-            SELECT conversation_id, position, content, metadata, content_type
+            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin
             FROM chunks WHERE id = ?
         """,
                 (chunk_id,),
@@ -1515,7 +1546,15 @@ class SearchMixin:
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
 
-        conv_id, position, content, metadata, content_type = target[0]
+        conv_id, position, content, metadata, content_type, tags, chunk_origin = target[0]
+        if self._context_chunk_is_filtered(
+            content=content,
+            tags=tags,
+            chunk_origin=chunk_origin,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        ):
+            return {"target": None, "context": [], "error": "Chunk not found"}
 
         if not conv_id or position is None:
             # Standalone chunks (for example, manual-* chunks created via brain_store)
@@ -1538,7 +1577,7 @@ class SearchMixin:
         context_rows = list(
             cursor.execute(
                 """
-            SELECT id, content, position, content_type
+            SELECT id, content, position, content_type, tags, chunk_origin
             FROM chunks
             WHERE conversation_id = ?
               AND position BETWEEN ? AND ?
@@ -1550,6 +1589,14 @@ class SearchMixin:
 
         context = []
         for row in context_rows:
+            if self._context_chunk_is_filtered(
+                content=row[1],
+                tags=row[4],
+                chunk_origin=row[5],
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+            ):
+                continue
             context.append(
                 {
                     "id": row[0],

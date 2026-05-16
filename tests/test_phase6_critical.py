@@ -153,7 +153,13 @@ class TestSearchRouting:
             from brainlayer.mcp.search_handler import _brain_search
 
             asyncio.run(_brain_search(query="expand this", chunk_id="test-chunk-001"))
-        mock_context.assert_called_once_with(chunk_id="test-chunk-001", before=3, after=3)
+        mock_context.assert_called_once_with(
+            chunk_id="test-chunk-001",
+            before=3,
+            after=3,
+            include_checkpoints=False,
+            include_audit=False,
+        )
 
     def test_search_routing_file_path(self):
         """file_path parameter → routes to file timeline + recall."""

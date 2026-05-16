@@ -1,10 +1,11 @@
 import json
 
 import apsw
+import pytest
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.engine import recall, think
-from brainlayer.mcp.search_handler import _kg_facts_sql
+from brainlayer.mcp.search_handler import _brain_search, _kg_facts_sql
 from brainlayer.search_repo import _audit_recursion_exclusion_sql
 from brainlayer.vector_store import VectorStore
 
@@ -21,6 +22,29 @@ def _insert_chunk(store: VectorStore, chunk_id: str, content: str, tags: list[st
     cursor.execute(
         "INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)",
         (chunk_id, serialize_f32(embedding)),
+    )
+    cursor.executemany(
+        "INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)",
+        [(chunk_id, tag) for tag in tags],
+    )
+
+
+def _insert_context_chunk(
+    store: VectorStore,
+    *,
+    chunk_id: str,
+    content: str,
+    tags: list[str],
+    position: int,
+) -> None:
+    cursor = store.conn.cursor()
+    cursor.execute(
+        """INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type,
+            char_count, source, tags, conversation_id, position
+        ) VALUES (?, ?, '{}', 'audit-context.jsonl', 'brainlayer',
+                  'assistant_text', ?, 'claude_code', ?, 'audit-context-session', ?)""",
+        (chunk_id, content, len(content), json.dumps(tags), position),
     )
     cursor.executemany(
         "INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)",
@@ -487,6 +511,51 @@ def test_kg_facts_exclude_audit_sourced_relations_by_default(tmp_path):
             "Audit Project",
             "Normal Project",
         }
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_chunk_context_filters_audit_neighbors_by_default(tmp_path, monkeypatch):
+    store = VectorStore(tmp_path / "audit-context-filter.db")
+    try:
+        recursive_content = 'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0"}'
+        _insert_context_chunk(
+            store,
+            chunk_id="audit-context-neighbor",
+            content=recursive_content,
+            tags=["audit"],
+            position=1,
+        )
+        _insert_context_chunk(
+            store,
+            chunk_id="normal-context-target",
+            content="Normal context target",
+            tags=["brainlayer"],
+            position=2,
+        )
+        _insert_context_chunk(
+            store,
+            chunk_id="normal-context-neighbor",
+            content="Normal context neighbor",
+            tags=["brainlayer"],
+            position=3,
+        )
+        monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+
+        default_content = await _brain_search(query="ignored", chunk_id="normal-context-target", before=1, after=1)
+        audit_content = await _brain_search(
+            query="ignored",
+            chunk_id="normal-context-target",
+            before=1,
+            after=1,
+            include_audit=True,
+        )
+
+        assert recursive_content not in default_content[0].text
+        assert "Normal context target" in default_content[0].text
+        assert "Normal context neighbor" in default_content[0].text
+        assert recursive_content in audit_content[0].text
     finally:
         store.close()
 

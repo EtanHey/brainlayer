@@ -151,7 +151,13 @@ async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
         result = await _brain_search(query=chunk_id, chunk_id=chunk_id, detail="compact")
 
     assert result == ["context window"]
-    context_mock.assert_awaited_once_with(chunk_id=chunk_id, before=3, after=3)
+    context_mock.assert_awaited_once_with(
+        chunk_id=chunk_id,
+        before=3,
+        after=3,
+        include_checkpoints=False,
+        include_audit=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -200,7 +206,13 @@ async def test_brain_search_chunk_id_context_allows_audit_when_requested():
         result = await _brain_search(query="ignored", chunk_id=chunk_id, detail="compact", include_audit=True)
 
     assert result == ["context window"]
-    context_mock.assert_awaited_once_with(chunk_id=chunk_id, before=3, after=3)
+    context_mock.assert_awaited_once_with(
+        chunk_id=chunk_id,
+        before=3,
+        after=3,
+        include_checkpoints=False,
+        include_audit=True,
+    )
 
 
 @pytest.mark.asyncio
