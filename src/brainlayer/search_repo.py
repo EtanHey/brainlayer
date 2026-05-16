@@ -156,10 +156,14 @@ def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_ch
     content_expr = (
         f"COALESCE(CAST({tags_expr.replace('.tags', '.content') if '.tags' in tags_expr else 'content'} AS TEXT), '')"
     )
+    compact_content_expr = (
+        f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), "
+        "char(9), ''), char(10), ''), char(13), '')"
+    )
     recursive_content_filter = (
         f"LTRIM({content_expr}) NOT LIKE '┌─ brain_search:%' "
         f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
-        f"AND REPLACE(LOWER({content_expr}), ' ', '') NOT LIKE '%\"jsonrpc\":\"2.0\"%'"
+        f"AND {compact_content_expr} NOT LIKE '%\"jsonrpc\":\"2.0\"%'"
     )
     return f"({tag_filter} AND {recursive_content_filter})"
 
@@ -207,20 +211,42 @@ class SearchMixin:
         )
 
     def _audit_recursion_count(self) -> int:
-        try:
-            row = (
-                self._read_cursor()
-                .execute(
-                    f"""
-                    SELECT COUNT(*) FROM chunks
-                    WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags")})
-                    """
+        cached_count = getattr(self, "_audit_recursion_count_cache", None)
+        current_data_version = self._checkpoint_cache_data_version()
+        cached_data_version = getattr(self, "_audit_recursion_count_cache_data_version", None)
+        if cached_count is not None and (current_data_version is None or cached_data_version == current_data_version):
+            return int(cached_count)
+
+        for attempt in range(3):
+            try:
+                row = (
+                    self._read_cursor()
+                    .execute(
+                        f"""
+                        SELECT COUNT(*) FROM chunks
+                        WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags")})
+                        """
+                    )
+                    .fetchone()
                 )
-                .fetchone()
-            )
-            return int(row[0]) if row else 0
-        except (apsw.Error, TypeError, IndexError, ValueError):
-            return 0
+                audit_count = int(row[0]) if row else 0
+                setattr(self, "_audit_recursion_count_cache", audit_count)
+                setattr(self, "_audit_recursion_count_cache_data_version", current_data_version)
+                return audit_count
+            except apsw.Error as exc:
+                if _is_sqlite_busy_error(exc) and attempt < 2:
+                    time.sleep(0.05 * (2**attempt))
+                    continue
+                if cached_count is not None:
+                    return int(cached_count)
+                return 0
+            except (TypeError, IndexError, ValueError):
+                if cached_count is not None:
+                    return int(cached_count)
+                return 0
+        if cached_count is not None:
+            return int(cached_count)
+        return 0
 
     def _checkpoint_exclusion_clause(self, table_alias: str | None = None) -> str | None:
         if not getattr(self, "_has_chunk_origin", True):

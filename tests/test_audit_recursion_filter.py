@@ -1,5 +1,7 @@
 import json
 
+import apsw
+
 from brainlayer._helpers import serialize_f32
 from brainlayer.engine import recall, think
 from brainlayer.vector_store import VectorStore
@@ -172,6 +174,36 @@ def test_hybrid_search_overfetches_when_audit_chunks_dominate_knn(tmp_path):
         store.close()
 
 
+def test_audit_recursion_count_uses_cached_value_on_busy_retry_exhaustion(tmp_path, monkeypatch):
+    store = VectorStore(tmp_path / "audit-filter-count-cache.db")
+    try:
+        query_embedding = [0.065] * 1024
+        _insert_chunk(
+            store,
+            "audit-count-source",
+            "audit count source",
+            ["audit"],
+            query_embedding,
+        )
+
+        assert store._audit_recursion_count() == 1
+
+        attempts = 0
+
+        def busy_read_cursor():
+            nonlocal attempts
+            attempts += 1
+            raise apsw.BusyError("database is locked")
+
+        monkeypatch.setattr(store, "_checkpoint_cache_data_version", lambda: 999)
+        monkeypatch.setattr(store, "_read_cursor", busy_read_cursor)
+
+        assert store._audit_recursion_count() == 1
+        assert attempts == 3
+    finally:
+        store.close()
+
+
 def test_exact_r0x_tag_is_filtered_as_audit_shorthand(tmp_path):
     store = VectorStore(tmp_path / "audit-filter-r0x.db")
     try:
@@ -251,6 +283,41 @@ def test_recursive_mcp_output_content_is_filtered_even_without_audit_tags(tmp_pa
 
         assert "recursive-jsonrpc-output" in audit_results["ids"][0]
         assert "recursive-brain-search-box" in audit_results["ids"][0]
+    finally:
+        store.close()
+
+
+def test_formatted_jsonrpc_content_is_filtered_by_sql_paths(tmp_path):
+    store = VectorStore(tmp_path / "recursive-formatted-jsonrpc-filter.db")
+    try:
+        query_embedding = [0.09] * 1024
+        _insert_chunk(
+            store,
+            "recursive-formatted-jsonrpc-output",
+            'MCP output payload: {"jsonrpc" :\n\t"2.0", "id": 24}',
+            ["auto-detected"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "ordinary-formatted-jsonrpc-control",
+            "BrainLayer MCP guard should keep ordinary results visible",
+            ["brainlayer", "mcp"],
+            [0.091] * 1024,
+        )
+        store.build_binary_index()
+
+        vector_results = store.search(query_embedding=query_embedding, n_results=5)
+        hybrid_results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="BrainLayer MCP guard",
+            n_results=5,
+        )
+
+        assert "recursive-formatted-jsonrpc-output" not in vector_results["ids"][0]
+        assert "ordinary-formatted-jsonrpc-control" in vector_results["ids"][0]
+        assert "recursive-formatted-jsonrpc-output" not in hybrid_results["ids"][0]
+        assert "ordinary-formatted-jsonrpc-control" in hybrid_results["ids"][0]
     finally:
         store.close()
 

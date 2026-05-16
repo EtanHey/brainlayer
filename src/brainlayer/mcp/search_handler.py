@@ -45,6 +45,21 @@ def _empty_exact_chunk_lookup_result(query: str) -> tuple[list[TextContent], dic
     return ([TextContent(type="text", text=format_search_results(query, [], 0))], structured)
 
 
+def _parsed_chunk_tags(chunk: dict[str, Any]) -> list[Any]:
+    tags = chunk.get("tags")
+    if not tags:
+        return []
+    if isinstance(tags, list):
+        return tags
+    if isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -194,7 +209,7 @@ def _exact_chunk_lookup_result(
     ):
         return _empty_exact_chunk_lookup_result(query)
     if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
-        return _empty_exact_chunk_lookup_result(query)
+        return None
     if project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
         normalized_project = _normalize_project_name(project) or project
@@ -203,13 +218,7 @@ def _exact_chunk_lookup_result(
     if content_type is not None and chunk.get("content_type") != content_type:
         return _empty_exact_chunk_lookup_result(query)
 
-    tags = chunk.get("tags")
-    parsed_tags = None
-    if tags:
-        try:
-            parsed_tags = json.loads(tags) if isinstance(tags, str) else tags
-        except (json.JSONDecodeError, TypeError):
-            parsed_tags = None
+    parsed_tags = _parsed_chunk_tags(chunk)
     if tag is not None and tag not in (parsed_tags or []):
         return _empty_exact_chunk_lookup_result(query)
     if not include_audit and _is_audit_recursion_metadata({"tags": parsed_tags or []}, chunk.get("content")):
@@ -485,6 +494,13 @@ async def _brain_search(
                 chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
                 or is_precompact_checkpoint_content(chunk.get("content"))
             )
+        ):
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
+        if (
+            not include_audit
+            and isinstance(chunk, dict)
+            and _is_audit_recursion_metadata({"tags": _parsed_chunk_tags(chunk)}, chunk.get("content"))
         ):
             empty = {"query": query, "total": 0, "results": []}
             return ([TextContent(type="text", text="No results found.")], empty)

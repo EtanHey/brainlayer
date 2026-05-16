@@ -33,41 +33,35 @@ def test_watcher_postchunk_rejects_jsonrpc_mcp_memory_output():
 
 
 def test_direct_store_rejects_recursive_mcp_output(tmp_path):
-    store = VectorStore(tmp_path / "store-guard.db")
-
-    with pytest.raises(ValueError, match="recursive MCP output"):
-        store_memory(
-            store=store,
-            embed_fn=None,
-            content=JSONRPC_RECURSION_CONTENT,
-            memory_type="note",
-            project="brainlayer",
-            tags=["correction:factual", "auto-detected"],
-        )
-
-    store.close()
+    with VectorStore(tmp_path / "store-guard.db") as store:
+        with pytest.raises(ValueError, match="recursive MCP output"):
+            store_memory(
+                store=store,
+                embed_fn=None,
+                content=JSONRPC_RECURSION_CONTENT,
+                memory_type="note",
+                project="brainlayer",
+                tags=["correction:factual", "auto-detected"],
+            )
 
 
 def test_vector_upsert_rejects_recursive_mcp_output(tmp_path):
-    store = VectorStore(tmp_path / "upsert-guard.db")
-
-    with pytest.raises(ValueError, match="recursive MCP output"):
-        store.upsert_chunks(
-            [
-                {
-                    "id": "rt-guarded-jsonrpc",
-                    "content": JSONRPC_RECURSION_CONTENT,
-                    "metadata": {},
-                    "source_file": "session.jsonl",
-                    "project": "brainlayer",
-                    "content_type": "assistant_text",
-                    "char_count": len(JSONRPC_RECURSION_CONTENT),
-                }
-            ],
-            [[0.1] * 1024],
-        )
-
-    store.close()
+    with VectorStore(tmp_path / "upsert-guard.db") as store:
+        with pytest.raises(ValueError, match="recursive MCP output"):
+            store.upsert_chunks(
+                [
+                    {
+                        "id": "rt-guarded-jsonrpc",
+                        "content": JSONRPC_RECURSION_CONTENT,
+                        "metadata": {},
+                        "source_file": "session.jsonl",
+                        "project": "brainlayer",
+                        "content_type": "assistant_text",
+                        "char_count": len(JSONRPC_RECURSION_CONTENT),
+                    }
+                ],
+                [[0.1] * 1024],
+            )
 
 
 def test_drain_drops_recursive_mcp_output_events(tmp_path, monkeypatch):
