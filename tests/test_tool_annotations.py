@@ -1,4 +1,4 @@
-"""Tests for B6: ToolAnnotations on all 12 MCP tools + B7: agent_id scoping on brain_store."""
+"""Tests for B6: ToolAnnotations on all MCP tools + B7: agent_id scoping on brain_store."""
 
 import asyncio
 
@@ -11,6 +11,7 @@ EXPECTED_TOOLS = [
     "brain_search",
     "brain_store",
     "brain_recall",
+    "brain_resume",
     "brain_digest",
     "brain_entity",
     "brain_expand",
@@ -26,6 +27,7 @@ EXPECTED_TOOLS = [
 READ_ONLY_TOOLS = {
     "brain_search",
     "brain_recall",
+    "brain_resume",
     "brain_entity",
     "brain_expand",
     "brain_tags",
@@ -46,6 +48,7 @@ WRITE_TOOLS = {
 IDEMPOTENT_TOOLS = {
     "brain_search",
     "brain_recall",
+    "brain_resume",
     "brain_entity",
     "brain_expand",
     "brain_tags",
@@ -68,8 +71,8 @@ class TestToolAnnotationsPresent:
 
         return asyncio.run(list_tools())
 
-    def test_all_12_tools_have_annotations(self):
-        """Every one of the 12 tools must have a non-None annotations field."""
+    def test_all_tools_have_annotations(self):
+        """Every expected tool must have a non-None annotations field."""
         tools = self._get_tools()
         tool_map = {t.name: t for t in tools}
         for name in EXPECTED_TOOLS:

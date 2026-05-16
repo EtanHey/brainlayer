@@ -3,12 +3,14 @@
 import asyncio
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import apsw
 from mcp.types import TextContent
 
-from .._helpers import _escape_fts5_query
+from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
+from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 
 # Retry settings for DB lock resilience on reads
@@ -35,6 +37,10 @@ from ._shared import (
 )
 
 _CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _quote_fts_phrase(value: str) -> str:
@@ -163,6 +169,7 @@ def _exact_chunk_lookup_result(
     sentiment: str | None = None,
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_checkpoints: bool = False,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -174,6 +181,9 @@ def _exact_chunk_lookup_result(
         return None
     if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
         return None
+    if not include_checkpoints and chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
+        empty = {"query": query, "total": 0, "results": []}
+        return ([TextContent(type="text", text="No results found.")], empty)
     if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
         return None
     if project is not None:
@@ -313,7 +323,7 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
         return []
 
 
-def _kg_facts_sql(store: Any, entity_name: str) -> list[dict]:
+def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = False) -> list[dict]:
     """Pure SQL KG fact lookup — no embeddings, no vector search.
 
     Returns typed relations for an entity, excluding co_occurs_with noise.
@@ -333,20 +343,36 @@ def _kg_facts_sql(store: Any, entity_name: str) -> list[dict]:
 
         entity_id = row[0][0]
 
+        checkpoint_join = ""
+        checkpoint_filter = ""
+        params: list[Any] = [entity_id, entity_id]
+        if not include_checkpoints and getattr(store, "_has_chunk_origin", True):
+            checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
+            checkpoint_filter = """
+                     AND (
+                         r.source_chunk_id IS NULL
+                         OR source_chunk.id IS NULL
+                         OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                     )
+            """
+            params.append(CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT)
+
         # Get all semantic relations (exclude co_occurs_with)
         facts_raw = list(
             cursor.execute(
-                """SELECT r.relation_type, r.properties, r.confidence,
+                f"""SELECT r.relation_type, r.properties, r.confidence,
                           se.name as source_name, se.entity_type as source_type,
                           te.name as target_name, te.entity_type as target_type
                    FROM kg_relations r
                    JOIN kg_entities se ON r.source_id = se.id
                    JOIN kg_entities te ON r.target_id = te.id
+                   {checkpoint_join}
                    WHERE (r.source_id = ? OR r.target_id = ?)
                      AND r.relation_type != 'co_occurs_with'
+                     {checkpoint_filter}
                    ORDER BY r.confidence DESC
                    LIMIT 20""",
-                (entity_id, entity_id),
+                params,
             )
         )
 
@@ -397,6 +423,7 @@ async def _brain_search(
     detail: str = "compact",
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_checkpoints: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -432,9 +459,15 @@ async def _brain_search(
             detail=detail,
             source_filter_like=source_filter,
             correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
         )
 
     if chunk_id is not None:
+        store = _get_vector_store()
+        chunk = store.get_chunk(chunk_id)
+        if not include_checkpoints and chunk and chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
         return await _context(chunk_id=chunk_id, before=before, after=after)
 
     if file_path is not None and _query_has_regression_signal(query):
@@ -480,6 +513,7 @@ async def _brain_search(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
         )
 
     if _query_signals_current_context(query):
@@ -518,6 +552,7 @@ async def _brain_search(
         sentiment=sentiment,
         source_filter=source_filter,
         correction_category=correction_category,
+        include_checkpoints=include_checkpoints,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -546,7 +581,7 @@ async def _brain_search(
         entity_name = detected_entities[0]["name"]
 
         # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
-        fact_items = _kg_facts_sql(store, entity_name)
+        fact_items = _kg_facts_sql(store, entity_name, include_checkpoints=include_checkpoints)
 
         # Path 2: Try full hybrid search (embedding + vector + KG)
         structured_results = []
@@ -563,6 +598,7 @@ async def _brain_search(
                 n_results=num_results,
                 entity_name=entity_name,
                 project_filter=normalized_project,
+                include_checkpoints=include_checkpoints,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -634,7 +670,106 @@ async def _brain_search(
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
         correction_category=correction_category,
+        include_checkpoints=include_checkpoints,
     )
+
+
+def _escape_like_pattern(value: str) -> str:
+    """Escape user text for a literal SQLite LIKE pattern."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def _execute_resume_query_with_retry(store: Any, query: str, params: list[Any]) -> list:
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return list(store._read_cursor().execute(query, params))
+        except apsw.Error as exc:
+            if not _is_sqlite_busy_error(exc) or attempt == _RETRY_MAX_ATTEMPTS - 1:
+                raise
+            await asyncio.sleep(_retry_delay * (2**attempt))
+    return []
+
+
+async def _brain_resume(session_id: str | None = None, lookback_days: int = 7):
+    """Return recent PreCompact checkpoints without polluting default search."""
+    try:
+        try:
+            days = int(lookback_days)
+        except (TypeError, ValueError):
+            days = 7
+        days = max(1, min(days, 90))
+
+        now = datetime.fromisoformat(_utcnow_iso().replace("Z", "+00:00"))
+        cutoff = (now - timedelta(days=days)).isoformat()
+
+        where_clauses = [
+            "COALESCE(chunk_origin, 'unknown') = ?",
+            "(created_at IS NULL OR created_at >= ?)",
+            "superseded_by IS NULL",
+            "aggregated_into IS NULL",
+            "archived_at IS NULL",
+        ]
+        params: list[Any] = [CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, cutoff]
+        if session_id:
+            where_clauses.append("(conversation_id = ? OR content LIKE ? ESCAPE '\\' OR metadata LIKE ? ESCAPE '\\')")
+            session_like = f"%{_escape_like_pattern(session_id)}%"
+            params.extend([session_id, session_like, session_like])
+        params.append(20)
+
+        store = _get_vector_store()
+        if not getattr(store, "_has_chunk_origin", True):
+            structured = {"session_id": session_id, "lookback_days": days, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No PreCompact checkpoints found.")], structured)
+
+        rows = await _execute_resume_query_with_retry(
+            store,
+            f"""
+                SELECT id, content, source_file, project, content_type, created_at,
+                       source, conversation_id, summary, importance
+                FROM chunks
+                WHERE {" AND ".join(where_clauses)}
+                ORDER BY COALESCE(created_at, '') DESC
+                LIMIT ?
+                """,
+            params,
+        )
+
+        structured_results = [
+            {
+                "chunk_id": row[0],
+                "content": row[1],
+                "source_file": row[2],
+                "project": _normalize_project_name(row[3]) or row[3] or "unknown",
+                "content_type": row[4],
+                "date": row[5][:10] if row[5] else None,
+                "source": row[6],
+                "session_id": row[7],
+                "summary": row[8],
+                "importance": row[9],
+            }
+            for row in rows
+        ]
+        structured = {
+            "session_id": session_id,
+            "lookback_days": days,
+            "total": len(structured_results),
+            "results": structured_results,
+        }
+        if not structured_results:
+            return ([TextContent(type="text", text="No PreCompact checkpoints found.")], structured)
+
+        output_parts = [f"## PreCompact Checkpoints ({len(structured_results)})"]
+        for index, item in enumerate(structured_results, start=1):
+            header = f"\n### Checkpoint {index}: {item['chunk_id']}"
+            if item.get("date"):
+                header += f" | {item['date']}"
+            if item.get("session_id"):
+                header += f" | session: {item['session_id']}"
+            output_parts.append(header)
+            output_parts.append(item["content"])
+        return ([TextContent(type="text", text="\n".join(output_parts))], structured)
+    except Exception as exc:
+        return _error_result(f"Resume error: {exc}")
 
 
 def _infer_recall_mode(arguments: dict) -> str:
@@ -732,6 +867,7 @@ async def _brain_recall(
     # --- T3 filter additions ---
     source_filter: str | None = None,
     correction_category: str | None = None,
+    include_checkpoints: bool = False,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -789,6 +925,7 @@ async def _brain_recall(
             detail=detail,
             source_filter=source_filter,
             correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
         )
 
     if resolved_mode == "entity":
@@ -849,6 +986,7 @@ async def _search(
     # --- T3 filter additions ---
     source_filter_like: str | None = None,
     correction_category: str | None = None,
+    include_checkpoints: bool = False,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -909,6 +1047,7 @@ async def _search(
                     entity_id=entity_id,
                     source_filter_like=source_filter_like,
                     correction_category=correction_category,
+                    include_checkpoints=include_checkpoints,
                 )
                 break
             except Exception as e:

@@ -981,6 +981,7 @@ class KGMixin:
         query: str,
         relation_type: Optional[str] = None,
         limit: int = 20,
+        include_checkpoints: bool = False,
     ) -> List[Dict[str, Any]]:
         """Structured KG fact retrieval. Excludes co_occurs_with noise."""
         results: List[Dict[str, Any]] = []
@@ -989,14 +990,28 @@ class KGMixin:
         if entity:
             cursor = self._read_cursor()
 
+            checkpoint_join = ""
+            checkpoint_filter = ""
+            checkpoint_params: list[str] = []
+            if not include_checkpoints and getattr(self, "_has_chunk_origin", True):
+                checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
+                checkpoint_filter = """
+                          AND (
+                              r.source_chunk_id IS NULL
+                              OR source_chunk.id IS NULL
+                              OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                          )
+                """
+                checkpoint_params.append("precompact_checkpoint")
+
             if relation_type:
                 type_filter_src = "AND r.relation_type = ?"
                 type_filter_tgt = "AND r.relation_type = ?"
-                params = [entity["id"], relation_type, entity["id"], relation_type, limit]
+                params = [entity["id"], relation_type, entity["id"], relation_type, *checkpoint_params, limit]
             else:
                 type_filter_src = "AND r.relation_type != 'co_occurs_with'"
                 type_filter_tgt = "AND r.relation_type != 'co_occurs_with'"
-                params = [entity["id"], entity["id"], limit]
+                params = [entity["id"], entity["id"], *checkpoint_params, limit]
 
             rows = list(
                 cursor.execute(
@@ -1009,8 +1024,10 @@ class KGMixin:
                     FROM kg_current_facts r
                     JOIN kg_entities se ON r.source_id = se.id
                     JOIN kg_entities te ON r.target_id = te.id
-                    WHERE (r.source_id = ? {type_filter_src})
-                       OR (r.target_id = ? {type_filter_tgt})
+                    {checkpoint_join}
+                    WHERE ((r.source_id = ? {type_filter_src})
+                       OR (r.target_id = ? {type_filter_tgt}))
+                    {checkpoint_filter}
                     ORDER BY r.importance DESC, r.confidence DESC
                     LIMIT ?
                     """,
@@ -1070,6 +1087,7 @@ class KGMixin:
             query=search_term,
             relation_type=relation_type,
             limit=n_results,
+            include_checkpoints=bool(kwargs.get("include_checkpoints", False)),
         )
 
         scored_facts = []

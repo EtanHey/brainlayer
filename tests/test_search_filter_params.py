@@ -73,6 +73,25 @@ class TestNewFilterParamsPassthrough:
         call_kwargs = mock_search.call_args[1]
         assert call_kwargs.get("correction_category") is None
         assert call_kwargs.get("source_filter") is None
+        assert call_kwargs.get("include_checkpoints") is False
+
+    def test_include_checkpoints_passes_through(self):
+        """include_checkpoints reaches _brain_search from _brain_recall."""
+        with patch(
+            "brainlayer.mcp.search_handler._brain_search",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_search:
+            asyncio.run(
+                _brain_recall(
+                    mode="search",
+                    query="resume checkpoint",
+                    include_checkpoints=True,
+                )
+            )
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["include_checkpoints"] is True
 
 
 # ── _brain_search -> _search delegation ──────────────────────────────────────
@@ -180,6 +199,78 @@ class TestBrainSearchToSearch:
         mock_detect.assert_not_called()
         mock_search.assert_called_once()
 
+    def test_include_checkpoints_reaches_search(self):
+        """include_checkpoints flows from _brain_search to _search."""
+        with (
+            patch(
+                "brainlayer.mcp.search_handler._get_vector_store",
+                return_value=MagicMock(count=MagicMock(return_value=100)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._get_embedding_model",
+                return_value=MagicMock(embed_query=MagicMock(return_value=[0.1] * 1024)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ) as mock_search,
+            patch(
+                "brainlayer.mcp.search_handler._normalize_project_name",
+                return_value=None,
+            ),
+        ):
+            asyncio.run(
+                _brain_search(
+                    query="resume checkpoint",
+                    include_checkpoints=True,
+                )
+            )
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["include_checkpoints"] is True
+
+    def test_include_checkpoints_does_not_skip_entity_routing(self):
+        """include_checkpoints widens checkpoint visibility but keeps entity-aware routing active."""
+        store = MagicMock(count=MagicMock(return_value=100))
+        store.kg_hybrid_search.return_value = {
+            "chunks": {
+                "ids": [["chunk-1"]],
+                "documents": [["entity checkpoint context"]],
+                "metadatas": [[{"project": "brainlayer", "source_file": "test", "created_at": "2026-05-16"}]],
+                "distances": [[0.1]],
+            }
+        }
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch(
+                "brainlayer.mcp.search_handler._get_embedding_model",
+                return_value=MagicMock(embed_query=MagicMock(return_value=[0.1] * 1024)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._detect_entities",
+                return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
+            ) as mock_detect,
+            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=[]),
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ) as mock_search,
+            patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
+        ):
+            asyncio.run(
+                _brain_search(
+                    query="Etan checkpoint context",
+                    include_checkpoints=True,
+                )
+            )
+
+        mock_detect.assert_called_once_with("Etan checkpoint context", store)
+        store.kg_hybrid_search.assert_called_once()
+        assert store.kg_hybrid_search.call_args[1]["include_checkpoints"] is True
+        mock_search.assert_not_awaited()
+
 
 # ── Input schema validation ──────────────────────────────────────────────────
 
@@ -202,6 +293,7 @@ class TestInputSchemaPresence:
         assert "content_type_filter" in props
         assert "source_filter" in props
         assert "correction_category" in props
+        assert "include_checkpoints" in props
 
     def test_sentiment_filter_enum_values(self):
         """sentiment_filter has the standardized enum values."""
@@ -353,3 +445,39 @@ class TestAliasResolution:
 
         call_kwargs = mock_recall.call_args[1]
         assert call_kwargs["source_filter"] == "%youtube%"
+
+    def test_include_checkpoints_passes_from_call_tool(self):
+        """include_checkpoints is forwarded from call_tool to _brain_recall."""
+        from brainlayer.mcp import call_tool
+
+        with patch(
+            "brainlayer.mcp._brain_recall",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_recall:
+            asyncio.run(
+                call_tool(
+                    "brain_search",
+                    {
+                        "query": "resume checkpoint",
+                        "include_checkpoints": True,
+                    },
+                )
+            )
+
+        call_kwargs = mock_recall.call_args[1]
+        assert call_kwargs["include_checkpoints"] is True
+
+
+class TestBrainResumeSchema:
+    """Verify the explicit checkpoint resume tool is exposed."""
+
+    def test_brain_resume_tool_schema(self):
+        from brainlayer.mcp import list_tools
+
+        tools = asyncio.run(list_tools())
+        brain_resume = next(tool for tool in tools if tool.name == "brain_resume")
+        props = brain_resume.inputSchema["properties"]
+
+        assert props["session_id"]["type"] == "string"
+        assert props["lookback_days"]["type"] == "integer"

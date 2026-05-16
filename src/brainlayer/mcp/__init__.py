@@ -41,6 +41,7 @@ from .entity_handler import _brain_entity as _brain_entity
 from .entity_handler import _brain_get_person
 from .search_handler import (
     _brain_recall,
+    _brain_resume,
     _brain_search,
     _context,
     _current_context,
@@ -505,6 +506,11 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "description": "Filter by correction type tag (e.g. 'correction:preference', 'correction:factual', 'correction:naming'). Matches chunks tagged with the given correction category.",
                         },
+                        "include_checkpoints": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Include PreCompact checkpoint chunks in search results. Defaults to false; use brain_resume for explicit session recovery.",
+                        },
                         "detail": {
                             "type": "string",
                             "enum": ["compact", "full"],
@@ -513,6 +519,31 @@ async def list_tools() -> list[Tool]:
                         },
                     },
                     "required": ["query"],
+                }
+            ),
+        ),
+        Tool(
+            name="brain_resume",
+            title="Resume From PreCompact Checkpoint",
+            description="""Return recent PreCompact checkpoint chunks for session recovery. Use when: an agent asks what it was working on after compaction or needs explicit session-restore state. Don't use for normal topical search; brain_search excludes checkpoints by default to avoid checkpoint pollution. session_id narrows to one session when known, and lookback_days defaults to 7.""",
+            annotations=_READ_ONLY,
+            inputSchema=_bounded_input_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Optional session ID to resume.",
+                        },
+                        "lookback_days": {
+                            "type": "integer",
+                            "default": 7,
+                            "minimum": 1,
+                            "maximum": 90,
+                            "description": "How many days back to search checkpoints.",
+                        },
+                    },
+                    "required": [],
                 }
             ),
         ),
@@ -791,6 +822,11 @@ async def list_tools() -> list[Tool]:
                             "enum": ["compact", "full"],
                             "default": "compact",
                             "description": "Result detail level (mode=search). 'compact': snippet + metadata. 'full': complete content.",
+                        },
+                        "include_checkpoints": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Include PreCompact checkpoint chunks in mode=search results. Defaults to false; use brain_resume for explicit session recovery.",
                         },
                     },
                 }
@@ -1218,6 +1254,15 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 detail=arguments.get("detail", "compact"),
                 source_filter=resolved_source_filter,
                 correction_category=arguments.get("correction_category"),
+                include_checkpoints=arguments.get("include_checkpoints", False),
+            )
+        )
+
+    elif name == "brain_resume":
+        return await _with_timeout(
+            _brain_resume(
+                session_id=arguments.get("session_id"),
+                lookback_days=arguments.get("lookback_days", 7),
             )
         )
 
@@ -1297,6 +1342,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 max_results=arguments.get("max_results", 10),
                 detail=arguments.get("detail", "compact"),
                 entity_type=arguments.get("entity_type"),
+                include_checkpoints=arguments.get("include_checkpoints", False),
             )
         )
 
