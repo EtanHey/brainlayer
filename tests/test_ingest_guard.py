@@ -64,6 +64,29 @@ def test_vector_upsert_rejects_recursive_mcp_output(tmp_path):
             )
 
 
+def test_update_chunk_rejects_recursive_mcp_output(tmp_path):
+    with VectorStore(tmp_path / "update-guard.db") as store:
+        store.upsert_chunks(
+            [
+                {
+                    "id": "safe-update-target",
+                    "content": "ordinary memory before attempted recursive update",
+                    "metadata": {},
+                    "source_file": "session.jsonl",
+                    "project": "brainlayer",
+                    "content_type": "assistant_text",
+                    "char_count": 47,
+                }
+            ],
+            [[0.2] * 1024],
+        )
+
+        with pytest.raises(ValueError, match="recursive MCP output"):
+            store.update_chunk("safe-update-target", content=JSONRPC_RECURSION_CONTENT)
+
+        assert store.get_chunk("safe-update-target")["content"] == "ordinary memory before attempted recursive update"
+
+
 def test_drain_drops_recursive_mcp_output_events(tmp_path, monkeypatch):
     db_path = tmp_path / "drain-guard.db"
     queue_dir = tmp_path / "queue"

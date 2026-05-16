@@ -1529,6 +1529,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
 
         if content is not None:
+            reject_recursive_mcp_output(content)
             created_at_row = cursor.execute("SELECT created_at FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
             dedupe_fields = compute_dedupe_fields(content, created_at_row[0] if created_at_row else None)
             cursor.execute(
