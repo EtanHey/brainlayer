@@ -196,9 +196,39 @@ class TestFlushCallback:
         flush([entry])
 
         conn = sqlite3.connect(str(db_path))
-        rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        rows = conn.execute("SELECT COUNT(*), MAX(seen_count) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        audit_count = conn.execute("SELECT COUNT(*) FROM dedupe_audit WHERE mechanism = 'sha256_same_id'").fetchone()[0]
         conn.close()
         assert rows[0] == 1
+        assert rows[1] == 2
+        assert audit_count == 1
+
+    def test_dedup_merges_same_content_across_source_files(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path)
+        content = "This exact same content should merge even when it appears in a different session file"
+        first = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T09:00:00Z")
+        second = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T10:00:00Z")
+        first["_source_file"] = "/tmp/projects/test-project/alpha-session.jsonl"
+        second["_source_file"] = "/tmp/projects/test-project/beta-session.jsonl"
+
+        flush([first, second])
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT id, seen_count, last_seen_at FROM chunks WHERE source = 'realtime_watcher'"
+        ).fetchone()
+        aliases = conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchall()
+        audit_count = conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0]
+        conn.close()
+
+        assert row[1] == 2
+        assert row[2] == "2026-05-16T10:00:00Z"
+        assert len(aliases) == 1
+        assert aliases[0][1] == row[0]
+        assert audit_count == 1
 
     def test_auto_tags_detected_correction_user_message(self, tmp_path):
         db_path = tmp_path / "test.db"

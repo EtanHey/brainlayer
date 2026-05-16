@@ -6,6 +6,7 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 
 import json
 import os
+import struct
 import threading
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,14 @@ from .chunk_origin import (
     CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
     CHUNK_ORIGIN_UNKNOWN,
     detect_chunk_origin,
+)
+from .dedupe import (
+    compute_dedupe_fields,
+    ensure_dedupe_schema,
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_seen,
+    resolve_chunk_id,
 )
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
@@ -228,10 +237,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("aggregated_into", "TEXT"),
             ("archived_at", "TEXT"),
             ("chunk_origin", "TEXT DEFAULT 'unknown'"),
+            ("seen_count", "INTEGER DEFAULT 1"),
+            ("last_seen_at", "TEXT"),
+            ("content_hash", "TEXT"),
+            ("dedupe_hash", "TEXT"),
+            ("simhash", "TEXT"),
+            ("simhash_band_0", "TEXT"),
+            ("simhash_band_1", "TEXT"),
+            ("simhash_band_2", "TEXT"),
+            ("simhash_band_3", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
         self._has_chunk_origin = True
+        ensure_dedupe_schema(self.conn)
 
         migration_name = "2026_05_16_fm6_chunk_origin"
         migration_done = cursor.execute(
@@ -1304,6 +1323,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 (chunk_id, embedding_bytes),
             )
 
+    def _blend_chunk_vector(self, cursor, chunk_id: str, embedding: List[float]) -> List[float]:
+        """Approximate a merged duplicate by preserving canonical and incoming vectors."""
+        row = cursor.execute("SELECT embedding FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()
+        if not row or row[0] is None:
+            return embedding
+        existing_bytes = bytes(row[0])
+        if len(existing_bytes) != len(embedding) * 4:
+            return embedding
+        existing = struct.unpack(f"{len(embedding)}f", existing_bytes)
+        return [(float(left) + float(right)) / 2.0 for left, right in zip(existing, embedding)]
+
+    def _chunk_vector_exists(self, cursor, chunk_id: str) -> bool:
+        return bool(cursor.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone())
+
     def _delete_chunk_vector(self, cursor, chunk_id: str) -> None:
         """Delete a chunk from both float and binary vector tables."""
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
@@ -1313,64 +1346,152 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     # ── Chunk CRUD ──────────────────────────────────────────────────────
 
     def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> int:
-        """Upsert chunks with embeddings."""
+        """Upsert chunks with embeddings, returning the number of input chunks processed."""
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
-        cursor = self.conn.cursor()
+        for attempt in range(5):
+            cursor = self.conn.cursor()
+            transaction_started = False
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                for chunk, embedding in zip(chunks, embeddings):
+                    chunk_id = chunk["id"]
+                    created_at = chunk.get("created_at")
+                    tags_value = chunk.get("tags")
+                    tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
+                    duplicate, dedupe_fields = find_duplicate(
+                        self.conn,
+                        chunk_id=chunk_id,
+                        content=chunk["content"],
+                        created_at=created_at,
+                        project=chunk.get("project"),
+                        content_type=chunk.get("content_type"),
+                    )
+                    if duplicate is not None:
+                        duplicate_row_exists = cursor.execute(
+                            "SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)
+                        ).fetchone()
+                        content_changed = merge_duplicate_chunk(
+                            self.conn,
+                            canonical_id=duplicate.canonical_chunk_id,
+                            duplicate_id=chunk_id,
+                            incoming={
+                                **chunk,
+                                "tags": tags_json,
+                                "created_at": created_at,
+                                "last_seen_at": chunk.get("last_seen_at") or created_at,
+                            },
+                            mechanism=duplicate.mechanism,
+                            hamming_distance_value=duplicate.hamming_distance,
+                            archive_existing_duplicate=duplicate_row_exists is not None,
+                        )
+                        if content_changed:
+                            merged_embedding = self._blend_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                            self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
+                        elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
+                            self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                        continue
+                    if merge_existing_chunk_seen(
+                        self.conn,
+                        chunk_id=chunk_id,
+                        incoming={
+                            **chunk,
+                            "tags": tags_json,
+                            "created_at": created_at,
+                            "last_seen_at": chunk.get("last_seen_at") or created_at,
+                        },
+                    ):
+                        if not self._chunk_vector_exists(cursor, chunk_id):
+                            self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                        continue
 
-        for chunk, embedding in zip(chunks, embeddings):
-            chunk_id = chunk["id"]
-
-            cursor.execute(
-                """
-                INSERT INTO chunks
-                (id, content, metadata, source_file, project,
-                 content_type, value_type, char_count, source, created_at,
-                 conversation_id, position, sender, chunk_origin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    content = excluded.content,
-                    metadata = excluded.metadata,
-                    source_file = excluded.source_file,
-                    project = excluded.project,
-                    content_type = excluded.content_type,
-                    value_type = excluded.value_type,
-                    char_count = excluded.char_count,
-                    source = excluded.source,
-                    created_at = COALESCE(chunks.created_at, excluded.created_at),
-                    conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
-                    position = COALESCE(excluded.position, chunks.position),
-                    sender = COALESCE(excluded.sender, chunks.sender),
-                    chunk_origin = CASE
-                        WHEN excluded.content != chunks.content
-                            THEN COALESCE(excluded.chunk_origin, 'unknown')
-                        WHEN excluded.chunk_origin IS NOT NULL AND excluded.chunk_origin != 'unknown'
-                            THEN excluded.chunk_origin
-                        WHEN chunks.chunk_origin IS NULL
-                            THEN COALESCE(excluded.chunk_origin, 'unknown')
-                        ELSE chunks.chunk_origin
-                    END
-            """,
-                (
-                    chunk_id,
-                    chunk["content"],
-                    json.dumps(chunk["metadata"]),
-                    chunk["source_file"],
-                    chunk.get("project"),
-                    chunk.get("content_type"),
-                    chunk.get("value_type"),
-                    chunk.get("char_count", 0),
-                    chunk.get("source", "claude_code"),
-                    chunk.get("created_at"),
-                    chunk.get("conversation_id"),
-                    chunk.get("position"),
-                    chunk.get("sender"),
-                    detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
-                ),
-            )
-
-            self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                    cursor.execute(
+                        """
+                        INSERT INTO chunks
+                        (id, content, metadata, source_file, project,
+                         content_type, value_type, char_count, source, created_at,
+                         conversation_id, position, sender, chunk_origin, tags, importance,
+                         half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
+                         simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            content = excluded.content,
+                            metadata = excluded.metadata,
+                            source_file = excluded.source_file,
+                            project = excluded.project,
+                            content_type = excluded.content_type,
+                            value_type = excluded.value_type,
+                            char_count = excluded.char_count,
+                            source = excluded.source,
+                            created_at = COALESCE(chunks.created_at, excluded.created_at),
+                            conversation_id = COALESCE(excluded.conversation_id, chunks.conversation_id),
+                            position = COALESCE(excluded.position, chunks.position),
+                            sender = COALESCE(excluded.sender, chunks.sender),
+                            tags = COALESCE(excluded.tags, chunks.tags),
+                            importance = COALESCE(excluded.importance, chunks.importance),
+                            half_life_days = MAX(COALESCE(chunks.half_life_days, 30.0), COALESCE(excluded.half_life_days, 30.0)),
+                            seen_count = COALESCE(chunks.seen_count, 1),
+                            last_seen_at = COALESCE(chunks.last_seen_at, excluded.last_seen_at),
+                            dedupe_hash = excluded.dedupe_hash,
+                            simhash = excluded.simhash,
+                            simhash_band_0 = excluded.simhash_band_0,
+                            simhash_band_1 = excluded.simhash_band_1,
+                            simhash_band_2 = excluded.simhash_band_2,
+                            simhash_band_3 = excluded.simhash_band_3,
+                            chunk_origin = CASE
+                                WHEN excluded.content != chunks.content
+                                    THEN COALESCE(excluded.chunk_origin, 'unknown')
+                                WHEN excluded.chunk_origin IS NOT NULL AND excluded.chunk_origin != 'unknown'
+                                    THEN excluded.chunk_origin
+                                WHEN chunks.chunk_origin IS NULL
+                                    THEN COALESCE(excluded.chunk_origin, 'unknown')
+                                ELSE chunks.chunk_origin
+                            END
+                    """,
+                        (
+                            chunk_id,
+                            chunk["content"],
+                            json.dumps(chunk["metadata"]),
+                            chunk["source_file"],
+                            chunk.get("project"),
+                            chunk.get("content_type"),
+                            chunk.get("value_type"),
+                            chunk.get("char_count", 0),
+                            chunk.get("source", "claude_code"),
+                            chunk.get("created_at"),
+                            chunk.get("conversation_id"),
+                            chunk.get("position"),
+                            chunk.get("sender"),
+                            detect_chunk_origin(chunk.get("content"), chunk.get("chunk_origin")),
+                            tags_json,
+                            float(chunk["importance"]) if chunk.get("importance") is not None else None,
+                            float(chunk["half_life_days"]) if chunk.get("half_life_days") is not None else None,
+                            int(chunk.get("seen_count") or 1),
+                            chunk.get("last_seen_at") or created_at,
+                            dedupe_fields.dedupe_hash,
+                            dedupe_fields.simhash,
+                            dedupe_fields.bands[0],
+                            dedupe_fields.bands[1],
+                            dedupe_fields.bands[2],
+                            dedupe_fields.bands[3],
+                        ),
+                    )
+                    self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                cursor.execute("COMMIT")
+                transaction_started = False
+                break
+            except apsw.BusyError:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                if attempt == 4:
+                    raise
+                time.sleep(0.1 * (2**attempt))
+            except Exception:
+                if transaction_started:
+                    cursor.execute("ROLLBACK")
+                raise
 
         from .search_repo import clear_hybrid_search_cache
 
@@ -1394,9 +1515,36 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
 
         if content is not None:
+            created_at_row = cursor.execute("SELECT created_at FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            dedupe_fields = compute_dedupe_fields(content, created_at_row[0] if created_at_row else None)
             cursor.execute(
-                "UPDATE chunks SET content = ?, char_count = ?, summary = ?, chunk_origin = ? WHERE id = ?",
-                (content, len(content), content[:200], detect_chunk_origin(content), chunk_id),
+                """
+                UPDATE chunks
+                SET content = ?,
+                    char_count = ?,
+                    summary = ?,
+                    chunk_origin = ?,
+                    dedupe_hash = ?,
+                    simhash = ?,
+                    simhash_band_0 = ?,
+                    simhash_band_1 = ?,
+                    simhash_band_2 = ?,
+                    simhash_band_3 = ?
+                WHERE id = ?
+                """,
+                (
+                    content,
+                    len(content),
+                    content[:200],
+                    detect_chunk_origin(content),
+                    dedupe_fields.dedupe_hash,
+                    dedupe_fields.simhash,
+                    dedupe_fields.bands[0],
+                    dedupe_fields.bands[1],
+                    dedupe_fields.bands[2],
+                    dedupe_fields.bands[3],
+                    chunk_id,
+                ),
             )
         if tags is not None:
             cursor.execute(
@@ -1456,7 +1604,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Get a single chunk by ID."""
-        cursor = self.conn.cursor()
+        read_conn = self._get_read_conn()
+        cursor = read_conn.cursor()
+        chunk_id = resolve_chunk_id(read_conn, chunk_id)
         has_chunk_origin = getattr(self, "_has_chunk_origin", True)
         chunk_origin_select = ", chunk_origin" if has_chunk_origin else ""
         rows = list(
@@ -1488,6 +1638,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "archived_at": r[13],
             "chunk_origin": r[14] if has_chunk_origin else CHUNK_ORIGIN_UNKNOWN,
         }
+
+    def resolve_chunk_id(self, chunk_id: str) -> str:
+        """Resolve a duplicate chunk alias within the 90-day grace period."""
+        return resolve_chunk_id(self._get_read_conn(), chunk_id)
 
     # ── Chunk events audit ─────────────────────────────────────────────
 

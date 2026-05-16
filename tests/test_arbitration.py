@@ -213,6 +213,169 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
     assert entity_link == replacement_id
 
 
+def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
+    from brainlayer.drain import drain_once
+    from brainlayer.queue_io import enqueue_store
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    _create_minimal_db(db_path)
+
+    enqueue_store(
+        chunk_id="store-a",
+        content="Duplicate store memory should merge through the single-writer drain",
+        project="arbitration-test",
+        tags=["first"],
+        importance=3,
+        queue_dir=queue_dir,
+    )
+    enqueue_store(
+        chunk_id="store-b",
+        content="Duplicate store memory should merge through the single-writer drain",
+        project="arbitration-test",
+        tags=["second"],
+        importance=9,
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, seen_count, importance, tags FROM chunks WHERE COALESCE(archived, 0) = 0"
+        ).fetchall()
+        alias = conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchone()
+
+    assert len(rows) == 1
+    canonical_id, seen_count, importance, tags = rows[0]
+    assert seen_count == 2
+    assert importance == 9.0
+    assert tags == '["first", "second"]'
+    assert alias[0] != canonical_id
+    assert alias[1] == canonical_id
+
+
+def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('old-id', 'old content', '{}', 'seed')
+            """
+        )
+        conn.execute("INSERT INTO kg_entities (id, name) VALUES ('person-1', 'Person One')")
+        conn.commit()
+
+    duplicate_content = "Duplicate store memory should route references to the canonical row"
+    (queue_dir / "store-ordered.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "store-a",
+                "content": duplicate_content,
+                "memory_type": "note",
+                "project": "arbitration-test",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "store-b",
+                "content": duplicate_content,
+                "memory_type": "note",
+                "project": "arbitration-test",
+                "supersedes": "old-id",
+                "metadata": {"entity_id": "person-1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
+        entity_link = conn.execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'person-1'").fetchone()[0]
+
+    assert superseded_by == "store-a"
+    assert entity_link == "store-a"
+
+
+def test_drain_watcher_same_id_reposts_increment_seen_count(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    event = {
+        "kind": "watcher_chunk",
+        "chunk_id": "watcher-same",
+        "content": "Same watcher chunk should count repeat sightings",
+        "created_at": "2026-05-16T09:00:00Z",
+        "tags": ["watcher"],
+    }
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(event) + "\n" + json.dumps({**event, "created_at": "2026-05-16T10:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT seen_count, last_seen_at FROM chunks WHERE id = 'watcher-same'").fetchone()
+        audit = conn.execute("SELECT chunk_id_dropped, chunk_id_kept, mechanism FROM dedupe_audit").fetchone()
+
+    assert row == (2, "2026-05-16T10:00:00Z")
+    assert audit == ("watcher-same", "watcher-same", "sha256_same_id")
+
+
+def test_drain_watcher_same_id_timestamp_change_merges_originals(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    first = {
+        "kind": "watcher_chunk",
+        "chunk_id": "watcher-timestamp",
+        "content": "Deploy at 2026-05-16T10:00:00Z",
+        "created_at": "2026-05-16T09:00:00Z",
+    }
+    second = {
+        **first,
+        "content": "Deploy at 2026-05-17T10:00:00Z",
+        "created_at": "2026-05-16T10:00:00Z",
+    }
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(first) + "\n" + json.dumps(second) + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT content, seen_count FROM chunks WHERE id = 'watcher-timestamp'").fetchone()
+        audit = conn.execute("SELECT chunk_id_dropped, chunk_id_kept, mechanism FROM dedupe_audit").fetchone()
+
+    assert "2026-05-16T10:00:00Z" in row[0]
+    assert "2026-05-17T10:00:00Z" in row[0]
+    assert row[1] == 2
+    assert audit == ("watcher-timestamp", "watcher-timestamp", "same_id_content_merge")
+
+
 def test_drain_embeds_every_queued_store(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store

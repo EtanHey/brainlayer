@@ -20,6 +20,14 @@ import sqlite_vec
 
 from ._helpers import serialize_f32
 from .chunk_origin import detect_chunk_origin
+from .dedupe import (
+    compute_dedupe_fields,
+    ensure_dedupe_schema,
+    find_duplicate,
+    merge_duplicate_chunk,
+    merge_existing_chunk_content,
+    merge_existing_chunk_seen,
+)
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -77,6 +85,19 @@ def _columns(conn: apsw.Connection, table: str) -> set[str]:
 
 def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     cols = _columns(conn, "chunks")
+    if "content" in values:
+        fields = compute_dedupe_fields(str(values["content"]), values.get("created_at"))
+        values = {
+            **values,
+            "seen_count": values.get("seen_count") or 1,
+            "last_seen_at": values.get("last_seen_at") or values.get("created_at"),
+            "dedupe_hash": fields.dedupe_hash,
+            "simhash": fields.simhash,
+            "simhash_band_0": fields.bands[0],
+            "simhash_band_1": fields.bands[1],
+            "simhash_band_2": fields.bands[2],
+            "simhash_band_3": fields.bands[3],
+        }
     row = {key: value for key, value in values.items() if key in cols}
     if "id" not in row and "chunk_id" in cols:
         row["chunk_id"] = values["id"]
@@ -86,6 +107,37 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     placeholders = ", ".join("?" for _ in names)
     sql = f"INSERT OR IGNORE INTO chunks ({', '.join(names)}) VALUES ({placeholders})"
     conn.execute(sql, [row[name] for name in names])
+
+
+def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
+    ensure_dedupe_schema(conn)
+    chunk_id = values["id"]
+    duplicate, _ = find_duplicate(
+        conn,
+        chunk_id=chunk_id,
+        content=str(values["content"]),
+        created_at=values.get("created_at"),
+        project=values.get("project"),
+        content_type=values.get("content_type"),
+    )
+    if duplicate is not None:
+        merge_duplicate_chunk(
+            conn,
+            canonical_id=duplicate.canonical_chunk_id,
+            duplicate_id=chunk_id,
+            incoming=values,
+            mechanism=duplicate.mechanism,
+            hamming_distance_value=duplicate.hamming_distance,
+        )
+        return duplicate.canonical_chunk_id
+    if merge_existing_chunk_seen(conn, chunk_id=chunk_id, incoming=values):
+        return chunk_id
+    existing = conn.execute("SELECT id FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    if existing:
+        merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=values)
+        return chunk_id
+    _insert_chunk(conn, values)
+    return chunk_id
 
 
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -115,13 +167,25 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
     chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
+    tags = event.get("tags")
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
         if str(existing[0]).strip() == content:
+            merge_existing_chunk_seen(
+                conn,
+                chunk_id=chunk_id,
+                incoming={
+                    "id": chunk_id,
+                    "content": content,
+                    "tags": json.dumps(tags) if tags else None,
+                    "importance": float(event["importance"]) if event.get("importance") is not None else None,
+                    "created_at": now,
+                    "last_seen_at": now,
+                },
+            )
             return ApplyResult(chunk_id=chunk_id)
         return ApplyResult(collision_chunk_id=chunk_id)
-    tags = event.get("tags")
-    _insert_chunk(
+    stored_chunk_id = _insert_or_merge_chunk(
         conn,
         {
             "id": chunk_id,
@@ -144,7 +208,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     cols = _columns(conn, "chunks")
     if supersedes and "superseded_by" in cols:
-        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (chunk_id, supersedes))
+        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (stored_chunk_id, supersedes))
         for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
             if conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
@@ -158,11 +222,11 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
                 INSERT OR REPLACE INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
                 VALUES (?, ?, ?, ?)
                 """,
-                (entity_id, chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
+                (entity_id, stored_chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
             )
         else:
             logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
-    return ApplyResult(chunk_id=chunk_id)
+    return ApplyResult(chunk_id=stored_chunk_id)
 
 
 def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
@@ -176,7 +240,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
         logger.warning("Skipping malformed watcher event with empty content")
         return
     tags = event.get("tags")
-    _insert_chunk(
+    _insert_or_merge_chunk(
         conn,
         {
             "id": chunk_id,
@@ -215,7 +279,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         logger.warning("Invalid hook timestamp %r; using current time", ts_raw)
         timestamp = time.time()
-    _insert_chunk(
+    _insert_or_merge_chunk(
         conn,
         {
             "id": chunk_id,
@@ -416,6 +480,7 @@ def drain_once(
                 store_chunk_ids: list[str] = []
                 try:
                     conn.execute("BEGIN IMMEDIATE")
+                    ensure_dedupe_schema(conn)
                     for event in events:
                         result = _apply_event(conn, event)
                         if result.chunk_id:

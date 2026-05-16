@@ -209,6 +209,153 @@ class TestStoreMemory:
         # May or may not find related depending on mock embedding similarity
         assert isinstance(result["related"], list)
 
+    def test_store_merges_duplicate_memory(self, store, mock_embed):
+        """Duplicate brain_store writes collapse into one canonical chunk."""
+        from brainlayer.store import store_memory
+
+        content = "Duplicate manual memory should merge through direct brain_store writes"
+        first = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["first"],
+            importance=4,
+        )
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["second"],
+            importance=9,
+        )
+
+        row = (
+            store.conn.cursor()
+            .execute("SELECT id, seen_count, importance, tags FROM chunks WHERE source = 'manual'")
+            .fetchone()
+        )
+        alias = store.conn.cursor().execute("SELECT canonical_chunk_id FROM chunk_id_alias").fetchone()
+
+        assert second["id"] == first["id"]
+        assert row == (first["id"], 2, 9.0, '["first", "second"]')
+        assert alias == (first["id"],)
+
+    def test_duplicate_store_uses_available_embedding_when_canonical_has_none(self, store, mock_embed):
+        """A later synchronous duplicate should backfill a missing canonical vector."""
+        from brainlayer.store import store_memory
+
+        content = "Duplicate manual memory should reuse available exact embedding"
+        first = store_memory(
+            store=store,
+            embed_fn=None,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+        )
+        assert store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 0
+
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        vector_count = (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (first["id"],))
+            .fetchone()[0]
+        )
+        assert second["id"] == first["id"]
+        assert vector_count == 1
+
+    def test_duplicate_store_busy_retry_keeps_incoming_chunk_id_stable(self, store, mock_embed, monkeypatch):
+        """A BusyError after merge rollback should retry with the original incoming ID."""
+        import apsw
+
+        from brainlayer.store import store_memory
+
+        cursor = store.conn.cursor()
+        cursor.execute(
+            "INSERT INTO kg_entities(id, name, entity_type) VALUES (?, ?, ?)",
+            ("entity-retry", "Retry Entity", "project"),
+        )
+        first = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="Duplicate retry memory should survive one busy rollback",
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        original_link = store.link_entity_chunk
+        calls = {"count": 0}
+
+        def flaky_link_entity_chunk(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise apsw.BusyError("database is locked")
+            return original_link(*args, **kwargs)
+
+        monkeypatch.setattr(store, "link_entity_chunk", flaky_link_entity_chunk)
+
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="Duplicate retry memory should survive one busy rollback",
+            memory_type="learning",
+            project="brainlayer",
+            entity_id="entity-retry",
+        )
+
+        row = cursor.execute("SELECT seen_count FROM chunks WHERE id = ?", (first["id"],)).fetchone()
+        link = cursor.execute(
+            "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
+            ("entity-retry",),
+        ).fetchone()
+        assert second["id"] == first["id"]
+        assert row == (2,)
+        assert link == (first["id"],)
+
+    def test_changed_duplicate_embedding_runs_after_write_transaction(self, store):
+        """Merged-content embedding should not hold the write transaction open."""
+        from brainlayer.store import store_memory
+
+        calls = []
+
+        def embed(content: str):
+            calls.append((content, store.conn.getautocommit()))
+            return [0.1] * 1024
+
+        first_words = [f"token{i}" for i in range(100)]
+        second_words = first_words.copy()
+        second_words[0] = "changed0"
+
+        first = store_memory(
+            store=store,
+            embed_fn=embed,
+            content=" ".join(first_words),
+            memory_type="learning",
+            project="brainlayer",
+        )
+        second = store_memory(
+            store=store,
+            embed_fn=embed,
+            content=" ".join(second_words),
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        merged_embedding_calls = [call for call in calls if "\n\n2. " in call[0]]
+        assert second["id"] == first["id"]
+        assert merged_embedding_calls
+        assert all(autocommit for _, autocommit in merged_embedding_calls)
+
 
 class TestStoreValidation:
     """Test input validation for store_memory."""

@@ -93,7 +93,7 @@ def test_get_enrichment_candidates_honors_explicit_chunk_ids_filter(tmp_path):
 def test_get_enrichment_candidates_respects_limit(tmp_path):
     store = VectorStore(tmp_path / "test.db")
     for idx in range(5):
-        _insert_chunk(store, f"c{idx}", "x" * 80)
+        _insert_chunk(store, f"c{idx}", f"Candidate {idx} " + "x" * 80)
 
     results = store.get_enrichment_candidates(limit=2)
 

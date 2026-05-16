@@ -14,6 +14,7 @@ from brainlayer.chunk_origin import (
     CHUNK_ORIGIN_UNKNOWN,
     detect_chunk_origin,
 )
+from brainlayer.dedupe import compute_dedupe_fields
 from brainlayer.drain import _apply_watcher
 from brainlayer.mcp.search_handler import _brain_resume, _kg_facts_sql
 from brainlayer.search_repo import _hybrid_cache
@@ -220,6 +221,38 @@ def test_update_chunk_recomputes_origin_when_content_changes(tmp_path):
 
     assert updated is True
     assert row == (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,)
+
+
+def test_update_chunk_recomputes_dedupe_fingerprints_when_content_changes(tmp_path):
+    store = VectorStore(tmp_path / "update-dedupe.db")
+    created_at = "2026-05-16T10:00:00+00:00"
+    original = "Original update fingerprint memory"
+    updated_content = "Edited update fingerprint memory with a different dedupe identity"
+    _insert_chunk(
+        store,
+        chunk_id="updated-fingerprint",
+        content=original,
+        created_at=created_at,
+    )
+
+    updated = store.update_chunk("updated-fingerprint", content=updated_content)
+
+    row = (
+        store.conn.cursor()
+        .execute(
+            """
+            SELECT dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
+            FROM chunks
+            WHERE id = 'updated-fingerprint'
+            """
+        )
+        .fetchone()
+    )
+    expected = compute_dedupe_fields(updated_content, created_at)
+    store.close()
+
+    assert updated is True
+    assert row == (expected.dedupe_hash, expected.simhash, *expected.bands)
 
 
 def test_watcher_and_drain_tag_precompact_origin(tmp_path, monkeypatch):
