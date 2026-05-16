@@ -14,11 +14,11 @@ JSONRPC_RECURSION_CONTENT = (
 )
 
 RT_AGENT_A7_JUDGE_NOTES_CONTENT = (
-    'Key observations:\n'
+    "Key observations:\n"
     '- **qid=20 "Etan TechGym title abstract sent WhatsApp Sagit content"**: '
     "Pair 49 contains Sagit context but says pre-draft.\n"
     '- **qid=22 "two-sentence hook opener"**: Both pairs are FM6 PreCompact pollution.\n'
-    'Final JSONL fields: judge_agent_name, failure_modes_observed, judge_reasoning.'
+    "Final JSONL fields: judge_agent_name, failure_modes_observed, judge_reasoning."
 )
 
 
