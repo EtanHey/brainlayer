@@ -48,11 +48,15 @@ def run_count(db_path: Path, since: str = SINCE) -> list[dict[str, object]]:
         conn.close()
 
 
-def build_payload(db_path: Path) -> dict[str, object]:
+def build_payload(db_path: Path, now: datetime | None = None) -> dict[str, object]:
     rows = run_count(db_path)
     total = sum(int(row["new_audit_chunks"]) for row in rows)
-    now = datetime.now(timezone.utc)
-    elapsed_days = max(0, (now.date() - datetime.fromisoformat(SINCE).date()).days)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    since = datetime.fromisoformat(SINCE)
+    elapsed_seconds = max(0.0, (now - since).total_seconds())
+    elapsed_days = int(elapsed_seconds // 86400)
     verdict_ready = elapsed_days >= 7
     structural_fix = verdict_ready and total == 0
     return {
