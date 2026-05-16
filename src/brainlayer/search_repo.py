@@ -168,7 +168,7 @@ def _audit_recursion_exclusion_sql(
     )
     trimmed_content_expr = f"LTRIM({content_expr}, char(9) || char(10) || char(11) || char(12) || char(13) || char(32))"
     recursive_content_filter = (
-        f"LOWER({trimmed_content_expr}) NOT LIKE '┌─ brain_search:%' "
+        f"LOWER({trimmed_content_expr}) NOT GLOB '┌─ brain_search:*' "
         f"AND LOWER({trimmed_content_expr}) NOT GLOB '┌─ brain_*:*' "
         f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity:%' "
         f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity search:%' "
