@@ -14,9 +14,12 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import apsw
 
 from .chunk_origin import detect_chunk_origin
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
@@ -290,81 +293,104 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                         inserted += 1
                     else:
                         assert cursor is not None and store is not None
-                        duplicate, dedupe_fields = find_duplicate(
-                            store.conn,
-                            chunk_id=chunk_id,
-                            content=clean_content,
-                            created_at=created_at,
-                            project=project,
-                            content_type=chunk.content_type.value,
-                        )
-                        if duplicate is not None:
-                            merge_duplicate_chunk(
-                                store.conn,
-                                canonical_id=duplicate.canonical_chunk_id,
-                                duplicate_id=chunk_id,
-                                incoming={
-                                    "id": chunk_id,
-                                    "content": clean_content,
-                                    "tags": tags,
-                                    "created_at": created_at,
-                                    "last_seen_at": created_at,
-                                },
-                                mechanism=duplicate.mechanism,
-                                hamming_distance_value=duplicate.hamming_distance,
-                            )
-                            inserted += 1
-                            continue
-                        if merge_existing_chunk_seen(
-                            store.conn,
-                            chunk_id=chunk_id,
-                            incoming={
-                                "id": chunk_id,
-                                "content": clean_content,
-                                "tags": tags,
-                                "created_at": created_at,
-                                "last_seen_at": created_at,
-                            },
-                        ):
-                            inserted += 1
-                            continue
-                        cursor.execute(
-                            """INSERT OR IGNORE INTO chunks
-                               (id, content, metadata, source_file, project,
-                                content_type, value_type, char_count, source,
-                                created_at, conversation_id, sender, tags, chunk_origin,
-                                seen_count, last_seen_at, dedupe_hash, simhash,
-                                simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                chunk_id,
-                                clean_content,
-                                json.dumps(chunk.metadata),
-                                source_file,
-                                project,
-                                chunk.content_type.value,
-                                chunk.value.value,
-                                len(clean_content),
-                                "realtime_watcher",
-                                created_at,
-                                conversation_id,
-                                chunk.metadata.get("sender"),
-                                tags,
-                                chunk_origin,
-                                1,
-                                created_at,
-                                dedupe_fields.content_hash,
-                                dedupe_fields.simhash,
-                                dedupe_fields.bands[0],
-                                dedupe_fields.bands[1],
-                                dedupe_fields.bands[2],
-                                dedupe_fields.bands[3],
-                            ),
-                        )
-                        if store.conn.changes() > 0:
-                            inserted += 1
-                        else:
-                            skipped += 1
+                        for attempt in range(5):
+                            transaction_started = False
+                            try:
+                                cursor.execute("BEGIN IMMEDIATE")
+                                transaction_started = True
+                                duplicate, dedupe_fields = find_duplicate(
+                                    store.conn,
+                                    chunk_id=chunk_id,
+                                    content=clean_content,
+                                    created_at=created_at,
+                                    project=project,
+                                    content_type=chunk.content_type.value,
+                                )
+                                if duplicate is not None:
+                                    merge_duplicate_chunk(
+                                        store.conn,
+                                        canonical_id=duplicate.canonical_chunk_id,
+                                        duplicate_id=chunk_id,
+                                        incoming={
+                                            "id": chunk_id,
+                                            "content": clean_content,
+                                            "tags": tags,
+                                            "created_at": created_at,
+                                            "last_seen_at": created_at,
+                                        },
+                                        mechanism=duplicate.mechanism,
+                                        hamming_distance_value=duplicate.hamming_distance,
+                                    )
+                                    cursor.execute("COMMIT")
+                                    transaction_started = False
+                                    inserted += 1
+                                    break
+                                if merge_existing_chunk_seen(
+                                    store.conn,
+                                    chunk_id=chunk_id,
+                                    incoming={
+                                        "id": chunk_id,
+                                        "content": clean_content,
+                                        "tags": tags,
+                                        "created_at": created_at,
+                                        "last_seen_at": created_at,
+                                    },
+                                ):
+                                    cursor.execute("COMMIT")
+                                    transaction_started = False
+                                    inserted += 1
+                                    break
+                                cursor.execute(
+                                    """INSERT OR IGNORE INTO chunks
+                                       (id, content, metadata, source_file, project,
+                                        content_type, value_type, char_count, source,
+                                        created_at, conversation_id, sender, tags, chunk_origin,
+                                        seen_count, last_seen_at, dedupe_hash, simhash,
+                                        simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                    (
+                                        chunk_id,
+                                        clean_content,
+                                        json.dumps(chunk.metadata),
+                                        source_file,
+                                        project,
+                                        chunk.content_type.value,
+                                        chunk.value.value,
+                                        len(clean_content),
+                                        "realtime_watcher",
+                                        created_at,
+                                        conversation_id,
+                                        chunk.metadata.get("sender"),
+                                        tags,
+                                        chunk_origin,
+                                        1,
+                                        created_at,
+                                        dedupe_fields.content_hash,
+                                        dedupe_fields.simhash,
+                                        dedupe_fields.bands[0],
+                                        dedupe_fields.bands[1],
+                                        dedupe_fields.bands[2],
+                                        dedupe_fields.bands[3],
+                                    ),
+                                )
+                                changed = store.conn.changes() > 0
+                                cursor.execute("COMMIT")
+                                transaction_started = False
+                                if changed:
+                                    inserted += 1
+                                else:
+                                    skipped += 1
+                                break
+                            except apsw.BusyError:
+                                if transaction_started:
+                                    cursor.execute("ROLLBACK")
+                                if attempt == 4:
+                                    raise
+                                time.sleep(0.05 * (2**attempt))
+                            except Exception:
+                                if transaction_started:
+                                    cursor.execute("ROLLBACK")
+                                raise
                 except Exception as e:
                     logger.warning("Queue/write failed for %s: %s", chunk_id, e)
                     skipped += 1

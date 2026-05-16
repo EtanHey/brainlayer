@@ -32,9 +32,12 @@ Usage:
 
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
+
+import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
 from .dedupe import find_duplicate, merge_duplicate_chunk
@@ -143,95 +146,108 @@ def store_memory(
     if line_number is not None:
         meta["line_number"] = line_number
 
-    # Insert into chunks table
-    cursor = store.conn.cursor()
     chunk_origin = detect_chunk_origin(content)
     tags_json = json.dumps(tags) if tags else None
-    duplicate, dedupe_fields = find_duplicate(
-        store.conn,
-        chunk_id=chunk_id,
-        content=content,
-        created_at=now,
-        project=project,
-        content_type=memory_type,
-    )
-    if duplicate is not None:
-        content_changed = merge_duplicate_chunk(
-            store.conn,
-            canonical_id=duplicate.canonical_chunk_id,
-            duplicate_id=chunk_id,
-            incoming={
-                "id": chunk_id,
-                "content": content,
-                "tags": tags_json,
-                "importance": float(importance) if importance is not None else None,
-                "created_at": now,
-                "last_seen_at": now,
-            },
-            mechanism=duplicate.mechanism,
-            hamming_distance_value=duplicate.hamming_distance,
-        )
-        chunk_id = duplicate.canonical_chunk_id
-        if embedding is not None:
-            if content_changed:
-                merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-                if merged_row:
-                    store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
-            elif not store._chunk_vector_exists(cursor, chunk_id):
-                store._upsert_chunk_vector(cursor, chunk_id, embedding)
-    else:
-        cursor.execute(
-            """
-            INSERT INTO chunks
-            (id, content, metadata, source_file, project, content_type,
-             value_type, char_count, source, created_at, enriched_at,
-             summary, tags, importance, chunk_origin, seen_count, last_seen_at,
-             dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                chunk_id,
-                content,
-                json.dumps(meta),
-                "brainlayer-store",
-                project,
-                memory_type,  # content_type = memory_type for easy filtering
-                "HIGH",
-                len(content),
-                "manual",
-                now,
-                now,  # enriched_at = now (user-provided content is pre-enriched)
-                content[:200],  # summary = first 200 chars
-                tags_json,
-                float(importance) if importance is not None else None,
-                chunk_origin,
-                1,
-                now,
-                dedupe_fields.content_hash,
-                dedupe_fields.simhash,
-                dedupe_fields.bands[0],
-                dedupe_fields.bands[1],
-                dedupe_fields.bands[2],
-                dedupe_fields.bands[3],
-            ),
-        )
+    for attempt in range(5):
+        cursor = store.conn.cursor()
+        transaction_started = False
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            transaction_started = True
+            duplicate, dedupe_fields = find_duplicate(
+                store.conn,
+                chunk_id=chunk_id,
+                content=content,
+                created_at=now,
+                project=project,
+                content_type=memory_type,
+            )
+            if duplicate is not None:
+                content_changed = merge_duplicate_chunk(
+                    store.conn,
+                    canonical_id=duplicate.canonical_chunk_id,
+                    duplicate_id=chunk_id,
+                    incoming={
+                        "id": chunk_id,
+                        "content": content,
+                        "tags": tags_json,
+                        "importance": float(importance) if importance is not None else None,
+                        "created_at": now,
+                        "last_seen_at": now,
+                    },
+                    mechanism=duplicate.mechanism,
+                    hamming_distance_value=duplicate.hamming_distance,
+                )
+                chunk_id = duplicate.canonical_chunk_id
+                if embedding is not None:
+                    if content_changed:
+                        merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+                        if merged_row:
+                            store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
+                    elif not store._chunk_vector_exists(cursor, chunk_id):
+                        store._upsert_chunk_vector(cursor, chunk_id, embedding)
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO chunks
+                    (id, content, metadata, source_file, project, content_type,
+                     value_type, char_count, source, created_at, enriched_at,
+                     summary, tags, importance, chunk_origin, seen_count, last_seen_at,
+                     dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        chunk_id,
+                        content,
+                        json.dumps(meta),
+                        "brainlayer-store",
+                        project,
+                        memory_type,
+                        "HIGH",
+                        len(content),
+                        "manual",
+                        now,
+                        now,
+                        content[:200],
+                        tags_json,
+                        float(importance) if importance is not None else None,
+                        chunk_origin,
+                        1,
+                        now,
+                        dedupe_fields.content_hash,
+                        dedupe_fields.simhash,
+                        dedupe_fields.bands[0],
+                        dedupe_fields.bands[1],
+                        dedupe_fields.bands[2],
+                        dedupe_fields.bands[3],
+                    ),
+                )
+                if embedding is not None:
+                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
 
-    # Insert embedding into chunk_vectors (only if we have one)
-    if embedding is not None and duplicate is None:
-        store._upsert_chunk_vector(cursor, chunk_id, embedding)
-
-    # Link to entity if entity_id provided (per-person memory tagging)
-    if entity_id:
-        # Validate entity exists to avoid dangling kg_entity_chunks rows
-        entity = store.get_entity(entity_id)
-        if entity is None:
-            raise ValueError(f"Unknown entity_id: {entity_id}")
-        store.link_entity_chunk(
-            entity_id=entity_id,
-            chunk_id=chunk_id,
-            relevance=1.0,
-            context=f"Stored via brain_store: {memory_type}",
-        )
+            if entity_id:
+                entity = store.get_entity(entity_id)
+                if entity is None:
+                    raise ValueError(f"Unknown entity_id: {entity_id}")
+                store.link_entity_chunk(
+                    entity_id=entity_id,
+                    chunk_id=chunk_id,
+                    relevance=1.0,
+                    context=f"Stored via brain_store: {memory_type}",
+                )
+            cursor.execute("COMMIT")
+            transaction_started = False
+            break
+        except apsw.BusyError:
+            if transaction_started:
+                cursor.execute("ROLLBACK")
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (2**attempt))
+        except Exception:
+            if transaction_started:
+                cursor.execute("ROLLBACK")
+            raise
 
     from .search_repo import clear_hybrid_search_cache
 

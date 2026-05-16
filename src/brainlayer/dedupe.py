@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ SHINGLE_WIDTH = 4
 MIN_SIMHASH_TOKENS = 8
 ALIAS_GRACE_DAYS = 90
 AUDIT_RETENTION_DAYS = 30
+BUSY_RETRY_ATTEMPTS = 5
 
 _ISO_TIMESTAMP_RE = re.compile(
     r"\b\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-][0-2]\d:?[0-5]\d)?\b",
@@ -183,7 +185,14 @@ def _int_simhash(value: int | str | None) -> int | None:
     text = str(value).strip()
     if not text:
         return None
-    return int(text, 16)
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
+def _busy_retry_delay(attempt: int) -> float:
+    return 0.05 * (2**attempt)
 
 
 def hamming_distance(left: int | str, right: int | str) -> int:
@@ -519,78 +528,82 @@ def merge_duplicate_chunk(
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     assignments = ", ".join(f"{column} = ?" for column in updates)
-    cursor.execute("SAVEPOINT dedupe_merge")
-    try:
-        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
 
-        write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
-        record_dedupe_audit(
-            conn,
-            dropped_id=duplicate_id,
-            kept_id=canonical_id,
-            mechanism=mechanism,
-            hamming_distance_value=hamming_distance_value,
-        )
-        if archive_existing_duplicate:
-            now = datetime.now(timezone.utc).isoformat()
-            kg_columns = [
-                row[1]
-                for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")
-                if row[1] not in {"rowid"}  # defensive for future virtualized schemas
-            ]
-            if {"entity_id", "chunk_id"}.issubset(set(kg_columns)):
-                column_sql = ", ".join(kg_columns)
-                select_sql = ", ".join("?" if column == "chunk_id" else column for column in kg_columns)
-                cursor.execute(
-                    f"""
-                    INSERT OR IGNORE INTO kg_entity_chunks ({column_sql})
-                    SELECT {select_sql}
-                    FROM kg_entity_chunks
-                    WHERE chunk_id = ?
-                    """,
-                    (canonical_id, duplicate_id),
-                )
-                cursor.execute("DELETE FROM kg_entity_chunks WHERE chunk_id = ?", (duplicate_id,))
-            cursor.execute(
-                """
-                UPDATE chunks
-                SET value_type = 'ARCHIVED',
-                    archived = 1,
-                    archived_at = COALESCE(archived_at, ?),
-                    superseded_by = COALESCE(superseded_by, ?)
-                WHERE id = ?
-                """,
-                (now, canonical_id, duplicate_id),
+    for attempt in range(BUSY_RETRY_ATTEMPTS):
+        cursor.execute("SAVEPOINT dedupe_merge")
+        try:
+            cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), canonical_id])
+            write_alias(conn, old_chunk_id=duplicate_id, canonical_chunk_id=canonical_id)
+            record_dedupe_audit(
+                conn,
+                dropped_id=duplicate_id,
+                kept_id=canonical_id,
+                mechanism=mechanism,
+                hamming_distance_value=hamming_distance_value,
             )
-            for table in ("chunk_vectors", "chunk_vectors_binary"):
-                if cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)
-                ).fetchone():
-                    cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (duplicate_id,))
-    except Exception:
-        cursor.execute("ROLLBACK TO dedupe_merge")
-        cursor.execute("RELEASE dedupe_merge")
-        raise
-    else:
-        cursor.execute("RELEASE dedupe_merge")
+            if archive_existing_duplicate:
+                now = datetime.now(timezone.utc).isoformat()
+                kg_columns = [
+                    row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)") if row[1] not in {"rowid"}
+                ]
+                if {"entity_id", "chunk_id"}.issubset(set(kg_columns)):
+                    column_sql = ", ".join(kg_columns)
+                    select_sql = ", ".join("?" if column == "chunk_id" else column for column in kg_columns)
+                    cursor.execute(
+                        f"""
+                        INSERT OR IGNORE INTO kg_entity_chunks ({column_sql})
+                        SELECT {select_sql}
+                        FROM kg_entity_chunks
+                        WHERE chunk_id = ?
+                        """,
+                        (canonical_id, duplicate_id),
+                    )
+                    cursor.execute("DELETE FROM kg_entity_chunks WHERE chunk_id = ?", (duplicate_id,))
+                cursor.execute(
+                    """
+                    UPDATE chunks
+                    SET value_type = 'ARCHIVED',
+                        archived = 1,
+                        archived_at = COALESCE(archived_at, ?),
+                        superseded_by = COALESCE(superseded_by, ?)
+                    WHERE id = ?
+                    """,
+                    (now, canonical_id, duplicate_id),
+                )
+                for table in ("chunk_vectors", "chunk_vectors_binary"):
+                    if cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)
+                    ).fetchone():
+                        cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (duplicate_id,))
+        except apsw.BusyError:
+            cursor.execute("ROLLBACK TO dedupe_merge")
+            cursor.execute("RELEASE dedupe_merge")
+            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_busy_retry_delay(attempt))
+            continue
+        except Exception:
+            cursor.execute("ROLLBACK TO dedupe_merge")
+            cursor.execute("RELEASE dedupe_merge")
+            raise
+        else:
+            cursor.execute("RELEASE dedupe_merge")
+            return content_changed
     return content_changed
 
 
 def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, Any]) -> bool:
     """Merge a repost that generated the same chunk_id as the canonical row."""
     ensure_dedupe_schema(conn)
-    row = (
-        conn.cursor()
-        .execute(
-            """
+    cursor = conn.cursor()
+    row = cursor.execute(
+        """
         SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
         FROM chunks
         WHERE id = ?
         """,
-            (chunk_id,),
-        )
-        .fetchone()
-    )
+        (chunk_id,),
+    ).fetchone()
     if not row:
         return False
     (
@@ -621,23 +634,32 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     assignments = ", ".join(f"{column} = ?" for column in updates)
-    cursor = conn.cursor()
-    cursor.execute("SAVEPOINT dedupe_seen")
-    try:
-        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-        record_dedupe_audit(
-            conn,
-            dropped_id=chunk_id,
-            kept_id=chunk_id,
-            mechanism="sha256_same_id",
-            hamming_distance_value=0,
-        )
-    except Exception:
-        cursor.execute("ROLLBACK TO dedupe_seen")
-        cursor.execute("RELEASE dedupe_seen")
-        raise
-    else:
-        cursor.execute("RELEASE dedupe_seen")
+
+    for attempt in range(BUSY_RETRY_ATTEMPTS):
+        cursor.execute("SAVEPOINT dedupe_seen")
+        try:
+            cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+            record_dedupe_audit(
+                conn,
+                dropped_id=chunk_id,
+                kept_id=chunk_id,
+                mechanism="sha256_same_id",
+                hamming_distance_value=0,
+            )
+        except apsw.BusyError:
+            cursor.execute("ROLLBACK TO dedupe_seen")
+            cursor.execute("RELEASE dedupe_seen")
+            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_busy_retry_delay(attempt))
+            continue
+        except Exception:
+            cursor.execute("ROLLBACK TO dedupe_seen")
+            cursor.execute("RELEASE dedupe_seen")
+            raise
+        else:
+            cursor.execute("RELEASE dedupe_seen")
+            return True
     return True
 
 
@@ -692,22 +714,32 @@ def merge_existing_chunk_content(conn: Any, *, chunk_id: str, incoming: dict[str
     if merged_half_life is not None:
         updates["half_life_days"] = merged_half_life
     assignments = ", ".join(f"{column} = ?" for column in updates)
-    cursor.execute("SAVEPOINT dedupe_same_id_content")
-    try:
-        cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-        record_dedupe_audit(
-            conn,
-            dropped_id=chunk_id,
-            kept_id=chunk_id,
-            mechanism="same_id_content_merge",
-            hamming_distance_value=None,
-        )
-    except Exception:
-        cursor.execute("ROLLBACK TO dedupe_same_id_content")
-        cursor.execute("RELEASE dedupe_same_id_content")
-        raise
-    else:
-        cursor.execute("RELEASE dedupe_same_id_content")
+
+    for attempt in range(BUSY_RETRY_ATTEMPTS):
+        cursor.execute("SAVEPOINT dedupe_same_id_content")
+        try:
+            cursor.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+            record_dedupe_audit(
+                conn,
+                dropped_id=chunk_id,
+                kept_id=chunk_id,
+                mechanism="same_id_content_merge",
+                hamming_distance_value=None,
+            )
+        except apsw.BusyError:
+            cursor.execute("ROLLBACK TO dedupe_same_id_content")
+            cursor.execute("RELEASE dedupe_same_id_content")
+            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_busy_retry_delay(attempt))
+            continue
+        except Exception:
+            cursor.execute("ROLLBACK TO dedupe_same_id_content")
+            cursor.execute("RELEASE dedupe_same_id_content")
+            raise
+        else:
+            cursor.execute("RELEASE dedupe_same_id_content")
+            return content_changed
     return content_changed
 
 
@@ -771,6 +803,8 @@ def backfill_dedupe_database(
     batch_size: int = 1000,
     allow_live: bool = False,
 ) -> BackfillResult:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
     path = Path(db_path).expanduser().resolve()
     if path == Path(get_db_path()).expanduser().resolve() and not allow_live:
         raise ValueError(
