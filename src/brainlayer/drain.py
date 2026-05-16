@@ -90,7 +90,7 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
             **values,
             "seen_count": values.get("seen_count") or 1,
             "last_seen_at": values.get("last_seen_at") or values.get("created_at"),
-            "content_hash": fields.content_hash,
+            "dedupe_hash": fields.content_hash,
             "simhash": fields.simhash,
             "simhash_band_0": fields.bands[0],
             "simhash_band_1": fields.bands[1],

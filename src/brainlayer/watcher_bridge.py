@@ -331,7 +331,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                (id, content, metadata, source_file, project,
                                 content_type, value_type, char_count, source,
                                 created_at, conversation_id, sender, tags, chunk_origin,
-                                seen_count, last_seen_at, content_hash, simhash,
+                                seen_count, last_seen_at, dedupe_hash, simhash,
                                 simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (

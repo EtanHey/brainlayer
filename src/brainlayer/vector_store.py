@@ -238,6 +238,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("seen_count", "INTEGER DEFAULT 1"),
             ("last_seen_at", "TEXT"),
             ("content_hash", "TEXT"),
+            ("dedupe_hash", "TEXT"),
             ("simhash", "TEXT"),
             ("simhash_band_0", "TEXT"),
             ("simhash_band_1", "TEXT"),
@@ -1381,7 +1382,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 (id, content, metadata, source_file, project,
                  content_type, value_type, char_count, source, created_at,
                  conversation_id, position, sender, chunk_origin, tags, importance,
-                 half_life_days, seen_count, last_seen_at, content_hash, simhash,
+                 half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
                  simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
@@ -1402,7 +1403,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     half_life_days = MAX(COALESCE(chunks.half_life_days, 30.0), COALESCE(excluded.half_life_days, 30.0)),
                     seen_count = COALESCE(chunks.seen_count, 1),
                     last_seen_at = COALESCE(chunks.last_seen_at, excluded.last_seen_at),
-                    content_hash = excluded.content_hash,
+                    dedupe_hash = excluded.dedupe_hash,
                     simhash = excluded.simhash,
                     simhash_band_0 = excluded.simhash_band_0,
                     simhash_band_1 = excluded.simhash_band_1,

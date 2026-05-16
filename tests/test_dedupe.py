@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sqlite3
 
@@ -28,13 +29,16 @@ def _chunk(chunk_id: str, content: str, *, created_at: str, tags=None, importanc
     return chunk
 
 
-def test_normalized_exact_hash_ignores_timestamps_stopwords_and_whitespace():
+def test_normalized_exact_hash_preserves_timestamps_but_ignores_stopwords_and_whitespace():
     from brainlayer.dedupe import normalized_exact_hash
 
-    left = "The API was ready at 2026-05-16T10:03:22Z\n\nfor the launch"
+    left = "The API was ready\n\nfor the launch"
     right = "api ready launch"
+    first_deadline = "Deploy at 2026-05-16T10:00:00Z"
+    second_deadline = "Deploy at 2026-05-17T10:00:00Z"
 
     assert normalized_exact_hash(left) == normalized_exact_hash(right)
+    assert normalized_exact_hash(first_deadline) != normalized_exact_hash(second_deadline)
 
 
 def test_simhash_week_bucket_prevents_weekly_milestone_collapse():
@@ -188,6 +192,52 @@ def test_weekly_standups_remain_distinct_chunks(tmp_path):
     store.close()
 
 
+def test_timestamp_only_changes_remain_distinct_chunks(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+
+    store.upsert_chunks(
+        [
+            _chunk("deadline-a", "Deploy at 2026-05-16T10:00:00Z", created_at="2026-05-16T09:00:00Z"),
+            _chunk("deadline-b", "Deploy at 2026-05-17T10:00:00Z", created_at="2026-05-16T09:05:00Z"),
+        ],
+        [[0.1] * 1024, [0.2] * 1024],
+    )
+
+    count = store.conn.cursor().execute("SELECT COUNT(*) FROM chunks WHERE archived = 0").fetchone()[0]
+    aliases = store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+
+    assert count == 2
+    assert aliases == 0
+    store.close()
+
+
+def test_enrichment_content_hash_does_not_disable_dedupe(tmp_path):
+    from brainlayer.enrichment_controller import _content_hash
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    content = "Enrichment can overwrite raw content hash without breaking dedupe"
+    store.upsert_chunks([_chunk("hash-a", content, created_at="2026-05-16T09:00:00Z")], [[0.1] * 1024])
+    store.conn.cursor().execute(
+        "UPDATE chunks SET content_hash = ? WHERE id = ?",
+        (_content_hash(content), "hash-a"),
+    )
+
+    store.upsert_chunks([_chunk("hash-b", content, created_at="2026-05-16T10:00:00Z")], [[0.2] * 1024])
+
+    row = store.conn.cursor().execute("SELECT id, seen_count FROM chunks WHERE COALESCE(archived, 0) = 0").fetchone()
+    alias = (
+        store.conn.cursor()
+        .execute("SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = 'hash-b'")
+        .fetchone()
+    )
+
+    assert row == ("hash-a", 2)
+    assert alias == ("hash-a",)
+    store.close()
+
+
 def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
     from brainlayer.dedupe import backfill_dedupe_database
 
@@ -210,6 +260,16 @@ def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
         """,
         ("old-b", content, '["new"]', 8, "2026-05-16T11:00:00Z"),
     )
+    cursor.execute(
+        "INSERT INTO kg_entities(id, name, entity_type) VALUES (?, ?, ?)", ("entity-1", "Entity One", "project")
+    )
+    cursor.execute(
+        """
+        INSERT INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("entity-1", "old-b", 0.9, "duplicate link"),
+    )
     store.close()
     shutil.copy2(live_path, snapshot_path)
 
@@ -228,9 +288,13 @@ def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
         .execute("SELECT canonical_chunk_id FROM chunk_id_alias WHERE old_chunk_id = 'old-b'")
         .fetchone()
     )
+    entity_link = (
+        checked.conn.cursor().execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'entity-1'").fetchone()
+    )
 
     assert active_rows == [("old-a", 2, 8.0, '["new", "old"]')]
     assert alias == ("old-a",)
+    assert entity_link == ("old-a",)
     assert checked.get_chunk("old-b")["id"] == "old-a"
     checked.close()
 
@@ -272,6 +336,57 @@ def test_alias_resolution_expires_after_grace_period(tmp_path):
     store.close()
 
 
+def test_alias_resolution_falls_back_when_alias_table_missing_on_readonly_legacy_db(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT,
+                metadata TEXT,
+                source_file TEXT,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                tags TEXT,
+                importance REAL,
+                created_at TEXT,
+                summary TEXT,
+                superseded_by TEXT,
+                aggregated_into TEXT,
+                archived_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO chunks(id, content, metadata, source_file, project, content_type, value_type)
+            VALUES (?, ?, '{}', 'legacy', 'brainlayer', 'note', 'HIGH')
+            """,
+            (
+                "legacy-id",
+                "legacy chunk",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    os.chmod(db_path, 0o444)
+    store = None
+    try:
+        store = VectorStore(db_path)
+        chunk = store.get_chunk("legacy-id")
+    finally:
+        if store is not None:
+            store.close()
+        os.chmod(db_path, 0o644)
+
+    assert chunk["id"] == "legacy-id"
+
+
 def test_dedupe_schema_exists_on_minimal_sqlite_connection(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     VectorStore(db_path).close()
@@ -283,5 +398,5 @@ def test_dedupe_schema_exists_on_minimal_sqlite_connection(tmp_path):
     finally:
         conn.close()
 
-    assert {"seen_count", "last_seen_at", "content_hash", "simhash"}.issubset(cols)
+    assert {"seen_count", "last_seen_at", "content_hash", "dedupe_hash", "simhash"}.issubset(cols)
     assert {"dedupe_audit", "chunk_id_alias"}.issubset(tables)

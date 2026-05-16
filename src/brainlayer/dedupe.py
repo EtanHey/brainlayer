@@ -82,14 +82,20 @@ class BackfillResult:
 
 
 def normalize_for_dedupe(content: str) -> str:
-    """Normalize text before exact hashing and SimHash tokenization."""
+    """Normalize text before SimHash tokenization."""
     without_timestamps = _ISO_TIMESTAMP_RE.sub(" ", content.lower())
     tokens = [token for token in _TOKEN_RE.findall(without_timestamps) if token not in _STOPWORDS]
     return " ".join(tokens)
 
 
+def normalize_for_exact_hash(content: str) -> str:
+    """Normalize exact hashes while preserving timestamp facts."""
+    tokens = [token for token in _TOKEN_RE.findall(content.lower()) if token not in _STOPWORDS]
+    return " ".join(tokens)
+
+
 def _numeric_tokens(content: str) -> set[str]:
-    return {token for token in normalize_for_dedupe(content).split() if token.isdigit()}
+    return {token for token in normalize_for_exact_hash(content).split() if token.isdigit()}
 
 
 def _numeric_tokens_conflict(left: str, right: str) -> bool:
@@ -99,7 +105,7 @@ def _numeric_tokens_conflict(left: str, right: str) -> bool:
 
 
 def normalized_exact_hash(content: str) -> str:
-    return hashlib.sha256(normalize_for_dedupe(content).encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalize_for_exact_hash(content).encode("utf-8")).hexdigest()
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -227,6 +233,7 @@ def ensure_dedupe_schema(conn: Any) -> None:
         ("seen_count", "INTEGER DEFAULT 1"),
         ("last_seen_at", "TEXT"),
         ("content_hash", "TEXT"),
+        ("dedupe_hash", "TEXT"),
         ("simhash", "TEXT"),
         ("simhash_band_0", "TEXT"),
         ("simhash_band_1", "TEXT"),
@@ -255,6 +262,7 @@ def ensure_dedupe_schema(conn: Any) -> None:
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_id_alias_canonical ON chunk_id_alias(canonical_chunk_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_dedupe_hash ON chunks(dedupe_hash)")
     for index in range(4):
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_chunks_simhash_band_{index} ON chunks(simhash_band_{index})")
 
@@ -275,7 +283,7 @@ def find_duplicate(
     exact = cursor.execute(
         f"""
         SELECT id FROM chunks
-        WHERE content_hash = ?
+        WHERE dedupe_hash = ?
           AND id != ?
           AND {_active_clause()}
         ORDER BY created_at ASC, id ASC
@@ -401,14 +409,17 @@ def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprec
 
 
 def resolve_chunk_id(conn: Any, chunk_id: str) -> str:
-    row = (
-        conn.cursor()
-        .execute(
-            "SELECT canonical_chunk_id, deprecated_at FROM chunk_id_alias WHERE old_chunk_id = ?",
-            (chunk_id,),
+    try:
+        row = (
+            conn.cursor()
+            .execute(
+                "SELECT canonical_chunk_id, deprecated_at FROM chunk_id_alias WHERE old_chunk_id = ?",
+                (chunk_id,),
+            )
+            .fetchone()
         )
-        .fetchone()
-    )
+    except (apsw.SQLError, apsw.ReadOnlyError):
+        return chunk_id
     if not row:
         return chunk_id
     deprecated_at = _parse_datetime(str(row[1]))
@@ -468,7 +479,7 @@ def merge_duplicate_chunk(
         "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + incoming_seen,
         "last_seen_at": last_seen_at,
-        "content_hash": fields.content_hash,
+        "dedupe_hash": fields.content_hash,
         "simhash": fields.simhash,
         "simhash_band_0": fields.bands[0],
         "simhash_band_1": fields.bands[1],
@@ -494,6 +505,23 @@ def merge_duplicate_chunk(
         )
         if archive_existing_duplicate:
             now = datetime.now(timezone.utc).isoformat()
+            kg_columns = [
+                row[1]
+                for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")
+                if row[1] not in {"rowid"}  # defensive for future virtualized schemas
+            ]
+            if {"entity_id", "chunk_id"}.issubset(set(kg_columns)):
+                column_sql = ", ".join(kg_columns)
+                select_sql = ", ".join("?" if column == "chunk_id" else column for column in kg_columns)
+                cursor.execute(
+                    f"""
+                    INSERT OR IGNORE INTO kg_entity_chunks ({column_sql})
+                    SELECT {select_sql}
+                    FROM kg_entity_chunks
+                    WHERE chunk_id = ?
+                    """,
+                    (canonical_id, duplicate_id),
+                )
             cursor.execute(
                 """
                 UPDATE chunks
@@ -662,7 +690,7 @@ def backfill_dedupe_database(
                 cursor.execute(
                     """
                     UPDATE chunks
-                    SET content_hash = ?, simhash = ?,
+                    SET dedupe_hash = ?, simhash = ?,
                         simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ?
                     WHERE id = ?
                     """,

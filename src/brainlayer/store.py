@@ -176,7 +176,7 @@ def store_memory(
             (id, content, metadata, source_file, project, content_type,
              value_type, char_count, source, created_at, enriched_at,
              summary, tags, importance, chunk_origin, seen_count, last_seen_at,
-             content_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+             dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (

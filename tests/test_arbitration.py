@@ -255,13 +255,14 @@ def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
     assert alias[1] == canonical_id
 
 
-def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp_path):
+def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp_path, monkeypatch):
     from brainlayer.drain import drain_once
-    from brainlayer.queue_io import enqueue_store
 
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
     _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -273,19 +274,30 @@ def test_drain_duplicate_store_uses_canonical_for_supersedes_and_entity_link(tmp
         conn.commit()
 
     duplicate_content = "Duplicate store memory should route references to the canonical row"
-    enqueue_store(
-        chunk_id="store-a",
-        content=duplicate_content,
-        project="arbitration-test",
-        queue_dir=queue_dir,
-    )
-    enqueue_store(
-        chunk_id="store-b",
-        content=duplicate_content,
-        project="arbitration-test",
-        supersedes="old-id",
-        entity_id="person-1",
-        queue_dir=queue_dir,
+    (queue_dir / "store-ordered.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "store-a",
+                "content": duplicate_content,
+                "memory_type": "note",
+                "project": "arbitration-test",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "store-b",
+                "content": duplicate_content,
+                "memory_type": "note",
+                "project": "arbitration-test",
+                "supersedes": "old-id",
+                "metadata": {"entity_id": "person-1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10) == 2
