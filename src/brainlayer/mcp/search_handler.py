@@ -343,7 +343,13 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
         return []
 
 
-def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = False) -> list[dict]:
+def _kg_facts_sql(
+    store: Any,
+    entity_name: str,
+    *,
+    include_checkpoints: bool = False,
+    include_audit: bool = False,
+) -> list[dict]:
     """Pure SQL KG fact lookup — no embeddings, no vector search.
 
     Returns typed relations for an entity, excluding co_occurs_with noise.
@@ -363,11 +369,16 @@ def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = F
 
         entity_id = row[0][0]
 
-        checkpoint_join = ""
+        source_chunk_join = ""
         checkpoint_filter = ""
+        audit_filter = ""
         params: list[Any] = [entity_id, entity_id]
+        needs_source_chunk = (
+            not include_checkpoints and getattr(store, "_has_chunk_origin", True)
+        ) or not include_audit
+        if needs_source_chunk:
+            source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
         if not include_checkpoints and getattr(store, "_has_chunk_origin", True):
-            checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
             checkpoint_filter = """
                      AND (
                          r.source_chunk_id IS NULL
@@ -376,6 +387,14 @@ def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = F
                      )
             """
             params.append(CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT)
+        if not include_audit:
+            audit_filter = f"""
+                     AND (
+                         r.source_chunk_id IS NULL
+                         OR source_chunk.id IS NULL
+                         OR {store._audit_recursion_exclusion_sql("source_chunk.id", "source_chunk.tags", "source_chunk.content")}
+                     )
+            """
 
         # Get all semantic relations (exclude co_occurs_with)
         facts_raw = list(
@@ -386,10 +405,11 @@ def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = F
                    FROM kg_relations r
                    JOIN kg_entities se ON r.source_id = se.id
                    JOIN kg_entities te ON r.target_id = te.id
-                   {checkpoint_join}
+                   {source_chunk_join}
                    WHERE (r.source_id = ? OR r.target_id = ?)
                      AND r.relation_type != 'co_occurs_with'
                      {checkpoint_filter}
+                     {audit_filter}
                    ORDER BY r.confidence DESC
                    LIMIT 20""",
                 params,
@@ -634,7 +654,9 @@ async def _brain_search(
         entity_name = detected_entities[0]["name"]
 
         # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
-        fact_items = _kg_facts_sql(store, entity_name, include_checkpoints=include_checkpoints)
+        fact_items = _kg_facts_sql(
+            store, entity_name, include_checkpoints=include_checkpoints, include_audit=include_audit
+        )
 
         # Path 2: Try full hybrid search (embedding + vector + KG)
         structured_results = []

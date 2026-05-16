@@ -982,6 +982,7 @@ class KGMixin:
         relation_type: Optional[str] = None,
         limit: int = 20,
         include_checkpoints: bool = False,
+        include_audit: bool = False,
     ) -> List[Dict[str, Any]]:
         """Structured KG fact retrieval. Excludes co_occurs_with noise."""
         results: List[Dict[str, Any]] = []
@@ -990,11 +991,16 @@ class KGMixin:
         if entity:
             cursor = self._read_cursor()
 
-            checkpoint_join = ""
+            source_chunk_join = ""
             checkpoint_filter = ""
+            audit_filter = ""
             checkpoint_params: list[str] = []
+            needs_source_chunk = (
+                not include_checkpoints and getattr(self, "_has_chunk_origin", True)
+            ) or not include_audit
+            if needs_source_chunk:
+                source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
             if not include_checkpoints and getattr(self, "_has_chunk_origin", True):
-                checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
                 checkpoint_filter = """
                           AND (
                               r.source_chunk_id IS NULL
@@ -1003,6 +1009,14 @@ class KGMixin:
                           )
                 """
                 checkpoint_params.append("precompact_checkpoint")
+            if not include_audit:
+                audit_filter = f"""
+                          AND (
+                              r.source_chunk_id IS NULL
+                              OR source_chunk.id IS NULL
+                              OR {self._audit_recursion_exclusion_sql("source_chunk.id", "source_chunk.tags", "source_chunk.content")}
+                          )
+                """
 
             if relation_type:
                 type_filter_src = "AND r.relation_type = ?"
@@ -1024,10 +1038,11 @@ class KGMixin:
                     FROM kg_current_facts r
                     JOIN kg_entities se ON r.source_id = se.id
                     JOIN kg_entities te ON r.target_id = te.id
-                    {checkpoint_join}
+                    {source_chunk_join}
                     WHERE ((r.source_id = ? {type_filter_src})
                        OR (r.target_id = ? {type_filter_tgt}))
                     {checkpoint_filter}
+                    {audit_filter}
                     ORDER BY r.importance DESC, r.confidence DESC
                     LIMIT ?
                     """,
@@ -1088,6 +1103,7 @@ class KGMixin:
             relation_type=relation_type,
             limit=n_results,
             include_checkpoints=bool(kwargs.get("include_checkpoints", False)),
+            include_audit=bool(kwargs.get("include_audit", False)),
         )
 
         scored_facts = []

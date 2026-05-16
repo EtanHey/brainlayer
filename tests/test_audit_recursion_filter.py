@@ -4,6 +4,8 @@ import apsw
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.engine import recall, think
+from brainlayer.mcp.search_handler import _kg_facts_sql
+from brainlayer.search_repo import _audit_recursion_exclusion_sql
 from brainlayer.vector_store import VectorStore
 
 
@@ -373,6 +375,118 @@ def test_formatted_jsonrpc_content_is_filtered_by_sql_paths(tmp_path):
         assert "ordinary-formatted-jsonrpc-control" in vector_results["ids"][0]
         assert "recursive-formatted-jsonrpc-output" not in hybrid_results["ids"][0]
         assert "ordinary-formatted-jsonrpc-control" in hybrid_results["ids"][0]
+    finally:
+        store.close()
+
+
+def test_brain_search_box_with_leading_non_space_whitespace_is_filtered_by_sql_paths(tmp_path):
+    store = VectorStore(tmp_path / "recursive-leading-whitespace-filter.db")
+    try:
+        query_embedding = [0.092] * 1024
+        _insert_chunk(
+            store,
+            "recursive-leading-whitespace-box",
+            '\n\t┌─ brain_search: "BrainLayer audit recursion"\n│ recursive output',
+            ["auto-detected"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "ordinary-leading-whitespace-control",
+            "BrainLayer MCP guard should still return ordinary memories",
+            ["brainlayer", "mcp"],
+            [0.093] * 1024,
+        )
+        store.build_binary_index()
+
+        vector_results = store.search(query_embedding=query_embedding, n_results=5)
+        hybrid_results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="BrainLayer MCP guard",
+            n_results=5,
+        )
+
+        assert "recursive-leading-whitespace-box" not in vector_results["ids"][0]
+        assert "ordinary-leading-whitespace-control" in vector_results["ids"][0]
+        assert "recursive-leading-whitespace-box" not in hybrid_results["ids"][0]
+        assert "ordinary-leading-whitespace-control" in hybrid_results["ids"][0]
+    finally:
+        store.close()
+
+
+def test_audit_recursion_sql_accepts_explicit_content_expression():
+    clause = _audit_recursion_exclusion_sql(
+        "c.id",
+        "audit_tags.tags",
+        content_expr="c.content",
+        use_chunk_tags=False,
+    )
+
+    assert "c.content" in clause
+    assert "audit_tags.content" not in clause
+
+
+def test_kg_facts_exclude_audit_sourced_relations_by_default(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-kg-facts.db")
+    try:
+        query_embedding = [0.094] * 1024
+        _insert_chunk(
+            store,
+            "audit-fact-chunk",
+            "Etan stores recursive audit output",
+            ["audit"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
+            "normal-fact-chunk",
+            "Etan stores durable memory",
+            ["brainlayer"],
+            [0.095] * 1024,
+        )
+        store.upsert_entity("person-etan", "person", "Etan")
+        store.upsert_entity("project-audit", "project", "Audit Project")
+        store.upsert_entity("project-normal", "project", "Normal Project")
+        store.add_relation(
+            "rel-audit",
+            "person-etan",
+            "project-audit",
+            "mentions",
+            fact="audit-sourced fact",
+            source_chunk_id="audit-fact-chunk",
+        )
+        store.add_relation(
+            "rel-normal",
+            "person-etan",
+            "project-normal",
+            "maintains",
+            fact="normal fact",
+            source_chunk_id="normal-fact-chunk",
+        )
+
+        sql_default_facts = _kg_facts_sql(store, "Etan")
+        sql_audit_facts = _kg_facts_sql(store, "Etan", include_audit=True)
+        hybrid_default = store.kg_hybrid_search(
+            query_embedding=query_embedding,
+            query_text="Etan",
+            n_results=10,
+            entity_name="Etan",
+        )
+        hybrid_with_audit = store.kg_hybrid_search(
+            query_embedding=query_embedding,
+            query_text="Etan",
+            n_results=10,
+            entity_name="Etan",
+            include_audit=True,
+        )
+
+        assert {fact["target"] for fact in sql_default_facts} == {"Normal Project"}
+        assert {fact["target"] for fact in sql_audit_facts} == {"Audit Project", "Normal Project"}
+        assert {fact["target_entity"]["name"] for fact in hybrid_default["facts"]} == {"Normal Project"}
+        assert {fact["target_entity"]["name"] for fact in hybrid_with_audit["facts"]} == {
+            "Audit Project",
+            "Normal Project",
+        }
     finally:
         store.close()
 

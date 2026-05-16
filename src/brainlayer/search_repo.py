@@ -135,7 +135,13 @@ def _audit_recursion_tag_predicate(tag_expr: str) -> str:
     return "(" + " OR ".join(pattern.format(tag_expr=lowered) for pattern in AUDIT_RECURSION_TAG_PATTERNS) + ")"
 
 
-def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_chunk_tags: bool = True) -> str:
+def _audit_recursion_exclusion_sql(
+    chunk_id_expr: str,
+    tags_expr: str,
+    *,
+    content_expr: str = "content",
+    use_chunk_tags: bool = True,
+) -> str:
     if use_chunk_tags:
         tag_filter = (
             "NOT EXISTS ("
@@ -153,14 +159,13 @@ def _audit_recursion_exclusion_sql(chunk_id_expr: str, tags_expr: str, *, use_ch
             ")"
         )
 
-    content_expr = (
-        f"COALESCE(CAST({tags_expr.replace('.tags', '.content') if '.tags' in tags_expr else 'content'} AS TEXT), '')"
-    )
+    content_expr = f"COALESCE(CAST({content_expr} AS TEXT), '')"
     compact_content_expr = (
         f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), char(9), ''), char(10), ''), char(13), '')"
     )
+    trimmed_content_expr = f"LTRIM({content_expr}, char(9) || char(10) || char(11) || char(12) || char(13) || char(32))"
     recursive_content_filter = (
-        f"LTRIM({content_expr}) NOT LIKE '┌─ brain_search:%' "
+        f"LOWER({trimmed_content_expr}) NOT LIKE '┌─ brain_search:%' "
         f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
         f'AND {compact_content_expr} NOT LIKE \'%"jsonrpc":"2.0"%\''
     )
@@ -202,10 +207,11 @@ def _precompact_content_exclusion_sql(content_expr: str) -> str:
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
 
-    def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str) -> str:
+    def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str, content_expr: str) -> str:
         return _audit_recursion_exclusion_sql(
             chunk_id_expr,
             tags_expr,
+            content_expr=content_expr,
             use_chunk_tags=getattr(self, "_chunk_tags_available", True),
         )
 
@@ -223,7 +229,7 @@ class SearchMixin:
                     .execute(
                         f"""
                         SELECT COUNT(*) FROM chunks
-                        WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags")})
+                        WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags", "content")})
                         """
                     )
                     .fetchone()
@@ -566,7 +572,7 @@ class SearchMixin:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
             if not include_audit:
-                where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
+                where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
@@ -652,7 +658,7 @@ class SearchMixin:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
             if not include_audit:
-                where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags"))
+                where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags", "content"))
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause()
                 if checkpoint_clause:
@@ -917,7 +923,7 @@ class SearchMixin:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
         if not include_audit:
-            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags"))
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
         if not include_checkpoints:
             checkpoint_clause = self._checkpoint_exclusion_clause("c")
             if checkpoint_clause:
@@ -1234,7 +1240,7 @@ class SearchMixin:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
             if not include_audit:
-                fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags')}")
+                fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags', 'c.content')}")
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
