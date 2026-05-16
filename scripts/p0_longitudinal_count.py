@@ -15,8 +15,14 @@ SINCE = "2026-05-16T16:56:00+03:00"
 DEFAULT_LOG_DIR = Path.home() / ".brainlayer-p0-counter"
 
 P0_SQL = """
+WITH normalized AS (
+    SELECT
+        created_at,
+        ltrim(content, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) AS content
+    FROM chunks
+)
 SELECT date(datetime(created_at)) AS day, COUNT(*) AS new_audit_chunks
-FROM chunks
+FROM normalized
 WHERE datetime(created_at) > datetime(?)
   AND (content GLOB '┌─brain_search:*'
        OR content GLOB '┌─brain_*:*'

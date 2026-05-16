@@ -32,6 +32,10 @@ RT_AGENT_FM11_ANALYSIS_CONTENT = (
     "Investigate FM11 retrieval failure mode and summarize why recall missed a valid workshop memory."
 )
 
+ORDINARY_QID_FM11_NOTE_CONTENT = (
+    "qid=20 shows an FM11 retrieval miss. Keep this durable diagnostic note because it is not an rt-agent judge note."
+)
+
 RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE = (
     "/Users/test-user/.claude/projects/-Users-test-user-Gits-orchestrator/"
     "session/subagents/agent-a7823570938b54ccd.jsonl"
@@ -117,6 +121,10 @@ def test_rt_agent_fm11_analysis_without_judge_fields_is_allowed():
         )
         is None
     )
+
+
+def test_qid_fm11_note_without_rt_agent_context_is_allowed():
+    assert should_skip_chunk_content(ORDINARY_QID_FM11_NOTE_CONTENT) is None
 
 
 def test_rt_agent_guard_ignores_non_string_context_values():

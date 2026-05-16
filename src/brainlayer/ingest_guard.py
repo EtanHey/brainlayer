@@ -27,9 +27,6 @@ _QID_JUDGE_NOTE_MARKERS = (
 
 def _looks_like_rt_agent_judge_notes(content: str, chunk_id: str | None = None, source_file: str | None = None) -> bool:
     folded = content.casefold()
-    has_qid = bool(re.search(r"\bqid\s*=", folded))
-    if has_qid and any(marker in folded for marker in _QID_JUDGE_NOTE_MARKERS):
-        return True
 
     chunk_id_s = chunk_id if isinstance(chunk_id, str) else None
     source_file_s = source_file if isinstance(source_file, str) else None
@@ -37,7 +34,13 @@ def _looks_like_rt_agent_judge_notes(content: str, chunk_id: str | None = None, 
         (chunk_id_s and _RT_AGENT_CHUNK_ID_RE.match(chunk_id_s))
         or (source_file_s and _RT_AGENT_SOURCE_FILE_RE.search(source_file_s))
     )
-    return has_rt_agent_context and any(marker in folded for marker in _STRONG_JUDGE_NOTE_MARKERS)
+    has_qid = bool(re.search(r"\bqid\s*=", folded))
+    has_strong_judge_marker = any(marker in folded for marker in _STRONG_JUDGE_NOTE_MARKERS)
+    if has_qid and has_strong_judge_marker:
+        return True
+    if has_rt_agent_context and has_qid and any(marker in folded for marker in _QID_JUDGE_NOTE_MARKERS):
+        return True
+    return has_rt_agent_context and has_strong_judge_marker
 
 
 def recursive_mcp_output_reason(
