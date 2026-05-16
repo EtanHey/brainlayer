@@ -511,6 +511,11 @@ async def list_tools() -> list[Tool]:
                             "default": False,
                             "description": "Include PreCompact checkpoint chunks in search results. Defaults to false; use brain_resume for explicit session recovery.",
                         },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval and recursive MCP-output memories. Defaults false to prevent audit-recursion pollution.",
+                        },
                         "detail": {
                             "type": "string",
                             "enum": ["compact", "full"],
@@ -828,6 +833,11 @@ async def list_tools() -> list[Tool]:
                             "default": False,
                             "description": "Include PreCompact checkpoint chunks in mode=search results. Defaults to false; use brain_resume for explicit session recovery.",
                         },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval and recursive MCP-output memories in mode=search. Defaults false to prevent audit-recursion pollution.",
+                        },
                     },
                 }
             ),
@@ -933,6 +943,11 @@ async def list_tools() -> list[Tool]:
                             "default": 0,
                             "minimum": 0,
                             "description": "Pagination offset for list action.",
+                        },
+                        "include_audit": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to audit/eval and recursive MCP-output evidence. Defaults false to prevent audit-recursion pollution.",
                         },
                     },
                     "required": [],
@@ -1255,6 +1270,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 source_filter=resolved_source_filter,
                 correction_category=arguments.get("correction_category"),
                 include_checkpoints=arguments.get("include_checkpoints", False),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 
@@ -1343,6 +1359,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 detail=arguments.get("detail", "compact"),
                 entity_type=arguments.get("entity_type"),
                 include_checkpoints=arguments.get("include_checkpoints", False),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 
@@ -1395,6 +1412,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 mode="entity",
                 query=query,
                 entity_type=arguments.get("entity_type"),
+                include_audit=arguments.get("include_audit", False),
             )
         )
 

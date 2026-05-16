@@ -480,17 +480,27 @@ class KGMixin:
             (parent_id, entity_id),
         )
 
-    def get_entity_chunks(self, entity_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_entity_chunks(
+        self,
+        entity_id: str,
+        limit: int = 20,
+        *,
+        include_audit: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get chunks linked to an entity, ordered by relevance."""
         cursor = self._read_cursor()
+        where_clauses = ["ec.entity_id = ?"]
+        if not include_audit:
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
+        where_sql = " AND ".join(where_clauses)
         rows = list(
             cursor.execute(
-                """
+                f"""
                 SELECT ec.chunk_id, ec.relevance, ec.context, ec.mention_type,
                        c.content, c.source_file, c.project, c.content_type, c.created_at
                 FROM kg_entity_chunks ec
                 JOIN chunks c ON ec.chunk_id = c.id
-                WHERE ec.entity_id = ?
+                WHERE {where_sql}
                 ORDER BY ec.relevance DESC
                 LIMIT ?
                 """,
@@ -982,6 +992,7 @@ class KGMixin:
         relation_type: Optional[str] = None,
         limit: int = 20,
         include_checkpoints: bool = False,
+        include_audit: bool = False,
     ) -> List[Dict[str, Any]]:
         """Structured KG fact retrieval. Excludes co_occurs_with noise."""
         results: List[Dict[str, Any]] = []
@@ -990,19 +1001,32 @@ class KGMixin:
         if entity:
             cursor = self._read_cursor()
 
-            checkpoint_join = ""
+            source_chunk_join = ""
             checkpoint_filter = ""
+            audit_filter = ""
             checkpoint_params: list[str] = []
+            needs_source_chunk = (
+                not include_checkpoints and getattr(self, "_has_chunk_origin", True)
+            ) or not include_audit
+            if needs_source_chunk:
+                source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
             if not include_checkpoints and getattr(self, "_has_chunk_origin", True):
-                checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
-                checkpoint_filter = """
+                checkpoint_clause = self._checkpoint_exclusion_clause("source_chunk")
+                checkpoint_filter = f"""
                           AND (
                               r.source_chunk_id IS NULL
                               OR source_chunk.id IS NULL
-                              OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                              OR ({checkpoint_clause})
                           )
                 """
-                checkpoint_params.append("precompact_checkpoint")
+            if not include_audit:
+                audit_filter = f"""
+                          AND (
+                              r.source_chunk_id IS NULL
+                              OR source_chunk.id IS NULL
+                              OR {self._audit_recursion_exclusion_sql("source_chunk.id", "source_chunk.tags", "source_chunk.content")}
+                          )
+                """
 
             if relation_type:
                 type_filter_src = "AND r.relation_type = ?"
@@ -1024,10 +1048,11 @@ class KGMixin:
                     FROM kg_current_facts r
                     JOIN kg_entities se ON r.source_id = se.id
                     JOIN kg_entities te ON r.target_id = te.id
-                    {checkpoint_join}
+                    {source_chunk_join}
                     WHERE ((r.source_id = ? {type_filter_src})
                        OR (r.target_id = ? {type_filter_tgt}))
                     {checkpoint_filter}
+                    {audit_filter}
                     ORDER BY r.importance DESC, r.confidence DESC
                     LIMIT ?
                     """,
@@ -1088,6 +1113,7 @@ class KGMixin:
             relation_type=relation_type,
             limit=n_results,
             include_checkpoints=bool(kwargs.get("include_checkpoints", False)),
+            include_audit=bool(kwargs.get("include_audit", False)),
         )
 
         scored_facts = []

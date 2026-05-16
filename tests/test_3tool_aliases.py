@@ -143,7 +143,7 @@ class TestBrainRecallEntityMode:
         ) as mock_entity:
             asyncio.run(_brain_recall(mode="entity", query="BrainLayer"))
 
-        mock_entity.assert_called_once_with(query="BrainLayer", entity_type=None)
+        mock_entity.assert_called_once_with(query="BrainLayer", entity_type=None, include_audit=False)
 
     def test_entity_mode_passes_entity_type(self):
         """mode=entity passes entity_type filter."""
@@ -154,7 +154,18 @@ class TestBrainRecallEntityMode:
         ) as mock_entity:
             asyncio.run(_brain_recall(mode="entity", query="Etan", entity_type="person"))
 
-        mock_entity.assert_called_once_with(query="Etan", entity_type="person")
+        mock_entity.assert_called_once_with(query="Etan", entity_type="person", include_audit=False)
+
+    def test_entity_mode_passes_include_audit(self):
+        """mode=entity passes audit opt-in to entity evidence lookup."""
+        with patch(
+            "brainlayer.mcp.entity_handler._brain_entity",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_entity:
+            asyncio.run(_brain_recall(mode="entity", query="Etan", include_audit=True))
+
+        mock_entity.assert_called_once_with(query="Etan", entity_type=None, include_audit=True)
 
     def test_entity_mode_requires_query(self):
         """mode=entity without query returns error."""

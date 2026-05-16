@@ -23,6 +23,7 @@ import apsw
 
 from .chunk_origin import detect_chunk_origin
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
+from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 from .pipeline.chunk import chunk_content
 from .pipeline.classify import classify_content
@@ -127,6 +128,9 @@ def should_skip_entry(entry: dict) -> str | None:
     if len(raw_text.strip()) < MIN_RAW_CONTENT_LENGTH:
         return "too_short"
 
+    if recursive_mcp_output_reason(raw_text):
+        return "recursive_mcp_output"
+
     # Skip if content is mostly system-reminder injection
     cleaned = _strip_system_reminders(raw_text)
     if len(cleaned.strip()) < MIN_RAW_CONTENT_LENGTH:
@@ -141,6 +145,9 @@ def should_skip_chunk_content(content: str) -> str | None:
     cleaned = _strip_system_reminders(content)
     if len(cleaned.strip()) < MIN_RAW_CONTENT_LENGTH:
         return "system_reminder_residue"
+
+    if recursive_mcp_output_reason(cleaned):
+        return "recursive_mcp_output"
 
     # Skip pure file deletion diffs
     if _is_pure_deletion_diff(cleaned):

@@ -41,6 +41,7 @@ import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
 from .dedupe import find_duplicate, merge_duplicate_chunk
+from .ingest_guard import reject_recursive_mcp_output
 from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
@@ -106,6 +107,7 @@ def store_memory(
         raise ValueError(f"type must be one of: {', '.join(VALID_MEMORY_TYPES)}")
 
     content = content.strip()
+    reject_recursive_mcp_output(content)
     if looks_like_system_prompt(content):
         raise ValueError("system prompt content is not stored in BrainLayer")
 
@@ -284,6 +286,7 @@ def store_memory(
     from .search_repo import clear_hybrid_search_cache
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
+    store._invalidate_audit_recursion_count_cache()
     if chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
         store._invalidate_checkpoint_count_cache()
 

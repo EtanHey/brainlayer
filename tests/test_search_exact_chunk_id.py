@@ -92,7 +92,7 @@ async def test_brain_search_exact_checkpoint_chunk_id_returns_empty_without_fall
     ):
         content, structured = await _brain_search(query=chunk_id, detail="compact")
 
-    assert content[0].text == "No results found."
+    assert "No results found." in content[0].text
     assert structured == {"query": chunk_id, "total": 0, "results": []}
 
 
@@ -106,7 +106,25 @@ def test_exact_chunk_lookup_skips_lifecycle_managed_chunks():
         "archived_at": "2026-04-30T09:15:00Z",
     }
 
-    assert _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact") is None
+    _, structured = _exact_chunk_lookup_result("brainbar-archived01", mock_store, "compact")
+    assert structured["total"] == 0
+
+
+def test_exact_chunk_lookup_defers_when_unhandled_filters_are_active():
+    """Exact lookup should fall through so the normal search path can evaluate filters."""
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": "brainbar-filter01",
+        "content": "Filterable chunk",
+        "project": "brainlayer",
+        "source": "claude_code",
+        "intent": "decision",
+        "tags": '["correction:factual"]',
+    }
+
+    result = _exact_chunk_lookup_result("brainbar-filter01", mock_store, "compact", source="claude_code")
+
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -133,7 +151,68 @@ async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
         result = await _brain_search(query=chunk_id, chunk_id=chunk_id, detail="compact")
 
     assert result == ["context window"]
-    context_mock.assert_awaited_once_with(chunk_id=chunk_id, before=3, after=3)
+    context_mock.assert_awaited_once_with(
+        chunk_id=chunk_id,
+        before=3,
+        after=3,
+        include_checkpoints=False,
+        include_audit=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_brain_search_chunk_id_context_blocks_audit_recursion_by_default():
+    chunk_id = "rt-33abe108-recursive"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": 'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0"}',
+        "source_file": "session.jsonl",
+        "project": "brainlayer",
+        "tags": '["correction:factual", "auto-detected"]',
+        "created_at": "2026-05-16T09:15:00Z",
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._context",
+            new=AsyncMock(side_effect=AssertionError("audit-recursive chunk_id must not route to context")),
+        ),
+    ):
+        content, structured = await _brain_search(query="ignored", chunk_id=chunk_id, detail="compact")
+
+    assert "No results found." in content[0].text
+    assert structured == {"query": "ignored", "total": 0, "results": []}
+
+
+@pytest.mark.asyncio
+async def test_brain_search_chunk_id_context_allows_audit_when_requested():
+    chunk_id = "rt-33abe108-recursive"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": 'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0"}',
+        "source_file": "session.jsonl",
+        "project": "brainlayer",
+        "tags": '["correction:factual", "auto-detected"]',
+        "created_at": "2026-05-16T09:15:00Z",
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch("brainlayer.mcp.search_handler._context", new=AsyncMock(return_value=["context window"])) as context_mock,
+    ):
+        result = await _brain_search(query="ignored", chunk_id=chunk_id, detail="compact", include_audit=True)
+
+    assert result == ["context window"]
+    context_mock.assert_awaited_once_with(
+        chunk_id=chunk_id,
+        before=3,
+        after=3,
+        include_checkpoints=False,
+        include_audit=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -162,8 +241,9 @@ async def test_brain_search_exact_chunk_id_respects_project_scope():
     ):
         result = await _brain_search(query=chunk_id, project="brainlayer", detail="compact")
 
-    assert result == (["fallback"], {"total": 0, "results": []})
-    search_mock.assert_awaited_once()
+    _, structured = result
+    assert structured["total"] == 0
+    search_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

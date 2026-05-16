@@ -48,6 +48,7 @@ from .dedupe import (
     merge_existing_chunk_seen,
     resolve_chunk_id,
 )
+from .ingest_guard import reject_recursive_mcp_output
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
@@ -91,6 +92,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._retrieval_strengthening_lock = threading.Lock()
         self._checkpoint_count_cache: int | None = None
         self._checkpoint_count_cache_data_version: int | None = None
+        self._audit_recursion_count_cache: int | None = None
+        self._audit_recursion_count_cache_data_version: int | None = None
         self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
         if self._readonly:
             self._init_readonly_db()
@@ -113,11 +116,20 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
+        self._chunk_tags_available = "chunk_tags" in existing_tables
         self._local = threading.local()
 
     def _invalidate_checkpoint_count_cache(self) -> None:
         self._checkpoint_count_cache = None
         self._checkpoint_count_cache_data_version = None
+
+    def _invalidate_audit_recursion_count_cache(self) -> None:
+        self._audit_recursion_count_cache = None
+        self._audit_recursion_count_cache_data_version = None
+
+    def _invalidate_filtered_count_caches(self) -> None:
+        self._invalidate_checkpoint_count_cache()
+        self._invalidate_audit_recursion_count_cache()
 
     def _checkpoint_wal_full(self, cursor) -> None:
         try:
@@ -299,7 +311,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 ),
             )
             self._checkpoint_wal_full(cursor)
-            self._invalidate_checkpoint_count_cache()
+            self._invalidate_filtered_count_caches()
 
         cursor.execute("""
             UPDATE chunks
@@ -522,6 +534,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 SELECT c.id, j.value FROM chunks c, json_each(c.tags) j
                 WHERE c.tags IS NOT NULL AND json_valid(c.tags) = 1
             """)
+        self._chunk_tags_available = True
 
         # Session context table
         cursor.execute("""
@@ -1350,13 +1363,25 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
+        valid_pairs: list[tuple[Dict[str, Any], List[float]]] = []
+        rejected_error: ValueError | None = None
+        for chunk, embedding in zip(chunks, embeddings):
+            try:
+                reject_recursive_mcp_output(chunk.get("content"))
+            except ValueError as exc:
+                rejected_error = rejected_error or exc
+                continue
+            valid_pairs.append((chunk, embedding))
+        if not valid_pairs and rejected_error is not None:
+            raise rejected_error
+
         for attempt in range(5):
             cursor = self.conn.cursor()
             transaction_started = False
             try:
                 cursor.execute("BEGIN IMMEDIATE")
                 transaction_started = True
-                for chunk, embedding in zip(chunks, embeddings):
+                for chunk, embedding in valid_pairs:
                     chunk_id = chunk["id"]
                     created_at = chunk.get("created_at")
                     tags_value = chunk.get("tags")
@@ -1496,9 +1521,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
-        self._invalidate_checkpoint_count_cache()
+        self._invalidate_filtered_count_caches()
 
-        return len(chunks)
+        return len(valid_pairs)
 
     def update_chunk(
         self,
@@ -1515,6 +1540,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
 
         if content is not None:
+            reject_recursive_mcp_output(content)
             created_at_row = cursor.execute("SELECT created_at FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
             dedupe_fields = compute_dedupe_fields(content, created_at_row[0] if created_at_row else None)
             cursor.execute(
@@ -1561,7 +1587,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
-        self._invalidate_checkpoint_count_cache()
+        self._invalidate_filtered_count_caches()
         return True
 
     def archive_chunk(self, chunk_id: str) -> bool:
@@ -1581,6 +1607,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_filtered_count_caches()
         return True
 
     def supersede_chunk(self, old_chunk_id: str, new_chunk_id: str) -> bool:
@@ -1600,6 +1627,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         from .search_repo import clear_hybrid_search_cache
 
         clear_hybrid_search_cache(getattr(self, "db_path", None))
+        self._invalidate_filtered_count_caches()
         return True
 
     def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:

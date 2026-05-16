@@ -28,6 +28,7 @@ from .dedupe import (
     merge_existing_chunk_content,
     merge_existing_chunk_seen,
 )
+from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,10 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed store event with empty content")
         return ApplyResult()
+    recursive_reason = recursive_mcp_output_reason(content)
+    if recursive_reason:
+        logger.warning("Skipping recursive MCP store event: %s", recursive_reason)
+        return ApplyResult()
     now = datetime.now(timezone.utc).isoformat()
     metadata = {"memory_type": event.get("memory_type", "note")}
     raw_metadata = event.get("metadata")
@@ -239,6 +244,10 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if not content:
         logger.warning("Skipping malformed watcher event with empty content")
         return
+    recursive_reason = recursive_mcp_output_reason(content)
+    if recursive_reason:
+        logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
+        return
     tags = event.get("tags")
     _insert_or_merge_chunk(
         conn,
@@ -269,6 +278,10 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
+        return
+    recursive_reason = recursive_mcp_output_reason(content)
+    if recursive_reason:
+        logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
         return
     content_hash = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
     session_id = event.get("session_id") or "unknown"

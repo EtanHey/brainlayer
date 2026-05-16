@@ -338,6 +338,44 @@ def test_search_excludes_checkpoints_by_default_and_can_include_them(tmp_path):
     assert {"checkpoint", "normal"}.issubset(set(hybrid_with_checkpoints["ids"][0]))
 
 
+def test_search_excludes_checkpoint_content_even_when_origin_backfill_missed_it(tmp_path):
+    _hybrid_cache.clear()
+    store = VectorStore(tmp_path / "search-missed-origin.db")
+    _insert_chunk(
+        store,
+        chunk_id="missed-origin-checkpoint",
+        content="\t\n[PreCompact checkpoint]\nCurrent task: should not leak through default search",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    _insert_chunk(
+        store,
+        chunk_id="normal-missed-origin-control",
+        content="Current task memory that should remain visible in default search",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    store.build_binary_index()
+
+    text_default = store.search(query_text="Current task", n_results=10)
+    hybrid_default = store.hybrid_search(
+        query_embedding=_embed("Current task"),
+        query_text="Current task",
+        n_results=10,
+    )
+    text_with_checkpoints = store.search(query_text="Current task", n_results=10, include_checkpoints=True)
+    hybrid_with_checkpoints = store.hybrid_search(
+        query_embedding=_embed("Current task"),
+        query_text="Current task",
+        n_results=10,
+        include_checkpoints=True,
+    )
+    store.close()
+
+    assert text_default["ids"][0] == ["normal-missed-origin-control"]
+    assert "missed-origin-checkpoint" not in hybrid_default["ids"][0]
+    assert {"missed-origin-checkpoint", "normal-missed-origin-control"}.issubset(set(text_with_checkpoints["ids"][0]))
+    assert {"missed-origin-checkpoint", "normal-missed-origin-control"}.issubset(set(hybrid_with_checkpoints["ids"][0]))
+
+
 def test_vector_search_overfetches_when_checkpoint_filter_discards_nearest_neighbors(tmp_path):
     store = VectorStore(tmp_path / "vector-overfetch.db")
     query_embedding = [0.0] * 1024
@@ -366,7 +404,7 @@ def test_vector_search_overfetches_when_checkpoint_filter_discards_nearest_neigh
 def test_vector_search_does_not_starve_normal_results_after_many_checkpoints(tmp_path):
     store = VectorStore(tmp_path / "vector-many-checkpoints.db")
     query_embedding = [0.0] * 1024
-    for index in range(1001):
+    for index in range(2001):
         _insert_chunk(
             store,
             chunk_id=f"checkpoint-{index}",
@@ -707,6 +745,69 @@ def test_kg_hybrid_search_facts_excludes_checkpoint_sourced_relations_by_default
     assert {fact["target_entity"]["name"] for fact in checkpoint_results["facts"]} == {
         "Checkpoint Project",
         "Normal Project",
+    }
+
+
+def test_kg_facts_exclude_legacy_checkpoint_content_when_origin_unknown(tmp_path):
+    store = VectorStore(tmp_path / "kg-legacy-checkpoint-content-facts.db")
+    _insert_chunk(
+        store,
+        chunk_id="legacy-checkpoint-content-fact-chunk",
+        content="[PreCompact checkpoint]\nEtan builds legacy checkpoint-only project",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    _insert_chunk(
+        store,
+        chunk_id="normal-legacy-control-fact-chunk",
+        content="Etan builds durable legacy control project",
+        chunk_origin=CHUNK_ORIGIN_UNKNOWN,
+    )
+    store.upsert_entity("person-etan", "person", "Etan")
+    store.upsert_entity("project-legacy-checkpoint", "project", "Legacy Checkpoint Project")
+    store.upsert_entity("project-legacy-normal", "project", "Legacy Normal Project")
+    store.add_relation(
+        "rel-legacy-checkpoint-content",
+        "person-etan",
+        "project-legacy-checkpoint",
+        "builds",
+        fact="legacy checkpoint-only fact",
+        source_chunk_id="legacy-checkpoint-content-fact-chunk",
+    )
+    store.add_relation(
+        "rel-legacy-normal",
+        "person-etan",
+        "project-legacy-normal",
+        "maintains",
+        fact="legacy normal fact",
+        source_chunk_id="normal-legacy-control-fact-chunk",
+    )
+
+    sql_default_facts = _kg_facts_sql(store, "Etan")
+    sql_checkpoint_facts = _kg_facts_sql(store, "Etan", include_checkpoints=True)
+    hybrid_default = store.kg_hybrid_search(
+        query_embedding=_embed("Etan"),
+        query_text="Etan",
+        n_results=10,
+        entity_name="Etan",
+    )
+    hybrid_with_checkpoints = store.kg_hybrid_search(
+        query_embedding=_embed("Etan"),
+        query_text="Etan",
+        n_results=10,
+        entity_name="Etan",
+        include_checkpoints=True,
+    )
+    store.close()
+
+    assert {fact["target"] for fact in sql_default_facts} == {"Legacy Normal Project"}
+    assert {fact["target"] for fact in sql_checkpoint_facts} == {
+        "Legacy Checkpoint Project",
+        "Legacy Normal Project",
+    }
+    assert {fact["target_entity"]["name"] for fact in hybrid_default["facts"]} == {"Legacy Normal Project"}
+    assert {fact["target_entity"]["name"] for fact in hybrid_with_checkpoints["facts"]} == {
+        "Legacy Checkpoint Project",
+        "Legacy Normal Project",
     }
 
 

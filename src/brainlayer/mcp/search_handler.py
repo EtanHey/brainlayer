@@ -10,8 +10,9 @@ import apsw
 from mcp.types import TextContent
 
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
-from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
+from ..search_repo import _is_audit_recursion_metadata
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -37,6 +38,26 @@ from ._shared import (
 )
 
 _CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")
+
+
+def _empty_exact_chunk_lookup_result(query: str) -> tuple[list[TextContent], dict]:
+    structured: dict[str, Any] = {"query": query, "total": 0, "results": []}
+    return ([TextContent(type="text", text=format_search_results(query, [], 0))], structured)
+
+
+def _parsed_chunk_tags(chunk: dict[str, Any]) -> list[Any]:
+    tags = chunk.get("tags")
+    if not tags:
+        return []
+    if isinstance(tags, list):
+        return tags
+    if isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 def _utcnow_iso() -> str:
@@ -170,6 +191,7 @@ def _exact_chunk_lookup_result(
     source_filter: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
+    include_audit: bool = False,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -180,38 +202,36 @@ def _exact_chunk_lookup_result(
     if not chunk:
         return None
     if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
-        return None
-    if not include_checkpoints and chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
-        empty = {"query": query, "total": 0, "results": []}
-        return ([TextContent(type="text", text="No results found.")], empty)
+        return _empty_exact_chunk_lookup_result(query)
+    if not include_checkpoints and (
+        chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+        or is_precompact_checkpoint_content(chunk.get("content"))
+    ):
+        return _empty_exact_chunk_lookup_result(query)
     if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
         return None
     if project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
         normalized_project = _normalize_project_name(project) or project
         if chunk_project not in (normalized_project, None):
-            return None
+            return _empty_exact_chunk_lookup_result(query)
     if content_type is not None and chunk.get("content_type") != content_type:
-        return None
+        return _empty_exact_chunk_lookup_result(query)
 
-    tags = chunk.get("tags")
-    parsed_tags = None
-    if tags:
-        try:
-            parsed_tags = json.loads(tags) if isinstance(tags, str) else tags
-        except (json.JSONDecodeError, TypeError):
-            parsed_tags = None
+    parsed_tags = _parsed_chunk_tags(chunk)
     if tag is not None and tag not in (parsed_tags or []):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
+    if not include_audit and _is_audit_recursion_metadata({"tags": parsed_tags or []}, chunk.get("content")):
+        return _empty_exact_chunk_lookup_result(query)
     if importance_min is not None:
         chunk_importance = chunk.get("importance")
         if not isinstance(chunk_importance, (int, float)) or float(chunk_importance) < float(importance_min):
-            return None
+            return _empty_exact_chunk_lookup_result(query)
     chunk_date = chunk.get("created_at", "")[:10] if chunk.get("created_at") else None
     if date_from is not None and (chunk_date is None or chunk_date < date_from):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
     if date_to is not None and (chunk_date is None or chunk_date > date_to):
-        return None
+        return _empty_exact_chunk_lookup_result(query)
 
     item = {
         "score": 1.0,
@@ -323,7 +343,13 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
         return []
 
 
-def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = False) -> list[dict]:
+def _kg_facts_sql(
+    store: Any,
+    entity_name: str,
+    *,
+    include_checkpoints: bool = False,
+    include_audit: bool = False,
+) -> list[dict]:
     """Pure SQL KG fact lookup — no embeddings, no vector search.
 
     Returns typed relations for an entity, excluding co_occurs_with noise.
@@ -343,19 +369,32 @@ def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = F
 
         entity_id = row[0][0]
 
-        checkpoint_join = ""
+        source_chunk_join = ""
         checkpoint_filter = ""
+        audit_filter = ""
         params: list[Any] = [entity_id, entity_id]
+        needs_source_chunk = (
+            not include_checkpoints and getattr(store, "_has_chunk_origin", True)
+        ) or not include_audit
+        if needs_source_chunk:
+            source_chunk_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
         if not include_checkpoints and getattr(store, "_has_chunk_origin", True):
-            checkpoint_join = "LEFT JOIN chunks source_chunk ON r.source_chunk_id = source_chunk.id"
-            checkpoint_filter = """
+            checkpoint_clause = store._checkpoint_exclusion_clause("source_chunk")
+            checkpoint_filter = f"""
                      AND (
                          r.source_chunk_id IS NULL
                          OR source_chunk.id IS NULL
-                         OR COALESCE(source_chunk.chunk_origin, 'unknown') != ?
+                         OR ({checkpoint_clause})
                      )
             """
-            params.append(CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT)
+        if not include_audit:
+            audit_filter = f"""
+                     AND (
+                         r.source_chunk_id IS NULL
+                         OR source_chunk.id IS NULL
+                         OR {store._audit_recursion_exclusion_sql("source_chunk.id", "source_chunk.tags", "source_chunk.content")}
+                     )
+            """
 
         # Get all semantic relations (exclude co_occurs_with)
         facts_raw = list(
@@ -366,10 +405,11 @@ def _kg_facts_sql(store: Any, entity_name: str, *, include_checkpoints: bool = F
                    FROM kg_relations r
                    JOIN kg_entities se ON r.source_id = se.id
                    JOIN kg_entities te ON r.target_id = te.id
-                   {checkpoint_join}
+                   {source_chunk_join}
                    WHERE (r.source_id = ? OR r.target_id = ?)
                      AND r.relation_type != 'co_occurs_with'
                      {checkpoint_filter}
+                     {audit_filter}
                    ORDER BY r.confidence DESC
                    LIMIT 20""",
                 params,
@@ -424,6 +464,7 @@ async def _brain_search(
     source_filter: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
+    include_audit: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
 
@@ -460,19 +501,45 @@ async def _brain_search(
             source_filter_like=source_filter,
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
         )
 
     if chunk_id is not None:
         store = _get_vector_store()
         chunk = store.get_chunk(chunk_id)
-        if not include_checkpoints and chunk and chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
+        if (
+            not include_checkpoints
+            and isinstance(chunk, dict)
+            and (
+                chunk.get("chunk_origin") == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+                or is_precompact_checkpoint_content(chunk.get("content"))
+            )
+        ):
             empty = {"query": query, "total": 0, "results": []}
             return ([TextContent(type="text", text="No results found.")], empty)
-        return await _context(chunk_id=chunk_id, before=before, after=after)
+        if (
+            not include_audit
+            and isinstance(chunk, dict)
+            and _is_audit_recursion_metadata({"tags": _parsed_chunk_tags(chunk)}, chunk.get("content"))
+        ):
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
+        return await _context(
+            chunk_id=chunk_id,
+            before=before,
+            after=after,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        )
 
     if file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(regression_result, list):
             merged_text.extend(regression_result)
@@ -484,7 +551,12 @@ async def _brain_search(
 
     if file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
-        recall_result = await _recall(file_path=file_path, project=project, max_results=max_results)
+        recall_result = await _recall(
+            file_path=file_path,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(timeline, list):
             merged_text.extend(timeline)
@@ -514,11 +586,17 @@ async def _brain_search(
             source_filter=source_filter,
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
         )
 
     if _query_signals_current_context(query):
         ctx = await _current_context(hours=24)
-        think_result = await _think(context=query, project=project, max_results=max_results)
+        think_result = await _think(
+            context=query,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+        )
         merged_text = []
         if isinstance(ctx, tuple):
             merged_text.extend(ctx[0])
@@ -531,10 +609,10 @@ async def _brain_search(
         return merged_text
 
     if _query_signals_think(query):
-        return await _think(context=query, project=project, max_results=max_results)
+        return await _think(context=query, project=project, max_results=max_results, include_audit=include_audit)
 
     if _query_signals_recall(query):
-        return await _recall(topic=query, project=project, max_results=max_results)
+        return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
 
     store = _get_vector_store()
     exact_chunk_hit = _exact_chunk_lookup_result(
@@ -553,6 +631,7 @@ async def _brain_search(
         source_filter=source_filter,
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
+        include_audit=include_audit,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -581,7 +660,9 @@ async def _brain_search(
         entity_name = detected_entities[0]["name"]
 
         # Path 1: Pure SQL KG facts (no embedding model needed, always runs)
-        fact_items = _kg_facts_sql(store, entity_name, include_checkpoints=include_checkpoints)
+        fact_items = _kg_facts_sql(
+            store, entity_name, include_checkpoints=include_checkpoints, include_audit=include_audit
+        )
 
         # Path 2: Try full hybrid search (embedding + vector + KG)
         structured_results = []
@@ -599,6 +680,7 @@ async def _brain_search(
                 entity_name=entity_name,
                 project_filter=normalized_project,
                 include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -671,6 +753,7 @@ async def _brain_search(
         source_filter_like=source_filter,
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
+        include_audit=include_audit,
     )
 
 
@@ -868,6 +951,7 @@ async def _brain_recall(
     source_filter: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
+    include_audit: bool = False,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -926,6 +1010,7 @@ async def _brain_recall(
             source_filter=source_filter,
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
         )
 
     if resolved_mode == "entity":
@@ -933,7 +1018,7 @@ async def _brain_recall(
             return _error_result("query is required for mode=entity")
         from .entity_handler import _brain_entity as _entity_handler
 
-        return await _entity_handler(query=query, entity_type=entity_type)
+        return await _entity_handler(query=query, entity_type=entity_type, include_audit=include_audit)
 
     # --- Original modes ---
 
@@ -987,6 +1072,7 @@ async def _search(
     source_filter_like: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
+    include_audit: bool = False,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -1048,6 +1134,7 @@ async def _search(
                     source_filter_like=source_filter_like,
                     correction_category=correction_category,
                     include_checkpoints=include_checkpoints,
+                    include_audit=include_audit,
                 )
                 break
             except Exception as e:
@@ -1200,11 +1287,24 @@ async def _list_projects() -> list[TextContent]:
         return _error_result(f"Error listing projects: {str(e)}")
 
 
-async def _context(chunk_id: str, before: int = 3, after: int = 3) -> list[TextContent]:
+async def _context(
+    chunk_id: str,
+    before: int = 3,
+    after: int = 3,
+    *,
+    include_checkpoints: bool = False,
+    include_audit: bool = False,
+) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
         store = _get_vector_store()
-        result = store.get_context(chunk_id, before=before, after=after)
+        result = store.get_context(
+            chunk_id,
+            before=before,
+            after=after,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        )
         if result.get("error"):
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
         if not result.get("context"):
@@ -1330,7 +1430,12 @@ async def _plan_links(
         return _error_result(f"Plan links error: {str(e)}")
 
 
-async def _think(context: str, project: str | None = None, max_results: int = 10):
+async def _think(
+    context: str,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
+):
     """Execute think -- retrieve relevant memories for current task."""
     try:
         from ..engine import think
@@ -1346,7 +1451,12 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
         result = await loop.run_in_executor(
             None,
             lambda: think(
-                context=context, store=store, embed_fn=_embed, project=normalized_project, max_results=max_results
+                context=context,
+                store=store,
+                embed_fn=_embed,
+                project=normalized_project,
+                max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {
@@ -1363,7 +1473,11 @@ async def _think(context: str, project: str | None = None, max_results: int = 10
 
 
 async def _recall(
-    file_path: str | None = None, topic: str | None = None, project: str | None = None, max_results: int = 10
+    file_path: str | None = None,
+    topic: str | None = None,
+    project: str | None = None,
+    max_results: int = 10,
+    include_audit: bool = False,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1386,6 +1500,7 @@ async def _recall(
                 topic=topic,
                 project=normalized_project,
                 max_results=max_results,
+                include_audit=include_audit,
             ),
         )
         structured = {

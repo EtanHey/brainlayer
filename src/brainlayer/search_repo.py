@@ -15,8 +15,9 @@ import apsw
 import numpy as np
 
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
-from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
+from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .dedupe import resolve_chunk_id
+from .ingest_guard import recursive_mcp_output_reason
 
 # ── hybrid_search result cache ───────────────────────────────────────────────
 # Caches identical (store, query_text, filters) → results for 60s.
@@ -31,6 +32,7 @@ _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 _MMR_CANDIDATE_LIMIT = 50
 _MMR_LAMBDA = 0.65
+_FILTERED_KNN_MAX = 2000
 META_NOISE_PATTERNS = [
     "brain_search(",
     "brain_entity(",
@@ -40,6 +42,15 @@ META_NOISE_PATTERNS = [
     "Grounding Results — Prompt",
 ]
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
+AUDIT_RECURSION_TAG_PATTERNS = (
+    "{tag_expr} = 'audit'",
+    "{tag_expr} = 'audit-recursion'",
+    "{tag_expr} = 'audit_recursion'",
+    "{tag_expr} = 'meta-research'",
+    "{tag_expr} = 'r0x'",
+    "{tag_expr} = 'r02'",
+    "{tag_expr} GLOB 'r0[0-9]'",
+)
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
@@ -85,6 +96,7 @@ def _hybrid_cache_key(
     k: int,
     include_archived: bool = False,
     include_checkpoints: bool = False,
+    include_audit: bool = False,
 ) -> tuple:
     return (
         store_key,
@@ -106,6 +118,7 @@ def _hybrid_cache_key(
         k,
         include_archived,
         include_checkpoints,
+        include_audit,
     )
 
 
@@ -121,14 +134,142 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
     return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
 
 
+def _audit_recursion_tag_predicate(tag_expr: str) -> str:
+    lowered = f"LOWER(CAST({tag_expr} AS TEXT))"
+    return "(" + " OR ".join(pattern.format(tag_expr=lowered) for pattern in AUDIT_RECURSION_TAG_PATTERNS) + ")"
+
+
+def _audit_recursion_exclusion_sql(
+    chunk_id_expr: str,
+    tags_expr: str,
+    *,
+    content_expr: str = "content",
+    use_chunk_tags: bool = True,
+) -> str:
+    if use_chunk_tags:
+        tag_filter = (
+            "NOT EXISTS ("
+            "SELECT 1 FROM chunk_tags audit_tags "
+            f"WHERE audit_tags.chunk_id = {chunk_id_expr} "
+            f"AND {_audit_recursion_tag_predicate('audit_tags.tag')}"
+            ")"
+        )
+    else:
+        tags_json = f"CASE WHEN json_valid({tags_expr}) THEN {tags_expr} ELSE '[]' END"
+        tag_filter = (
+            "NOT EXISTS ("
+            f"SELECT 1 FROM json_each({tags_json}) audit_tags "
+            f"WHERE {_audit_recursion_tag_predicate('audit_tags.value')}"
+            ")"
+        )
+
+    content_expr = f"COALESCE(CAST({content_expr} AS TEXT), '')"
+    compact_content_expr = (
+        f"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER({content_expr}), ' ', ''), char(9), ''), "
+        "char(10), ''), char(11), ''), char(12), ''), char(13), '')"
+    )
+    recursive_content_filter = (
+        f"{compact_content_expr} NOT GLOB '┌─brain_search:*' "
+        f"AND {compact_content_expr} NOT GLOB '┌─brain_*:*' "
+        f"AND {compact_content_expr} NOT LIKE '┌─entity:%' "
+        f"AND {compact_content_expr} NOT LIKE '┌─entitysearch:%' "
+        f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
+        f'AND {compact_content_expr} NOT LIKE \'%"jsonrpc":"2.0"%\''
+    )
+    return f"({tag_filter} AND {recursive_content_filter})"
+
+
+def _is_audit_recursion_metadata(meta: dict, content: str | None = None) -> bool:
+    if recursive_mcp_output_reason(content):
+        return True
+    tags = meta.get("tags")
+    if not isinstance(tags, list):
+        return False
+    for tag in tags:
+        normalized = str(tag).casefold()
+        if normalized in {"audit", "audit-recursion", "audit_recursion", "meta-research"}:
+            return True
+        if normalized in {"r02", "r0x"}:
+            return True
+        if len(normalized) == 3 and normalized[:2] == "r0" and normalized[2].isdigit():
+            return True
+    return False
+
+
+def _precompact_content_exclusion_sql(content_expr: str) -> str:
+    whitespace_chars = "char(9) || char(10) || char(11) || char(12) || char(13) || char(32)"
+    normalized = f"LOWER(LTRIM(COALESCE(CAST({content_expr} AS TEXT), ''), {whitespace_chars}))"
+    prefix = f"SUBSTR({normalized}, 1, 1024)"
+    return (
+        f"{normalized} NOT LIKE '[precompact checkpoint]%' "
+        f"AND {normalized} NOT LIKE '# precompact checkpoint%' "
+        f"AND {normalized} NOT LIKE 'session-restore%' "
+        f"AND {normalized} NOT LIKE '# session-restore%' "
+        f"AND {prefix} NOT LIKE '%content=\"[precompact checkpoint]%' "
+        f"AND {prefix} NOT LIKE '%content=''[precompact checkpoint]%' "
+        f'AND {prefix} NOT LIKE \'%"content": "[precompact checkpoint]%\' '
+        f"AND {prefix} NOT LIKE '%''content'': ''[precompact checkpoint]%'"
+    )
+
+
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str, content_expr: str) -> str:
+        return _audit_recursion_exclusion_sql(
+            chunk_id_expr,
+            tags_expr,
+            content_expr=content_expr,
+            use_chunk_tags=getattr(self, "_chunk_tags_available", True),
+        )
+
+    def _audit_recursion_count(self) -> int:
+        cached_count = getattr(self, "_audit_recursion_count_cache", None)
+        current_data_version = self._checkpoint_cache_data_version()
+        cached_data_version = getattr(self, "_audit_recursion_count_cache_data_version", None)
+        if cached_count is not None and (current_data_version is None or cached_data_version == current_data_version):
+            return int(cached_count)
+
+        for attempt in range(3):
+            try:
+                row = (
+                    self._read_cursor()
+                    .execute(
+                        f"""
+                        SELECT COUNT(*) FROM chunks
+                        WHERE NOT ({self._audit_recursion_exclusion_sql("id", "tags", "content")})
+                        """
+                    )
+                    .fetchone()
+                )
+                audit_count = int(row[0]) if row else 0
+                setattr(self, "_audit_recursion_count_cache", audit_count)
+                setattr(self, "_audit_recursion_count_cache_data_version", current_data_version)
+                return audit_count
+            except apsw.Error as exc:
+                if _is_sqlite_busy_error(exc) and attempt < 2:
+                    time.sleep(0.05 * (2**attempt))
+                    continue
+                if cached_count is not None:
+                    return int(cached_count)
+                return 0
+            except (TypeError, IndexError, ValueError):
+                if cached_count is not None:
+                    return int(cached_count)
+                return 0
+        if cached_count is not None:
+            return int(cached_count)
+        return 0
 
     def _checkpoint_exclusion_clause(self, table_alias: str | None = None) -> str | None:
         if not getattr(self, "_has_chunk_origin", True):
             return None
         column = f"{table_alias}.chunk_origin" if table_alias else "chunk_origin"
-        return f"COALESCE({column}, 'unknown') != 'precompact_checkpoint'"
+        content_column = f"{table_alias}.content" if table_alias else "content"
+        return (
+            f"(COALESCE({column}, 'unknown') != 'precompact_checkpoint' "
+            f"AND {_precompact_content_exclusion_sql(content_column)})"
+        )
 
     def _checkpoint_cache_data_version(self) -> int | None:
         for attempt in range(3):
@@ -141,7 +282,13 @@ class SearchMixin:
                 time.sleep(0.05 * (2**attempt))
         return None
 
-    def _checkpoint_filtered_knn_k(self, n_results: int, include_checkpoints: bool) -> int:
+    def _checkpoint_filtered_knn_k(
+        self,
+        n_results: int,
+        include_checkpoints: bool,
+        *,
+        cap_filtered: bool = True,
+    ) -> int:
         if include_checkpoints or not getattr(self, "_has_chunk_origin", True):
             return n_results
 
@@ -157,7 +304,11 @@ class SearchMixin:
                     checkpoint_count = int(
                         self._read_cursor()
                         .execute(
-                            "SELECT COUNT(*) FROM chunks WHERE chunk_origin = ?",
+                            f"""
+                            SELECT COUNT(*) FROM chunks
+                            WHERE chunk_origin = ?
+                               OR NOT ({_precompact_content_exclusion_sql("content")})
+                            """,
                             (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,),
                         )
                         .fetchone()[0]
@@ -174,13 +325,40 @@ class SearchMixin:
 
         if checkpoint_count <= 0:
             return n_results
-        return n_results + checkpoint_count
+        expanded_k = n_results + checkpoint_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
 
-    def _effective_knn_k(self, n_results: int, needs_overfetch: bool, include_checkpoints: bool) -> int:
+    def _audit_filtered_knn_k(self, n_results: int, include_audit: bool, *, cap_filtered: bool = True) -> int:
+        if include_audit:
+            return n_results
+        audit_count = self._audit_recursion_count()
+        if audit_count <= 0:
+            return n_results
+        expanded_k = n_results + audit_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
+
+    def _effective_knn_k(
+        self,
+        n_results: int,
+        needs_overfetch: bool,
+        include_checkpoints: bool,
+        include_audit: bool,
+        *,
+        cap_filtered: bool = True,
+    ) -> int:
         effective_k = n_results
         if needs_overfetch:
             effective_k = max(effective_k, min(n_results * 10, 1000))
-        return self._checkpoint_filtered_knn_k(effective_k, include_checkpoints)
+        effective_k = self._checkpoint_filtered_knn_k(
+            effective_k,
+            include_checkpoints,
+            cap_filtered=cap_filtered,
+        )
+        return self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -357,6 +535,7 @@ class SearchMixin:
         include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
@@ -418,6 +597,8 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
@@ -441,7 +622,7 @@ class SearchMixin:
                 or source_filter_like
                 or correction_category
             )
-            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
+            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
             params = [query_bytes, effective_k] + filter_params
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
@@ -456,6 +637,16 @@ class SearchMixin:
             """
 
             results = list(cursor.execute(query, params))
+            if len(results) < n_results:
+                retry_k = self._effective_knn_k(
+                    n_results,
+                    bool(needs_overfetch),
+                    include_checkpoints,
+                    include_audit,
+                    cap_filtered=False,
+                )
+                if retry_k > effective_k:
+                    results = list(cursor.execute(query, [query_bytes, retry_k] + filter_params))
             results = results[:n_results]
 
         elif query_text is not None:
@@ -502,6 +693,8 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags", "content"))
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause()
                 if checkpoint_clause:
@@ -714,6 +907,7 @@ class SearchMixin:
         include_checkpoints: bool = False,
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
         cursor = self._read_cursor()
@@ -764,6 +958,8 @@ class SearchMixin:
         if correction_category:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
+        if not include_audit:
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
         if not include_checkpoints:
             checkpoint_clause = self._checkpoint_exclusion_clause("c")
             if checkpoint_clause:
@@ -780,11 +976,9 @@ class SearchMixin:
         needs_overfetch = (
             entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
         )
-        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints)
+        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
-        results = list(
-            cursor.execute(
-                f"""
+        query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
@@ -794,10 +988,18 @@ class SearchMixin:
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
                 ORDER BY v.distance
-                """,
-                params,
+                """
+        results = list(cursor.execute(query, params))
+        if len(results) < n_results:
+            retry_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                cap_filtered=False,
             )
-        )
+            if retry_k > effective_k:
+                results = list(cursor.execute(query, [query_bytes, retry_k] + filter_params))
         results = results[:n_results]
 
         ids = []
@@ -924,6 +1126,7 @@ class SearchMixin:
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         filter_meta_noise: bool = True,
+        include_audit: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -958,6 +1161,7 @@ class SearchMixin:
             k,
             include_archived,
             include_checkpoints,
+            include_audit,
         ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise)
         now = time.monotonic()
         if cache_key in _hybrid_cache:
@@ -993,6 +1197,7 @@ class SearchMixin:
                 include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
+                include_audit=include_audit,
             )
             semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
         else:
@@ -1015,6 +1220,7 @@ class SearchMixin:
                 include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
+                include_audit=include_audit,
             )
 
         # Build semantic rank map: chunk_content -> rank
@@ -1075,6 +1281,8 @@ class SearchMixin:
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags', 'c.content')}")
             if not include_checkpoints:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
@@ -1222,6 +1430,8 @@ class SearchMixin:
 
             if filter_meta_noise and _contains_meta_noise(doc):
                 continue
+            if not include_audit and _is_audit_recursion_metadata(meta, doc):
+                continue
 
             # Apply filters to FTS-only results
             if fts_rank is not None and sem_entry is None:
@@ -1327,7 +1537,38 @@ class SearchMixin:
 
         return result
 
-    def get_context(self, chunk_id: str, before: int = 3, after: int = 3) -> Dict[str, Any]:
+    def _context_chunk_is_filtered(
+        self,
+        *,
+        content: str | None,
+        tags: Any,
+        chunk_origin: str | None,
+        include_checkpoints: bool,
+        include_audit: bool,
+    ) -> bool:
+        if not include_checkpoints and (
+            chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT or is_precompact_checkpoint_content(content)
+        ):
+            return True
+        if include_audit:
+            return False
+        parsed_tags = tags
+        if isinstance(tags, str):
+            try:
+                parsed_tags = json.loads(tags)
+            except (json.JSONDecodeError, TypeError):
+                parsed_tags = []
+        return _is_audit_recursion_metadata({"tags": parsed_tags if isinstance(parsed_tags, list) else []}, content)
+
+    def get_context(
+        self,
+        chunk_id: str,
+        before: int = 3,
+        after: int = 3,
+        *,
+        include_checkpoints: bool = False,
+        include_audit: bool = False,
+    ) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
         read_conn = self._get_read_conn()
         cursor = read_conn.cursor()
@@ -1337,7 +1578,7 @@ class SearchMixin:
         target = list(
             cursor.execute(
                 """
-            SELECT conversation_id, position, content, metadata, content_type
+            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin
             FROM chunks WHERE id = ?
         """,
                 (chunk_id,),
@@ -1347,7 +1588,15 @@ class SearchMixin:
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
 
-        conv_id, position, content, metadata, content_type = target[0]
+        conv_id, position, content, metadata, content_type, tags, chunk_origin = target[0]
+        if self._context_chunk_is_filtered(
+            content=content,
+            tags=tags,
+            chunk_origin=chunk_origin,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        ):
+            return {"target": None, "context": [], "error": "Chunk not found"}
 
         if not conv_id or position is None:
             # Standalone chunks (for example, manual-* chunks created via brain_store)
@@ -1370,7 +1619,7 @@ class SearchMixin:
         context_rows = list(
             cursor.execute(
                 """
-            SELECT id, content, position, content_type
+            SELECT id, content, position, content_type, tags, chunk_origin
             FROM chunks
             WHERE conversation_id = ?
               AND position BETWEEN ? AND ?
@@ -1382,6 +1631,14 @@ class SearchMixin:
 
         context = []
         for row in context_rows:
+            if self._context_chunk_is_filtered(
+                content=row[1],
+                tags=row[4],
+                chunk_origin=row[5],
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+            ):
+                continue
             context.append(
                 {
                     "id": row[0],
