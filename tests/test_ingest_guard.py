@@ -6,7 +6,7 @@ from brainlayer.drain import drain_once
 from brainlayer.queue_io import enqueue_hook_chunk, enqueue_store, enqueue_watcher_chunk
 from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
-from brainlayer.watcher_bridge import should_skip_chunk_content, should_skip_entry
+from brainlayer.watcher_bridge import create_flush_callback, should_skip_chunk_content, should_skip_entry
 
 JSONRPC_RECURSION_CONTENT = (
     'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0","id":24,'
@@ -61,6 +61,50 @@ def test_watcher_preclassify_rejects_rt_agent_qid_judge_notes():
 
 def test_watcher_postchunk_rejects_rt_agent_qid_judge_notes():
     assert should_skip_chunk_content(RT_AGENT_A7_JUDGE_NOTES_CONTENT) == "recursive_mcp_output"
+
+
+def test_watcher_preclassify_rejects_rt_agent_context_only_judge_notes_from_subagent_source():
+    entry = _make_entry(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT)
+    entry["_source_file"] = (
+        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+        "session/subagents/agent-a7823570938b54ccd.jsonl"
+    )
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
+def test_watcher_postchunk_rejects_rt_agent_context_only_judge_notes_from_source_context():
+    source_file = (
+        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+        "session/subagents/agent-a7823570938b54ccd.jsonl"
+    )
+
+    assert (
+        should_skip_chunk_content(
+            RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT,
+            chunk_id="ordinary-watcher-id",
+            source_file=source_file,
+        )
+        == "recursive_mcp_output"
+    )
+
+
+def test_non_arbitrated_watcher_drops_rt_agent_context_only_judge_notes(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_ARBITRATED", raising=False)
+    db_path = tmp_path / "watcher-direct-rt-agent-guard.db"
+    flush = create_flush_callback(db_path)
+    entry = _make_entry(RT_AGENT_CONTEXT_ONLY_JUDGE_NOTES_CONTENT)
+    entry["_source_file"] = (
+        "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-orchestrator/"
+        "session/subagents/agent-a7823570938b54ccd.jsonl"
+    )
+
+    flush([entry])
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT id, content FROM chunks").fetchall()
+
+    assert rows == []
 
 
 def test_direct_store_rejects_recursive_mcp_output(tmp_path):

@@ -110,7 +110,7 @@ def _extract_raw_text(entry: dict) -> str:
     return ""
 
 
-def should_skip_entry(entry: dict) -> str | None:
+def should_skip_entry(entry: dict, *, source_file: str | None = None) -> str | None:
     """Pre-classify filter. Returns skip reason or None to keep.
 
     This runs BEFORE classify_content to reject obvious noise early.
@@ -128,7 +128,8 @@ def should_skip_entry(entry: dict) -> str | None:
     if len(raw_text.strip()) < MIN_RAW_CONTENT_LENGTH:
         return "too_short"
 
-    if recursive_mcp_output_reason(raw_text):
+    resolved_source_file = source_file or entry.get("_source_file")
+    if recursive_mcp_output_reason(raw_text, source_file=resolved_source_file):
         return "recursive_mcp_output"
 
     # Skip if content is mostly system-reminder injection
@@ -139,14 +140,19 @@ def should_skip_entry(entry: dict) -> str | None:
     return None
 
 
-def should_skip_chunk_content(content: str) -> str | None:
+def should_skip_chunk_content(
+    content: str,
+    *,
+    chunk_id: str | None = None,
+    source_file: str | None = None,
+) -> str | None:
     """Post-chunk filter. Returns skip reason or None to keep."""
     # Strip system-reminders from the final content
     cleaned = _strip_system_reminders(content)
     if len(cleaned.strip()) < MIN_RAW_CONTENT_LENGTH:
         return "system_reminder_residue"
 
-    if recursive_mcp_output_reason(cleaned):
+    if recursive_mcp_output_reason(cleaned, chunk_id=chunk_id, source_file=source_file):
         return "recursive_mcp_output"
 
     # Skip pure file deletion diffs
@@ -234,7 +240,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
             project = _extract_project_from_source(source_file)
 
             # Layer 1: Pre-classify filter
-            skip_reason = should_skip_entry(entry)
+            skip_reason = should_skip_entry(entry, source_file=source_file)
             if skip_reason:
                 skipped += 1
                 continue
@@ -258,16 +264,16 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                 continue
 
             for chunk in chunks:
-                # Layer 4: Post-chunk content filter
                 clean_content = _strip_system_reminders(chunk.content)
-                skip_reason = should_skip_chunk_content(clean_content)
-                if skip_reason:
-                    skipped += 1
-                    continue
-
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
                 chunk_id = f"rt-{file_stem[:8]}-{content_hash}"
+
+                # Layer 4: Post-chunk content filter
+                skip_reason = should_skip_chunk_content(clean_content, chunk_id=chunk_id, source_file=source_file)
+                if skip_reason:
+                    skipped += 1
+                    continue
 
                 created_at = entry.get("timestamp")
                 if not created_at:

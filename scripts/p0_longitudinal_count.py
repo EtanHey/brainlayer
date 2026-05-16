@@ -14,9 +14,9 @@ DEFAULT_DB_PATH = Path.home() / ".local/share/brainlayer/brainlayer.db"
 DEFAULT_LOG_DIR = Path.home() / ".brainlayer-p0-counter"
 
 P0_SQL = """
-SELECT date(created_at) AS day, COUNT(*) AS new_audit_chunks
+SELECT date(datetime(created_at)) AS day, COUNT(*) AS new_audit_chunks
 FROM chunks
-WHERE created_at > '2026-05-16T16:56:00+03:00'
+WHERE datetime(created_at) > datetime('2026-05-16T16:56:00+03:00')
   AND (content GLOB '┌─brain_search:*'
        OR content GLOB '┌─brain_*:*'
        OR content GLOB '┌─ brain_search:*'
