@@ -1363,15 +1363,26 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
+        valid_pairs: list[tuple[Dict[str, Any], List[float]]] = []
+        rejected_error: ValueError | None = None
+        for chunk, embedding in zip(chunks, embeddings):
+            try:
+                reject_recursive_mcp_output(chunk.get("content"))
+            except ValueError as exc:
+                rejected_error = rejected_error or exc
+                continue
+            valid_pairs.append((chunk, embedding))
+        if not valid_pairs and rejected_error is not None:
+            raise rejected_error
+
         for attempt in range(5):
             cursor = self.conn.cursor()
             transaction_started = False
             try:
                 cursor.execute("BEGIN IMMEDIATE")
                 transaction_started = True
-                for chunk, embedding in zip(chunks, embeddings):
+                for chunk, embedding in valid_pairs:
                     chunk_id = chunk["id"]
-                    reject_recursive_mcp_output(chunk.get("content"))
                     created_at = chunk.get("created_at")
                     tags_value = chunk.get("tags")
                     tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
@@ -1512,7 +1523,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         clear_hybrid_search_cache(getattr(self, "db_path", None))
         self._invalidate_filtered_count_caches()
 
-        return len(chunks)
+        return len(valid_pairs)
 
     def update_chunk(
         self,

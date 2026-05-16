@@ -70,6 +70,37 @@ def test_vector_upsert_rejects_recursive_mcp_output(tmp_path):
             )
 
 
+def test_vector_upsert_skips_recursive_mcp_output_without_rolling_back_valid_siblings(tmp_path):
+    with VectorStore(tmp_path / "upsert-mixed-guard.db") as store:
+        count = store.upsert_chunks(
+            [
+                {
+                    "id": "valid-sibling",
+                    "content": "valid operational memory beside recursive output",
+                    "metadata": {},
+                    "source_file": "session.jsonl",
+                    "project": "brainlayer",
+                    "content_type": "assistant_text",
+                    "char_count": 48,
+                },
+                {
+                    "id": "recursive-sibling",
+                    "content": JSONRPC_RECURSION_CONTENT,
+                    "metadata": {},
+                    "source_file": "session.jsonl",
+                    "project": "brainlayer",
+                    "content_type": "assistant_text",
+                    "char_count": len(JSONRPC_RECURSION_CONTENT),
+                },
+            ],
+            [[0.1] * 1024, [0.2] * 1024],
+        )
+
+        assert count == 1
+        assert store.get_chunk("valid-sibling")["content"] == "valid operational memory beside recursive output"
+        assert store.get_chunk("recursive-sibling") is None
+
+
 def test_update_chunk_rejects_recursive_mcp_output(tmp_path):
     with VectorStore(tmp_path / "update-guard.db") as store:
         store.upsert_chunks(
