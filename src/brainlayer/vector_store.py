@@ -1367,7 +1367,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         rejected_error: ValueError | None = None
         for chunk, embedding in zip(chunks, embeddings):
             try:
-                reject_recursive_mcp_output(chunk.get("content"))
+                reject_recursive_mcp_output(
+                    chunk.get("content"),
+                    chunk_id=chunk.get("id"),
+                    source_file=chunk.get("source_file"),
+                )
             except ValueError as exc:
                 rejected_error = rejected_error or exc
                 continue
@@ -1540,7 +1544,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
 
         if content is not None:
-            reject_recursive_mcp_output(content)
+            existing_source_file = cursor.execute("SELECT source_file FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            reject_recursive_mcp_output(
+                content,
+                chunk_id=chunk_id,
+                source_file=existing_source_file[0] if existing_source_file else None,
+            )
             created_at_row = cursor.execute("SELECT created_at FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
             dedupe_fields = compute_dedupe_fields(content, created_at_row[0] if created_at_row else None)
             cursor.execute(
