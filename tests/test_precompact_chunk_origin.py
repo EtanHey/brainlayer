@@ -404,7 +404,7 @@ def test_vector_search_overfetches_when_checkpoint_filter_discards_nearest_neigh
 def test_vector_search_does_not_starve_normal_results_after_many_checkpoints(tmp_path):
     store = VectorStore(tmp_path / "vector-many-checkpoints.db")
     query_embedding = [0.0] * 1024
-    for index in range(1001):
+    for index in range(2001):
         _insert_chunk(
             store,
             chunk_id=f"checkpoint-{index}",

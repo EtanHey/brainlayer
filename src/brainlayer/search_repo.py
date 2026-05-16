@@ -282,7 +282,13 @@ class SearchMixin:
                 time.sleep(0.05 * (2**attempt))
         return None
 
-    def _checkpoint_filtered_knn_k(self, n_results: int, include_checkpoints: bool) -> int:
+    def _checkpoint_filtered_knn_k(
+        self,
+        n_results: int,
+        include_checkpoints: bool,
+        *,
+        cap_filtered: bool = True,
+    ) -> int:
         if include_checkpoints or not getattr(self, "_has_chunk_origin", True):
             return n_results
 
@@ -319,15 +325,21 @@ class SearchMixin:
 
         if checkpoint_count <= 0:
             return n_results
-        return min(n_results + checkpoint_count, max(n_results, _FILTERED_KNN_MAX))
+        expanded_k = n_results + checkpoint_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
 
-    def _audit_filtered_knn_k(self, n_results: int, include_audit: bool) -> int:
+    def _audit_filtered_knn_k(self, n_results: int, include_audit: bool, *, cap_filtered: bool = True) -> int:
         if include_audit:
             return n_results
         audit_count = self._audit_recursion_count()
         if audit_count <= 0:
             return n_results
-        return min(n_results + audit_count, max(n_results, _FILTERED_KNN_MAX))
+        expanded_k = n_results + audit_count
+        if not cap_filtered:
+            return expanded_k
+        return min(expanded_k, max(n_results, _FILTERED_KNN_MAX))
 
     def _effective_knn_k(
         self,
@@ -335,12 +347,18 @@ class SearchMixin:
         needs_overfetch: bool,
         include_checkpoints: bool,
         include_audit: bool,
+        *,
+        cap_filtered: bool = True,
     ) -> int:
         effective_k = n_results
         if needs_overfetch:
             effective_k = max(effective_k, min(n_results * 10, 1000))
-        effective_k = self._checkpoint_filtered_knn_k(effective_k, include_checkpoints)
-        return self._audit_filtered_knn_k(effective_k, include_audit)
+        effective_k = self._checkpoint_filtered_knn_k(
+            effective_k,
+            include_checkpoints,
+            cap_filtered=cap_filtered,
+        )
+        return self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""
@@ -619,6 +637,16 @@ class SearchMixin:
             """
 
             results = list(cursor.execute(query, params))
+            if len(results) < n_results:
+                retry_k = self._effective_knn_k(
+                    n_results,
+                    bool(needs_overfetch),
+                    include_checkpoints,
+                    include_audit,
+                    cap_filtered=False,
+                )
+                if retry_k > effective_k:
+                    results = list(cursor.execute(query, [query_bytes, retry_k] + filter_params))
             results = results[:n_results]
 
         elif query_text is not None:
@@ -950,9 +978,7 @@ class SearchMixin:
         )
         effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
-        results = list(
-            cursor.execute(
-                f"""
+        query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
@@ -962,10 +988,18 @@ class SearchMixin:
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
                 ORDER BY v.distance
-                """,
-                params,
+                """
+        results = list(cursor.execute(query, params))
+        if len(results) < n_results:
+            retry_k = self._effective_knn_k(
+                n_results,
+                bool(needs_overfetch),
+                include_checkpoints,
+                include_audit,
+                cap_filtered=False,
             )
-        )
+            if retry_k > effective_k:
+                results = list(cursor.execute(query, [query_bytes, retry_k] + filter_params))
         results = results[:n_results]
 
         ids = []
