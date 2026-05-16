@@ -41,6 +41,7 @@ from .chunk_origin import (
     detect_chunk_origin,
 )
 from .dedupe import (
+    compute_dedupe_fields,
     ensure_dedupe_schema,
     find_duplicate,
     merge_duplicate_chunk,
@@ -1514,9 +1515,36 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return False
 
         if content is not None:
+            created_at_row = cursor.execute("SELECT created_at FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+            dedupe_fields = compute_dedupe_fields(content, created_at_row[0] if created_at_row else None)
             cursor.execute(
-                "UPDATE chunks SET content = ?, char_count = ?, summary = ?, chunk_origin = ? WHERE id = ?",
-                (content, len(content), content[:200], detect_chunk_origin(content), chunk_id),
+                """
+                UPDATE chunks
+                SET content = ?,
+                    char_count = ?,
+                    summary = ?,
+                    chunk_origin = ?,
+                    dedupe_hash = ?,
+                    simhash = ?,
+                    simhash_band_0 = ?,
+                    simhash_band_1 = ?,
+                    simhash_band_2 = ?,
+                    simhash_band_3 = ?
+                WHERE id = ?
+                """,
+                (
+                    content,
+                    len(content),
+                    content[:200],
+                    detect_chunk_origin(content),
+                    dedupe_fields.content_hash,
+                    dedupe_fields.simhash,
+                    dedupe_fields.bands[0],
+                    dedupe_fields.bands[1],
+                    dedupe_fields.bands[2],
+                    dedupe_fields.bands[3],
+                    chunk_id,
+                ),
             )
         if tags is not None:
             cursor.execute(

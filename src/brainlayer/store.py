@@ -148,6 +148,8 @@ def store_memory(
 
     chunk_origin = detect_chunk_origin(content)
     tags_json = json.dumps(tags) if tags else None
+    incoming_chunk_id = chunk_id
+    stored_chunk_id = chunk_id
     for attempt in range(5):
         cursor = store.conn.cursor()
         transaction_started = False
@@ -156,7 +158,7 @@ def store_memory(
             transaction_started = True
             duplicate, dedupe_fields = find_duplicate(
                 store.conn,
-                chunk_id=chunk_id,
+                chunk_id=incoming_chunk_id,
                 content=content,
                 created_at=now,
                 project=project,
@@ -166,9 +168,9 @@ def store_memory(
                 content_changed = merge_duplicate_chunk(
                     store.conn,
                     canonical_id=duplicate.canonical_chunk_id,
-                    duplicate_id=chunk_id,
+                    duplicate_id=incoming_chunk_id,
                     incoming={
-                        "id": chunk_id,
+                        "id": incoming_chunk_id,
                         "content": content,
                         "tags": tags_json,
                         "importance": float(importance) if importance is not None else None,
@@ -178,15 +180,19 @@ def store_memory(
                     mechanism=duplicate.mechanism,
                     hamming_distance_value=duplicate.hamming_distance,
                 )
-                chunk_id = duplicate.canonical_chunk_id
+                stored_chunk_id = duplicate.canonical_chunk_id
                 if embedding is not None:
                     if content_changed:
-                        merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+                        merged_row = cursor.execute(
+                            "SELECT content FROM chunks WHERE id = ?",
+                            (stored_chunk_id,),
+                        ).fetchone()
                         if merged_row:
-                            store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
-                    elif not store._chunk_vector_exists(cursor, chunk_id):
-                        store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                            store._upsert_chunk_vector(cursor, stored_chunk_id, embed_fn(str(merged_row[0])))
+                    elif not store._chunk_vector_exists(cursor, stored_chunk_id):
+                        store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
             else:
+                stored_chunk_id = incoming_chunk_id
                 cursor.execute(
                     """
                     INSERT INTO chunks
@@ -197,7 +203,7 @@ def store_memory(
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
-                        chunk_id,
+                        incoming_chunk_id,
                         content,
                         json.dumps(meta),
                         "brainlayer-store",
@@ -223,7 +229,7 @@ def store_memory(
                     ),
                 )
                 if embedding is not None:
-                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                    store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
 
             if entity_id:
                 entity = store.get_entity(entity_id)
@@ -231,7 +237,7 @@ def store_memory(
                     raise ValueError(f"Unknown entity_id: {entity_id}")
                 store.link_entity_chunk(
                     entity_id=entity_id,
-                    chunk_id=chunk_id,
+                    chunk_id=stored_chunk_id,
                     relevance=1.0,
                     context=f"Stored via brain_store: {memory_type}",
                 )
@@ -256,7 +262,7 @@ def store_memory(
         store._invalidate_checkpoint_count_cache()
 
     return {
-        "id": chunk_id,
+        "id": stored_chunk_id,
         "related": related,
     }
 

@@ -910,6 +910,18 @@ def backfill_dedupe_database(
                         (chunk_id, hit.canonical_chunk_id),
                     ).fetchone()
                     if not alias_row:
+                        canonical_row = cursor.execute(
+                            "SELECT 1 FROM chunks WHERE id = ?",
+                            (hit.canonical_chunk_id,),
+                        ).fetchone()
+                        if not canonical_row:
+                            _drop_backfill_index(
+                                hit.canonical_chunk_id,
+                                seen_hashes=seen_hashes,
+                                band_index=band_index,
+                                fingerprints=fingerprints,
+                                numeric_index=numeric_index,
+                            )
                         _add_backfill_index(
                             chunk_id,
                             str(incoming["content"]),

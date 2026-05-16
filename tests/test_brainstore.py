@@ -274,6 +274,54 @@ class TestStoreMemory:
         assert second["id"] == first["id"]
         assert vector_count == 1
 
+    def test_duplicate_store_busy_retry_keeps_incoming_chunk_id_stable(self, store, mock_embed, monkeypatch):
+        """A BusyError after merge rollback should retry with the original incoming ID."""
+        import apsw
+
+        from brainlayer.store import store_memory
+
+        cursor = store.conn.cursor()
+        cursor.execute(
+            "INSERT INTO kg_entities(id, name, entity_type) VALUES (?, ?, ?)",
+            ("entity-retry", "Retry Entity", "project"),
+        )
+        first = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="Duplicate retry memory should survive one busy rollback",
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        original_link = store.link_entity_chunk
+        calls = {"count": 0}
+
+        def flaky_link_entity_chunk(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise apsw.BusyError("database is locked")
+            return original_link(*args, **kwargs)
+
+        monkeypatch.setattr(store, "link_entity_chunk", flaky_link_entity_chunk)
+
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="Duplicate retry memory should survive one busy rollback",
+            memory_type="learning",
+            project="brainlayer",
+            entity_id="entity-retry",
+        )
+
+        row = cursor.execute("SELECT seen_count FROM chunks WHERE id = ?", (first["id"],)).fetchone()
+        link = cursor.execute(
+            "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
+            ("entity-retry",),
+        ).fetchone()
+        assert second["id"] == first["id"]
+        assert row == (2,)
+        assert link == (first["id"],)
+
 
 class TestStoreValidation:
     """Test input validation for store_memory."""
