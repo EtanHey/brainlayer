@@ -343,7 +343,6 @@ def embed_pending_chunks(
     from .search_repo import clear_hybrid_search_cache
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
-    store._invalidate_audit_recursion_count_cache()
     return count
 
 
