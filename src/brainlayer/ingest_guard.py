@@ -7,6 +7,10 @@ import re
 _JSONRPC_MESSAGE_RE = re.compile(r'"jsonrpc"\s*:\s*"2\.0"', re.IGNORECASE)
 _INVALID_JSONRPC_MARKER = "mcp brainlayer memory: invalid json-rpc message"
 _BRAIN_SEARCH_BOX_PREFIX = "┌─ brain_search:"
+_BRAINLAYER_BOX_PREFIX_RE = re.compile(
+    r"^┌─\s*(?:brain_[a-z_]+|entity(?:\s+search)?):",
+    re.IGNORECASE,
+)
 
 
 def recursive_mcp_output_reason(content: str | None) -> str | None:
@@ -17,6 +21,8 @@ def recursive_mcp_output_reason(content: str | None) -> str | None:
     stripped = str(content).lstrip()
     if stripped.startswith(_BRAIN_SEARCH_BOX_PREFIX):
         return "brain_search_output"
+    if _BRAINLAYER_BOX_PREFIX_RE.match(stripped):
+        return "brainlayer_mcp_output"
 
     folded = stripped.casefold()
     if _INVALID_JSONRPC_MARKER in folded:

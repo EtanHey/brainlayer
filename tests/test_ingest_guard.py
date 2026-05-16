@@ -28,6 +28,12 @@ def test_watcher_preclassify_rejects_brain_search_output_box():
     assert should_skip_entry(entry) == "recursive_mcp_output"
 
 
+def test_watcher_preclassify_rejects_other_brainlayer_mcp_output_boxes():
+    entry = _make_entry("┌─ Entity search: Etan\n│ recursive entity output\n└─")
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
 def test_watcher_postchunk_rejects_jsonrpc_mcp_memory_output():
     assert should_skip_chunk_content(JSONRPC_RECURSION_CONTENT) == "recursive_mcp_output"
 

@@ -42,7 +42,10 @@ META_NOISE_PATTERNS = [
 ]
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
 AUDIT_RECURSION_TAG_PATTERNS = (
-    "{tag_expr} LIKE '%audit%'",
+    "{tag_expr} = 'audit'",
+    "{tag_expr} = 'audit-recursion'",
+    "{tag_expr} = 'audit_recursion'",
+    "{tag_expr} = 'meta-research'",
     "{tag_expr} = 'r0x'",
     "{tag_expr} = 'r02'",
     "{tag_expr} GLOB 'r0[0-9]'",
@@ -166,6 +169,9 @@ def _audit_recursion_exclusion_sql(
     trimmed_content_expr = f"LTRIM({content_expr}, char(9) || char(10) || char(11) || char(12) || char(13) || char(32))"
     recursive_content_filter = (
         f"LOWER({trimmed_content_expr}) NOT LIKE '┌─ brain_search:%' "
+        f"AND LOWER({trimmed_content_expr}) NOT GLOB '┌─ brain_*:*' "
+        f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity:%' "
+        f"AND LOWER({trimmed_content_expr}) NOT LIKE '┌─ entity search:%' "
         f"AND LOWER({content_expr}) NOT LIKE '%mcp brainlayer memory: invalid json-rpc message%' "
         f'AND {compact_content_expr} NOT LIKE \'%"jsonrpc":"2.0"%\''
     )
@@ -180,7 +186,7 @@ def _is_audit_recursion_metadata(meta: dict, content: str | None = None) -> bool
         return False
     for tag in tags:
         normalized = str(tag).casefold()
-        if "audit" in normalized:
+        if normalized in {"audit", "audit-recursion", "audit_recursion", "meta-research"}:
             return True
         if normalized in {"r02", "r0x"}:
             return True

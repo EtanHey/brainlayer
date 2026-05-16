@@ -118,6 +118,30 @@ def test_hybrid_search_does_not_exclude_r0x_substrings_inside_normal_tags(tmp_pa
         store.close()
 
 
+def test_hybrid_search_does_not_exclude_normal_audit_word_tags(tmp_path):
+    store = VectorStore(tmp_path / "audit-filter-normal-audit-tag.db")
+    try:
+        query_embedding = [0.031] * 1024
+        _insert_chunk(
+            store,
+            "ordinary-security-audit-memory",
+            "security audit finding with real operational content should remain searchable",
+            ["security-audit", "reliability"],
+            query_embedding,
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="security audit operational content",
+            n_results=3,
+        )
+
+        assert "ordinary-security-audit-memory" in results["ids"][0]
+    finally:
+        store.close()
+
+
 def test_readonly_legacy_db_without_chunk_tags_uses_json_tag_fallback(tmp_path):
     db_path = tmp_path / "legacy-readonly-audit-filter.db"
     store = VectorStore(db_path)
@@ -337,6 +361,13 @@ def test_recursive_mcp_output_content_is_filtered_even_without_audit_tags(tmp_pa
         )
         _insert_chunk(
             store,
+            "recursive-entity-search-box",
+            "┌─ Entity search: BrainLayer\n│ recursive entity output",
+            ["auto-detected"],
+            query_embedding,
+        )
+        _insert_chunk(
+            store,
             "ordinary-mcp-memory",
             "BrainLayer MCP timeout investigation produced a real operational fix",
             ["brainlayer", "mcp"],
@@ -354,6 +385,7 @@ def test_recursive_mcp_output_content_is_filtered_even_without_audit_tags(tmp_pa
         assert "ordinary-mcp-memory" in ids
         assert "recursive-jsonrpc-output" not in ids
         assert "recursive-brain-search-box" not in ids
+        assert "recursive-entity-search-box" not in ids
 
         audit_results = store.hybrid_search(
             query_embedding=query_embedding,
@@ -364,6 +396,7 @@ def test_recursive_mcp_output_content_is_filtered_even_without_audit_tags(tmp_pa
 
         assert "recursive-jsonrpc-output" in audit_results["ids"][0]
         assert "recursive-brain-search-box" in audit_results["ids"][0]
+        assert "recursive-entity-search-box" in audit_results["ids"][0]
     finally:
         store.close()
 
