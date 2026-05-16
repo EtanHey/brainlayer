@@ -116,6 +116,8 @@ def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str
         chunk_id=chunk_id,
         content=str(values["content"]),
         created_at=values.get("created_at"),
+        project=values.get("project"),
+        content_type=values.get("content_type"),
     )
     if duplicate is not None:
         merge_duplicate_chunk(

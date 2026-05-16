@@ -7,14 +7,24 @@ from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
 
 
-def _chunk(chunk_id: str, content: str, *, created_at: str, tags=None, importance=None, half_life_days=None):
+def _chunk(
+    chunk_id: str,
+    content: str,
+    *,
+    created_at: str,
+    tags=None,
+    importance=None,
+    half_life_days=None,
+    project="brainlayer",
+    content_type="note",
+):
     chunk = {
         "id": chunk_id,
         "content": content,
         "metadata": {"session_id": "session-a"},
         "source_file": "test.jsonl",
-        "project": "brainlayer",
-        "content_type": "note",
+        "project": project,
+        "content_type": content_type,
         "value_type": "HIGH",
         "char_count": len(content),
         "source": "test",
@@ -125,6 +135,48 @@ def test_same_chunk_id_reposts_increment_seen_count(tmp_path):
 
     assert row == (2, 8.0, '["first", "second"]', "2026-05-16T10:00:00Z")
     assert audit == ("same-id", "same-id", "sha256_same_id")
+    store.close()
+
+
+def test_identical_content_in_different_projects_stays_separate(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    content = "Identical scoped content should not disappear from project-filtered recall"
+
+    store.upsert_chunks(
+        [
+            _chunk("project-a", content, created_at="2026-05-16T09:00:00Z", project="alpha"),
+            _chunk("project-b", content, created_at="2026-05-16T10:00:00Z", project="beta"),
+        ],
+        [[0.1] * 1024, [0.2] * 1024],
+    )
+
+    rows = store.conn.cursor().execute("SELECT id, project, seen_count FROM chunks ORDER BY id").fetchall()
+    aliases = store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+
+    assert rows == [("project-a", "alpha", 1), ("project-b", "beta", 1)]
+    assert aliases == 0
+    store.close()
+
+
+def test_identical_content_with_different_content_types_stays_separate(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    content = "Identical typed content should keep separate type-filtered recall"
+
+    store.upsert_chunks(
+        [
+            _chunk("todo-row", content, created_at="2026-05-16T09:00:00Z", content_type="todo"),
+            _chunk("decision-row", content, created_at="2026-05-16T10:00:00Z", content_type="decision"),
+        ],
+        [[0.1] * 1024, [0.2] * 1024],
+    )
+
+    rows = store.conn.cursor().execute("SELECT id, content_type, seen_count FROM chunks ORDER BY id").fetchall()
+    aliases = store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+
+    assert rows == [("decision-row", "decision", 1), ("todo-row", "todo", 1)]
+    assert aliases == 0
     store.close()
 
 
@@ -291,10 +343,12 @@ def test_backfill_merges_snapshot_duplicates_and_preserves_alias_refs(tmp_path):
     entity_link = (
         checked.conn.cursor().execute("SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = 'entity-1'").fetchone()
     )
+    entity_link_count = checked.conn.cursor().execute("SELECT COUNT(*) FROM kg_entity_chunks").fetchone()[0]
 
     assert active_rows == [("old-a", 2, 8.0, '["new", "old"]')]
     assert alias == ("old-a",)
     assert entity_link == ("old-a",)
+    assert entity_link_count == 1
     assert checked.get_chunk("old-b")["id"] == "old-a"
     checked.close()
 

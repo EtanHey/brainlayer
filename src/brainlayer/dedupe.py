@@ -271,25 +271,52 @@ def _active_clause() -> str:
     return "COALESCE(archived, 0) = 0 AND archived_at IS NULL AND superseded_by IS NULL"
 
 
+def _scope_key(project: Any, content_type: Any) -> tuple[str | None, str | None]:
+    return (
+        str(project) if project is not None else None,
+        str(content_type) if content_type is not None else None,
+    )
+
+
+def _scope_clause(project: Any, content_type: Any) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if project is None:
+        clauses.append("project IS NULL")
+    else:
+        clauses.append("project = ?")
+        params.append(str(project))
+    if content_type is None:
+        clauses.append("content_type IS NULL")
+    else:
+        clauses.append("content_type = ?")
+        params.append(str(content_type))
+    return " AND ".join(clauses), params
+
+
 def find_duplicate(
     conn: Any,
     *,
     chunk_id: str,
     content: str,
     created_at: str | None,
+    project: Any = None,
+    content_type: Any = None,
 ) -> tuple[DuplicateHit | None, DedupeFields]:
     fields = compute_dedupe_fields(content, created_at)
     cursor = conn.cursor()
+    scope_sql, scope_params = _scope_clause(project, content_type)
     exact = cursor.execute(
         f"""
         SELECT id FROM chunks
         WHERE dedupe_hash = ?
           AND id != ?
           AND {_active_clause()}
+          AND {scope_sql}
         ORDER BY created_at ASC, id ASC
         LIMIT 1
         """,
-        (fields.content_hash, chunk_id),
+        (fields.content_hash, chunk_id, *scope_params),
     ).fetchone()
     if exact:
         return DuplicateHit(str(exact[0]), "sha256", 0), fields
@@ -302,6 +329,7 @@ def find_duplicate(
         SELECT id, simhash, content FROM chunks
         WHERE id != ?
           AND {_active_clause()}
+          AND {scope_sql}
           AND simhash IS NOT NULL
           AND (
             simhash_band_0 = ? OR simhash_band_1 = ? OR simhash_band_2 = ? OR simhash_band_3 = ?
@@ -309,7 +337,7 @@ def find_duplicate(
         ORDER BY created_at ASC, id ASC
         LIMIT 100
         """,
-        (chunk_id, *fields.bands),
+        (chunk_id, *scope_params, *fields.bands),
     ).fetchall()
     best: DuplicateHit | None = None
     for candidate_id, candidate_simhash, candidate_content in candidates:
@@ -522,6 +550,7 @@ def merge_duplicate_chunk(
                     """,
                     (canonical_id, duplicate_id),
                 )
+                cursor.execute("DELETE FROM kg_entity_chunks WHERE chunk_id = ?", (duplicate_id,))
             cursor.execute(
                 """
                 UPDATE chunks
@@ -622,14 +651,16 @@ def row_to_incoming(row: Any) -> dict[str, Any]:
         "half_life_days": row[5],
         "seen_count": row[6],
         "last_seen_at": row[7],
+        "project": row[8],
+        "content_type": row[9],
     }
 
 
 def _drop_backfill_index(
     chunk_id: str,
     *,
-    seen_hashes: dict[str, str],
-    band_index: dict[str, set[str]],
+    seen_hashes: dict[tuple[str | None, str | None, str], str],
+    band_index: dict[tuple[str | None, str | None, str], set[str]],
     fingerprints: dict[str, str],
     numeric_index: dict[str, set[str]],
 ) -> None:
@@ -647,17 +678,20 @@ def _add_backfill_index(
     content: str,
     created_at: str | None,
     *,
-    seen_hashes: dict[str, str],
-    band_index: dict[str, set[str]],
+    project: Any,
+    content_type: Any,
+    seen_hashes: dict[tuple[str | None, str | None, str], str],
+    band_index: dict[tuple[str | None, str | None, str], set[str]],
     fingerprints: dict[str, str],
     numeric_index: dict[str, set[str]],
 ) -> DedupeFields:
     fields = compute_dedupe_fields(content, created_at)
-    seen_hashes[fields.content_hash] = chunk_id
+    scope = _scope_key(project, content_type)
+    seen_hashes[(*scope, fields.content_hash)] = chunk_id
     fingerprints[chunk_id] = fields.simhash
     numeric_index[chunk_id] = _numeric_tokens(content)
     for band in fields.bands:
-        band_index.setdefault(band, set()).add(chunk_id)
+        band_index.setdefault((*scope, band), set()).add(chunk_id)
     return fields
 
 
@@ -683,8 +717,8 @@ def backfill_dedupe_database(
         cursor = conn.cursor()
         cursor.execute("PRAGMA wal_checkpoint(FULL)")
         total = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_active_clause()}").fetchone()[0]
-        seen_hashes: dict[str, str] = {}
-        band_index: dict[str, set[str]] = {}
+        seen_hashes: dict[tuple[str | None, str | None, str], str] = {}
+        band_index: dict[tuple[str | None, str | None, str], set[str]] = {}
         fingerprints: dict[str, str] = {}
         numeric_index: dict[str, set[str]] = {}
         merged = 0
@@ -696,8 +730,8 @@ def backfill_dedupe_database(
         while True:
             rows = cursor.execute(
                 f"""
-                SELECT id, content, created_at, tags, importance, half_life_days,
-                       COALESCE(seen_count, 1), last_seen_at
+                    SELECT id, content, created_at, tags, importance, half_life_days,
+                           COALESCE(seen_count, 1), last_seen_at, project, content_type
                 FROM chunks
                 WHERE {_active_clause()}
                   AND (COALESCE(created_at, '') > ?
@@ -723,6 +757,8 @@ def backfill_dedupe_database(
                 if not still_active:
                     continue
                 fields = compute_dedupe_fields(str(incoming["content"]), incoming.get("created_at"))
+                scope = _scope_key(incoming.get("project"), incoming.get("content_type"))
+                incoming_numbers = _numeric_tokens(str(incoming["content"]))
                 cursor.execute(
                     """
                     UPDATE chunks
@@ -734,18 +770,19 @@ def backfill_dedupe_database(
                 )
                 hashed += 1
                 hit: DuplicateHit | None = None
-                if fields.content_hash in seen_hashes:
-                    hit = DuplicateHit(seen_hashes[fields.content_hash], "sha256", 0)
+                hash_key = (*scope, fields.content_hash)
+                if hash_key in seen_hashes:
+                    hit = DuplicateHit(seen_hashes[hash_key], "sha256", 0)
                 elif len(normalize_for_dedupe(str(incoming["content"])).split()) >= MIN_SIMHASH_TOKENS:
                     candidate_ids: set[str] = set()
                     for band in fields.bands:
-                        candidate_ids.update(band_index.get(band, set()))
+                        candidate_ids.update(band_index.get((*scope, band), set()))
                     best_id = None
                     best_distance = SIMHASH_BITS
                     for candidate_id in candidate_ids:
-                        if numeric_index.get(candidate_id, set()) != _numeric_tokens(str(incoming["content"])):
+                        if numeric_index.get(candidate_id, set()) != incoming_numbers:
                             left_numbers = numeric_index.get(candidate_id, set())
-                            right_numbers = _numeric_tokens(str(incoming["content"]))
+                            right_numbers = incoming_numbers
                             if left_numbers or right_numbers:
                                 continue
                         distance = hamming_distance(fields.simhash, fingerprints.get(candidate_id))
@@ -780,18 +817,22 @@ def backfill_dedupe_database(
                             hit.canonical_chunk_id,
                             str(merged_row[0]),
                             merged_row[1],
+                            project=incoming.get("project"),
+                            content_type=incoming.get("content_type"),
                             seen_hashes=seen_hashes,
                             band_index=band_index,
                             fingerprints=fingerprints,
                             numeric_index=numeric_index,
                         )
-                        seen_hashes[fields.content_hash] = hit.canonical_chunk_id
+                        seen_hashes[hash_key] = hit.canonical_chunk_id
                     merged += 1
                 else:
                     _add_backfill_index(
                         chunk_id,
                         str(incoming["content"]),
                         incoming.get("created_at"),
+                        project=incoming.get("project"),
+                        content_type=incoming.get("content_type"),
                         seen_hashes=seen_hashes,
                         band_index=band_index,
                         fingerprints=fingerprints,

@@ -147,7 +147,14 @@ def store_memory(
     cursor = store.conn.cursor()
     chunk_origin = detect_chunk_origin(content)
     tags_json = json.dumps(tags) if tags else None
-    duplicate, dedupe_fields = find_duplicate(store.conn, chunk_id=chunk_id, content=content, created_at=now)
+    duplicate, dedupe_fields = find_duplicate(
+        store.conn,
+        chunk_id=chunk_id,
+        content=content,
+        created_at=now,
+        project=project,
+        content_type=memory_type,
+    )
     if duplicate is not None:
         content_changed = merge_duplicate_chunk(
             store.conn,
@@ -165,10 +172,13 @@ def store_memory(
             hamming_distance_value=duplicate.hamming_distance,
         )
         chunk_id = duplicate.canonical_chunk_id
-        if embedding is not None and content_changed:
-            merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-            if merged_row:
-                store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
+        if embedding is not None:
+            if content_changed:
+                merged_row = cursor.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+                if merged_row:
+                    store._upsert_chunk_vector(cursor, chunk_id, embed_fn(str(merged_row[0])))
+            elif not store._chunk_vector_exists(cursor, chunk_id):
+                store._upsert_chunk_vector(cursor, chunk_id, embedding)
     else:
         cursor.execute(
             """

@@ -295,6 +295,8 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                             chunk_id=chunk_id,
                             content=clean_content,
                             created_at=created_at,
+                            project=project,
+                            content_type=chunk.content_type.value,
                         )
                         if duplicate is not None:
                             merge_duplicate_chunk(

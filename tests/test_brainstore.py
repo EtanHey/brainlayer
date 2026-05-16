@@ -244,6 +244,36 @@ class TestStoreMemory:
         assert row == (first["id"], 2, 9.0, '["first", "second"]')
         assert alias == (first["id"],)
 
+    def test_duplicate_store_uses_available_embedding_when_canonical_has_none(self, store, mock_embed):
+        """A later synchronous duplicate should backfill a missing canonical vector."""
+        from brainlayer.store import store_memory
+
+        content = "Duplicate manual memory should reuse available exact embedding"
+        first = store_memory(
+            store=store,
+            embed_fn=None,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+        )
+        assert store.conn.cursor().execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 0
+
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+        )
+
+        vector_count = (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?", (first["id"],))
+            .fetchone()[0]
+        )
+        assert second["id"] == first["id"]
+        assert vector_count == 1
+
 
 class TestStoreValidation:
     """Test input validation for store_memory."""

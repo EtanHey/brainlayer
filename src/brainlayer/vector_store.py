@@ -1333,6 +1333,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         existing = struct.unpack(f"{len(embedding)}f", existing_bytes)
         return [(float(left) + float(right)) / 2.0 for left, right in zip(existing, embedding)]
 
+    def _chunk_vector_exists(self, cursor, chunk_id: str) -> bool:
+        return bool(cursor.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone())
+
     def _delete_chunk_vector(self, cursor, chunk_id: str) -> None:
         """Delete a chunk from both float and binary vector tables."""
         cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
@@ -1352,12 +1355,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             chunk_id = chunk["id"]
             created_at = chunk.get("created_at")
             tags_value = chunk.get("tags")
-            tags_json = json.dumps(tags_value) if isinstance(tags_value, list) else tags_value
+            tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
             duplicate, dedupe_fields = find_duplicate(
                 self.conn,
                 chunk_id=chunk_id,
                 content=chunk["content"],
                 created_at=created_at,
+                project=chunk.get("project"),
+                content_type=chunk.get("content_type"),
             )
             if duplicate is not None:
                 content_changed = merge_duplicate_chunk(
@@ -1376,6 +1381,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 if content_changed:
                     merged_embedding = self._blend_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
                     self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
+                elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
+                    self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
                 continue
             if merge_existing_chunk_seen(
                 self.conn,
