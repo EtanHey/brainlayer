@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from brainlayer._helpers import serialize_f32
-from brainlayer.search_repo import _hybrid_cache
+from brainlayer.search_repo import _contains_precompact_or_quarantined_meta, _hybrid_cache
 from brainlayer.vector_store import VectorStore
 
 
@@ -38,6 +38,7 @@ def _insert_chunk(
     chunk_id: str,
     content: str,
     embedding: list[float],
+    metadata_obj: dict | None = None,
     summary: str | None = None,
     tags: list[str] | None = None,
     resolved_query: str | None = None,
@@ -53,10 +54,11 @@ def _insert_chunk(
         """INSERT INTO chunks (
             id, content, metadata, source_file, project, content_type,
             char_count, source, sender, language, summary, tags, resolved_query, importance, created_at
-        ) VALUES (?, ?, '{}', 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?, ?, ?)""",
+        ) VALUES (?, ?, ?, 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?, ?, ?)""",
         (
             chunk_id,
             content,
+            json.dumps(metadata_obj) if metadata_obj is not None else "{}",
             project,
             len(content),
             sender,
@@ -347,6 +349,87 @@ class TestHybridSearch:
 
         assert "meta-noise-upper" not in filtered["ids"][0]
         assert "real-hit-lower" in filtered["ids"][0]
+
+    def test_hybrid_search_demotes_precompact_and_quarantined_tagged_chunks(self, store):
+        query_embedding = _embed("noise-aware rerank control")
+
+        _insert_chunk(
+            store,
+            chunk_id="precompact-noise",
+            content="noise-aware rerank control with direct match",
+            embedding=query_embedding,
+            tags=["precompact-checkpoint"],
+            created_at="2026-05-16T00:00:00Z",
+            importance=1.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="quarantined-noise",
+            content="noise-aware rerank control with direct match",
+            embedding=query_embedding,
+            tags=["quarantined"],
+            created_at="2026-05-16T00:00:00Z",
+            importance=1.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="clean-hit",
+            content="noise-aware rerank control semantic anchor phrase",
+            embedding=[value + 0.0002 for value in query_embedding],
+            created_at="2026-05-17T00:00:00Z",
+            importance=10.0,
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="noise-aware rerank control",
+            n_results=3,
+            include_archived=False,
+        )
+
+        ids = results["ids"][0]
+        assert ids[0] == "clean-hit", ids
+        assert set(ids[1:]) == {"precompact-noise", "quarantined-noise"}, ids
+
+    def test_hybrid_search_demotes_chunks_with_quarantine_metadata(self, store):
+        query_embedding = _embed("metadata noise rerank")
+        clean_content = "metadata noise rerank control anchor"
+        noisy_content = "metadata noise rerank control anchor"
+
+        _insert_chunk(
+            store,
+            chunk_id="meta-hit",
+            content=clean_content,
+            embedding=[value + 0.00002 for value in query_embedding],
+            created_at="2026-05-17T00:00:00Z",
+            importance=10.0,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="meta-flag-noise",
+            content=noisy_content,
+            embedding=query_embedding,
+            created_at="2026-05-16T00:00:00Z",
+            importance=10.0,
+            metadata_obj={"quarantine": True},
+            tags=["search"],
+        )
+        store.build_binary_index()
+
+        results = store.hybrid_search(
+            query_embedding=query_embedding,
+            query_text="metadata noise rerank",
+            n_results=2,
+            include_archived=False,
+        )
+
+        ids = results["ids"][0]
+        assert ids[0] == "meta-hit", ids
+        assert ids[1] == "meta-flag-noise", ids
+
+    def test_noise_demoter_does_not_treat_arbitrary_true_metadata_as_quarantine(self):
+        assert not _contains_precompact_or_quarantined_meta({"feature_enabled": "true"}, "ordinary content")
 
     def test_mmr_rerank_dedupes_near_duplicates(self, store):
         def embedding(primary: float, secondary: float = 0.0) -> list[float]:

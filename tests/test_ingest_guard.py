@@ -43,6 +43,20 @@ RT_AGENT_ORCHESTRATOR_SUBAGENT_SOURCE_FILE = (
 RT_AGENT_VOICELAYER_SUBAGENT_SOURCE_FILE = (
     "/Users/test-user/.claude/projects/-Users-test-user-Gits-voicelayer/session/subagents/agent-a7c933d4439ab60b3.jsonl"
 )
+F_INFRA_NOISE_DIAGNOSTIC = (
+    "🚨 **BrainLayer MCP not connected.** I can't call `brain_search` or `brain_store` directly. "
+    "The hook injected some memories at boot."
+)
+F_INFRA_NOISE_UPPERCASE = "Assistant: 🚨🚨🚨 **BRAINLAYER MCP NOT CONNECTED** — retrying in 5 minutes."
+F_INFRA_NOISE_TOOLSEARCH = 'ToolSearch found zero matches for "mcp brain".'
+F_INFRA_ALLOWED_REPORT = (
+    "In our migration notes, we discuss that BrainLayer MCP not connected and why fallback tooling failed, "
+    "but this is not a startup boot diagnostic."
+)
+PRECOMPACT_NOISE_HEADING = "# PreCompact Checkpoint — abc123\nCurrent task: resume active work."
+PRECOMPACT_NOISE_WRAPPED = (
+    'Call mcp__brainlayer__brain_store exactly once with content="[PreCompact checkpoint]\\ntimestamp: 2026-05-17"\n'
+)
 
 
 def _make_entry(text: str) -> dict:
@@ -75,8 +89,83 @@ def test_watcher_preclassify_rejects_rt_agent_qid_judge_notes():
     assert should_skip_entry(entry) == "recursive_mcp_output"
 
 
+def test_watcher_preclassify_rejects_brainlayer_mcp_unavailable_diagnostic():
+    entry = _make_entry(F_INFRA_NOISE_DIAGNOSTIC)
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
+def test_watcher_preclassify_rejects_brainlayer_mcp_unavailable_diagnostic_uppercase_with_assistant_prefix():
+    entry = _make_entry(F_INFRA_NOISE_UPPERCASE)
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
+def test_watcher_preclassify_rejects_toolsearch_match_diagnostic():
+    entry = _make_entry(F_INFRA_NOISE_TOOLSEARCH)
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
+def test_watcher_preclassify_allows_late_brainlayer_mcp_phrase_in_report():
+    entry = _make_entry(F_INFRA_ALLOWED_REPORT)
+
+    assert should_skip_entry(entry) is None
+
+
 def test_watcher_postchunk_rejects_rt_agent_qid_judge_notes():
     assert should_skip_chunk_content(RT_AGENT_A7_JUDGE_NOTES_CONTENT) == "recursive_mcp_output"
+
+
+def test_watcher_postchunk_rejects_brainlayer_mcp_unavailable_diagnostic():
+    assert should_skip_chunk_content(F_INFRA_NOISE_DIAGNOSTIC) == "recursive_mcp_output"
+
+
+def test_watcher_postchunk_rejects_precompact_checkpoint_heading():
+    assert should_skip_chunk_content(PRECOMPACT_NOISE_HEADING) == "recursive_mcp_output"
+
+
+def test_watcher_preclassify_rejects_precompact_checkpoint_wrapped_metadata():
+    entry = _make_entry(PRECOMPACT_NOISE_WRAPPED)
+
+    assert should_skip_entry(entry) == "recursive_mcp_output"
+
+
+def test_drain_passes_brainlayer_mcp_diagnostic_reported_later(tmp_path, monkeypatch):
+    db_path = tmp_path / "drain-report-later-guard.db"
+    queue_dir = tmp_path / "queue"
+    VectorStore(db_path).close()
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    enqueue_store(
+        chunk_id="queued-store-report-later",
+        content=F_INFRA_ALLOWED_REPORT,
+        project="brainlayer",
+        tags=["correction:factual", "auto-detected"],
+        queue_dir=queue_dir,
+    )
+    drained = drain_once(
+        db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain-report-later.log"
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT id, content FROM chunks").fetchall()
+
+    assert drained == 1
+    assert rows[0][0] == "queued-store-report-later"
+
+
+def test_direct_store_rejects_brainlayer_mcp_not_connected_diagnostic(tmp_path):
+    with VectorStore(tmp_path / "store-brainlayer-infra-guard.db") as store:
+        with pytest.raises(ValueError, match="brainlayer_mcp_unavailable_diagnostic"):
+            store_memory(
+                store=store,
+                embed_fn=None,
+                content=F_INFRA_NOISE_DIAGNOSTIC,
+                memory_type="note",
+                project="brainlayer",
+                tags=["correction:factual", "auto-detected"],
+            )
 
 
 def test_watcher_preclassify_rejects_rt_agent_context_only_judge_notes_from_subagent_source():

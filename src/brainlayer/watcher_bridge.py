@@ -129,7 +129,7 @@ def should_skip_entry(entry: dict, *, source_file: str | None = None) -> str | N
         return "too_short"
 
     resolved_source_file = source_file or entry.get("_source_file")
-    if recursive_mcp_output_reason(raw_text, source_file=resolved_source_file):
+    if recursive_mcp_output_reason(raw_text, source_file=resolved_source_file, reject_precompact=True):
         return "recursive_mcp_output"
 
     # Skip if content is mostly system-reminder injection
@@ -152,7 +152,7 @@ def should_skip_chunk_content(
     if len(cleaned.strip()) < MIN_RAW_CONTENT_LENGTH:
         return "system_reminder_residue"
 
-    if recursive_mcp_output_reason(cleaned, chunk_id=chunk_id, source_file=source_file):
+    if recursive_mcp_output_reason(cleaned, chunk_id=chunk_id, source_file=source_file, reject_precompact=True):
         return "recursive_mcp_output"
 
     # Skip pure file deletion diffs
