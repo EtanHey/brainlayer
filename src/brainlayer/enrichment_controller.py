@@ -594,6 +594,14 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
             "UPDATE chunks SET raw_entities_json = ? WHERE id = ?",
             (json.dumps(entities), chunk["id"]),
         )
+        try:
+            from .kg_promotion import promote_chunk_raw_entities
+            from .vector_store import VectorStore
+
+            if isinstance(store, VectorStore):
+                promote_chunk_raw_entities(store, chunk["id"])
+        except Exception:
+            logger.debug("raw entity KG promotion skipped for %s", chunk["id"], exc_info=True)
     # Set content_hash after enrichment so dedup works next time
     content = chunk.get("content", "")
     if content:

@@ -245,6 +245,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("resolved_query", "TEXT"),
             ("key_facts", "TEXT"),
             ("resolved_queries", "TEXT"),
+            ("raw_entities_json", "TEXT"),
             ("epistemic_level", "TEXT"),
             ("version_scope", "TEXT"),
             ("debt_impact", "TEXT"),
