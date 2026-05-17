@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sqlite3
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .vector_store import VectorStore
 
@@ -19,7 +22,8 @@ class _ReadOnlyPromotionStore:
     """Small read-only adapter for dry-runs against a live BrainLayer DB."""
 
     def __init__(self, db_path: Path):
-        self.conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        db_uri_path = quote(str(db_path), safe="/:")
+        self.conn = sqlite3.connect(f"file:{db_uri_path}?mode=ro", uri=True)
 
     def _read_cursor(self) -> sqlite3.Cursor:
         return self.conn.cursor()
@@ -47,6 +51,13 @@ class PromotionCandidate:
 
 def _slugify(value: str) -> str:
     return _SLUG_TOKEN_RE.sub("-", value.casefold()).strip("-")
+
+
+def _entity_slug(value: str) -> str:
+    slug = _slugify(value)
+    if slug:
+        return slug
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _canonical_from_identity_tag(tag: str) -> str:
@@ -167,16 +178,18 @@ def _collect_candidates(rows: list[dict[str, Any]], entity_type: str) -> list[Pr
             raw_surface_entries.append((chunk_id, surface))
 
         for tag in identity_tags:
+            canonical_name = _canonical_from_identity_tag(tag)
+            matching_surfaces = {surface for surface in surfaces if _surface_matches_identity(canonical_name, surface)}
             candidate = by_identity_tag.setdefault(
                 tag,
                 PromotionCandidate(
-                    canonical_name=_canonical_from_identity_tag(tag),
+                    canonical_name=canonical_name,
                     entity_type=entity_type,
                     reason="identity_tag",
                 ),
             )
             candidate.chunk_ids.add(chunk_id)
-            candidate.surfaces.update(surfaces)
+            candidate.surfaces.update(matching_surfaces)
             candidate.identity_tags.add(tag)
 
         if not raw_entities:
@@ -219,18 +232,43 @@ def _surface_matches_identity(canonical_name: str, surface: str) -> bool:
         return False
     normalized_surface = _SLUG_TOKEN_RE.sub("", surface_folded).replace("h", "")
     normalized_family = _SLUG_TOKEN_RE.sub("", family).replace("h", "")
-    return normalized_family in normalized_surface or len(surface.split()) == 1
+    return normalized_family in normalized_surface
+
+
+def _empty_stats(chunks_scanned: int = 0) -> dict[str, int]:
+    return {
+        "chunks_scanned": chunks_scanned,
+        "candidates": 0,
+        "entities_promoted": 0,
+        "aliases_created": 0,
+        "chunks_linked": 0,
+    }
+
+
+def _retry_busy(fn, *, attempts: int = 5, base_delay: float = 0.05) -> dict[str, int]:
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            message = str(exc).casefold()
+            if "busy" not in message and "locked" not in message:
+                raise
+            if attempt == attempts - 1:
+                raise
+            time.sleep(base_delay * (2**attempt))
+    raise RuntimeError("unreachable busy retry state")
 
 
 def _promote_candidate(store: VectorStore, candidate: PromotionCandidate, *, dry_run: bool = False) -> dict[str, int]:
     stats = {"entities_promoted": 0, "aliases_created": 0, "chunks_linked": 0}
     if dry_run:
+        aliases = {surface for surface in candidate.surfaces if surface != candidate.canonical_name}
         stats["entities_promoted"] = 1
-        stats["aliases_created"] = len(candidate.surfaces | candidate.identity_tags)
+        stats["aliases_created"] = len(aliases | candidate.identity_tags)
         stats["chunks_linked"] = len(candidate.chunk_ids)
         return stats
 
-    entity_id = f"promoted-{candidate.entity_type}-{_slugify(candidate.canonical_name)}"
+    entity_id = f"promoted-{candidate.entity_type}-{_entity_slug(candidate.canonical_name)}"
     existing = store.get_entity_by_name(candidate.entity_type, candidate.canonical_name)
     if existing:
         entity_id = existing["id"]
@@ -240,7 +278,7 @@ def _promote_candidate(store: VectorStore, candidate: PromotionCandidate, *, dry
             candidate.entity_type,
             candidate.canonical_name,
             metadata={"source": "raw_entities_json_promotion", "reason": candidate.reason},
-            canonical_name=_slugify(candidate.canonical_name).replace("-", "_"),
+            canonical_name=_entity_slug(candidate.canonical_name).replace("-", "_"),
             confidence=0.9,
             importance=0.7,
         )
@@ -292,7 +330,7 @@ def promote_raw_entity_identities(
         "chunks_linked": 0,
     }
     for candidate in candidates:
-        stats = _promote_candidate(store, candidate, dry_run=dry_run)
+        stats = _retry_busy(lambda candidate=candidate: _promote_candidate(store, candidate, dry_run=dry_run))
         for key in ("entities_promoted", "aliases_created", "chunks_linked"):
             totals[key] += stats[key]
     return totals
@@ -309,17 +347,11 @@ def promote_chunk_raw_entities(
     cursor = store._read_cursor()
     row = cursor.execute("SELECT tags FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if row is None:
-        return {
-            "chunks_scanned": 0,
-            "candidates": 0,
-            "entities_promoted": 0,
-            "aliases_created": 0,
-            "chunks_linked": 0,
-        }
+        return _empty_stats()
 
     identity_tags = [tag for tag in _load_tags(row[0]) if _IDENTITY_TAG_RE.fullmatch(tag)]
     if not identity_tags:
-        return promote_raw_entity_identities(store, entity_type=entity_type, limit=500, dry_run=dry_run)
+        return _empty_stats(chunks_scanned=1)
 
     placeholders = ", ".join("?" for _ in identity_tags)
     rows = list(
@@ -327,16 +359,29 @@ def promote_chunk_raw_entities(
             f"""
             SELECT c.id, c.raw_entities_json, c.tags
             FROM chunks c
-            JOIN chunk_tags ct ON c.id = ct.chunk_id
-            WHERE ct.tag IN ({placeholders})
+            WHERE (
+                c.id IN (
+                    SELECT chunk_id FROM chunk_tags WHERE tag IN ({placeholders})
+                )
+                OR (c.raw_entities_json IS NOT NULL AND c.raw_entities_json != '')
+            )
+              AND COALESCE(c.status, 'active') = 'active'
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
+              AND c.archived_at IS NULL
             """,
             identity_tags,
         )
     )
-    candidates = _collect_candidates(
-        [{"chunk_id": item[0], "raw_entities_json": item[1], "tags": item[2]} for item in rows],
-        entity_type=entity_type,
-    )
+    identity_tag_set = set(identity_tags)
+    candidates = [
+        candidate
+        for candidate in _collect_candidates(
+            [{"chunk_id": item[0], "raw_entities_json": item[1], "tags": item[2]} for item in rows],
+            entity_type=entity_type,
+        )
+        if candidate.reason == "identity_tag" and candidate.identity_tags & identity_tag_set
+    ]
     totals = {
         "chunks_scanned": len(rows),
         "candidates": len(candidates),
@@ -345,7 +390,7 @@ def promote_chunk_raw_entities(
         "chunks_linked": 0,
     }
     for candidate in candidates:
-        stats = _promote_candidate(store, candidate, dry_run=dry_run)
+        stats = _retry_busy(lambda candidate=candidate: _promote_candidate(store, candidate, dry_run=dry_run))
         for key in ("entities_promoted", "aliases_created", "chunks_linked"):
             totals[key] += stats[key]
     return totals
