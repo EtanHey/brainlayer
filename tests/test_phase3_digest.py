@@ -128,6 +128,45 @@ def test_digest_content_extracts_entities(tmp_path):
     assert any("Etan" in n for n in entity_names) or any("Dor" in n for n in entity_names)
 
 
+def test_digest_content_persists_llm_people_entities_for_lookup(tmp_path, monkeypatch):
+    """brain_digest persists LLM-extracted people so brain_entity can find them."""
+    from brainlayer.pipeline.digest import digest_content, entity_lookup
+
+    def fake_extraction(prompt):  # noqa: ARG001
+        return """
+        {
+          "entities": [
+            {"text": "Katya Taershmidt", "type": "person", "description": "Operations lead"},
+            {"text": "Rotem Maimon", "type": "person", "description": "Product strategist"},
+            {"text": "Israel Davidson", "type": "person", "description": "Engineering advisor"}
+          ],
+          "relations": []
+        }
+        """
+
+    monkeypatch.setattr("brainlayer.enrichment_controller.call_gemini_for_extraction", fake_extraction)
+
+    store = VectorStore(tmp_path / "test.db")
+    content = (
+        "PEOPLE-ROLES: Katya Taershmidt owns operations, Rotem Maimon handles product strategy, "
+        "and Israel Davidson advises engineering."
+    )
+
+    result = digest_content(
+        content=content,
+        store=store,
+        embed_fn=_dummy_embed,
+        project="kg-regression",
+        faceted_enrich_fn=lambda **kw: {"status": "skipped"},
+    )
+
+    assert result["stats"]["entities_found"] >= 3
+    found = entity_lookup("Katya Taershmidt", store, _dummy_embed, entity_type="person")
+    assert found is not None
+    assert found["name"] == "Katya Taershmidt"
+    assert found["evidence"]
+
+
 def test_digest_content_applies_sentiment(tmp_path):
     """digest_content includes sentiment analysis."""
     from brainlayer.pipeline.digest import digest_content
