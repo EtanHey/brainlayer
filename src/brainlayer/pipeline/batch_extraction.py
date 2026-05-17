@@ -84,7 +84,7 @@ def process_chunk(
         text,
         seed_entities,
         llm_caller=llm_caller,
-        use_llm=llm_caller is not None,
+        use_llm=True,
     )
     result.chunk_id = chunk_id
 
