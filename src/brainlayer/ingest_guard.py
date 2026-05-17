@@ -66,10 +66,7 @@ def _looks_like_brainlayer_infra_noise(content: str) -> bool:
     stripped = re.sub(r"^[^A-Za-z0-9]+", "", stripped)
     stripped = stripped[:_F_INFRA_MAX_PREFIX_CHARS].casefold()
 
-    return any(
-        re.match(rf"^(?:{re.escape(prefix)})(?:$|[^a-z0-9])", stripped)
-        for prefix in _F_INFRA_NOISE_PREFIXES
-    )
+    return any(re.match(rf"^(?:{re.escape(prefix)})(?:$|[^a-z0-9])", stripped) for prefix in _F_INFRA_NOISE_PREFIXES)
 
 
 def recursive_mcp_output_reason(

@@ -55,8 +55,7 @@ F_INFRA_ALLOWED_REPORT = (
 )
 PRECOMPACT_NOISE_HEADING = "# PreCompact Checkpoint — abc123\nCurrent task: resume active work."
 PRECOMPACT_NOISE_WRAPPED = (
-    "Call mcp__brainlayer__brain_store exactly once with content=\"[PreCompact checkpoint]\\n"
-    "timestamp: 2026-05-17\"\n"
+    'Call mcp__brainlayer__brain_store exactly once with content="[PreCompact checkpoint]\\ntimestamp: 2026-05-17"\n'
 )
 
 
@@ -145,7 +144,9 @@ def test_drain_passes_brainlayer_mcp_diagnostic_reported_later(tmp_path, monkeyp
         tags=["correction:factual", "auto-detected"],
         queue_dir=queue_dir,
     )
-    drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain-report-later.log")
+    drained = drain_once(
+        db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain-report-later.log"
+    )
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute("SELECT id, content FROM chunks").fetchall()

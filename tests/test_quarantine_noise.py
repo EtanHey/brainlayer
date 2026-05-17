@@ -24,11 +24,11 @@ def test_precompact_detection():
     """PreCompact chunks are recognized by content and checkpoint tags."""
     assert is_precompact_candidate("# PreCompact Checkpoint\nsession now.", None, None)
     assert is_precompact_candidate("normal text", "precompact_checkpoint", '["tag:one"]')
-    assert is_precompact_candidate("normal text", None, '[\"precompact\", \"session\"]')
-    assert is_precompact_candidate("normal text", None, '[\"pre-compact\", \"session-checkpoint\"]')
+    assert is_precompact_candidate("normal text", None, '["precompact", "session"]')
+    assert is_precompact_candidate("normal text", None, '["pre-compact", "session-checkpoint"]')
     assert is_precompact_candidate("normal text", None, None, "brainbar-c89abcd")
-    assert not is_precompact_candidate("normal text", None, '[\"precompact-hook\"]')
-    assert not is_precompact_candidate("normal text", None, '[\"session-checkpoint\"]')
+    assert not is_precompact_candidate("normal text", None, '["precompact-hook"]')
+    assert not is_precompact_candidate("normal text", None, '["session-checkpoint"]')
     assert not is_precompact_candidate("normal text", None, None)
 
 
@@ -102,7 +102,7 @@ def test_dry_run_does_not_mutate_db(tmp_path: Path):
             {
                 "id": "pre-a",
                 "content": "# PreCompact Checkpoint\\nsession",
-                "tags": "[\"precompact\"]",
+                "tags": '["precompact"]',
                 "chunk_origin": "precompact_checkpoint",
                 "project": "brainlayer",
                 "source": "mcp",
@@ -128,8 +128,7 @@ def test_dry_run_does_not_mutate_db(tmp_path: Path):
 
     with sqlite3.connect(db_path) as check:
         rows = {
-            row[0]: row[1:]
-            for row in check.execute("SELECT id, importance, archived, status, archived_at FROM chunks")
+            row[0]: row[1:] for row in check.execute("SELECT id, importance, archived, status, archived_at FROM chunks")
         }
     assert rows["rt-root"] == (8.0, 0, "active", None)
     assert rows["pre-a"] == (9.0, 0, "active", None)
@@ -144,7 +143,7 @@ def test_apply_updates_only_quarantine_fields_and_tag(tmp_path: Path):
             {
                 "id": "pre-valid",
                 "content": "normal [PreCompact checkpoint]\nnote",
-                "tags": "[\"keep-me\"]",
+                "tags": '["keep-me"]',
                 "chunk_origin": "precompact_checkpoint",
                 "project": "brainlayer",
                 "source": "mcp",

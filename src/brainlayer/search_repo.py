@@ -154,10 +154,7 @@ def _is_noise_tag(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     normalized = _ALNUM_ONLY_RE.sub("", value.casefold())
-    return (
-        normalized in _PRECOMPACT_TAG_MARKERS
-        or normalized in _QUARANTINE_TAG_MARKERS
-    )
+    return normalized in _PRECOMPACT_TAG_MARKERS or normalized in _QUARANTINE_TAG_MARKERS
 
 
 def _contains_precompact_or_quarantined_meta(
