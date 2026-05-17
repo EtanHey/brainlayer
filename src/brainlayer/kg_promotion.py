@@ -27,6 +27,7 @@ class _ReadOnlyPromotionStore:
     def close(self) -> None:
         self.conn.close()
 
+
 _IDENTITY_TAG_RE = re.compile(r"^[a-z][a-z0-9-]+-[a-z][a-z0-9-]+-identification$")
 _SLUG_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 _KNOWN_GIVEN_NAME_ALIASES = {
@@ -245,17 +246,13 @@ def _promote_candidate(store: VectorStore, candidate: PromotionCandidate, *, dry
         )
         stats["entities_promoted"] = 1
 
-    before_aliases = {
-        (row["alias"].casefold(), row["alias_type"]) for row in store.get_entity_aliases(entity_id)
-    }
+    before_aliases = {(row["alias"].casefold(), row["alias_type"]) for row in store.get_entity_aliases(entity_id)}
     for surface in sorted(candidate.surfaces):
         if surface != candidate.canonical_name:
             store.add_entity_alias(surface, entity_id, alias_type="raw_surface")
     for tag in sorted(candidate.identity_tags):
         store.add_entity_alias(tag, entity_id, alias_type="identity_tag")
-    after_aliases = {
-        (row["alias"].casefold(), row["alias_type"]) for row in store.get_entity_aliases(entity_id)
-    }
+    after_aliases = {(row["alias"].casefold(), row["alias_type"]) for row in store.get_entity_aliases(entity_id)}
     stats["aliases_created"] = len(after_aliases - before_aliases)
 
     cursor = store.conn.cursor()
@@ -360,7 +357,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill KG promotion from chunks.raw_entities_json")
     parser.add_argument("--db-path", type=Path, default=get_db_path())
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--dry-run", action="store_true", help="Preview promotions without writing. This is the default.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview promotions without writing. This is the default."
+    )
     parser.add_argument("--apply", action="store_true", help="Write promotions. Default is dry-run.")
     args = parser.parse_args()
 
