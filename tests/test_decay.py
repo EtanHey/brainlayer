@@ -212,11 +212,40 @@ def test_decay_job_updates_scores_and_archives_stale_chunks(store):
 
     stats = run_decay_job(store.db_path, now=1_800_000_000.0, dry_run=False, batch_size=100)
 
-    row = cursor.execute("SELECT decay_score, archived, archived_at FROM chunks WHERE id = 'archive-target'").fetchone()
+    row = cursor.execute(
+        "SELECT decay_score, archived, archived_at, status FROM chunks WHERE id = 'archive-target'"
+    ).fetchone()
     assert row[0] == pytest.approx(0.05)
     assert row[1] == 1
     assert float(row[2]) == 1_800_000_000.0
+    assert row[3] == "archived"
     assert stats["archived_rows"] >= 1
+
+
+def test_decay_job_preserves_superseded_status_for_non_archived_rows(store):
+    cursor = store.conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type, char_count,
+            source, created_at, half_life_days, retrieval_count, decay_score,
+            superseded_by, status
+        ) VALUES (
+            'superseded-decay-target', 'already superseded', '{}', 'test.jsonl', 'decay-test',
+            'assistant_text', 18, 'claude_code', '2026-01-01T00:00:00Z', 36500.0, 0, 1.0,
+            'replacement', 'superseded'
+        )
+        """
+    )
+
+    from brainlayer.decay_job import run_decay_job
+
+    run_decay_job(store.db_path, now=1_800_000_000.0, dry_run=False, batch_size=100)
+
+    row = cursor.execute(
+        "SELECT archived, archived_at, superseded_by, status FROM chunks WHERE id = 'superseded-decay-target'"
+    ).fetchone()
+    assert row == (0, None, "replacement", "superseded")
 
 
 def test_backfill_seeds_half_life_and_pins_core_tags(tmp_path):

@@ -201,6 +201,8 @@ def _exact_chunk_lookup_result(
     chunk = store.get_chunk(candidate)
     if not chunk:
         return None
+    if chunk.get("status") not in (None, "active"):
+        return None
     if any(chunk.get(field) is not None for field in ("superseded_by", "aggregated_into", "archived_at")):
         return _empty_exact_chunk_lookup_result(query)
     if not include_checkpoints and (

@@ -209,8 +209,23 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+        """)
+        atomic_brick_migration_applied = (
+            cursor.execute("SELECT 1 FROM schema_migrations WHERE name = 'atomic_brick_chunks_v1'").fetchone()
+            is not None
+        )
+
         # Add columns if upgrading existing DB
         existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+        atomic_brick_cols = {"brick_id", "source_uri", "status", "ingested_at", "topic_cluster"}
+        needs_atomic_brick_backfill = (
+            not atomic_brick_cols.issubset(existing_cols) or not atomic_brick_migration_applied
+        )
         for col, typ in [
             ("source", "TEXT"),
             ("sender", "TEXT"),
@@ -258,6 +273,14 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("simhash_band_1", "TEXT"),
             ("simhash_band_2", "TEXT"),
             ("simhash_band_3", "TEXT"),
+            # Atomic-brick compatibility columns. Embeddings remain in sqlite-vec
+            # virtual tables; these fields provide ledger/status metadata without
+            # duplicating vector blobs inside chunks.
+            ("brick_id", "TEXT"),
+            ("source_uri", "TEXT"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("ingested_at", "INTEGER"),
+            ("topic_cluster", "TEXT"),
         ]:
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
@@ -318,6 +341,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             SET archived = 1
             WHERE value_type = 'ARCHIVED' AND COALESCE(archived, 0) = 0
         """)
+        if needs_atomic_brick_backfill:
+            self._backfill_atomic_brick_columns(cursor)
+            cursor.execute("""
+                INSERT OR REPLACE INTO schema_migrations(name, applied_at)
+                VALUES ('atomic_brick_chunks_v1', datetime('now'))
+            """)
 
         # Indexes for filtering
         for idx, col in [
@@ -333,8 +362,15 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_content_type", "content_type"),
             ("idx_chunks_language", "language"),
             ("idx_chunks_chunk_origin", "chunk_origin"),
+            ("idx_chunks_source_uri", "source_uri"),
+            ("idx_chunks_status", "status"),
+            ("idx_chunks_ingested_at", "ingested_at"),
+            ("idx_chunks_topic_cluster", "topic_cluster"),
         ]:
             cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON chunks({col})")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_brick_id ON chunks(brick_id) WHERE brick_id IS NOT NULL"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_decay_score ON chunks(decay_score) WHERE archived = 0")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_chunks_last_retrieved ON chunks(last_retrieved) WHERE archived = 0"
@@ -1049,6 +1085,52 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         # MCP tool calls (e.g., brain_search) hit the same VectorStore.
         self._local = threading.local()
 
+    def _backfill_atomic_brick_columns(self, cursor) -> None:
+        """Populate additive atomic-brick metadata from existing chunk fields."""
+        cursor.execute("""
+            UPDATE chunks
+            SET brick_id = id
+            WHERE brick_id IS NULL
+        """)
+        cursor.execute("""
+            UPDATE chunks
+            SET source_uri = source_file
+            WHERE source_uri IS NULL AND source_file IS NOT NULL
+        """)
+        cursor.execute("""
+            UPDATE chunks
+            SET ingested_at = COALESCE(
+                CAST(strftime('%s', created_at) AS INTEGER),
+                CAST(strftime('%s', 'now') AS INTEGER)
+            )
+            WHERE ingested_at IS NULL
+        """)
+        cursor.execute("""
+            UPDATE chunks
+            SET status = CASE
+                WHEN COALESCE(archived, 0) = 1
+                  OR value_type = 'ARCHIVED'
+                  OR archived_at IS NOT NULL
+                    THEN 'archived'
+                WHEN superseded_by IS NOT NULL
+                  OR aggregated_into IS NOT NULL
+                    THEN 'superseded'
+                ELSE 'active'
+            END
+            WHERE status IS NULL
+               OR status NOT IN ('active', 'superseded', 'archived')
+               OR (
+                    status = 'active'
+                    AND (
+                        COALESCE(archived, 0) = 1
+                        OR value_type = 'ARCHIVED'
+                        OR archived_at IS NOT NULL
+                        OR superseded_by IS NOT NULL
+                        OR aggregated_into IS NOT NULL
+                    )
+               )
+        """)
+
     def repair_fts(self, *, rebuild_trigram: bool = True) -> dict[str, int]:
         """Run explicit FTS repair work outside normal startup."""
         for attempt in range(5):
@@ -1443,8 +1525,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                          content_type, value_type, char_count, source, created_at,
                          conversation_id, position, sender, chunk_origin, tags, importance,
                          half_life_days, seen_count, last_seen_at, dedupe_hash, simhash,
-                         simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
+                         brick_id, source_uri, status, ingested_at, topic_cluster)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(id) DO UPDATE SET
                             content = excluded.content,
                             metadata = excluded.metadata,
@@ -1469,6 +1552,15 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             simhash_band_1 = excluded.simhash_band_1,
                             simhash_band_2 = excluded.simhash_band_2,
                             simhash_band_3 = excluded.simhash_band_3,
+                            brick_id = COALESCE(chunks.brick_id, excluded.brick_id),
+                            source_uri = COALESCE(excluded.source_uri, chunks.source_uri),
+                            status = CASE
+                                WHEN excluded.status IS NOT NULL AND excluded.status != 'active' THEN excluded.status
+                                WHEN chunks.status IS NULL THEN COALESCE(excluded.status, 'active')
+                                ELSE chunks.status
+                            END,
+                            ingested_at = COALESCE(chunks.ingested_at, excluded.ingested_at),
+                            topic_cluster = COALESCE(excluded.topic_cluster, chunks.topic_cluster),
                             chunk_origin = CASE
                                 WHEN excluded.content != chunks.content
                                     THEN COALESCE(excluded.chunk_origin, 'unknown')
@@ -1505,6 +1597,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                             dedupe_fields.bands[1],
                             dedupe_fields.bands[2],
                             dedupe_fields.bands[3],
+                            chunk.get("brick_id", chunk_id),
+                            chunk.get("source_uri") or chunk["source_file"],
+                            chunk.get("status", "active"),
+                            chunk.get("ingested_at") or int(time.time()),
+                            chunk.get("topic_cluster"),
                         ),
                     )
                     self._upsert_chunk_vector(cursor, chunk_id, embedding)
@@ -1609,7 +1706,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "UPDATE chunks SET value_type = 'ARCHIVED', archived = 1, archived_at = ? WHERE id = ?",
+            "UPDATE chunks SET value_type = 'ARCHIVED', archived = 1, archived_at = ?, status = 'archived' WHERE id = ?",
             (now, chunk_id),
         )
         self._delete_chunk_vector(cursor, chunk_id)
@@ -1629,7 +1726,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if not new_rows:
             return False
         cursor.execute(
-            "UPDATE chunks SET superseded_by = ? WHERE id = ?",
+            "UPDATE chunks SET superseded_by = ?, status = 'superseded' WHERE id = ?",
             (new_chunk_id, old_chunk_id),
         )
         self._delete_chunk_vector(cursor, old_chunk_id)
@@ -1639,19 +1736,55 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._invalidate_filtered_count_caches()
         return True
 
-    def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single chunk by ID."""
+    def get_chunk(self, chunk_id: str, *, include_archived: bool = False) -> Optional[Dict[str, Any]]:
+        """Get a single active chunk by ID.
+
+        Soft-deleted chunks are hidden by default: archived, superseded, aggregated,
+        or non-active status rows return None unless include_archived=True.
+        """
         read_conn = self._get_read_conn()
         cursor = read_conn.cursor()
         chunk_id = resolve_chunk_id(read_conn, chunk_id)
-        has_chunk_origin = getattr(self, "_has_chunk_origin", True)
-        chunk_origin_select = ", chunk_origin" if has_chunk_origin else ""
+        cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+
+        def col_or_null(name: str, alias: str | None = None) -> str:
+            output = alias or name
+            if name in cols:
+                return name
+            return f"NULL AS {output}"
+
+        archived_expr = "COALESCE(archived, 0) AS archived" if "archived" in cols else "0 AS archived"
+        status_expr = "COALESCE(status, 'active') AS status" if "status" in cols else "'active' AS status"
+        chunk_origin_expr = (
+            "chunk_origin AS chunk_origin" if "chunk_origin" in cols else f"'{CHUNK_ORIGIN_UNKNOWN}' AS chunk_origin"
+        )
+        lifecycle_clauses = []
+        if not include_archived:
+            if "superseded_by" in cols:
+                lifecycle_clauses.append("superseded_by IS NULL")
+            if "aggregated_into" in cols:
+                lifecycle_clauses.append("aggregated_into IS NULL")
+            if "archived_at" in cols:
+                lifecycle_clauses.append("archived_at IS NULL")
+            if "archived" in cols:
+                lifecycle_clauses.append("COALESCE(archived, 0) = 0")
+            if "status" in cols:
+                lifecycle_clauses.append("COALESCE(status, 'active') = 'active'")
+        lifecycle_filter = "".join(f" AND {clause}" for clause in lifecycle_clauses)
         rows = list(
             cursor.execute(
                 f"""SELECT id, content, metadata, source_file, project, content_type,
-                      value_type, tags, importance, created_at, summary,
-                      superseded_by, aggregated_into, archived_at{chunk_origin_select}
-               FROM chunks WHERE id = ?""",
+                      {col_or_null("value_type")}, {col_or_null("tags")},
+                      {col_or_null("importance")}, {col_or_null("created_at")},
+                      {col_or_null("summary")},
+                      {col_or_null("superseded_by")}, {col_or_null("aggregated_into")},
+                      {col_or_null("archived_at")}, {archived_expr}, {status_expr},
+                      {col_or_null("brick_id")}, {col_or_null("source_uri")},
+                      {col_or_null("ingested_at")}, {col_or_null("topic_cluster")},
+                      {chunk_origin_expr}
+               FROM chunks WHERE id = ?
+               {lifecycle_filter}
+            """,
                 (chunk_id,),
             )
         )
@@ -1673,7 +1806,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "superseded_by": r[11],
             "aggregated_into": r[12],
             "archived_at": r[13],
-            "chunk_origin": r[14] if has_chunk_origin else CHUNK_ORIGIN_UNKNOWN,
+            "archived": r[14],
+            "status": r[15],
+            "brick_id": r[16],
+            "source_uri": r[17],
+            "ingested_at": r[18],
+            "topic_cluster": r[19],
+            "chunk_origin": r[20],
         }
 
     def resolve_chunk_id(self, chunk_id: str) -> str:

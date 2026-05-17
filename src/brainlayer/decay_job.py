@@ -124,11 +124,23 @@ def run_decay_job(
                             WHEN (SELECT pinned FROM batch WHERE batch.rowid = chunks.rowid) = 1 THEN NULL
                             WHEN (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid) < ? THEN ?
                             ELSE NULL
+                        END,
+                        status = CASE
+                            WHEN (SELECT new_decay_score FROM batch WHERE batch.rowid = chunks.rowid) < ? THEN 'archived'
+                            ELSE status
                         END
                     WHERE rowid IN (SELECT rowid FROM batch)
                     RETURNING rowid, decay_score, archived, pinned
                     """,
-                    (current_time, current_time, *batch_rowids, ARCHIVE_THRESHOLD, ARCHIVE_THRESHOLD, current_time),
+                    (
+                        current_time,
+                        current_time,
+                        *batch_rowids,
+                        ARCHIVE_THRESHOLD,
+                        ARCHIVE_THRESHOLD,
+                        current_time,
+                        ARCHIVE_THRESHOLD,
+                    ),
                 )
             )
         rows_processed += len(updated_rows)

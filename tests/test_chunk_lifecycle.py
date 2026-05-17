@@ -89,7 +89,7 @@ class TestSupersedeChunk:
         ok = store.supersede_chunk(old["id"], new["id"])
         assert ok is True
 
-        chunk = store.get_chunk(old["id"])
+        chunk = store.get_chunk(old["id"], include_archived=True)
         assert chunk["superseded_by"] == new["id"]
 
     def test_supersede_removes_from_vector_index(self, store, mock_embed):
@@ -134,7 +134,7 @@ class TestArchiveChunkLifecycle:
         result = _store_chunk(store, mock_embed, "To be archived")
         store.archive_chunk(result["id"])
 
-        chunk = store.get_chunk(result["id"])
+        chunk = store.get_chunk(result["id"], include_archived=True)
         assert chunk["archived_at"] is not None
         assert chunk["value_type"] == "ARCHIVED"
 
@@ -142,10 +142,18 @@ class TestArchiveChunkLifecycle:
         result = _store_chunk(store, mock_embed, "Archive me")
         store.archive_chunk(result["id"])
 
-        chunk = store.get_chunk(result["id"])
+        chunk = store.get_chunk(result["id"], include_archived=True)
         # Should parse as ISO 8601
         dt = datetime.fromisoformat(chunk["archived_at"])
         assert dt.year >= 2026
+
+    def test_get_chunk_excludes_archived_status_by_default(self, store, mock_embed):
+        result = _store_chunk(store, mock_embed, "Archived get_chunk hidden")
+        assert store.get_chunk(result["id"]) is not None
+
+        store.archive_chunk(result["id"])
+
+        assert store.get_chunk(result["id"]) is None
 
 
 # ── Search Filtering Tests ───────────────────────────────────────────────────
@@ -343,7 +351,7 @@ class TestStoreWithSupersedes:
         assert structured["superseded"] == old["id"]
 
         # Old chunk should be superseded
-        old_chunk = self.store.get_chunk(old["id"])
+        old_chunk = self.store.get_chunk(old["id"], include_archived=True)
         assert old_chunk["superseded_by"] is not None
 
     @pytest.mark.asyncio
