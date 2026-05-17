@@ -150,7 +150,7 @@ Requires the BrainLayer MCP server. The build script refuses non-canonical check
 
 Background producers run with `BRAINLAYER_ARBITRATED=1` and append writes to `~/.brainlayer/queue/`; `com.brainlayer.drain.plist` drains that queue every 500ms as the single writer. Trigram FTS maintenance is explicit via `brainlayer repair-fts` and the weekly `com.brainlayer.repair-fts.plist`, not synchronous startup work. See [docs/arbitration.md](docs/arbitration.md).
 
-## Recent Hardening (2026-04-15 → 2026-05-02)
+## Recent Hardening (2026-04-15 → 2026-05-17)
 
 Two-week stability sprint behind the next presentation. Every line below traces to a merged PR.
 
@@ -186,7 +186,10 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - KG atlas presentation (importance-based altitude filtering, region backdrops, deterministic seeding) and `AgentActivityMonitor` for live CLI presence on the dashboard.
 - Pub/sub plane on `/tmp/brainbar.sock` is explicitly preserved (`brain_subscribe`, `brain_unsubscribe`, `notifications/claude/channel`) — only search/store handlers move to the Python MCP path.
 
-
+**Phase 5 ship wave (2026-05-17)** — ingest hygiene + KG regression fix
+- **Diagnostic + PreCompact noise rejection at ingest** ([#289](https://github.com/EtanHey/brainlayer/pull/289)) — `recursive_mcp_output_reason` now detects BrainLayer-MCP-unavailable diagnostics and PreCompact checkpoint payloads, rejecting them at the watcher / drain / store ingestion heads so tooling failures do not become durable memory. The hybrid reranker *demotes* (not removes) any chunk tagged with precompact/quarantine signals so explicit `include_checkpoints` callers still see them. Pre-push gate: `1995 passed, 9 skipped, 75 deselected, 1 xfailed`. A dry-run-first `scripts/quarantine_noise.py` is available for back-filling existing infra noise — live DB mutation requires explicit `--apply`.
+- **Persist digest LLM entities** ([#290](https://github.com/EtanHey/brainlayer/pull/290)) — fixes a KG persistence regression where `brain_digest` silently skipped Gemini entity extraction because `process_chunk` passed `use_llm=llm_caller is not None` and the MCP/CLI path never sets `llm_caller`. Non-seed person entities were never materialized into `kg_entities` / `kg_entity_chunks`. The 2026-04-06 entity-recall recurrence root-caused to this code path. RED-first regression test (`test_digest_content_persists_llm_people_entities_for_lookup`) now guards the fix.
+- **Enrichment LaunchAgent recovered** — `com.brainlayer.enrichment` was silently unloaded since 2026-05-15 11:50 IDT (no entity extraction running). Bootstrapped back on 2026-05-17 against the 56K-chunk backfill; throttled by Gemini 503s on flex tier but actively draining (verified via `launchctl list | grep enrichment` returning a live PID).
 
 ## Data Sources
 
