@@ -926,6 +926,54 @@ def test_apply_enrichment_persists_raw_entities():
     assert row == (json.dumps(entities),)
 
 
+def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
+    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "apply-promotion.db")
+    try:
+        tag = "michal-hershkovits-identification"
+        cursor = store.conn.cursor()
+        cursor.execute(
+            """INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                char_count, source, raw_entities_json, tags
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text',
+                      ?, 'test', ?, ?)""",
+            (
+                "existing",
+                "Michal Hershkovits coached Etan.",
+                len("Michal Hershkovits coached Etan."),
+                json.dumps([{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}]),
+                json.dumps([tag]),
+            ),
+        )
+        cursor.execute("INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)", ("existing", tag))
+        cursor.execute(
+            """INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                char_count, source, tags
+            ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text',
+                      ?, 'test', ?)""",
+            ("new", "היי מיכל", len("היי מיכל"), json.dumps([tag])),
+        )
+        cursor.execute("INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)", ("new", tag))
+
+        _apply_enrichment(
+            store,
+            _candidate("new", "היי מיכל"),
+            {"summary": "s", "entities": [{"name": "מיכל", "type": "person", "relation": "recipient"}]},
+        )
+
+        entity = store.resolve_entity("Michal Hershkovits")
+        assert entity is not None
+        hebrew_entity = store.resolve_entity("מיכל")
+        assert hebrew_entity is not None
+        assert hebrew_entity["id"] == entity["id"]
+    finally:
+        store.close()
+
+
 # ── Telemetry tests ──────────────────────────────────────────────────────────
 
 
