@@ -255,7 +255,7 @@ def test_update_chunk_recomputes_dedupe_fingerprints_when_content_changes(tmp_pa
     assert row == (expected.dedupe_hash, expected.simhash, *expected.bands)
 
 
-def test_watcher_and_drain_tag_precompact_origin(tmp_path, monkeypatch):
+def test_watcher_and_drain_reject_precompact_checkpoint_noise(tmp_path, monkeypatch):
     db_path = tmp_path / "watcher.db"
     source_file = tmp_path / "session.jsonl"
     source_file.write_text(
@@ -296,8 +296,8 @@ def test_watcher_and_drain_tag_precompact_origin(tmp_path, monkeypatch):
     queued = store.conn.cursor().execute("SELECT chunk_origin FROM chunks WHERE id = 'queued-checkpoint'").fetchone()
     store.close()
 
-    assert row == (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,)
-    assert queued == (CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,)
+    assert row is None
+    assert queued is None
 
 
 def test_search_excludes_checkpoints_by_default_and_can_include_them(tmp_path):

@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import struct
 import time
 from collections import OrderedDict
@@ -42,6 +43,21 @@ META_NOISE_PATTERNS = [
     "Grounding Results — Prompt",
 ]
 META_NOISE_PATTERNS_CASEFOLDED = [pattern.casefold() for pattern in META_NOISE_PATTERNS]
+_ALNUM_ONLY_RE = re.compile(r"[^a-z0-9]+")
+_PRECOMPACT_TAG_MARKERS = frozenset(
+    {
+        "precompact",
+        "precompactcheckpoint",
+    }
+)
+_QUARANTINE_TAG_MARKERS = frozenset({"quarantine", "quarantined"})
+_NOISE_CONTENT_PATTERNS = (
+    "[precompact checkpoint]",
+    "# precompact checkpoint",
+    "session-restore",
+    "# session-restore",
+)
+_NOISE_RERANK_DEMOTION = 0.05
 AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} = 'audit'",
     "{tag_expr} = 'audit-recursion'",
@@ -132,6 +148,84 @@ def _contains_meta_noise(content: Optional[str]) -> bool:
         return False
     content_folded = content.casefold()
     return any(pattern in content_folded for pattern in META_NOISE_PATTERNS_CASEFOLDED)
+
+
+def _is_noise_tag(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = _ALNUM_ONLY_RE.sub("", value.casefold())
+    return (
+        normalized in _PRECOMPACT_TAG_MARKERS
+        or normalized in _QUARANTINE_TAG_MARKERS
+    )
+
+
+def _contains_precompact_or_quarantined_meta(
+    meta: dict[str, Any],
+    content: str | None = None,
+    *,
+    include_checkpoints: bool = False,
+) -> bool:
+    if meta is None:
+        return False
+
+    has_precompact_signal = is_precompact_checkpoint_content(content)
+    has_quarantine_signal = False
+
+    tags = meta.get("tags", [])
+    if isinstance(tags, list):
+        for tag in tags:
+            if _is_noise_tag(tag):
+                normalized = _ALNUM_ONLY_RE.sub("", tag.casefold())
+                if normalized in _QUARANTINE_TAG_MARKERS:
+                    has_quarantine_signal = True
+                else:
+                    has_precompact_signal = True
+    elif isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+        except (json.JSONDecodeError, TypeError):
+            parsed = []
+        if isinstance(parsed, list):
+            for tag in parsed:
+                if _is_noise_tag(tag):
+                    normalized = _ALNUM_ONLY_RE.sub("", tag.casefold())
+                    if normalized in _QUARANTINE_TAG_MARKERS:
+                        has_quarantine_signal = True
+                    else:
+                        has_precompact_signal = True
+
+    for key in ("quarantine", "quarantined", "is_quarantine", "is_quarantined"):
+        value = meta.get(key)
+        if isinstance(value, bool):
+            if value:
+                has_quarantine_signal = True
+        elif isinstance(value, (int, float)):
+            if bool(value):
+                has_quarantine_signal = True
+        elif isinstance(value, str):
+            if value.casefold() in {"true", "1", "yes", "quarantine", "quarantined"}:
+                has_quarantine_signal = True
+
+    for key, value in meta.items():
+        if isinstance(key, str) and _is_noise_tag(key):
+            normalized = _ALNUM_ONLY_RE.sub("", key.casefold())
+            if normalized in _QUARANTINE_TAG_MARKERS:
+                has_quarantine_signal = True
+            else:
+                has_precompact_signal = True
+        if isinstance(value, str) and _is_noise_tag(value):
+            normalized = _ALNUM_ONLY_RE.sub("", value.casefold())
+            if normalized in _QUARANTINE_TAG_MARKERS:
+                has_quarantine_signal = True
+            else:
+                has_precompact_signal = True
+
+    normalized_content = content.casefold() if content else ""
+    if any(pattern in normalized_content for pattern in _NOISE_CONTENT_PATTERNS):
+        has_precompact_signal = True
+
+    return has_quarantine_signal or (has_precompact_signal and not include_checkpoints)
 
 
 def _audit_recursion_tag_predicate(tag_expr: str) -> str:
@@ -1518,6 +1612,12 @@ class SearchMixin:
                             scored[i] = (score * KG_BOOST_FACTOR, cid, doc, meta, dist)
             except Exception:
                 pass  # KG tables may not exist in all DBs
+
+        # Penalize literal pre-compact or quarantined signals after all positive boosts.
+        # This keeps them discoverable but deprioritizes them in normal ranking.
+        for i, (score, cid, doc, meta, dist) in enumerate(scored):
+            if _contains_precompact_or_quarantined_meta(meta, doc, include_checkpoints=include_checkpoints):
+                scored[i] = (score * _NOISE_RERANK_DEMOTION, cid, doc, meta, dist)
 
         # Sort by boosted RRF score descending
         scored.sort(key=lambda x: x[0], reverse=True)

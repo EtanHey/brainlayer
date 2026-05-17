@@ -165,6 +165,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         content,
         chunk_id=chunk_id,
         source_file=event.get("source_file"),
+        reject_precompact=True,
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP store event: %s", recursive_reason)
@@ -255,7 +256,12 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
         logger.warning("Skipping malformed watcher event with empty content")
         return
     source_file = event.get("source_file") or "realtime-watcher"
-    recursive_reason = recursive_mcp_output_reason(content, chunk_id=chunk_id, source_file=source_file)
+    recursive_reason = recursive_mcp_output_reason(
+        content,
+        chunk_id=chunk_id,
+        source_file=source_file,
+        reject_precompact=True,
+    )
     if recursive_reason:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
         return
@@ -294,7 +300,12 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     session_id = event.get("session_id") or "unknown"
     chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{content_hash}"
     source_file = event.get("source_file") or "realtime-hook"
-    recursive_reason = recursive_mcp_output_reason(content, chunk_id=chunk_id, source_file=source_file)
+    recursive_reason = recursive_mcp_output_reason(
+        content,
+        chunk_id=chunk_id,
+        source_file=source_file,
+        reject_precompact=True,
+    )
     if recursive_reason:
         logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
         return

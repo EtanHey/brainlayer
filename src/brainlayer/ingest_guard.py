@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .chunk_origin import is_precompact_checkpoint_content
+
 _JSONRPC_MESSAGE_RE = re.compile(r'"jsonrpc"\s*:\s*"2\.0"', re.IGNORECASE)
 _INVALID_JSONRPC_MARKER = "mcp brainlayer memory: invalid json-rpc message"
 _BRAIN_SEARCH_BOX_PREFIX = "┌─ brain_search:"
@@ -23,6 +25,18 @@ _QID_JUDGE_NOTE_MARKERS = (
     *_STRONG_JUDGE_NOTE_MARKERS,
     "fm11",
 )
+_F_INFRA_NOISE_PREFIXES = (
+    "brainlayer mcp not connected",
+    "brainlayer mcp is down",
+    "brainlayer mcp tools are not callable",
+    "brainlayer unavailable",
+    "mcp__brainlayer__brain_search is not available",
+    "i can't call `brain_search` or `brain_store` directly",
+    "i cannot brain_store",
+    'toolsearch found zero matches for "mcp brain"',
+)
+_F_INFRA_MAX_PREFIX_CHARS = 500
+_ASSISTANT_PREFIX_RE = re.compile(r"^assistant\s*:\s*", re.IGNORECASE)
 
 
 def _looks_like_rt_agent_judge_notes(content: str, chunk_id: str | None = None, source_file: str | None = None) -> bool:
@@ -43,11 +57,27 @@ def _looks_like_rt_agent_judge_notes(content: str, chunk_id: str | None = None, 
     return has_rt_agent_context and has_strong_judge_marker
 
 
+def _looks_like_brainlayer_infra_noise(content: str) -> bool:
+    if not content:
+        return False
+
+    stripped = content.lstrip()
+    stripped = _ASSISTANT_PREFIX_RE.sub("", stripped, count=1)
+    stripped = re.sub(r"^[^A-Za-z0-9]+", "", stripped)
+    stripped = stripped[:_F_INFRA_MAX_PREFIX_CHARS].casefold()
+
+    return any(
+        re.match(rf"^(?:{re.escape(prefix)})(?:$|[^a-z0-9])", stripped)
+        for prefix in _F_INFRA_NOISE_PREFIXES
+    )
+
+
 def recursive_mcp_output_reason(
     content: str | None,
     *,
     chunk_id: str | None = None,
     source_file: str | None = None,
+    reject_precompact: bool = False,
 ) -> str | None:
     """Return a reason when content is BrainLayer MCP output being re-ingested."""
     if not content:
@@ -62,6 +92,10 @@ def recursive_mcp_output_reason(
     folded = stripped.casefold()
     if _INVALID_JSONRPC_MARKER in folded:
         return "invalid_jsonrpc_mcp_output"
+    if _looks_like_brainlayer_infra_noise(stripped):
+        return "brainlayer_mcp_unavailable_diagnostic"
+    if reject_precompact and is_precompact_checkpoint_content(stripped):
+        return "precompact_checkpoint_noise"
     if _JSONRPC_MESSAGE_RE.search(stripped):
         return "jsonrpc_message"
     if _looks_like_rt_agent_judge_notes(stripped, chunk_id=chunk_id, source_file=source_file):
@@ -75,8 +109,14 @@ def reject_recursive_mcp_output(
     *,
     chunk_id: str | None = None,
     source_file: str | None = None,
+    reject_precompact: bool = False,
 ) -> None:
     """Raise ValueError when content is recursive BrainLayer MCP output."""
-    reason = recursive_mcp_output_reason(content, chunk_id=chunk_id, source_file=source_file)
+    reason = recursive_mcp_output_reason(
+        content,
+        chunk_id=chunk_id,
+        source_file=source_file,
+        reject_precompact=reject_precompact,
+    )
     if reason:
         raise ValueError(f"recursive MCP output is not stored in BrainLayer: {reason}")
