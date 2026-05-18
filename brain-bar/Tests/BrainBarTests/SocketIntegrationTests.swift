@@ -151,6 +151,38 @@ final class SocketIntegrationTests: XCTestCase {
         }
     }
 
+    func testWatchBrainBusStreamsStoreEventsOverRawUnixSocket() throws {
+        let watchFD = try connectClient()
+        defer { close(watchFD) }
+
+        try sendRawLineJSON(on: watchFD, object: [
+            "jsonrpc": "2.0",
+            "id": 50,
+            "method": "watch-brain-bus",
+        ])
+        _ = try readBrainBusEvent(fd: watchFD, matching: "health_tick")
+
+        let storeResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 51,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Brain bus stream integration",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(storeResponse["error"])
+
+        let event = try readBrainBusEvent(fd: watchFD, matching: "last_chunk_id")
+        XCTAssertEqual(event["method"] as? String, "notifications/brain-bus")
+        let params = try XCTUnwrap(event["params"] as? [String: Any])
+        XCTAssertEqual(params["type"] as? String, "last_chunk_id")
+        XCTAssertFalse((params["last_chunk_id"] as? String ?? "").isEmpty)
+    }
+
     // MARK: - MCP tools/call brain_search over socket
 
     func testMCPBrainSearchOverSocket() throws {
@@ -887,6 +919,35 @@ final class SocketIntegrationTests: XCTestCase {
         }
 
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading raw line response"])
+    }
+
+    private func readBrainBusEvent(fd: Int32, matching type: String, timeout: TimeInterval = 5.0) throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var buffer = Data()
+        var readBuf = [UInt8](repeating: 0, count: 65536)
+        while Date() < deadline {
+            while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                let line = Data(buffer[..<newlineIndex])
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                guard !line.isEmpty else { continue }
+                let message = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+                let params = message["params"] as? [String: Any]
+                if params?["type"] as? String == type {
+                    return message
+                }
+            }
+
+            let n = read(fd, &readBuf, readBuf.count)
+            if n > 0 {
+                buffer.append(contentsOf: readBuf[0..<n])
+            } else if n == 0 {
+                break
+            } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        throw NSError(domain: "test", code: 6, userInfo: [NSLocalizedDescriptionKey: "Timeout reading brain bus event \(type)"])
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {

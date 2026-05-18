@@ -101,6 +101,8 @@ final class BrainBarServer: @unchecked Sendable {
     private var hybridSearchHelperClient: HybridSearchHelperClient?
     private let providedHybridSearchClient: HybridSearchClientProtocol?
     private let enableHybridSearchHelper: Bool
+    private let brainBus = BrainBusEventHub()
+    private var brainBusQueueDepthEstimate = 0
     private var databaseRetryWorkItem: DispatchWorkItem?
     private var lastDatabaseRetryDelayMillis: UInt64?
     private var databaseOpenInProgress = false
@@ -108,8 +110,9 @@ final class BrainBarServer: @unchecked Sendable {
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
-    /// Each retry sleeps 1ms, so 10 retries = 10ms max blocking the serial queue.
-    static let maxWriteRetries = 10
+    /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
+    /// below the UI budget while still bounding serial-queue stalls.
+    static let maxWriteRetries = 50
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -138,6 +141,7 @@ final class BrainBarServer: @unchecked Sendable {
         var usesContentLengthFraming: Bool = true
         var agentID: String?
         var subscribedTags: Set<String> = []
+        var brainBusSubscriptionID: BrainBusEventHub.SubscriptionID?
     }
 
     init(
@@ -338,6 +342,9 @@ final class BrainBarServer: @unchecked Sendable {
             database = db
             router.setDatabase(db)
             onDatabaseReady?(db)
+            brainBus.publish(.dbBusy(false))
+            brainBus.publish(.queueDepth(brainBusQueueDepthEstimate))
+            brainBus.publish(.enrichStatus("idle"))
             NSLog("[BrainBar] Database ready (%@)", dbPath)
             return
         }
@@ -346,6 +353,7 @@ final class BrainBarServer: @unchecked Sendable {
             db.close()
         }
         NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
+        brainBus.publish(.dbBusy(true))
         scheduleDatabaseRetry(lastError: db.lastOpenError)
     }
 
@@ -417,6 +425,7 @@ final class BrainBarServer: @unchecked Sendable {
         if !messages.isEmpty {
             state.usesContentLengthFraming = state.framing.lastExtractUsedContentLength
         }
+        clients[fd] = state
         debugLog("EXTRACTED \(messages.count) messages from fd=\(fd) (framing=\(state.usesContentLengthFraming ? "content-length" : "newline-json"), buffer remaining: \(state.framing.bufferCount) bytes)")
         for msg in messages {
             let method = msg["method"] as? String ?? "<no method>"
@@ -454,11 +463,16 @@ final class BrainBarServer: @unchecked Sendable {
                 if toolCall.name == "brain_store", !isToolError(response) {
                     publishStoredChunks(response: response, arguments: toolCall.arguments)
                 }
+                if toolCall.name == "brain_enrich", !isToolError(response) {
+                    brainBus.publish(.enrichStatus("running"))
+                }
                 return response
             }
         }
         if let method = request["method"] as? String {
             switch method {
+            case "watch-brain-bus":
+                return handleWatchBrainBus(fd: fd)
             default:
                 break
             }
@@ -511,6 +525,74 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private func writeFramedData(fd: Int32, data: Data) -> Bool {
+        data.withUnsafeBytes { ptr in
+            var totalWritten = 0
+            var eagainRetries = 0
+            while totalWritten < data.count {
+                let n = write(fd, ptr.baseAddress!.advanced(by: totalWritten), data.count - totalWritten)
+                if n < 0 {
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        eagainRetries += 1
+                        if eagainRetries > Self.maxWriteRetries {
+                            return false
+                        }
+                        usleep(1000)
+                        continue
+                    }
+                    return false
+                }
+                if n == 0 {
+                    return false
+                }
+                totalWritten += n
+                eagainRetries = 0
+            }
+            return true
+        }
+    }
+
+    private func handleWatchBrainBus(fd: Int32) -> [String: Any] {
+        guard var client = clients[fd] else { return [:] }
+        if let existing = client.brainBusSubscriptionID {
+            brainBus.unsubscribe(existing)
+        }
+
+        let useContentLength = client.usesContentLengthFraming
+        let subscription = brainBus.subscribe { [weak self] event in
+            guard let self else { return false }
+            guard let response = self.brainBusNotification(event: event) else { return true }
+            let framed: Data
+            do {
+                if useContentLength {
+                    framed = try MCPFraming.encode(response)
+                } else {
+                    var data = try MCPFraming.encodeJSONResponse(response)
+                    data.append(0x0A)
+                    framed = data
+                }
+            } catch {
+                return true
+            }
+
+            let delivered = self.writeFramedData(fd: fd, data: framed)
+            if !delivered {
+                self.queue.async { [weak self] in
+                    self?.disconnectClient(fd: fd)
+                }
+            }
+            return delivered
+        }
+
+        client.brainBusSubscriptionID = subscription
+        clients[fd] = client
+        brainBus.publish(.dbBusy(database == nil))
+        brainBus.publish(.queueDepth(brainBusQueueDepthEstimate))
+        brainBus.publish(.enrichStatus("idle"))
+        brainBus.publish(.healthTick(openConnections: clients.count))
+        return [:]
+    }
+
     private static let claudeExtensionRawChunkLimit = 8192
 
     private static func encodeRawJSONResponse(_ response: [String: Any]) -> Data? {
@@ -545,6 +627,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func disconnectClient(fd: Int32) {
+        if let subscriptionID = clients[fd]?.brainBusSubscriptionID {
+            brainBus.unsubscribe(subscriptionID)
+        }
         if let agentID = clients[fd]?.agentID {
             try? database?.markSubscriberDisconnected(agentID: agentID)
         }
@@ -761,6 +846,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func publishStoredChunk(stored: StoreResultPayload, content: String, tags: [String], importance: Int) {
+        brainBusQueueDepthEstimate += 1
+        brainBus.publish(.queueDepth(brainBusQueueDepthEstimate))
+        brainBus.publish(.lastChunkID(stored.chunkID))
         guard !tags.isEmpty else { return }
         let tagSet = Set(tags)
         for (clientFD, client) in Array(clients) {
@@ -857,5 +945,14 @@ final class BrainBarServer: @unchecked Sendable {
             return nil
         }
         return object
+    }
+
+    private func brainBusNotification(event: BrainBusEvent) -> [String: Any]? {
+        guard let params = jsonObject(event) else { return nil }
+        return [
+            "jsonrpc": "2.0",
+            "method": "notifications/brain-bus",
+            "params": params
+        ]
     }
 }

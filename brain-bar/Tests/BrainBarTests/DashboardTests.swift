@@ -255,6 +255,24 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
+    @MainActor
+    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        let startedAt = DispatchTime.now()
+        collector.start()
+        let elapsedMillis = Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000
+
+        XCTAssertEqual(eventSource.streamRequestCount, 1)
+        XCTAssertLessThan(elapsedMillis, 100)
+    }
+
     func testPipelineStateTreatsMissingDaemonSnapshotAsDegraded() {
         let stats = DashboardStats(
             chunkCount: 10,
@@ -385,5 +403,21 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(viewController.isViewLoaded)
         _ = viewController.view
         XCTAssertTrue(viewController.isViewLoaded)
+    }
+}
+
+private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+
+    var streamRequestCount: Int {
+        lock.withLock { requests }
+    }
+
+    func events() -> AsyncStream<BrainBusEvent> {
+        lock.withLock {
+            requests += 1
+        }
+        return AsyncStream { _ in }
     }
 }
