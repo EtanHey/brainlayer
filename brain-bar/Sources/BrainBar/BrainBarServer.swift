@@ -98,6 +98,9 @@ final class BrainBarServer: @unchecked Sendable {
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    private var hybridSearchHelperClient: HybridSearchHelperClient?
+    private let providedHybridSearchClient: HybridSearchClientProtocol?
+    private let enableHybridSearchHelper: Bool
     private var databaseRetryWorkItem: DispatchWorkItem?
     private var lastDatabaseRetryDelayMillis: UInt64?
     private var databaseOpenInProgress = false
@@ -141,12 +144,16 @@ final class BrainBarServer: @unchecked Sendable {
         socketPath: String? = nil,
         dbPath: String? = nil,
         database: BrainDatabase? = nil,
+        hybridSearchClient: HybridSearchClientProtocol? = nil,
+        enableHybridSearchHelper: Bool = true,
         databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
         instanceLockPath: String? = nil
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
         providedDatabase = database
+        providedHybridSearchClient = hybridSearchClient
+        self.enableHybridSearchHelper = enableHybridSearchHelper
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
     }
@@ -197,9 +204,21 @@ final class BrainBarServer: @unchecked Sendable {
             return
         }
 
+        let hybridClient: HybridSearchClientProtocol?
+        if let providedHybridSearchClient {
+            hybridClient = providedHybridSearchClient
+        } else if providedDatabase == nil && enableHybridSearchHelper {
+            let client = HybridSearchHelperClient(dbPath: dbPath)
+            client.start()
+            hybridSearchHelperClient = client
+            hybridClient = client
+        } else {
+            hybridClient = nil
+        }
+
         // 1. Create router FIRST (no DB dependency).
         //    initialize + tools/list work without a database.
-        router = MCPRouter()
+        router = MCPRouter(hybridSearchClient: hybridClient)
 
         // 2. Bind socket BEFORE database init.
         //    After a restart the socket must exist before Claude Code tries
@@ -542,6 +561,8 @@ final class BrainBarServer: @unchecked Sendable {
             database?.close()
         }
         database = nil
+        hybridSearchHelperClient?.stop()
+        hybridSearchHelperClient = nil
         databaseOpenInProgress = false
         instanceLock?.release()
         instanceLock = nil

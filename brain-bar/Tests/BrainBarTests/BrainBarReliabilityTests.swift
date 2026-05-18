@@ -56,6 +56,7 @@ final class BrainBarReliabilityTests: XCTestCase {
         let server = BrainBarServer(
             socketPath: socketPath,
             dbPath: dbPath,
+            enableHybridSearchHelper: false,
             databaseRecoveryPolicy: .init(
                 busyTimeoutMillis: 1_000,
                 initialRetryDelayMillis: 25,
