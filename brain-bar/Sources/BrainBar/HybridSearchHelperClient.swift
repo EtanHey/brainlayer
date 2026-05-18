@@ -17,12 +17,14 @@ protocol HybridSearchClientProtocol: AnyObject, Sendable {
 final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sendable {
     private static let maxResponseBytes = 10 * 1024 * 1024
     private static let defaultSocketIOTimeout: TimeInterval = 60
+    private static let queueKey = DispatchSpecificKey<UUID>()
     private let socketPath: String
     private let dbPath: String
     private let pythonExecutable: String
     private let environment: [String: String]
     private let socketIOTimeout: TimeInterval
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.hybrid-helper")
+    private let queueID = UUID()
     private var process: Process?
 
     init(
@@ -37,6 +39,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         self.pythonExecutable = pythonExecutable ?? Self.resolvePythonExecutable(environment: environment)
         self.environment = environment
         self.socketIOTimeout = socketIOTimeout
+        queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
     deinit {
@@ -105,17 +108,26 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         return nil
     }
 
-    func start() {
-        queue.sync {
-            do {
-                try startLocked()
-            } catch {
-                NSLog("[BrainBar] Hybrid search helper startup deferred after failure: %@", String(describing: error))
-            }
+    var isRunning: Bool {
+        if DispatchQueue.getSpecific(key: Self.queueKey) == queueID {
+            return process?.isRunning == true
+        }
+        return queue.sync {
+            process?.isRunning == true
+        }
+    }
+
+    func start() throws {
+        try queue.sync {
+            try startLocked()
         }
     }
 
     func stop() {
+        if DispatchQueue.getSpecific(key: Self.queueKey) == queueID {
+            stopLocked()
+            return
+        }
         queue.sync {
             stopLocked()
         }
@@ -136,7 +148,10 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
     }
 
     private func stopLocked() {
-        process?.terminate()
+        if let process, process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
         process = nil
         unlink(socketPath)
     }
@@ -313,9 +328,12 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
     private func readLine(fd: Int32) throws -> Data {
         var result = Data()
-        var byte = UInt8(0)
+        let bufferSize = 8192
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
         while true {
-            let count = read(fd, &byte, 1)
+            let count = buffer.withUnsafeMutableBytes { rawBuffer in
+                read(fd, rawBuffer.baseAddress, bufferSize)
+            }
             if count < 0 {
                 if errno == EINTR { continue }
                 throw HybridSearchHelperError.read(errno)
@@ -323,12 +341,18 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             if count == 0 {
                 break
             }
-            if byte == 0x0A {
-                break
+
+            let chunk = buffer[..<count]
+            let newlineIndex = chunk.firstIndex(of: 0x0A)
+            let endIndex = newlineIndex ?? count
+            if endIndex > 0 {
+                if result.count + endIndex > Self.maxResponseBytes {
+                    throw HybridSearchHelperError.responseTooLarge(Self.maxResponseBytes)
+                }
+                result.append(contentsOf: buffer[..<endIndex])
             }
-            result.append(byte)
-            if result.count > Self.maxResponseBytes {
-                throw HybridSearchHelperError.responseTooLarge(Self.maxResponseBytes)
+            if newlineIndex != nil {
+                break
             }
         }
         guard !result.isEmpty else {

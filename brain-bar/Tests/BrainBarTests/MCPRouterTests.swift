@@ -314,7 +314,11 @@ final class MCPRouterTests: XCTestCase {
 │  brainlayer       │ Michal speakers workshop manual chunk
 └─
 """#,
-                metadata: ["structuredContent": ["query": "techgym speakers workshop"]]
+                metadata: [
+                    "content": "helper must not overwrite MCP content",
+                    "isError": true,
+                    "structuredContent": ["query": "techgym speakers workshop"]
+                ]
             )
         )
         let router = MCPRouter(hybridSearchClient: helper)
@@ -353,6 +357,8 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(helper.requests.first?["importance_min"] as? Double, 8)
         XCTAssertEqual(helper.requests.first?["detail"] as? String, "compact")
         XCTAssertNotNil(result["structuredContent"])
+        XCTAssertNil(result["isError"], "Hybrid helper metadata must not overwrite reserved MCP result keys.")
+        XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
     }
 
     func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
