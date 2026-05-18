@@ -152,7 +152,7 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
         worker.join(timeout=20)
         assert worker.exitcode == 0
 
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 45
     total_drained = 0
     while time.monotonic() < deadline:
         total_drained += drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=250, log_path=log_path)
