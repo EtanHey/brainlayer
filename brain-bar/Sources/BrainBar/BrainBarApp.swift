@@ -7,6 +7,19 @@ enum BrainBarAppSupport {
     static func hotkeyPermissionFailureMessage(permissions: HotkeyPermissionStatus) -> String {
         "BrainBar could not start the fallback hotkey listener. Enable \(permissions.missingPermissionsMessage) in System Settings. The CGEventTap fallback requires both Input Monitoring and Accessibility."
     }
+
+    @MainActor
+    static func makeStatsCollector(
+        dbPath: String,
+        targetPID: pid_t,
+        brainBusEvents: BrainBusEventSource? = BrainBusClient()
+    ) -> StatsCollector {
+        StatsCollector(
+            dbPath: dbPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
+            brainBusEvents: brainBusEvents
+        )
+    }
 }
 
 @MainActor
@@ -15,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let menuBarWindowAutosaveKey = "NSWindow Frame BrainBarMenuBarExtraWindow"
 
     private var server: BrainBarServer?
+    private var statusPopoverController: BrainBarStatusPopoverController?
     private var legacyStatusItem: NSStatusItem?
     private var legacyPopover: NSPopover?
     private var collector: StatsCollector?
@@ -47,11 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startHotkeyFileWatcher()
 
-        if launchMode == .menuBarWindow {
-            UserDefaults.standard.removeObject(forKey: Self.menuBarWindowAutosaveKey)
-            dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
-        }
-
         let runningInstances = NSRunningApplication.runningApplications(
             withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brainlayer.BrainBar"
         )
@@ -69,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.configureQuickCaptureHotkey()
         }
 
-        if launchMode == .legacyStatusItem {
+        if launchMode == .menuBarWindow {
+            statusPopoverController = BrainBarStatusPopoverController(runtime: runtime)
+        } else if launchMode == .legacyStatusItem {
             createLegacyStatusItem()
         }
 
@@ -88,9 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.sharedDatabase = database
                 self.configureQuickCapture(database: database)
                 self.runtime.install(
-                    collector: self.collector ?? StatsCollector(
+                    collector: self.collector ?? BrainBarAppSupport.makeStatsCollector(
                         dbPath: dbPath,
-                        daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+                        targetPID: ProcessInfo.processInfo.processIdentifier,
                         brainBusEvents: BrainBusClient()
                     ),
                     injectionStore: self.injectionStore,
@@ -100,9 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let collector = StatsCollector(
+        let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: dbPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            targetPID: ProcessInfo.processInfo.processIdentifier,
             brainBusEvents: BrainBusClient()
         )
         let injectionStore = try? InjectionStore(databasePath: dbPath)
@@ -125,6 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         menuBarWindowObservers.forEach(NotificationCenter.default.removeObserver)
         menuBarWindowObservers.removeAll()
+        statusPopoverController?.stop()
+        statusPopoverController = nil
         menuBarWindowSyncTask?.cancel()
         menuBarWindowSyncTask = nil
         hotkeyFileWatcher?.cancel()
@@ -149,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         runtime.presentQuickAction(.search)
-        showMenuBarWindow(nil)
+        statusPopoverController?.show(nil)
     }
 
     func showQuickCapturePanel() {
@@ -159,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         runtime.presentQuickAction(.capture)
-        showMenuBarWindow(nil)
+        statusPopoverController?.show(nil)
     }
 
     private func configureRuntimeCallbacks() {
@@ -238,6 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if launchMode == .menuBarWindow, let statusPopoverController {
+            statusPopoverController.toggle(sender)
+            return
+        }
+
         if let dashboardPanel {
             dashboardPanel.toggle()
             return
@@ -286,10 +304,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if let statusPopoverController {
+            statusPopoverController.show(nil)
+            return
+        }
+
         dashboardPanel?.show()
     }
 
     private func showMenuBarWindow(_ sender: Any?) {
+        if launchMode == .menuBarWindow, let statusPopoverController {
+            statusPopoverController.show(sender)
+            return
+        }
+
         if launchMode == .menuBarWindow, let dashboardPanel {
             dashboardPanel.show()
             return
@@ -861,26 +889,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    private let launchMode = BrainBarLaunchMode.resolve()
 
     var body: some Scene {
-        MenuBarExtra(isInserted: .constant(launchMode == .menuBarWindow)) {
-            Button("Open Dashboard") {
-                appDelegate.showDashboardPanel()
-            }
-
-            Button("Search BrainLayer") {
-                appDelegate.showSearchPanel()
-            }
-
-            Button("Capture Note") {
-                appDelegate.showQuickCapturePanel()
-            }
-        } label: {
-            BrainBarMenuBarLabel(runtime: appDelegate.runtime)
-        }
-        .menuBarExtraStyle(.menu)
-
         Settings {
             EmptyView()
         }
@@ -899,30 +909,6 @@ struct BrainBarApp: App {
                     appDelegate.showQuickCapturePanel()
                 }
             }
-        }
-    }
-}
-
-private struct BrainBarMenuBarLabel: View {
-    @ObservedObject var runtime: BrainBarRuntime
-
-    var body: some View {
-        if let collector = runtime.collector {
-            let livePresentation = BrainBarLivePresentation.derive(stats: collector.stats)
-            HStack(spacing: 6) {
-                Image(systemName: "brain")
-                Image(
-                    nsImage: SparklineRenderer.render(
-                        state: collector.state,
-                        values: collector.stats.recentEnrichmentBuckets,
-                        size: NSSize(width: 22, height: 12),
-                        accentColor: livePresentation.accentColor
-                    )
-                )
-                .interpolation(.high)
-            }
-        } else {
-            Image(systemName: "brain")
         }
     }
 }
