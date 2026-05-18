@@ -65,4 +65,24 @@ final class HybridSearchHelperClientTests: XCTestCase {
             }
         }
     }
+
+    func testConfigureSocketTimeoutsMakesReadsFinite() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0)
+        defer {
+            close(fds[0])
+            close(fds[1])
+        }
+
+        try HybridSearchHelperClient.configureSocketTimeouts(fd: fds[0], timeout: 0.05)
+
+        var byte = UInt8(0)
+        let startedAt = Date()
+        let count = read(fds[0], &byte, 1)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertEqual(count, -1)
+        XCTAssertTrue(errno == EAGAIN || errno == EWOULDBLOCK)
+        XCTAssertLessThan(elapsed, 1.0)
+    }
 }
