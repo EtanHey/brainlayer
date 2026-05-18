@@ -90,7 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.runtime.install(
                     collector: self.collector ?? StatsCollector(
                         dbPath: dbPath,
-                        daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+                        daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+                        brainBusEvents: BrainBusClient()
                     ),
                     injectionStore: self.injectionStore,
                     database: database
@@ -101,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let collector = StatsCollector(
             dbPath: dbPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            brainBusEvents: BrainBusClient()
         )
         let injectionStore = try? InjectionStore(databasePath: dbPath)
 

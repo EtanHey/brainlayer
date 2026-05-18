@@ -29,18 +29,21 @@ final class StatsCollector: ObservableObject {
     private let database: BrainDatabase
     private let daemonMonitor: DaemonHealthMonitor
     private let agentActivityMonitor: AgentActivityMonitor
-    private var pollTask: Task<Void, Never>?
+    private let brainBusEvents: BrainBusEventSource?
+    private var brainBusTask: Task<Void, Never>?
     private var isRunning = false
     private var lastDataVersion: Int?
 
     init(
         dbPath: String,
         daemonMonitor: DaemonHealthMonitor,
-        agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor()
+        agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
+        brainBusEvents: BrainBusEventSource? = nil
     ) {
         self.database = BrainDatabase(path: dbPath)
         self.daemonMonitor = daemonMonitor
         self.agentActivityMonitor = agentActivityMonitor
+        self.brainBusEvents = brainBusEvents
         self.stats = DashboardStats(
             chunkCount: 0,
             enrichedChunkCount: 0,
@@ -61,19 +64,24 @@ final class StatsCollector: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         installDarwinObserver()
-        refresh(force: true)
-        pollTask = Task { [weak self] in
-            while let self, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { break }
-                self.pollForChanges()
+        if let brainBusEvents {
+            let eventStream = brainBusEvents.events()
+            brainBusTask = Task { [weak self] in
+                for await event in eventStream {
+                    guard !Task.isCancelled else { break }
+                    await MainActor.run {
+                        self?.handleBrainBusEvent(event)
+                    }
+                }
             }
+        } else {
+            refresh(force: true)
         }
     }
 
     func stop() {
-        pollTask?.cancel()
-        pollTask = nil
+        brainBusTask?.cancel()
+        brainBusTask = nil
         if isRunning {
             removeDarwinObserver()
         }
@@ -120,8 +128,15 @@ final class StatsCollector: ObservableObject {
         refresh(force: false)
     }
 
-    private func pollForChanges() {
-        refresh(force: false)
+    private func handleBrainBusEvent(_ event: BrainBusEvent) {
+        switch event.type {
+        case .healthTick:
+            daemon = daemonMonitor.sample()
+            agentActivity = agentActivityMonitor.sample()
+            state = PipelineState.derive(daemon: daemon, stats: stats)
+        case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
+            refresh(force: false)
+        }
     }
 
     private func installDarwinObserver() {
