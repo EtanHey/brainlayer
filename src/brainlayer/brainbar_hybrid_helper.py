@@ -194,7 +194,6 @@ def main(argv: list[str] | None = None) -> int:
     from brainlayer.paths import get_db_path
 
     helper = HybridSearchHelper(socket_path=Path(args.socket_path), db_path=get_db_path())
-    signal.signal(signal.SIGTERM, helper.stop)
     signal.signal(signal.SIGINT, helper.stop)
     helper.serve_forever()
     return 0

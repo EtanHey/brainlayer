@@ -355,6 +355,48 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(result["structuredContent"])
     }
 
+    func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertChunk(
+            id: "swift-fts-result",
+            content: "Etan BrainLayer local fallback result",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helperText = "python helper canonical KG/search output"
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: helperText))
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 171,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(text, helperText)
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertFalse(text.contains("### ◆ Etan"), "Swift KG facts must not duplicate Python helper entity output.")
+        XCTAssertFalse(text.contains("WORKS_ON"), "Swift KG facts must not be prepended on hybrid helper success.")
+    }
+
     func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperFails() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -390,6 +432,47 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(helper.requests.count, 1)
         XCTAssertTrue(text.contains("fallback-fts"), text)
         XCTAssertNil(result["structuredContent"])
+    }
+
+    func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertChunk(
+            id: "fallback-kg-result",
+            content: "Etan BrainLayer fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 172,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertTrue(text.contains("### ◆ Etan"), text)
+        XCTAssertTrue(text.contains("WORKS_ON"), text)
+        XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
     }
 
     func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {

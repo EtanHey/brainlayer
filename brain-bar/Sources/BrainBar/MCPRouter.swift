@@ -263,17 +263,20 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
 
-        // Entity detection → KG fact lookup
-        var kgSection = ""
-        let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
-        if !hasActiveFilters {
-            let detected = entityCache.detectEntities(in: query)
-            if let first = detected.first {
-                let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
-                if !facts.isEmpty {
-                    kgSection = TextFormatter.formatKGFacts(entity: first.name, facts: facts)
-                }
+        func localKGSection() -> String {
+            let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
+            if hasActiveFilters {
+                return ""
             }
+            let detected = entityCache.detectEntities(in: query)
+            guard let first = detected.first else {
+                return ""
+            }
+            let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
+            if facts.isEmpty {
+                return ""
+            }
+            return TextFormatter.formatKGFacts(entity: first.name, facts: facts)
         }
 
         func searchViaBrainBarDatabase() throws -> (text: String, metadata: [String: Any]) {
@@ -296,6 +299,7 @@ final class MCPRouter: @unchecked Sendable {
 
         let textSection: String
         let metadata: [String: Any]
+        let kgSection: String
         if let hybridSearchClient, subscriberID == nil, !unreadOnly {
             do {
                 let response = try hybridSearchClient.search(arguments: hybridSearchArguments(
@@ -309,16 +313,19 @@ final class MCPRouter: @unchecked Sendable {
                 ))
                 textSection = response.text
                 metadata = response.metadata
+                kgSection = ""
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
                 let fallback = try searchViaBrainBarDatabase()
                 textSection = fallback.text
                 metadata = fallback.metadata
+                kgSection = localKGSection()
             }
         } else {
             let fallback = try searchViaBrainBarDatabase()
             textSection = fallback.text
             metadata = fallback.metadata
+            kgSection = localKGSection()
         }
 
         // KG section goes before the <brain_search> envelope
