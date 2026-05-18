@@ -16,10 +16,12 @@ protocol HybridSearchClientProtocol: AnyObject, Sendable {
 
 final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sendable {
     private static let maxResponseBytes = 10 * 1024 * 1024
+    private static let defaultSocketIOTimeout: TimeInterval = 60
     private let socketPath: String
     private let dbPath: String
     private let pythonExecutable: String
     private let environment: [String: String]
+    private let socketIOTimeout: TimeInterval
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.hybrid-helper")
     private var process: Process?
 
@@ -27,12 +29,14 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         socketPath: String? = nil,
         dbPath: String,
         pythonExecutable: String? = nil,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        socketIOTimeout: TimeInterval = defaultSocketIOTimeout
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath
         self.pythonExecutable = pythonExecutable ?? Self.resolvePythonExecutable(environment: environment)
         self.environment = environment
+        self.socketIOTimeout = socketIOTimeout
     }
 
     deinit {
@@ -113,17 +117,28 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
     func stop() {
         queue.sync {
-            process?.terminate()
-            process = nil
-            unlink(socketPath)
+            stopLocked()
         }
     }
 
     func search(arguments: [String: Any]) throws -> HybridSearchResponse {
         try queue.sync {
             try startLocked()
-            return try send(arguments: arguments)
+            do {
+                return try send(arguments: arguments)
+            } catch {
+                if Self.shouldRestartHelper(after: error) {
+                    stopLocked()
+                }
+                throw error
+            }
         }
+    }
+
+    private func stopLocked() {
+        process?.terminate()
+        process = nil
+        unlink(socketPath)
     }
 
     private func startLocked() throws {
@@ -236,6 +251,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
                 }
             }
             if rc == 0 {
+                try Self.configureSocketTimeouts(fd: fd, timeout: socketIOTimeout)
                 return fd
             }
             lastErrno = errno
@@ -243,6 +259,33 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             usleep(useconds_t(min(50_000 + attempt * 10_000, 250_000)))
         }
         throw HybridSearchHelperError.connect(lastErrno)
+    }
+
+    static func configureSocketTimeouts(fd: Int32, timeout: TimeInterval) throws {
+        let boundedTimeout = max(timeout, 0.001)
+        let seconds = Int(boundedTimeout)
+        let microseconds = Int((boundedTimeout - Double(seconds)) * 1_000_000)
+        var timeval = timeval(tv_sec: seconds, tv_usec: Int32(microseconds))
+        let size = socklen_t(MemoryLayout<timeval>.size)
+
+        if setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeval, size) != 0 {
+            throw HybridSearchHelperError.configureSocket(errno)
+        }
+        if setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeval, size) != 0 {
+            throw HybridSearchHelperError.configureSocket(errno)
+        }
+    }
+
+    private static func shouldRestartHelper(after error: Error) -> Bool {
+        guard let helperError = error as? HybridSearchHelperError else {
+            return false
+        }
+        switch helperError {
+        case .connect, .configureSocket, .write, .read, .responseTooLarge, .invalidResponse:
+            return true
+        case .socket, .socketPathTooLong, .launch, .helperError:
+            return false
+        }
     }
 
     private func writeAll(fd: Int32, data: Data) throws {
@@ -294,6 +337,7 @@ enum HybridSearchHelperError: LocalizedError {
     case socket(Int32)
     case socketPathTooLong(String)
     case connect(Int32)
+    case configureSocket(Int32)
     case write(Int32)
     case read(Int32)
     case launch(String)
@@ -309,6 +353,8 @@ enum HybridSearchHelperError: LocalizedError {
             return "hybrid helper socket path too long: \(path)"
         case .connect(let code):
             return "hybrid helper connect failed: errno \(code)"
+        case .configureSocket(let code):
+            return "hybrid helper socket timeout configuration failed: errno \(code)"
         case .write(let code):
             return "hybrid helper write failed: errno \(code)"
         case .read(let code):

@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_ACCEPT_TIMEOUT_SECONDS = 0.25
+_CONNECTION_TIMEOUT_SECONDS = 5.0
+
 
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -53,7 +56,7 @@ class HybridSearchHelper:
             server.bind(os.fspath(self.socket_path))
             os.chmod(self.socket_path, 0o600)
             server.listen(16)
-            server.settimeout(0.25)
+            server.settimeout(_ACCEPT_TIMEOUT_SECONDS)
             self.warm()
 
             while not self._stopped:
@@ -66,7 +69,7 @@ class HybridSearchHelper:
                         break
                     raise
                 with conn:
-                    conn.settimeout(0.25)
+                    conn.settimeout(_CONNECTION_TIMEOUT_SECONDS)
                     try:
                         self._handle_connection(conn)
                     except OSError:
