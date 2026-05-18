@@ -64,6 +64,7 @@ final class StatsCollector: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         installDarwinObserver()
+        refresh(force: true)
         if let brainBusEvents {
             let eventStream = brainBusEvents.events()
             brainBusTask = Task { [weak self] in
@@ -74,8 +75,6 @@ final class StatsCollector: ObservableObject {
                     }
                 }
             }
-        } else {
-            refresh(force: true)
         }
     }
 

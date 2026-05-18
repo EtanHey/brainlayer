@@ -270,7 +270,32 @@ final class DashboardTests: XCTestCase {
         let elapsedMillis = Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
-        XCTAssertLessThan(elapsedMillis, 100)
+        XCTAssertLessThan(elapsedMillis, 1_000)
+    }
+
+    @MainActor
+    func testStatsCollectorRefreshesImmediatelyWithBrainBusEvents() throws {
+        try db.insertChunk(
+            id: "dash-preexisting",
+            content: "Inserted before collector start",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+
+        XCTAssertEqual(eventSource.streamRequestCount, 1)
+        XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
     func testPipelineStateTreatsMissingDaemonSnapshotAsDegraded() {
