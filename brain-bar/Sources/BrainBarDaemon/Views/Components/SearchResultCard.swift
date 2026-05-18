@@ -1,0 +1,1 @@
+../../../BrainBar/Views/Components/SearchResultCard.swift

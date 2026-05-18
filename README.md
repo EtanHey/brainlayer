@@ -111,7 +111,8 @@ graph LR
     KG --> D
     E["JSONL conversations"] --> W["Real-time Watcher<br/>~1s latency"]
     W --> D
-    I["BrainBar<br/>macOS menu bar"] -->|Unix socket| B
+    I["BrainBar UI<br/>NSStatusItem + NSPopover"] -->|UDS /tmp/brainbar.sock| BB["BrainBarDaemon<br/>MCP + brain bus"]
+    BB -->|MCP socket protocol| B
 ```
 
 **Everything runs locally.** Cloud enrichment (Gemini/Groq) and Axiom telemetry are optional.
@@ -138,13 +139,22 @@ graph LR
 
 ## BrainBar — macOS Companion
 
-Optional native Swift menu bar app. Quick capture, live dashboard, knowledge graph viewer — all over a Unix socket. Auto-restarts after quit via LaunchAgent.
+Optional native Swift menu bar companion split into two launchd-managed processes:
+
+```mermaid
+flowchart LR
+    UI["BrainBar<br/>LSUIElement UI"] -->|"watch-brain-bus + commands<br/>/tmp/brainbar.sock"| D["BrainBarDaemon<br/>headless MCP server"]
+    D -->|"single writer queue + reads"| DB["SQLite WAL<br/>~/.local/share/brainlayer/brainlayer.db"]
+    D -->|"helper subprocess IPC"| H["Hybrid search helper"]
+```
+
+`BrainBarDaemon` owns the MCP server, `/tmp/brainbar.sock`, the single-writer path, the `watch-brain-bus` stream, and helper subprocess lifecycle. `BrainBar` owns only the `NSStatusItem`, transient `NSPopover`, SwiftUI surfaces, hotkey routing, and a reconnecting socket subscriber. Killing the UI does not stop the daemon socket.
 
 ```bash
 bash brain-bar/build-app.sh    # Build, sign, install LaunchAgent
 ```
 
-Requires the BrainLayer MCP server. The build script refuses non-canonical checkouts and dirty trees by default ([#265](https://github.com/EtanHey/brainlayer/pull/265)) and stamps each bundle with `GitCommit`, `GitDescribe`, and `BuildTimeUTC` in `Info.plist` ([#264](https://github.com/EtanHey/brainlayer/pull/264)) so a stale install is diagnosable in seconds.
+The build script builds both `BrainBar` and `BrainBarDaemon`, embeds both binaries in `BrainBar.app`, then installs `com.brainlayer.brainbar.plist` and `com.brainlayer.brainbar-daemon.plist` with `ProcessType=Interactive`. It refuses non-canonical checkouts and dirty trees by default ([#265](https://github.com/EtanHey/brainlayer/pull/265)) and stamps each bundle with `GitCommit`, `GitDescribe`, and `BuildTimeUTC` in `Info.plist` ([#264](https://github.com/EtanHey/brainlayer/pull/264)) so a stale install is diagnosable in seconds.
 
 ## Writer Arbitration
 
