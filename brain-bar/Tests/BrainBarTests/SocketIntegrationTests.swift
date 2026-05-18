@@ -10,11 +10,14 @@ import XCTest
 final class SocketIntegrationTests: XCTestCase {
     let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
+    var db: BrainDatabase!
+    var tempDBPath: String!
 
     override func setUp() {
         super.setUp()
-        let tempDB = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
-        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDB)
+        tempDBPath = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
+        db = BrainDatabase(path: tempDBPath)
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
         server.start()
         // Give server time to bind
         Thread.sleep(forTimeInterval: 0.2)
@@ -22,6 +25,10 @@ final class SocketIntegrationTests: XCTestCase {
 
     override func tearDown() {
         server.stop()
+        db.close()
+        try? FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
         super.tearDown()
     }
 
@@ -214,6 +221,47 @@ final class SocketIntegrationTests: XCTestCase {
             try queryString("SELECT content FROM chunks WHERE content = 'vacuum over socket'", on: restored),
             "vacuum over socket"
         )
+    }
+
+    func testMCPBrainSearchOverSocketUsesInjectedHybridHelper() throws {
+        server.stop()
+        let helper = SocketRecordingHybridSearchClient(
+            response: HybridSearchResponse(
+                text: #"""
+┌─ brain_search: "techgym speakers workshop" ─ 1 result
+├─ [1] manual-a0b8a  score:0.97  imp: 8  2026-05-16
+└─
+"""#
+            )
+        )
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db, hybridSearchClient: helper)
+        server.start()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "test", "version": "1.0"]]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "techgym speakers workshop", "num_results": 3, "source": "all"] as [String: Any]
+            ]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("manual-a0b8a"))
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertEqual(helper.requests.first?["query"] as? String, "techgym speakers workshop")
+        XCTAssertEqual(helper.requests.first?["source"] as? String, "all")
     }
 
     func testMCPBrainSubscribeOverSocketReturnsCursorState() throws {
@@ -419,7 +467,9 @@ final class SocketIntegrationTests: XCTestCase {
                 unsetenv("BRAINBAR_PENDING_STORES_PATH")
             }
         }
-        server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath)
+        let flushDB = BrainDatabase(path: dbPath)
+        defer { flushDB.close() }
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath, database: flushDB)
         server.start()
         Thread.sleep(forTimeInterval: 0.2)
 
@@ -761,7 +811,15 @@ final class SocketIntegrationTests: XCTestCase {
     func testRejectsOverlongSocketPath() throws {
         // sockaddr_un.sun_path is 104 bytes on macOS. A path > 104 should not crash.
         let longPath = "/tmp/" + String(repeating: "x", count: 200) + ".sock"
-        let longServer = BrainBarServer(socketPath: longPath, dbPath: NSTemporaryDirectory() + "test-long.db")
+        let longDBPath = NSTemporaryDirectory() + "test-long-\(UUID().uuidString).db"
+        let longDB = BrainDatabase(path: longDBPath)
+        defer {
+            longDB.close()
+            try? FileManager.default.removeItem(atPath: longDBPath)
+            try? FileManager.default.removeItem(atPath: longDBPath + "-wal")
+            try? FileManager.default.removeItem(atPath: longDBPath + "-shm")
+        }
+        let longServer = BrainBarServer(socketPath: longPath, dbPath: longDBPath, database: longDB)
         longServer.start()
         Thread.sleep(forTimeInterval: 0.2)
 
@@ -974,5 +1032,19 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
+    }
+}
+
+private final class SocketRecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked Sendable {
+    private let response: HybridSearchResponse
+    private(set) var requests: [[String: Any]] = []
+
+    init(response: HybridSearchResponse) {
+        self.response = response
+    }
+
+    func search(arguments: [String: Any]) throws -> HybridSearchResponse {
+        requests.append(arguments)
+        return response
     }
 }
