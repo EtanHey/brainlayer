@@ -563,6 +563,10 @@ def run_daemon(interval: float, batch_size: int) -> None:
 
 
 def main() -> int:
+    from brainlayer.parent_death import install_parent_death_watcher
+
+    install_parent_death_watcher()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=float, default=0.5)
