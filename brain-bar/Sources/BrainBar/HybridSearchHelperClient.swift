@@ -251,8 +251,13 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
                 }
             }
             if rc == 0 {
-                try Self.configureSocketTimeouts(fd: fd, timeout: socketIOTimeout)
-                return fd
+                do {
+                    try Self.configureSocketTimeouts(fd: fd, timeout: socketIOTimeout)
+                    return fd
+                } catch {
+                    close(fd)
+                    throw error
+                }
             }
             lastErrno = errno
             close(fd)
