@@ -210,7 +210,8 @@ def _exact_chunk_lookup_result(
         or is_precompact_checkpoint_content(chunk.get("content"))
     ):
         return _empty_exact_chunk_lookup_result(query)
-    if any(value is not None for value in (source, intent, sentiment, source_filter, correction_category)):
+    effective_source = None if source == "all" else source
+    if any(value is not None for value in (effective_source, intent, sentiment, source_filter, correction_category)):
         return None
     if project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")

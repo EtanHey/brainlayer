@@ -69,6 +69,35 @@ async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown()
 
 
 @pytest.mark.asyncio
+async def test_brain_search_exact_chunk_id_treats_source_all_as_unfiltered():
+    """BrainBar forwards source='all'; exact chunk-id lookup must still short-circuit."""
+    chunk_id = "brainbar-sourceall01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": "Exact chunk content reachable when source all is unfiltered",
+        "source_file": "docs/repro.md",
+        "project": "brainlayer",
+        "content_type": "note",
+        "importance": 8,
+        "created_at": "2026-05-18T09:15:00Z",
+        "summary": "Source all exact lookup repro",
+    }
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("source='all' exact chunk-id query should bypass hybrid search")),
+        ),
+    ):
+        _, structured = await _brain_search(query=chunk_id, source="all", detail="compact")
+
+    assert structured["total"] == 1
+    assert structured["results"][0]["chunk_id"] == chunk_id
+
+
+@pytest.mark.asyncio
 async def test_brain_search_exact_checkpoint_chunk_id_returns_empty_without_fallback():
     """Default exact chunk-id lookup must not leak checkpoint chunks via fallback search."""
     chunk_id = "brainbar-checkpt01"

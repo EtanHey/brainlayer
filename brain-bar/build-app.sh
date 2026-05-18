@@ -271,9 +271,11 @@ if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ -f "$PLIST_SRC" ]; then
     echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
     bootout_launchagent
     TMP_PLIST="$(mktemp)"
+    trap 'rm -f "$TMP_PLIST"' EXIT
     sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$TMP_PLIST"
     configure_launchagent_environment "$TMP_PLIST" "$CURRENT_REPO_ROOT"
     mv "$TMP_PLIST" "$PLIST_DST"
+    trap - EXIT
     launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DST"
     launchctl kickstart -k "$LAUNCH_DOMAIN/$PLIST_LABEL"
     echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"

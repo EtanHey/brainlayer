@@ -67,7 +67,10 @@ class HybridSearchHelper:
                     raise
                 with conn:
                     conn.settimeout(0.25)
-                    self._handle_connection(conn)
+                    try:
+                        self._handle_connection(conn)
+                    except OSError:
+                        continue
         finally:
             server.close()
             try:
@@ -87,7 +90,10 @@ class HybridSearchHelper:
             response = {"ok": False, "error": str(exc)}
 
         payload = json.dumps(_json_safe(response), separators=(",", ":")).encode("utf-8") + b"\n"
-        conn.sendall(payload)
+        try:
+            conn.sendall(payload)
+        except OSError:
+            return
 
     @staticmethod
     def _read_line(conn: socket.socket) -> bytes:

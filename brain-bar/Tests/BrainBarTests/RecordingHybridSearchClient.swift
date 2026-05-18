@@ -14,7 +14,14 @@ enum RecordingHybridSearchClientError: LocalizedError {
 
 final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked Sendable {
     private let result: Result<HybridSearchResponse, Error>
-    private(set) var requests: [[String: Any]] = []
+    private let lock = NSLock()
+    private var recordedRequests: [[String: Any]] = []
+
+    var requests: [[String: Any]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedRequests
+    }
 
     init(response: HybridSearchResponse) {
         result = .success(response)
@@ -27,7 +34,9 @@ final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked 
     deinit {}
 
     func search(arguments: [String: Any]) throws -> HybridSearchResponse {
-        requests.append(arguments)
+        lock.lock()
+        recordedRequests.append(arguments)
+        lock.unlock()
         return try result.get()
     }
 }
