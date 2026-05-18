@@ -469,6 +469,40 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    func vacuumInto(targetPath: String) throws -> Int64 {
+        guard let db else { throw DBError.notOpen }
+        let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTarget.isEmpty else {
+            throw DBError.exec(SQLITE_MISUSE, "target_path is required")
+        }
+
+        let targetURL = URL(fileURLWithPath: trimmedTarget).standardizedFileURL
+        let sourceURL = URL(fileURLWithPath: path).standardizedFileURL
+        guard targetURL.path != sourceURL.path else {
+            throw DBError.exec(SQLITE_MISUSE, "refusing to VACUUM INTO the live database path")
+        }
+
+        try FileManager.default.createDirectory(
+            at: targetURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard !FileManager.default.fileExists(atPath: targetURL.path) else {
+            throw DBError.exec(SQLITE_CANTOPEN, "backup target already exists: \(targetURL.path)")
+        }
+
+        var stmt: OpaquePointer?
+        let prepareRC = sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil)
+        guard prepareRC == SQLITE_OK, let stmt else { throw DBError.prepare(prepareRC) }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(targetURL.path, to: stmt, index: 1)
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
     private static let allowedPragmas: Set<String> = [
         "journal_mode", "busy_timeout", "cache_size", "synchronous",
         "wal_checkpoint", "page_count", "page_size", "freelist_count"

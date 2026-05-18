@@ -1,15 +1,58 @@
 import gzip
+import json
+import os
+import queue
+import socket
 import sqlite3
+import threading
+import time
+import uuid
 from pathlib import Path
 
 import pytest
 
 
-def test_create_snapshot_gzip_is_restorable(tmp_path):
-    from brainlayer.backup_daily import create_sqlite_backup_gzip
+def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
+    received: queue.Queue[dict] = queue.Queue()
+    ready = threading.Event()
 
-    source = tmp_path / "brainlayer.db"
-    conn = sqlite3.connect(source)
+    def run() -> None:
+        if socket_path.exists():
+            socket_path.unlink()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(str(socket_path))
+            server.listen(1)
+            ready.set()
+            conn, _ = server.accept()
+            with conn:
+                data = b""
+                while not data.endswith(b"\n"):
+                    data += conn.recv(65_536)
+                request = json.loads(data.decode("utf-8"))
+                received.put(request)
+                args = request["params"]["arguments"]
+                target_path = Path(args["target_path"])
+                with sqlite3.connect(source_db) as db:
+                    db.execute("VACUUM INTO ?", (str(target_path),))
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": json.dumps({"status": "ok", "target_path": str(target_path)})}
+                        ]
+                    },
+                }
+                conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert ready.wait(timeout=2)
+    return received, thread
+
+
+def _create_source_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
     journal_mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
     assert journal_mode.upper() == "WAL"
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
@@ -17,8 +60,17 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
     conn.commit()
     conn.close()
 
+
+def test_create_snapshot_gzip_is_restorable(tmp_path):
+    from brainlayer.backup_daily import create_sqlite_backup_gzip
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source)
+    socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
+    _start_fake_brainbar_vacuum_server(socket_path, source)
+
     out_dir = tmp_path / "out"
-    snapshot = create_sqlite_backup_gzip(source, out_dir, date_stamp="2026-05-13")
+    snapshot = create_sqlite_backup_gzip(source, out_dir, date_stamp="2026-05-13", socket_path=socket_path)
 
     assert snapshot == out_dir / "2026-05-13.db.gz"
     assert snapshot.exists()
@@ -33,6 +85,24 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
         assert restored_conn.execute("SELECT content FROM chunks WHERE id = 'c1'").fetchone()[0] == "hello"
     finally:
         restored_conn.close()
+
+
+def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
+    from brainlayer.backup_daily import create_sqlite_backup_gzip
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source)
+    socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
+    received, thread = _start_fake_brainbar_vacuum_server(socket_path, source)
+
+    snapshot = create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13", socket_path=socket_path)
+
+    thread.join(timeout=2)
+    request = received.get_nowait()
+    assert request["method"] == "tools/call"
+    assert request["params"]["name"] == "brain_backup_vacuum_into"
+    assert request["params"]["arguments"]["target_path"].endswith("/2026-05-13.db")
+    assert snapshot.name == "2026-05-13.db.gz"
 
 
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
@@ -120,3 +190,20 @@ def test_launchd_installer_knows_backup_target():
     assert "<string>com.brainlayer.backup-daily</string>" in plist
     assert "<integer>3</integer>" in plist
     assert "<integer>17</integer>" in plist
+    assert "<key>KeepAlive</key>" not in plist
+    assert "<key>ExitTimeOut</key>" in plist
+    assert "<integer>300</integer>" in plist
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=300" in wrapper
+
+
+def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    def slow_backup(**kwargs):  # noqa: ARG001
+        time.sleep(5)
+
+    monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(backup_daily, "run_backup", slow_backup)
+
+    assert backup_daily.main() == 124
+    assert "brainlayer backup timed out after 1s" in capsys.readouterr().out

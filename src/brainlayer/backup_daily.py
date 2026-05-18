@@ -13,6 +13,8 @@ import gzip
 import json
 import os
 import shutil
+import signal
+import socket
 import sqlite3
 import tempfile
 import time
@@ -28,6 +30,8 @@ DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
+BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -40,8 +44,32 @@ def _escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str | None = None) -> Path:
-    """Create a restorable `.db.gz` snapshot using SQLite's online backup API."""
+class BackupTimeoutError(TimeoutError):
+    pass
+
+
+def _configured_backup_timeout_seconds() -> int | None:
+    raw = os.environ.get(BACKUP_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be an integer number of seconds") from exc
+    return seconds if seconds > 0 else None
+
+
+def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
+    raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
+
+
+def create_sqlite_backup_gzip(
+    db_path: Path,
+    output_dir: Path,
+    date_stamp: str | None = None,
+    socket_path: Path | str | None = None,
+) -> Path:
+    """Create a restorable `.db.gz` snapshot through BrainBar's single-writer socket."""
     db_path = Path(db_path).expanduser()
     output_dir = Path(output_dir).expanduser()
     date_stamp = date_stamp or _today()
@@ -61,17 +89,14 @@ def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str |
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
-        source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=60)
-        target = sqlite3.connect(raw_snapshot)
+        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path)
+        target = sqlite3.connect(f"file:{raw_snapshot}?mode=ro", uri=True)
         try:
-            source.backup(target, pages=10_000, sleep=0.1)
-            target.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             integrity = target.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":
                 raise RuntimeError(f"Backup integrity check failed: {integrity!r}")
         finally:
             target.close()
-            source.close()
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -79,6 +104,54 @@ def create_sqlite_backup_gzip(db_path: Path, output_dir: Path, date_stamp: str |
         shutil.move(str(temp_gz), final_gz)
 
     return final_gz
+
+
+def _brainbar_socket_path(socket_path: Path | str | None = None) -> Path:
+    if socket_path is not None:
+        return Path(socket_path).expanduser()
+    return Path(os.environ.get("BRAINBAR_SOCKET_PATH", DEFAULT_BRAINBAR_SOCKET_PATH)).expanduser()
+
+
+def request_brainbar_vacuum_into(
+    target_path: Path, socket_path: Path | str | None = None, timeout_seconds: int = 300
+) -> None:
+    target_path = Path(target_path).expanduser()
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "brain_backup_vacuum_into",
+            "arguments": {"target_path": str(target_path)},
+        },
+    }
+    response = _send_brainbar_json_request(_brainbar_socket_path(socket_path), request, timeout_seconds=timeout_seconds)
+    if response.get("error"):
+        raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
+    result = response.get("result") or {}
+    if result.get("isError"):
+        content = result.get("content") or []
+        text = content[0].get("text") if content and isinstance(content[0], dict) else result
+        raise RuntimeError(f"BrainBar backup request failed: {text}")
+    if not target_path.exists():
+        raise RuntimeError(f"BrainBar backup did not create snapshot: {target_path}")
+
+
+def _send_brainbar_json_request(socket_path: Path, request: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout_seconds)
+        client.connect(str(socket_path))
+        client.sendall(payload)
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = client.recv(65_536)
+            if not chunk:
+                break
+            data += chunk
+    if not data:
+        raise RuntimeError(f"BrainBar socket closed without response: {socket_path}")
+    return json.loads(data.decode("utf-8"))
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -335,6 +408,12 @@ def run_backup(
 
 
 def main() -> int:
+    timeout_seconds = _configured_backup_timeout_seconds()
+    previous_alarm_handler = None
+    if timeout_seconds is not None:
+        previous_alarm_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _raise_backup_timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
@@ -344,9 +423,16 @@ def main() -> int:
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
             ).split("/"),
         )
+    except BackupTimeoutError:
+        print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
+        return 124
     except Exception as exc:
         print(f"brainlayer backup failed: {exc}\n{traceback.format_exc()}", flush=True)
         return 1
+    finally:
+        if timeout_seconds is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_alarm_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0
 
