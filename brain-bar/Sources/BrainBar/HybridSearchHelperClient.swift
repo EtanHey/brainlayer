@@ -244,6 +244,12 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             guard fd >= 0 else {
                 throw HybridSearchHelperError.socket(errno)
             }
+            do {
+                try Self.configureNoSigpipe(fd: fd)
+            } catch {
+                close(fd)
+                throw error
+            }
 
             var addr = sockaddr_un()
             addr.sun_family = sa_family_t(AF_UNIX)
@@ -279,6 +285,13 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             usleep(useconds_t(min(50_000 + attempt * 10_000, 250_000)))
         }
         throw HybridSearchHelperError.connect(lastErrno)
+    }
+
+    static func configureNoSigpipe(fd: Int32) throws {
+        var nosigpipe: Int32 = 1
+        if setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            throw HybridSearchHelperError.configureSocket(errno)
+        }
     }
 
     static func configureSocketTimeouts(fd: Int32, timeout: TimeInterval) throws {
