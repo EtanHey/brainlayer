@@ -10,18 +10,24 @@ import XCTest
 final class SocketIntegrationTests: XCTestCase {
     let testSocketPath = "/tmp/brainbar-test-\(ProcessInfo.processInfo.processIdentifier).sock"
     var server: BrainBarServer!
+    var db: BrainDatabase!
+    var tempDBPath: String!
 
     override func setUp() {
         super.setUp()
-        let tempDB = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
-        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDB)
+        tempDBPath = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
+        db = BrainDatabase(path: tempDBPath)
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
         server.start()
-        // Give server time to bind
-        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
     }
 
     override func tearDown() {
         server.stop()
+        db.close()
+        try? FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
         super.tearDown()
     }
 
@@ -145,6 +151,38 @@ final class SocketIntegrationTests: XCTestCase {
         }
     }
 
+    func testWatchBrainBusStreamsStoreEventsOverRawUnixSocket() throws {
+        let watchFD = try connectClient()
+        defer { close(watchFD) }
+
+        try sendRawLineJSON(on: watchFD, object: [
+            "jsonrpc": "2.0",
+            "id": 50,
+            "method": "watch-brain-bus",
+        ])
+        _ = try readBrainBusEvent(fd: watchFD, matching: "health_tick")
+
+        let storeResponse = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 51,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Brain bus stream integration",
+                    "tags": ["agent-message"]
+                ] as [String: Any]
+            ]
+        ])
+        XCTAssertNil(storeResponse["error"])
+
+        let event = try readBrainBusEvent(fd: watchFD, matching: "last_chunk_id")
+        XCTAssertEqual(event["method"] as? String, "notifications/brain-bus")
+        let params = try XCTUnwrap(event["params"] as? [String: Any])
+        XCTAssertEqual(params["type"] as? String, "last_chunk_id")
+        XCTAssertFalse((params["last_chunk_id"] as? String ?? "").isEmpty)
+    }
+
     // MARK: - MCP tools/call brain_search over socket
 
     func testMCPBrainSearchOverSocket() throws {
@@ -214,6 +252,47 @@ final class SocketIntegrationTests: XCTestCase {
             try queryString("SELECT content FROM chunks WHERE content = 'vacuum over socket'", on: restored),
             "vacuum over socket"
         )
+    }
+
+    func testMCPBrainSearchOverSocketUsesInjectedHybridHelper() throws {
+        server.stop()
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(
+                text: #"""
+┌─ brain_search: "techgym speakers workshop" ─ 1 result
+├─ [1] manual-a0b8a  score:0.97  imp: 8  2026-05-16
+└─
+"""#
+            )
+        )
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db, hybridSearchClient: helper)
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "test", "version": "1.0"]]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "techgym speakers workshop", "num_results": 3, "source": "all"] as [String: Any]
+            ]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("manual-a0b8a"))
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertEqual(helper.requests.first?["query"] as? String, "techgym speakers workshop")
+        XCTAssertEqual(helper.requests.first?["source"] as? String, "all")
     }
 
     func testMCPBrainSubscribeOverSocketReturnsCursorState() throws {
@@ -419,9 +498,14 @@ final class SocketIntegrationTests: XCTestCase {
                 unsetenv("BRAINBAR_PENDING_STORES_PATH")
             }
         }
-        server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath)
+        let flushDB = BrainDatabase(path: dbPath)
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath, database: flushDB)
+        defer {
+            server.stop()
+            flushDB.close()
+        }
         server.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
 
         let subscriberFD = try connectClient()
         defer { close(subscriberFD) }
@@ -761,7 +845,15 @@ final class SocketIntegrationTests: XCTestCase {
     func testRejectsOverlongSocketPath() throws {
         // sockaddr_un.sun_path is 104 bytes on macOS. A path > 104 should not crash.
         let longPath = "/tmp/" + String(repeating: "x", count: 200) + ".sock"
-        let longServer = BrainBarServer(socketPath: longPath, dbPath: NSTemporaryDirectory() + "test-long.db")
+        let longDBPath = NSTemporaryDirectory() + "test-long-\(UUID().uuidString).db"
+        let longDB = BrainDatabase(path: longDBPath)
+        defer {
+            longDB.close()
+            try? FileManager.default.removeItem(atPath: longDBPath)
+            try? FileManager.default.removeItem(atPath: longDBPath + "-wal")
+            try? FileManager.default.removeItem(atPath: longDBPath + "-shm")
+        }
+        let longServer = BrainBarServer(socketPath: longPath, dbPath: longDBPath, database: longDB)
         longServer.start()
         Thread.sleep(forTimeInterval: 0.2)
 
@@ -781,6 +873,17 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     // MARK: - Helper
+
+    private func waitForSocket(at path: String, timeout: TimeInterval = 3.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: path) {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return FileManager.default.fileExists(atPath: path)
+    }
 
     private func sendMCPRequest(_ request: [String: Any]) throws -> [String: Any] {
         let fd = try connectClient()
@@ -889,6 +992,35 @@ final class SocketIntegrationTests: XCTestCase {
         }
 
         throw NSError(domain: "test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Timeout reading raw line response"])
+    }
+
+    private func readBrainBusEvent(fd: Int32, matching type: String, timeout: TimeInterval = 5.0) throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var buffer = Data()
+        var readBuf = [UInt8](repeating: 0, count: 65536)
+        while Date() < deadline {
+            while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                let line = Data(buffer[..<newlineIndex])
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                guard !line.isEmpty else { continue }
+                let message = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+                let params = message["params"] as? [String: Any]
+                if params?["type"] as? String == type {
+                    return message
+                }
+            }
+
+            let n = read(fd, &readBuf, readBuf.count)
+            if n > 0 {
+                buffer.append(contentsOf: readBuf[0..<n])
+            } else if n == 0 {
+                break
+            } else if errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        throw NSError(domain: "test", code: 6, userInfo: [NSLocalizedDescriptionKey: "Timeout reading brain bus event \(type)"])
     }
 
     private func readMCPMessage(fd: Int32, timeout: TimeInterval = 5.0) throws -> [String: Any] {

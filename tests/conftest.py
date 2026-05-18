@@ -24,6 +24,16 @@ def eval_project() -> str:
     return f"eval-{uuid.uuid4().hex[:8]}"
 
 
+@pytest.fixture(autouse=True)
+def disable_live_gemini_for_unit_tests(monkeypatch, request):
+    """Keep unit tests from making live Gemini calls through local shell env."""
+    if request.node.get_closest_marker("live"):
+        return
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+
+
 @pytest.fixture
 def test_user() -> str:
     """Username for path-based tests.

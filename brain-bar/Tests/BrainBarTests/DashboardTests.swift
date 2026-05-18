@@ -255,6 +255,82 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
+    @MainActor
+    func testReadOnlyStatsCollectorReopensAfterDaemonCreatesDatabase() throws {
+        db.close()
+        try? FileManager.default.removeItem(atPath: tempDBPath)
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
+        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        XCTAssertEqual(collector.stats.chunkCount, 0)
+
+        let writer = BrainDatabase(path: tempDBPath)
+        defer { writer.close() }
+        try writer.insertChunk(
+            id: "dash-readonly-late-db",
+            content: "Daemon created the database after UI startup",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        collector.refresh(force: true)
+
+        XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
+    @MainActor
+    func testStatsCollectorSubscribesToBrainBusWithoutPollingDelay() {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        let startedAt = DispatchTime.now()
+        collector.start()
+        let elapsedMillis = Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000
+
+        XCTAssertEqual(eventSource.streamRequestCount, 1)
+        XCTAssertLessThan(elapsedMillis, 1_000)
+    }
+
+    @MainActor
+    func testStatsCollectorRefreshesImmediatelyWithBrainBusEvents() throws {
+        try db.insertChunk(
+            id: "dash-preexisting",
+            content: "Inserted before collector start",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+
+        XCTAssertEqual(eventSource.streamRequestCount, 1)
+        XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
     func testPipelineStateTreatsMissingDaemonSnapshotAsDegraded() {
         let stats = DashboardStats(
             chunkCount: 10,
@@ -385,5 +461,21 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(viewController.isViewLoaded)
         _ = viewController.view
         XCTAssertTrue(viewController.isViewLoaded)
+    }
+}
+
+private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+
+    var streamRequestCount: Int {
+        lock.withLock { requests }
+    }
+
+    func events() -> AsyncStream<BrainBusEvent> {
+        lock.withLock {
+            requests += 1
+        }
+        return AsyncStream { _ in }
     }
 }

@@ -82,6 +82,47 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(exists, "brainbar_subscriptions table must exist")
     }
 
+    func testSchemaMigrationsTableIncludesDetailsForHybridHelperParity() throws {
+        let columns = try sqliteTableColumns(path: tempDBPath, table: "schema_migrations")
+
+        XCTAssertTrue(columns.contains("name"))
+        XCTAssertTrue(columns.contains("applied_at"))
+        XCTAssertTrue(
+            columns.contains("details"),
+            "Swift startup must keep schema_migrations compatible with the Phase D Python helper"
+        )
+    }
+
+    func testReadOnlyOpenConfigurationAllowsDashboardReadsButRejectsWrites() throws {
+        try db.insertChunk(
+            id: "readonly-seed",
+            content: "Seed row for read-only dashboard stats",
+            sessionId: "readonly",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let reader = BrainDatabase(
+            path: tempDBPath,
+            openConfiguration: .init(readOnly: true)
+        )
+        defer { reader.close() }
+
+        let stats = try reader.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+        XCTAssertEqual(stats.chunkCount, 1)
+        XCTAssertThrowsError(
+            try reader.insertChunk(
+                id: "readonly-write",
+                content: "This write must not land from the UI process",
+                sessionId: "readonly",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+        )
+    }
+
     func testInjectionEventsTableExists() throws {
         let exists = try db.tableExists("injection_events")
         XCTAssertTrue(exists, "injection_events table must exist")
@@ -1026,6 +1067,25 @@ private func sqliteQueryPlan(path: String, sql: String, binds: [String]) throws 
             }
         }
         return details
+    }
+}
+
+private func sqliteTableColumns(path: String, table: String) throws -> Set<String> {
+    try withSQLiteConnection(path: path) { db in
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &stmt, nil)
+        guard rc == SQLITE_OK else {
+            throw NSError(domain: "DatabaseTests", code: Int(rc))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var columns = Set<String>()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 1) {
+                columns.insert(String(cString: text))
+            }
+        }
+        return columns
     }
 }
 

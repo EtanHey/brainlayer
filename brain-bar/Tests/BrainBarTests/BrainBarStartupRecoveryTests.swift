@@ -44,6 +44,7 @@ final class BrainBarStartupRecoveryTests: XCTestCase {
         let server = BrainBarServer(
             socketPath: socketPath,
             dbPath: dbPath,
+            enableHybridSearchHelper: false,
             databaseRecoveryPolicy: .init(
                 busyTimeoutMillis: 50,
                 initialRetryDelayMillis: 25,

@@ -292,6 +292,237 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(response["id"] as? Int, 4)
     }
 
+    func testBrainSearchDelegatesNormalQueriesToHybridHelper() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-helper-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "fts-only-decoy",
+            content: "techgym speakers workshop decoy from the old Swift FTS path",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 1
+        )
+
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(
+                text: #"""
+┌─ brain_search: "techgym speakers workshop" ─ 1 result
+├─ [1] manual-a0b8a  score:0.97  imp: 8  2026-05-16
+│  brainlayer       │ Michal speakers workshop manual chunk
+└─
+"""#,
+                metadata: [
+                    "content": "helper must not overwrite MCP content",
+                    "isError": true,
+                    "structuredContent": ["query": "techgym speakers workshop"]
+                ]
+            )
+        )
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "techgym speakers workshop",
+                    "num_results": 3,
+                    "project": "brainlayer",
+                    "source": "all",
+                    "tag": "speakers-workshop",
+                    "importance_min": 8,
+                    "detail": "compact"
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("manual-a0b8a"))
+        XCTAssertFalse(text.contains("fts-only-decoy"), "Normal MCP brain_search must use the Python hybrid helper, not Swift FTS.")
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertEqual(helper.requests.first?["query"] as? String, "techgym speakers workshop")
+        XCTAssertEqual(helper.requests.first?["num_results"] as? Int, 3)
+        XCTAssertEqual(helper.requests.first?["project"] as? String, "brainlayer")
+        XCTAssertEqual(helper.requests.first?["source"] as? String, "all")
+        XCTAssertEqual(helper.requests.first?["tag"] as? String, "speakers-workshop")
+        XCTAssertEqual(helper.requests.first?["importance_min"] as? Double, 8)
+        XCTAssertEqual(helper.requests.first?["detail"] as? String, "compact")
+        XCTAssertNotNil(result["structuredContent"])
+        XCTAssertNil(result["isError"], "Hybrid helper metadata must not overwrite reserved MCP result keys.")
+        XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
+    }
+
+    func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertChunk(
+            id: "swift-fts-result",
+            content: "Etan BrainLayer local fallback result",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helperText = "python helper canonical KG/search output"
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: helperText))
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 171,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(text, helperText)
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertFalse(text.contains("### ◆ Etan"), "Swift KG facts must not duplicate Python helper entity output.")
+        XCTAssertFalse(text.contains("WORKS_ON"), "Swift KG facts must not be prepended on hybrid helper success.")
+    }
+
+    func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperFails() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "fallback-fts-result",
+            content: "techgym speakers workshop fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 177,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "fallback", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertTrue(text.contains("fallback-fts"), text)
+        XCTAssertNil(result["structuredContent"])
+    }
+
+    func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertChunk(
+            id: "fallback-kg-result",
+            content: "Etan BrainLayer fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 172,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertTrue(text.contains("### ◆ Etan"), text)
+        XCTAssertTrue(text.contains("WORKS_ON"), text)
+        XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
+    }
+
+    func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-unread-helper-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "read-1", content: "Agent message already delivered", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
+        try db.insertChunk(id: "unread-1", content: "Agent message still unread", sessionId: "s2", project: "test", contentType: "assistant_text", importance: 5, tags: "[\"agent-message\"]")
+        _ = try db.upsertSubscription(agentID: "agent-1", tags: ["agent-message"])
+        guard let readSeq = try db.chunkRowID(forChunkID: "read-1") else {
+            XCTFail("expected read-1 rowid")
+            return
+        }
+        try db.acknowledge(agentID: "agent-1", seq: readSeq)
+
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(text: "helper should not be called")
+        )
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 18,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "agent message",
+                    "subscriber_id": "agent-1",
+                    "unread_only": true
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("unread-1"), "Unread queue searches must preserve BrainBar subscriber cursor behavior.")
+        XCTAssertEqual(helper.requests.count, 0)
+    }
+
     func testBrainMaintenanceRebuildTrigramToolReturnsProgressMetadata() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-\(UUID().uuidString).db"
         defer {

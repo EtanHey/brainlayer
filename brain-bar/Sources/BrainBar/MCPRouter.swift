@@ -33,6 +33,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private var database: BrainDatabase?
+    private let hybridSearchClient: HybridSearchClientProtocol?
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
@@ -58,6 +59,10 @@ final class MCPRouter: @unchecked Sendable {
         "chunk_ids": (maxItems: 500, itemMaxLength: 128),
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
+
+    init(hybridSearchClient: HybridSearchClientProtocol? = nil) {
+        self.hybridSearchClient = hybridSearchClient
+    }
 
     /// Inject database for tool handlers + load entity cache.
     func setDatabase(_ db: BrainDatabase) {
@@ -258,37 +263,111 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.noDatabase
         }
 
-        // Entity detection → KG fact lookup
-        var kgSection = ""
-        let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
-        if !hasActiveFilters {
-            let detected = entityCache.detectEntities(in: query)
-            if let first = detected.first {
-                let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
-                if !facts.isEmpty {
-                    kgSection = TextFormatter.formatKGFacts(entity: first.name, facts: facts)
-                }
+        func localKGSection() -> String {
+            let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
+            if hasActiveFilters {
+                return ""
             }
+            let detected = entityCache.detectEntities(in: query)
+            guard let first = detected.first else {
+                return ""
+            }
+            let facts = (try? db.lookupEntityFacts(entityName: first.name)) ?? []
+            if facts.isEmpty {
+                return ""
+            }
+            return TextFormatter.formatKGFacts(entity: first.name, facts: facts)
         }
 
-        let results = try db.search(
-            query: query,
-            limit: limit,
-            project: project,
-            source: source,
-            tag: tag,
-            importanceMin: importanceMin,
-            subscriberID: subscriberID,
-            unreadOnly: unreadOnly
-        )
-        let typedResults = results.map(SearchResult.init(payload:))
-        let textSection = TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count)
+        func searchViaBrainBarDatabase() throws -> (text: String, metadata: [String: Any]) {
+            let results = try db.search(
+                query: query,
+                limit: limit,
+                project: project,
+                source: source,
+                tag: tag,
+                importanceMin: importanceMin,
+                subscriberID: subscriberID,
+                unreadOnly: unreadOnly
+            )
+            let typedResults = results.map(SearchResult.init(payload:))
+            return (
+                TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count),
+                [:]
+            )
+        }
+
+        let textSection: String
+        let metadata: [String: Any]
+        let kgSection: String
+        if let hybridSearchClient, subscriberID == nil, !unreadOnly {
+            do {
+                let response = try hybridSearchClient.search(arguments: hybridSearchArguments(
+                    query: query,
+                    limit: limit,
+                    project: project,
+                    source: source,
+                    tag: tag,
+                    importanceMin: importanceMin,
+                    detail: args["detail"] as? String
+                ))
+                textSection = response.text
+                metadata = sanitizedHybridMetadata(response.metadata)
+                kgSection = ""
+            } catch {
+                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
+                let fallback = try searchViaBrainBarDatabase()
+                textSection = fallback.text
+                metadata = fallback.metadata
+                kgSection = localKGSection()
+            }
+        } else {
+            let fallback = try searchViaBrainBarDatabase()
+            textSection = fallback.text
+            metadata = fallback.metadata
+            kgSection = localKGSection()
+        }
 
         // KG section goes before the <brain_search> envelope
         if kgSection.isEmpty {
-            return ToolOutput(text: textSection)
+            return ToolOutput(text: textSection, metadata: metadata)
         }
-        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection)
+        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+    }
+
+    private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
+        var allowed: [String: Any] = [:]
+        if let structuredContent = metadata["structuredContent"] {
+            allowed["structuredContent"] = structuredContent
+        }
+        return allowed
+    }
+
+    private func hybridSearchArguments(
+        query: String,
+        limit: Int,
+        project: String?,
+        source: String?,
+        tag: String?,
+        importanceMin: Double?,
+        detail: String?
+    ) -> [String: Any] {
+        var arguments: [String: Any] = [
+            "query": query,
+            "num_results": limit,
+            "source": source ?? "all",
+            "detail": detail ?? "compact"
+        ]
+        if let project {
+            arguments["project"] = project
+        }
+        if let tag {
+            arguments["tag"] = tag
+        }
+        if let importanceMin {
+            arguments["importance_min"] = importanceMin
+        }
+        return arguments
     }
 
     private func handleBrainStore(_ args: [String: Any]) throws -> ToolOutput {

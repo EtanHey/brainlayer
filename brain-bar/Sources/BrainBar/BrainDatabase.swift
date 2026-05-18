@@ -10,9 +10,11 @@ import SQLite3
 final class BrainDatabase: @unchecked Sendable {
     struct OpenConfiguration: Sendable, Equatable {
         let busyTimeoutMillis: Int32
+        let readOnly: Bool
 
-        init(busyTimeoutMillis: Int32 = 30_000) {
+        init(busyTimeoutMillis: Int32 = 30_000, readOnly: Bool = false) {
             self.busyTimeoutMillis = max(1, busyTimeoutMillis)
+            self.readOnly = readOnly
         }
     }
 
@@ -255,6 +257,12 @@ final class BrainDatabase: @unchecked Sendable {
             NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
             NSLog("[BrainBar] Connection configured, checking schema...")
+            if openConfiguration.readOnly {
+                NSLog("[BrainBar] Read-only connection - skipping schema migration checks")
+                lastOpenError = nil
+                isOpen = true
+                return
+            }
             // AIDEV-NOTE: Skip ensureSchema if chunks table already exists (Python creates all tables).
             // CREATE TABLE IF NOT EXISTS still acquires a RESERVED lock which blocks on watch agent.
             if (try? tableExists("chunks")) == true {
@@ -268,9 +276,19 @@ final class BrainDatabase: @unchecked Sendable {
             isOpen = true
             NSLog("[BrainBar] Database ready")
         } catch {
+            if let db {
+                sqlite3_close(db)
+                self.db = nil
+            }
+            isOpen = false
             lastOpenError = error
             NSLog("[BrainBar] Failed to open/configure database at %@: %@", path, String(describing: error))
         }
+    }
+
+    func reopenIfNeeded() {
+        guard !isOpen else { return }
+        openAndConfigure()
     }
 
     // tableExists defined at line ~237 (existing method)
@@ -467,6 +485,7 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_close(db)
             self.db = nil
         }
+        isOpen = false
     }
 
     func vacuumInto(targetPath: String) throws -> Int64 {
@@ -1662,12 +1681,12 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func openConnection(path: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
-        // AIDEV-NOTE: READWRITE is needed for save/search. The async init in BrainBarApp.swift
-        // ensures this runs on a background queue so it doesn't block the menu item.
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let flags = openConfiguration.readOnly
+            ? SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+            : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(path, &handle, flags, nil)
         guard rc == SQLITE_OK, let handle else { throw DBError.open(path, rc) }
-        NSLog("[BrainBar] Database opened READWRITE")
+        NSLog("[BrainBar] Database opened %@", openConfiguration.readOnly ? "READONLY" : "READWRITE")
         return handle
     }
 
@@ -1675,6 +1694,12 @@ final class BrainDatabase: @unchecked Sendable {
         guard let handle else { throw DBError.notOpen }
         // AIDEV-NOTE: busy_timeout FIRST — 30s because watch agent holds locks during enrichment.
         try executeOnHandle(handle, sql: "PRAGMA busy_timeout = \(openConfiguration.busyTimeoutMillis)")
+        if openConfiguration.readOnly {
+            try executeOnHandle(handle, sql: "PRAGMA query_only = ON")
+            try executeOnHandle(handle, sql: "PRAGMA cache_size = -64000")
+            try executeOnHandle(handle, sql: "PRAGMA foreign_keys = ON")
+            return
+        }
         // AIDEV-NOTE: Skip journal_mode=WAL if already set — the PRAGMA itself needs a write lock
         // which blocks indefinitely when the watch agent is active. WAL is already set by Python.
         let currentMode = queryPragma(handle, name: "journal_mode")
@@ -1967,9 +1992,14 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
+                applied_at TEXT NOT NULL,
+                details TEXT
             )
         """)
+        let schemaMigrationColumns = try tableColumns(name: "schema_migrations", on: db)
+        if !schemaMigrationColumns.contains("details") {
+            try execute("ALTER TABLE schema_migrations ADD COLUMN details TEXT")
+        }
         let existingColumns = try tableColumns(name: "chunks", on: db)
         let atomicColumns = ["brick_id", "source_uri", "status", "ingested_at", "topic_cluster"]
         let atomicMigrationApplied = try schemaMigrationApplied(name: "atomic_brick_chunks_v1", on: db)

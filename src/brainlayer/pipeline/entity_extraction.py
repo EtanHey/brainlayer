@@ -11,11 +11,18 @@ and source provenance.
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+_FALSEY = {"0", "false", "no"}
+
+
+def _llm_extraction_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_LLM_ENTITY_EXTRACTION", "1").lower() not in _FALSEY
 
 
 @dataclass
@@ -312,7 +319,7 @@ def extract_entities_llm(
     Returns:
         Tuple of (entities, relations).
     """
-    if not text.strip():
+    if not text.strip() or (llm_caller is None and not _llm_extraction_enabled()):
         return [], []
 
     if llm_caller is None:

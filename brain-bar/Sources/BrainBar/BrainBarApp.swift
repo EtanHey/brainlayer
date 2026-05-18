@@ -7,6 +7,34 @@ enum BrainBarAppSupport {
     static func hotkeyPermissionFailureMessage(permissions: HotkeyPermissionStatus) -> String {
         "BrainBar could not start the fallback hotkey listener. Enable \(permissions.missingPermissionsMessage) in System Settings. The CGEventTap fallback requires both Input Monitoring and Accessibility."
     }
+
+    @MainActor
+    static func makeStatsCollector(
+        dbPath: String,
+        targetPID: pid_t,
+        brainBusEvents: BrainBusEventSource? = BrainBusClient(),
+        databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
+    ) -> StatsCollector {
+        StatsCollector(
+            dbPath: dbPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
+            brainBusEvents: brainBusEvents,
+            databaseOpenConfiguration: databaseOpenConfiguration
+        )
+    }
+
+    @MainActor
+    static func makeUIStatsCollector(
+        dbPath: String,
+        brainBusEvents: BrainBusEventSource? = BrainBusClient()
+    ) -> StatsCollector {
+        makeStatsCollector(
+            dbPath: dbPath,
+            targetPID: 0,
+            brainBusEvents: brainBusEvents,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+    }
 }
 
 @MainActor
@@ -14,19 +42,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
     private static let menuBarWindowAutosaveKey = "NSWindow Frame BrainBarMenuBarExtraWindow"
 
-    private var server: BrainBarServer?
+    private var statusPopoverController: BrainBarStatusPopoverController?
     private var legacyStatusItem: NSStatusItem?
     private var legacyPopover: NSPopover?
     private var collector: StatsCollector?
-    private var injectionStore: InjectionStore?
-    private var quickCapturePanel: QuickCapturePanelController?
     private var searchPanel: SearchPanelController?
     private var dashboardPanel: BrainBarDashboardPanelController?
     private var quickCaptureHotkey: HotkeyManager?
     private weak var menuBarExtraWindow: NSWindow?
     private weak var discoveredMenuBarWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
-    private var sharedDatabase: BrainDatabase?
     private var pendingBrainBarURLs: [URL] = []
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
     private var menuBarWindowObservers: [NSObjectProtocol] = []
@@ -47,11 +72,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startHotkeyFileWatcher()
 
-        if launchMode == .menuBarWindow {
-            UserDefaults.standard.removeObject(forKey: Self.menuBarWindowAutosaveKey)
-            dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
-        }
-
         let runningInstances = NSRunningApplication.runningApplications(
             withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brainlayer.BrainBar"
         )
@@ -69,47 +89,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.configureQuickCaptureHotkey()
         }
 
-        if launchMode == .legacyStatusItem {
+        if launchMode == .menuBarWindow {
+            statusPopoverController = BrainBarStatusPopoverController(runtime: runtime)
+        } else if launchMode == .legacyStatusItem {
             createLegacyStatusItem()
         }
 
         let dbPath = BrainBarServer.defaultDBPath()
-        NSLog("[BrainBar] Starting server before database readiness at %@", dbPath)
-        let server = BrainBarServer(dbPath: dbPath)
-        server.onStartRejected = { reason in
-            NSLog("[BrainBar] Startup rejected: %@", reason)
-            Task { @MainActor in
-                NSApp.terminate(nil)
-            }
-        }
-        server.onDatabaseReady = { [weak self] database in
-            Task { @MainActor in
-                guard let self else { return }
-                self.sharedDatabase = database
-                self.configureQuickCapture(database: database)
-                self.runtime.install(
-                    collector: self.collector ?? StatsCollector(
-                        dbPath: dbPath,
-                        daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-                    ),
-                    injectionStore: self.injectionStore,
-                    database: database
-                )
-                self.flushPendingBrainBarURLs()
-            }
-        }
-
-        let collector = StatsCollector(
+        NSLog("[BrainBar] Starting UI shell; daemon owns %@", BrainBarServer.defaultSocketPath())
+        let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            brainBusEvents: BrainBusClient()
         )
-        let injectionStore = try? InjectionStore(databasePath: dbPath)
-
-        self.server = server
         self.collector = collector
-        self.injectionStore = injectionStore
+        runtime.install(
+            collector: collector,
+            injectionStore: nil,
+            database: nil
+        )
 
-        server.start()
+        flushPendingBrainBarURLs()
 
         if launchMode == .legacyStatusItem {
             installLegacyMenuBarSurface(with: collector)
@@ -123,13 +122,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         menuBarWindowObservers.forEach(NotificationCenter.default.removeObserver)
         menuBarWindowObservers.removeAll()
+        statusPopoverController?.stop()
+        statusPopoverController = nil
         menuBarWindowSyncTask?.cancel()
         menuBarWindowSyncTask = nil
         hotkeyFileWatcher?.cancel()
         quickCaptureHotkey?.stop()
         collector?.stop()
-        injectionStore?.stop()
-        server?.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -147,17 +146,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         runtime.presentQuickAction(.search)
-        showMenuBarWindow(nil)
+        statusPopoverController?.show(nil)
     }
 
     func showQuickCapturePanel() {
         guard launchMode == .menuBarWindow else {
-            quickCapturePanel?.toggle()
+            NSLog("[BrainBar] Quick capture requires the menu-bar command surface in UI-split mode")
             return
         }
 
         runtime.presentQuickAction(.capture)
-        showMenuBarWindow(nil)
+        statusPopoverController?.show(nil)
     }
 
     private func configureRuntimeCallbacks() {
@@ -236,6 +235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if launchMode == .menuBarWindow, let statusPopoverController {
+            statusPopoverController.toggle(sender)
+            return
+        }
+
         if let dashboardPanel {
             dashboardPanel.toggle()
             return
@@ -284,10 +288,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if let statusPopoverController {
+            statusPopoverController.show(nil)
+            return
+        }
+
         dashboardPanel?.show()
     }
 
     private func showMenuBarWindow(_ sender: Any?) {
+        if launchMode == .menuBarWindow, let statusPopoverController {
+            statusPopoverController.show(sender)
+            return
+        }
+
         if launchMode == .menuBarWindow, let dashboardPanel {
             dashboardPanel.show()
             return
@@ -797,16 +811,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func configureQuickCapture(database: BrainDatabase) {
-        guard launchMode == .legacyStatusItem else { return }
-        guard quickCapturePanel == nil else { return }
-        quickCapturePanel = QuickCapturePanelController(db: database)
-        if searchPanel == nil {
-            searchPanel = SearchPanelController(db: database)
-        }
-        flushPendingBrainBarURLs()
-    }
-
     private func ingestBrainBarURLs(_ urls: [URL]) {
         for url in urls {
             guard BrainBarURLAction.parse(url: url) != nil else { continue }
@@ -827,18 +831,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// URL actions are dispatched once the backing surface is ready. In
-    /// menuBarWindow mode the command bar is driven by `runtime.database` +
-    /// the MenuBarExtra window, so readiness means the database has been
-    /// installed into the runtime. In legacy mode the floating panel still
-    /// drives routing.
     private func isReadyToHandleBrainBarURL() -> Bool {
-        switch launchMode {
-        case .menuBarWindow:
-            return runtime.database != nil
-        case .legacyStatusItem:
-            return quickCapturePanel != nil
-        }
+        true
     }
 
     private func handleBrainBarURL(_ url: URL) {
@@ -859,26 +853,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    private let launchMode = BrainBarLaunchMode.resolve()
 
     var body: some Scene {
-        MenuBarExtra(isInserted: .constant(launchMode == .menuBarWindow)) {
-            Button("Open Dashboard") {
-                appDelegate.showDashboardPanel()
-            }
-
-            Button("Search BrainLayer") {
-                appDelegate.showSearchPanel()
-            }
-
-            Button("Capture Note") {
-                appDelegate.showQuickCapturePanel()
-            }
-        } label: {
-            BrainBarMenuBarLabel(runtime: appDelegate.runtime)
-        }
-        .menuBarExtraStyle(.menu)
-
         Settings {
             EmptyView()
         }
@@ -897,30 +873,6 @@ struct BrainBarApp: App {
                     appDelegate.showQuickCapturePanel()
                 }
             }
-        }
-    }
-}
-
-private struct BrainBarMenuBarLabel: View {
-    @ObservedObject var runtime: BrainBarRuntime
-
-    var body: some View {
-        if let collector = runtime.collector {
-            let livePresentation = BrainBarLivePresentation.derive(stats: collector.stats)
-            HStack(spacing: 6) {
-                Image(systemName: "brain")
-                Image(
-                    nsImage: SparklineRenderer.render(
-                        state: collector.state,
-                        values: collector.stats.recentEnrichmentBuckets,
-                        size: NSSize(width: 22, height: 12),
-                        accentColor: livePresentation.accentColor
-                    )
-                )
-                .interpolation(.high)
-            }
-        } else {
-            Image(systemName: "brain")
         }
     }
 }
