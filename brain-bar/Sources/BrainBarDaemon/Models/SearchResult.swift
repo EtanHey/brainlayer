@@ -1,0 +1,1 @@
+../../BrainBar/Models/SearchResult.swift

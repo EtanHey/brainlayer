@@ -26,7 +26,7 @@ final class BrainBarRuntime: ObservableObject {
     func install(
         collector: StatsCollector,
         injectionStore: InjectionStore?,
-        database: BrainDatabase
+        database: BrainDatabase?
     ) {
         self.collector = collector
         self.injectionStore = injectionStore

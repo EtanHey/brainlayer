@@ -51,10 +51,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
 SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Apple Development: Etan Heyman (DXHB5E7P2D)}"
-PLIST_LABEL="com.brainlayer.brainbar"
-PLIST_FILENAME="$PLIST_LABEL.plist"
-PLIST_SRC="$BUNDLE_DIR/$PLIST_FILENAME"
-PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_FILENAME"
+UI_PLIST_LABEL="com.brainlayer.brainbar"
+DAEMON_PLIST_LABEL="com.brainlayer.brainbar-daemon"
+UI_PLIST_FILENAME="$UI_PLIST_LABEL.plist"
+DAEMON_PLIST_FILENAME="$DAEMON_PLIST_LABEL.plist"
+UI_PLIST_SRC="$BUNDLE_DIR/$UI_PLIST_FILENAME"
+DAEMON_PLIST_SRC="$BUNDLE_DIR/$DAEMON_PLIST_FILENAME"
+UI_PLIST_DST="$HOME/Library/LaunchAgents/$UI_PLIST_FILENAME"
+DAEMON_PLIST_DST="$HOME/Library/LaunchAgents/$DAEMON_PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
@@ -111,9 +115,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "[build-app] Repo: $CURRENT_REPO_ROOT"
     echo "[build-app] App path: $APP_DIR"
     if [ "$DEV_BUNDLE_BUILD" -eq 1 ]; then
-        echo "[build-app] LaunchAgent: skipped for DEV worktree build"
+        echo "[build-app] LaunchAgents: skipped for DEV worktree build"
     else
-        echo "[build-app] LaunchAgent: canonical install to $PLIST_DST"
+        echo "[build-app] UI LaunchAgent: canonical install to $UI_PLIST_DST"
+        echo "[build-app] Daemon LaunchAgent: canonical install to $DAEMON_PLIST_DST"
     fi
     exit 0
 fi
@@ -170,15 +175,29 @@ stamp_info_plist() {
 }
 
 bootout_launchagent() {
-    launchctl bootout "$LAUNCH_DOMAIN/$PLIST_LABEL" 2>/dev/null || true
-    if [ -f "$PLIST_DST" ]; then
-        launchctl bootout "$LAUNCH_DOMAIN" "$PLIST_DST" 2>/dev/null || true
+    launchctl bootout "$LAUNCH_DOMAIN/$UI_PLIST_LABEL" 2>/dev/null || true
+    launchctl bootout "$LAUNCH_DOMAIN/$DAEMON_PLIST_LABEL" 2>/dev/null || true
+    if [ -f "$UI_PLIST_DST" ]; then
+        launchctl bootout "$LAUNCH_DOMAIN" "$UI_PLIST_DST" 2>/dev/null || true
+    fi
+    if [ -f "$DAEMON_PLIST_DST" ]; then
+        launchctl bootout "$LAUNCH_DOMAIN" "$DAEMON_PLIST_DST" 2>/dev/null || true
     fi
 }
 
 wait_for_brainbar_exit() {
     for _ in $(seq 1 100); do
         if ! pgrep -x BrainBar > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
+wait_for_brainbar_daemon_exit() {
+    for _ in $(seq 1 100); do
+        if ! pgrep -x BrainBarDaemon > /dev/null 2>&1; then
             return 0
         fi
         sleep 0.2
@@ -199,9 +218,9 @@ wait_for_socket() {
 }
 
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
-    # Stop LaunchAgent first so KeepAlive cannot race the rebuild and unlink the
+    # Stop LaunchAgents first so KeepAlive cannot race the rebuild and unlink the
     # freshly rebound socket from an older instance that is still terminating.
-    echo "[build-app] Stopping LaunchAgent..."
+    echo "[build-app] Stopping LaunchAgents..."
     bootout_launchagent
 
     # Kill any running BrainBar instances before installing.
@@ -214,19 +233,34 @@ if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
             exit 1
         fi
     fi
+    if pgrep -x BrainBarDaemon > /dev/null 2>&1; then
+        echo "[build-app] Stopping running BrainBarDaemon instances..."
+        killall BrainBarDaemon 2>/dev/null || true
+        if ! wait_for_brainbar_daemon_exit; then
+            echo "[build-app] ERROR: BrainBarDaemon did not exit cleanly"
+            pgrep -fl BrainBarDaemon || true
+            exit 1
+        fi
+    fi
     rm -f "$SOCKET_PATH"
 else
     echo "[build-app] DEV worktree build: preserving canonical LaunchAgent and socket"
 fi
 
-echo "[build-app] Building BrainBar (release)..."
-swift build -c release --package-path "$PACKAGE_DIR"
+echo "[build-app] Building BrainBar and BrainBarDaemon (release)..."
+swift build -c release --package-path "$PACKAGE_DIR" --product BrainBar
+swift build -c release --package-path "$PACKAGE_DIR" --product BrainBarDaemon
 
 # Find the built binary
 BIN_DIR="$(swift build -c release --package-path "$PACKAGE_DIR" --show-bin-path)"
 BINARY="$BIN_DIR/BrainBar"
+DAEMON_BINARY="$BIN_DIR/BrainBarDaemon"
 if [ ! -f "$BINARY" ]; then
     echo "[build-app] ERROR: Binary not found at $BINARY"
+    exit 1
+fi
+if [ ! -f "$DAEMON_BINARY" ]; then
+    echo "[build-app] ERROR: Daemon binary not found at $DAEMON_BINARY"
     exit 1
 fi
 
@@ -242,6 +276,7 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
+cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
 
 COMMIT_SHA="$(git_commit)"
 DESCRIBE_REF="$(git_describe)"
@@ -266,19 +301,31 @@ fi
 # Register URL scheme with Launch Services (ensures brainbar:// works after rebuild)
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -R "$APP_DIR"
 
-# Install LaunchAgent (expands path to actual APP_DIR)
-if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ -f "$PLIST_SRC" ]; then
-    echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
-    bootout_launchagent
+install_launchagent() {
+    local source_plist="$1"
+    local target_plist="$2"
+    local label="$3"
+
+    echo "[build-app] Installing LaunchAgent to $target_plist..."
     TMP_PLIST="$(mktemp)"
     trap 'rm -f "$TMP_PLIST"' EXIT
-    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$TMP_PLIST"
+    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$source_plist" > "$TMP_PLIST"
     configure_launchagent_environment "$TMP_PLIST" "$CURRENT_REPO_ROOT"
-    mv "$TMP_PLIST" "$PLIST_DST"
+    mv "$TMP_PLIST" "$target_plist"
     trap - EXIT
-    launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DST"
-    launchctl kickstart -k "$LAUNCH_DOMAIN/$PLIST_LABEL"
-    echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"
+    launchctl bootstrap "$LAUNCH_DOMAIN" "$target_plist"
+    launchctl kickstart -k "$LAUNCH_DOMAIN/$label"
+}
+
+# Install LaunchAgents (expands path to actual APP_DIR)
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    if [ -f "$DAEMON_PLIST_SRC" ]; then
+        install_launchagent "$DAEMON_PLIST_SRC" "$DAEMON_PLIST_DST" "$DAEMON_PLIST_LABEL"
+    fi
+    if [ -f "$UI_PLIST_SRC" ]; then
+        install_launchagent "$UI_PLIST_SRC" "$UI_PLIST_DST" "$UI_PLIST_LABEL"
+    fi
+    echo "[build-app] LaunchAgents installed — daemon and UI restart independently"
 fi
 
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then

@@ -1967,9 +1967,14 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
+                applied_at TEXT NOT NULL,
+                details TEXT
             )
         """)
+        let schemaMigrationColumns = try tableColumns(name: "schema_migrations", on: db)
+        if !schemaMigrationColumns.contains("details") {
+            try execute("ALTER TABLE schema_migrations ADD COLUMN details TEXT")
+        }
         let existingColumns = try tableColumns(name: "chunks", on: db)
         let atomicColumns = ["brick_id", "source_uri", "status", "ingested_at", "topic_cluster"]
         let atomicMigrationApplied = try schemaMigrationApplied(name: "atomic_brick_chunks_v1", on: db)
