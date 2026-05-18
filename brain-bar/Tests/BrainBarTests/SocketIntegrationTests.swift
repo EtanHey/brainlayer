@@ -19,8 +19,7 @@ final class SocketIntegrationTests: XCTestCase {
         db = BrainDatabase(path: tempDBPath)
         server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
         server.start()
-        // Give server time to bind
-        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
     }
 
     override func tearDown() {
@@ -268,7 +267,7 @@ final class SocketIntegrationTests: XCTestCase {
         )
         server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db, hybridSearchClient: helper)
         server.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
 
         _ = try sendMCPRequest([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -506,7 +505,7 @@ final class SocketIntegrationTests: XCTestCase {
             flushDB.close()
         }
         server.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
 
         let subscriberFD = try connectClient()
         defer { close(subscriberFD) }
@@ -874,6 +873,17 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     // MARK: - Helper
+
+    private func waitForSocket(at path: String, timeout: TimeInterval = 3.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: path) {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return FileManager.default.fileExists(atPath: path)
+    }
 
     private func sendMCPRequest(_ request: [String: Any]) throws -> [String: Any] {
         let fd = try connectClient()
