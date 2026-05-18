@@ -59,6 +59,7 @@ LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
+BRAINLAYER_LOG_DIR="$HOME/Library/Logs/brainlayer"
 
 if [ -d "$CANONICAL_REPO_ROOT" ]; then
     CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd -P)"
@@ -222,6 +223,7 @@ fi
 echo "[build-app] Creating .app bundle at $APP_DIR..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
+mkdir -p "$BRAINLAYER_LOG_DIR"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
@@ -253,7 +255,10 @@ fi
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ -f "$PLIST_SRC" ]; then
     echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
     bootout_launchagent
-    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
+    sed \
+        -e "s|/Applications/BrainBar.app|$APP_DIR|g" \
+        -e "s|__HOME__|$HOME|g" \
+        "$PLIST_SRC" > "$PLIST_DST"
     launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DST"
     launchctl kickstart -k "$LAUNCH_DOMAIN/$PLIST_LABEL"
     echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"

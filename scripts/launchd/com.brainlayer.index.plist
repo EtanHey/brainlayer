@@ -15,14 +15,14 @@
     <integer>1800</integer>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/index.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/index.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/index.err</string>
+    <string>__HOME__/Library/Logs/brainlayer/index.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:__HOME__/.local/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>
@@ -32,5 +32,16 @@
 
     <key>Nice</key>
     <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
 </dict>
 </plist>

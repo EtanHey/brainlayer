@@ -22,12 +22,14 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/backup-daily.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/backup-daily.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.local/share/brainlayer/logs/backup-daily.err</string>
+    <string>__HOME__/Library/Logs/brainlayer/backup-daily.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
         <key>PYTHONPATH</key>
         <string>__BRAINLAYER_DIR__/src</string>
         <key>BRAINLAYER_BACKUP_DRIVE_FOLDER</key>
@@ -42,5 +44,12 @@
 
     <key>ProcessType</key>
     <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
 </dict>
 </plist>
