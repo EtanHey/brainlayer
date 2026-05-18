@@ -354,6 +354,43 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(result["structuredContent"])
     }
 
+    func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperFails() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "fallback-fts-result",
+            content: "techgym speakers workshop fallback result from BrainBar database search",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let helper = RecordingHybridSearchClient()
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 177,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "fallback", "num_results": 3]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.first?["text"] as? String ?? ""
+
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertTrue(text.contains("fallback-fts"), text)
+        XCTAssertNil(result["structuredContent"])
+    }
+
     func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-unread-helper-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -1680,18 +1717,4 @@ private func openSQLiteConnection(path: String) throws -> OpaquePointer {
         throw NSError(domain: "MCPRouterTests", code: Int(rc))
     }
     return db
-}
-
-private final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked Sendable {
-    private let response: HybridSearchResponse
-    private(set) var requests: [[String: Any]] = []
-
-    init(response: HybridSearchResponse) {
-        self.response = response
-    }
-
-    func search(arguments: [String: Any]) throws -> HybridSearchResponse {
-        requests.append(arguments)
-        return response
-    }
 }

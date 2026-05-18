@@ -34,6 +34,10 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         self.environment = environment
     }
 
+    deinit {
+        stop()
+    }
+
     static func defaultSocketPath() -> String {
         "/tmp/brainbar-hybrid-\(ProcessInfo.processInfo.processIdentifier).sock"
     }
@@ -48,11 +52,52 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
                 return candidate
             }
         }
-        let repoCandidate = "/Users/etanheyman/Gits/brainlayer/.venv/bin/python"
-        if FileManager.default.isExecutableFile(atPath: repoCandidate) {
-            return repoCandidate
+        if let repoRoot = normalizedRepoRoot(environment: environment) {
+            let candidate = "\(repoRoot)/.venv/bin/python"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        if let python3 = findExecutable(named: "python3", path: environment["PATH"]) {
+            return python3
+        }
+        if let python = findExecutable(named: "python", path: environment["PATH"]) {
+            return python
         }
         return "/usr/bin/env"
+    }
+
+    static func resolvePythonPath(environment: [String: String]) -> String? {
+        if let existing = environment["PYTHONPATH"], !existing.isEmpty {
+            return existing
+        }
+        guard let repoRoot = normalizedRepoRoot(environment: environment) else {
+            return nil
+        }
+        let sourcePath = "\(repoRoot)/src"
+        guard FileManager.default.fileExists(atPath: sourcePath) else {
+            return nil
+        }
+        return sourcePath
+    }
+
+    private static func normalizedRepoRoot(environment: [String: String]) -> String? {
+        guard let raw = environment["BRAINLAYER_REPO_ROOT"],
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: raw).standardizedFileURL.path
+    }
+
+    private static func findExecutable(named name: String, path: String?) -> String? {
+        let searchPath = path?.split(separator: ":").map(String.init) ?? []
+        for dir in searchPath where !dir.isEmpty {
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     func start() {
@@ -109,9 +154,10 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
         var env = environment
         env["BRAINLAYER_DB"] = dbPath
-        if env["PYTHONPATH"] == nil || env["PYTHONPATH"]?.isEmpty == true {
-            env["PYTHONPATH"] = "/Users/etanheyman/Gits/brainlayer/src"
+        if let pythonPath = Self.resolvePythonPath(environment: env) {
+            env["PYTHONPATH"] = pythonPath
         }
+        env["PYTHONUNBUFFERED"] = "1"
         proc.environment = env
         proc.standardInput = Pipe()
         proc.standardOutput = Pipe()

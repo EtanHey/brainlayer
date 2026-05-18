@@ -204,15 +204,17 @@ final class BrainBarServer: @unchecked Sendable {
             return
         }
 
+        let ownedHybridClient: HybridSearchHelperClient?
         let hybridClient: HybridSearchClientProtocol?
         if let providedHybridSearchClient {
+            ownedHybridClient = nil
             hybridClient = providedHybridSearchClient
         } else if providedDatabase == nil && enableHybridSearchHelper {
             let client = HybridSearchHelperClient(dbPath: dbPath)
-            client.start()
-            hybridSearchHelperClient = client
+            ownedHybridClient = client
             hybridClient = client
         } else {
+            ownedHybridClient = nil
             hybridClient = nil
         }
 
@@ -285,6 +287,11 @@ final class BrainBarServer: @unchecked Sendable {
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
         debugLog("SERVER STARTED — listening on \(socketPath)")
+
+        if let ownedHybridClient {
+            hybridSearchHelperClient = ownedHybridClient
+            ownedHybridClient.start()
+        }
 
         // 3. NOW open the database (may take time on cold start with 8 GB file).
         //    Connections accepted above queue in the listen backlog.

@@ -142,6 +142,22 @@ plist_set_string() {
     fi
 }
 
+configure_launchagent_environment() {
+    local plist_path="$1"
+    local repo_root="$2"
+    local python_path="$repo_root/.venv/bin/python"
+
+    "$PLIST_BUDDY" -c "Delete :EnvironmentVariables" "$plist_path" >/dev/null 2>&1 || true
+    "$PLIST_BUDDY" -c "Add :EnvironmentVariables dict" "$plist_path"
+    "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINLAYER_REPO_ROOT string \"$repo_root\"" "$plist_path"
+    if [ -d "$repo_root/src" ]; then
+        "$PLIST_BUDDY" -c "Add :EnvironmentVariables:PYTHONPATH string \"$repo_root/src\"" "$plist_path"
+    fi
+    if [ -x "$python_path" ]; then
+        "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINBAR_PYTHON string \"$python_path\"" "$plist_path"
+    fi
+}
+
 stamp_info_plist() {
     local plist_path="$1"
     local commit_sha="$2"
@@ -172,7 +188,8 @@ wait_for_brainbar_exit() {
 
 wait_for_socket() {
     local path="$1"
-    for _ in $(seq 1 100); do
+    local attempts="${BRAINBAR_SOCKET_WAIT_ATTEMPTS:-300}"
+    for _ in $(seq 1 "$attempts"); do
         if [ -S "$path" ]; then
             return 0
         fi
@@ -253,7 +270,10 @@ fi
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ -f "$PLIST_SRC" ]; then
     echo "[build-app] Installing LaunchAgent to $PLIST_DST..."
     bootout_launchagent
-    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
+    TMP_PLIST="$(mktemp)"
+    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$PLIST_SRC" > "$TMP_PLIST"
+    configure_launchagent_environment "$TMP_PLIST" "$CURRENT_REPO_ROOT"
+    mv "$TMP_PLIST" "$PLIST_DST"
     launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DST"
     launchctl kickstart -k "$LAUNCH_DOMAIN/$PLIST_LABEL"
     echo "[build-app] LaunchAgent installed — BrainBar will auto-restart after quit"
