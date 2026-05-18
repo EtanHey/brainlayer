@@ -103,7 +103,11 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
     func start() {
         queue.sync {
-            startLocked()
+            do {
+                try startLocked()
+            } catch {
+                NSLog("[BrainBar] Hybrid search helper startup deferred after failure: %@", String(describing: error))
+            }
         }
     }
 
@@ -117,12 +121,12 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
     func search(arguments: [String: Any]) throws -> HybridSearchResponse {
         try queue.sync {
-            startLocked()
+            try startLocked()
             return try send(arguments: arguments)
         }
     }
 
-    private func startLocked() {
+    private func startLocked() throws {
         if let process, process.isRunning {
             return
         }
@@ -171,6 +175,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         } catch {
             NSLog("[BrainBar] Failed to start hybrid search helper: %@", String(describing: error))
             process = nil
+            throw HybridSearchHelperError.launch(String(describing: error))
         }
     }
 
@@ -291,6 +296,7 @@ enum HybridSearchHelperError: LocalizedError {
     case connect(Int32)
     case write(Int32)
     case read(Int32)
+    case launch(String)
     case responseTooLarge(Int)
     case invalidResponse
     case helperError(String)
@@ -307,6 +313,8 @@ enum HybridSearchHelperError: LocalizedError {
             return "hybrid helper write failed: errno \(code)"
         case .read(let code):
             return "hybrid helper read failed: errno \(code)"
+        case .launch(let message):
+            return "hybrid helper launch failed: \(message)"
         case .responseTooLarge(let limit):
             return "hybrid helper response exceeded \(limit) bytes"
         case .invalidResponse:

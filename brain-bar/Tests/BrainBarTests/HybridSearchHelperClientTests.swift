@@ -47,4 +47,22 @@ final class HybridSearchHelperClientTests: XCTestCase {
 
         XCTAssertEqual(resolved, "/custom/pythonpath")
     }
+
+    func testSearchReportsLaunchFailureWithoutSocketRetry() throws {
+        let client = HybridSearchHelperClient(
+            socketPath: NSTemporaryDirectory() + "brainbar-missing-helper-\(UUID().uuidString).sock",
+            dbPath: "/tmp/brainlayer-test.db",
+            pythonExecutable: "/no/such/python",
+            environment: [:]
+        )
+
+        do {
+            _ = try client.search(arguments: ["query": "techgym speakers workshop"])
+            XCTFail("Expected launch failure")
+        } catch let error as HybridSearchHelperError {
+            guard case .launch = error else {
+                return XCTFail("Expected launch error, got \(error)")
+            }
+        }
+    }
 }
