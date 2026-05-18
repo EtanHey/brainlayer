@@ -20,6 +20,18 @@ final class MCPRouter: @unchecked Sendable {
         }
     }
 
+    private struct BackupVacuumResult: Encodable {
+        let status: String
+        let targetPath: String
+        let bytes: Int64
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case targetPath = "target_path"
+            case bytes
+        }
+    }
+
     private var database: BrainDatabase?
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
@@ -39,7 +51,8 @@ final class MCPRouter: @unchecked Sendable {
         "reason": 1_024,
         "session_id": 128,
         "source": 32,
-        "tag": 128
+        "tag": 128,
+        "target_path": 4_096
     ]
     private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
         "chunk_ids": (maxItems: 500, itemMaxLength: 128),
@@ -208,6 +221,8 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainAck(arguments)
         case "brain_maintenance_rebuild_trigram":
             return try handleBrainMaintenanceRebuildTrigram(arguments)
+        case "brain_backup_vacuum_into":
+            return try handleBrainBackupVacuumInto(arguments)
         default:
             throw ToolError.unknownTool(name)
         }
@@ -625,6 +640,22 @@ final class MCPRouter: @unchecked Sendable {
         )
     }
 
+    private func handleBrainBackupVacuumInto(_ args: [String: Any]) throws -> ToolOutput {
+        guard let targetPath = args["target_path"] as? String else {
+            throw ToolError.missingParameter("target_path")
+        }
+        guard let db = database else { throw ToolError.noDatabase }
+        let bytes = try db.vacuumInto(targetPath: targetPath)
+        let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
+        return ToolOutput(
+            text: jsonEncode(payload),
+            metadata: [
+                "target_path": targetPath,
+                "bytes": bytes,
+            ]
+        )
+    }
+
     /// Safe JSON encoding — never use string interpolation with user data.
     private func jsonEncode<T: Encodable>(_ value: T) -> String {
         guard let data = try? JSONEncoder().encode(value),
@@ -1021,6 +1052,18 @@ final class MCPRouter: @unchecked Sendable {
                     "seq": ["type": "integer", "description": "Highest chunk rowid acknowledged by the agent"],
                 ] as [String: Any],
                 "required": ["agent_id", "seq"]
+            ] as [String: Any])
+        ],
+        [
+            "name": "brain_backup_vacuum_into",
+            "description": "Create a SQLite backup snapshot using VACUUM INTO on BrainBar's single-writer connection.",
+            "annotations": MCPRouter.writeIdempotentAnnotations,
+            "inputSchema": MCPRouter.limitedInputSchema([
+                "type": "object",
+                "properties": [
+                    "target_path": ["type": "string", "description": "Absolute path for the new SQLite backup file"],
+                ] as [String: Any],
+                "required": ["target_path"]
             ] as [String: Any])
         ],
         [

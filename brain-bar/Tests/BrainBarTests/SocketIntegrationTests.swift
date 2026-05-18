@@ -3,6 +3,7 @@
 // Tests the full pipeline: connect to Unix socket → send Content-Length framed
 // MCP request → receive Content-Length framed response.
 
+import SQLite3
 import XCTest
 @testable import BrainBar
 
@@ -91,7 +92,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 16)
+        XCTAssertEqual(tools?.count, 17)
 
         let encodedResponse = try MCPFraming.encodeJSONResponse(response)
         XCTAssertGreaterThan(encodedResponse.count, 8192)
@@ -135,7 +136,7 @@ final class SocketIntegrationTests: XCTestCase {
             8192,
             "Claude Desktop's MCPB utility process parses raw extension stdout in 8192-byte chunks"
         )
-        XCTAssertEqual(tools?.count, 16)
+        XCTAssertEqual(tools?.count, 17)
         for tool in tools ?? [] {
             XCTAssertNil(
                 tool["annotations"],
@@ -166,6 +167,53 @@ final class SocketIntegrationTests: XCTestCase {
 
         XCTAssertNil(response["error"], "brain_search should not error")
         XCTAssertNotNil(response["result"])
+    }
+
+    func testBrainBackupVacuumIntoOverSocketCreatesRestorableSnapshot() throws {
+        let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0", "id": 20, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-test", "version": "1.0"]]
+        ])
+        _ = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "vacuum over socket",
+                    "tags": ["backup-test"]
+                ] as [String: Any]
+            ]
+        ])
+
+        let response = try sendMCPRequest([
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_backup_vacuum_into",
+                "arguments": ["target_path": targetPath]
+            ]
+        ])
+
+        XCTAssertNil(response["error"])
+        let result = response["result"] as? [String: Any]
+        XCTAssertEqual(result?["isError"] as? Bool, nil)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath))
+
+        var restored: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(targetPath, &restored, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { sqlite3_close(restored) }
+        XCTAssertEqual(try queryString("PRAGMA integrity_check", on: restored), "ok")
+        XCTAssertEqual(
+            try queryString("SELECT content FROM chunks WHERE content = 'vacuum over socket'", on: restored),
+            "vacuum over socket"
+        )
     }
 
     func testMCPBrainSubscribeOverSocketReturnsCursorState() throws {
@@ -705,7 +753,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let toolsResponse = try JSONSerialization.jsonObject(with: Data(outputLines[1].utf8)) as? [String: Any]
         let tools = (toolsResponse?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 16)
+        XCTAssertEqual(tools?.count, 17)
     }
 
     // MARK: - C2: Socket path length validation
@@ -739,6 +787,18 @@ final class SocketIntegrationTests: XCTestCase {
         defer { close(fd) }
         try sendMCPRequest(on: fd, request: request)
         return try readMCPMessage(fd: fd)
+    }
+
+    private func queryString(_ sql: String, on db: OpaquePointer?) throws -> String? {
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else {
+            throw NSError(domain: "sqlite", code: Int(rc), userInfo: [NSLocalizedDescriptionKey: "prepare failed \(rc)"])
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        guard let value = sqlite3_column_text(stmt, 0) else { return nil }
+        return String(cString: value)
     }
 
     private func connectClient() throws -> Int32 {

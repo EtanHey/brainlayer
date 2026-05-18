@@ -127,7 +127,7 @@ final class MCPRouterTests: XCTestCase {
         let tools = result?["tools"] as? [[String: Any]]
 
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 16, "Should have exactly 16 tools")
+        XCTAssertEqual(tools?.count, 17, "Should have exactly 17 tools")
 
         let toolNames = Set(tools?.compactMap { $0["name"] as? String } ?? [])
         let expected: Set<String> = [
@@ -135,7 +135,7 @@ final class MCPRouterTests: XCTestCase {
             "brain_digest", "brain_update", "brain_expand", "brain_tags",
             "brain_subscribe", "brain_unsubscribe", "brain_ack",
             "brain_get_person", "brain_supersede", "brain_archive", "brain_enrich",
-            "brain_maintenance_rebuild_trigram",
+            "brain_backup_vacuum_into", "brain_maintenance_rebuild_trigram",
         ]
         XCTAssertEqual(toolNames, expected)
     }
@@ -168,7 +168,7 @@ final class MCPRouterTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
 
-        XCTAssertEqual(tools.count, 16)
+        XCTAssertEqual(tools.count, 17)
         for tool in tools {
             XCTAssertNotNil(
                 tool["annotations"],
@@ -226,6 +226,7 @@ final class MCPRouterTests: XCTestCase {
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
+            "brain_backup_vacuum_into": (false, false, true, false),
             "brain_maintenance_rebuild_trigram": (false, false, true, false),
         ]
 
