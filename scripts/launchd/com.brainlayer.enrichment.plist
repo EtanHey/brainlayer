@@ -22,14 +22,14 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/enrichment.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/brainlayer-enrichment.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/enrichment.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:__HOME__/.local/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>PYTHONPATH</key>
@@ -50,11 +50,22 @@
 
     <key>RunAtLoad</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
 
     <key>Nice</key>
     <integer>10</integer>
 
     <key>ProcessType</key>
     <string>Background</string>
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+    <key>LowPriorityIO</key>
+    <false/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
 </dict>
 </plist>

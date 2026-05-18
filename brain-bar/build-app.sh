@@ -63,6 +63,7 @@ LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
+BRAINLAYER_LOG_DIR="$HOME/Library/Logs/brainlayer"
 
 if [ -d "$CANONICAL_REPO_ROOT" ]; then
     CANONICAL_REPO_ROOT="$(cd "$CANONICAL_REPO_ROOT" && pwd -P)"
@@ -273,6 +274,7 @@ fi
 echo "[build-app] Creating .app bundle at $APP_DIR..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
+mkdir -p "$BRAINLAYER_LOG_DIR"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
@@ -309,7 +311,10 @@ install_launchagent() {
     echo "[build-app] Installing LaunchAgent to $target_plist..."
     TMP_PLIST="$(mktemp)"
     trap 'rm -f "$TMP_PLIST"' EXIT
-    sed "s|/Applications/BrainBar.app|$APP_DIR|g" "$source_plist" > "$TMP_PLIST"
+    sed \
+        -e "s|/Applications/BrainBar.app|$APP_DIR|g" \
+        -e "s|__HOME__|$HOME|g" \
+        "$source_plist" > "$TMP_PLIST"
     configure_launchagent_environment "$TMP_PLIST" "$CURRENT_REPO_ROOT"
     mv "$TMP_PLIST" "$target_plist"
     trap - EXIT
