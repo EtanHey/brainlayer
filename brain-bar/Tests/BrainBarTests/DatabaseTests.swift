@@ -93,6 +93,36 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testReadOnlyOpenConfigurationAllowsDashboardReadsButRejectsWrites() throws {
+        try db.insertChunk(
+            id: "readonly-seed",
+            content: "Seed row for read-only dashboard stats",
+            sessionId: "readonly",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let reader = BrainDatabase(
+            path: tempDBPath,
+            openConfiguration: .init(readOnly: true)
+        )
+        defer { reader.close() }
+
+        let stats = try reader.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+        XCTAssertEqual(stats.chunkCount, 1)
+        XCTAssertThrowsError(
+            try reader.insertChunk(
+                id: "readonly-write",
+                content: "This write must not land from the UI process",
+                sessionId: "readonly",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+        )
+    }
+
     func testInjectionEventsTableExists() throws {
         let exists = try db.tableExists("injection_events")
         XCTAssertTrue(exists, "injection_events table must exist")
