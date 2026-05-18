@@ -297,7 +297,7 @@ final class MCPRouter: @unchecked Sendable {
                     detail: args["detail"] as? String
                 ))
                 textSection = response.text
-                metadata = response.metadata
+                metadata = sanitizedHybridMetadata(response.metadata)
                 kgSection = ""
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
@@ -318,6 +318,14 @@ final class MCPRouter: @unchecked Sendable {
             return ToolOutput(text: textSection, metadata: metadata)
         }
         return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+    }
+
+    private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
+        var allowed: [String: Any] = [:]
+        if let structuredContent = metadata["structuredContent"] {
+            allowed["structuredContent"] = structuredContent
+        }
+        return allowed
     }
 
     private func hybridSearchArguments(

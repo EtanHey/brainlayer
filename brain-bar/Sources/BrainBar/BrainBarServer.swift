@@ -290,7 +290,11 @@ final class BrainBarServer: @unchecked Sendable {
 
         if let ownedHybridClient {
             hybridSearchHelperClient = ownedHybridClient
-            ownedHybridClient.start()
+            do {
+                try ownedHybridClient.start()
+            } catch {
+                NSLog("[BrainBar] Hybrid search helper startup deferred after failure: %@", String(describing: error))
+            }
         }
 
         // 3. NOW open the database (may take time on cold start with 8 GB file).

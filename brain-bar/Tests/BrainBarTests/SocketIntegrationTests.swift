@@ -420,8 +420,11 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         let flushDB = BrainDatabase(path: dbPath)
-        defer { flushDB.close() }
         server = BrainBarServer(socketPath: testSocketPath, dbPath: dbPath, database: flushDB)
+        defer {
+            server.stop()
+            flushDB.close()
+        }
         server.start()
         Thread.sleep(forTimeInterval: 0.2)
 
