@@ -92,7 +92,9 @@ final class BrainBarServer: @unchecked Sendable {
     private let providedDatabase: BrainDatabase?
     private let databaseRecoveryPolicy: DatabaseRecoveryPolicy
     private let instanceLockPath: String
+    private static let queueKey = DispatchSpecificKey<UUID>()
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.server", qos: .userInitiated)
+    private let queueID = UUID()
     private var listenFD: Int32 = -1
     private var listenSource: DispatchSourceRead?
     private var clients: [Int32: ClientState] = [:]
@@ -160,6 +162,7 @@ final class BrainBarServer: @unchecked Sendable {
         self.enableHybridSearchHelper = enableHybridSearchHelper
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
+        queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
     static func defaultSocketPath() -> String {
@@ -556,10 +559,21 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private func sendBrainBusFrame(fd: Int32, data: Data) -> Bool {
+        if DispatchQueue.getSpecific(key: Self.queueKey) == queueID {
+            guard clients[fd] != nil else { return false }
+            return writeFramedData(fd: fd, data: data)
+        }
+        return queue.sync {
+            guard clients[fd] != nil else { return false }
+            return writeFramedData(fd: fd, data: data)
+        }
+    }
+
     private func handleWatchBrainBus(fd: Int32) -> [String: Any] {
         guard var client = clients[fd] else { return [:] }
         if let existing = client.brainBusSubscriptionID {
-            brainBus.unsubscribe(existing)
+            brainBus.unsubscribeSynchronously(existing)
         }
 
         let useContentLength = client.usesContentLengthFraming
@@ -579,7 +593,7 @@ final class BrainBarServer: @unchecked Sendable {
                 return true
             }
 
-            let delivered = self.writeFramedData(fd: fd, data: framed)
+            let delivered = self.sendBrainBusFrame(fd: fd, data: framed)
             if !delivered {
                 self.queue.async { [weak self] in
                     self?.disconnectClient(fd: fd)
@@ -632,7 +646,7 @@ final class BrainBarServer: @unchecked Sendable {
 
     private func disconnectClient(fd: Int32) {
         if let subscriptionID = clients[fd]?.brainBusSubscriptionID {
-            brainBus.unsubscribe(subscriptionID)
+            brainBus.unsubscribeSynchronously(subscriptionID)
         }
         if let agentID = clients[fd]?.agentID {
             try? database?.markSubscriberDisconnected(agentID: agentID)
@@ -648,6 +662,9 @@ final class BrainBarServer: @unchecked Sendable {
         listenSource?.cancel()
         listenSource = nil
         for (_, state) in clients {
+            if let subscriptionID = state.brainBusSubscriptionID {
+                brainBus.unsubscribeSynchronously(subscriptionID)
+            }
             state.source.cancel()
         }
         clients.removeAll()

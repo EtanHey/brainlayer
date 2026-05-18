@@ -94,7 +94,9 @@ final class BrainBusEventHub: @unchecked Sendable {
         var isDraining = false
     }
 
+    private static let queueKey = DispatchSpecificKey<UUID>()
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.brain-bus")
+    private let queueID = UUID()
     private let bufferCapacity: Int
     private var nextSequence = 0
     private var subscribers: [SubscriptionID: Subscriber] = [:]
@@ -102,6 +104,7 @@ final class BrainBusEventHub: @unchecked Sendable {
 
     init(bufferCapacity: Int = 64, heartbeatInterval: TimeInterval? = 5) {
         self.bufferCapacity = max(1, bufferCapacity)
+        queue.setSpecific(key: Self.queueKey, value: queueID)
         if let heartbeatInterval {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + heartbeatInterval, repeating: heartbeatInterval, leeway: .milliseconds(100))
@@ -130,6 +133,16 @@ final class BrainBusEventHub: @unchecked Sendable {
 
     func unsubscribe(_ id: SubscriptionID) {
         queue.async {
+            self.subscribers.removeValue(forKey: id)
+        }
+    }
+
+    func unsubscribeSynchronously(_ id: SubscriptionID) {
+        if DispatchQueue.getSpecific(key: Self.queueKey) == queueID {
+            subscribers.removeValue(forKey: id)
+            return
+        }
+        _ = queue.sync {
             self.subscribers.removeValue(forKey: id)
         }
     }

@@ -161,6 +161,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             return
         }
 
+        try Self.validateSocketPath(socketPath)
         unlink(socketPath)
 
         let proc = Process()
@@ -253,11 +254,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
 
             var addr = sockaddr_un()
             addr.sun_family = sa_family_t(AF_UNIX)
-            let pathBytes = socketPath.utf8CString
-            guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-                close(fd)
-                throw HybridSearchHelperError.socketPathTooLong(socketPath)
-            }
+            let pathBytes = try Self.validateSocketPath(socketPath)
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
                     pathBytes.withUnsafeBufferPointer { src in
@@ -285,6 +282,16 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             usleep(useconds_t(min(50_000 + attempt * 10_000, 250_000)))
         }
         throw HybridSearchHelperError.connect(lastErrno)
+    }
+
+    @discardableResult
+    static func validateSocketPath(_ path: String) throws -> ContiguousArray<CChar> {
+        let pathBytes = path.utf8CString
+        let addr = sockaddr_un()
+        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            throw HybridSearchHelperError.socketPathTooLong(path)
+        }
+        return ContiguousArray(pathBytes)
     }
 
     static func configureNoSigpipe(fd: Int32) throws {

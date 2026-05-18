@@ -56,6 +56,21 @@ final class BrainBusEventHubTests: XCTestCase {
         XCTAssertLessThan(delivered.count, 20)
         XCTAssertEqual(delivered.last?.sequence, 20)
     }
+
+    func testSynchronousUnsubscribeRemovesSubscriberBeforeReturn() throws {
+        let hub = BrainBusEventHub(bufferCapacity: 8, heartbeatInterval: nil)
+        let received = LockedBrainBusEvents()
+        let subscription = hub.subscribe { event in
+            received.append(event)
+            return true
+        }
+
+        hub.unsubscribeSynchronously(subscription)
+        hub.publish(.queueDepth(1))
+        Thread.sleep(forTimeInterval: 0.05)
+
+        XCTAssertEqual(received.count, 0)
+    }
 }
 
 private final class LockedBrainBusEvents: @unchecked Sendable {

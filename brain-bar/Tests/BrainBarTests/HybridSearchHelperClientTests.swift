@@ -50,7 +50,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
 
     func testSearchReportsLaunchFailureWithoutSocketRetry() throws {
         let client = HybridSearchHelperClient(
-            socketPath: NSTemporaryDirectory() + "brainbar-missing-helper-\(UUID().uuidString).sock",
+            socketPath: "/tmp/bb-missing-\(UUID().uuidString).sock",
             dbPath: "/tmp/brainlayer-test.db",
             pythonExecutable: "/no/such/python",
             environment: [:]
@@ -63,6 +63,26 @@ final class HybridSearchHelperClientTests: XCTestCase {
             guard case .launch = error else {
                 return XCTFail("Expected launch error, got \(error)")
             }
+        }
+    }
+
+    func testSearchRejectsTooLongSocketPathBeforeLaunch() throws {
+        let longPath = "/tmp/" + String(repeating: "x", count: 200) + ".sock"
+        let client = HybridSearchHelperClient(
+            socketPath: longPath,
+            dbPath: "/tmp/brainlayer-test.db",
+            pythonExecutable: "/no/such/python",
+            environment: [:]
+        )
+
+        do {
+            _ = try client.search(arguments: ["query": "techgym speakers workshop"])
+            XCTFail("Expected socket path validation failure")
+        } catch let error as HybridSearchHelperError {
+            guard case .socketPathTooLong(let path) = error else {
+                return XCTFail("Expected socket path error, got \(error)")
+            }
+            XCTAssertEqual(path, longPath)
         }
     }
 
