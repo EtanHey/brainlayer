@@ -85,4 +85,20 @@ final class HybridSearchHelperClientTests: XCTestCase {
         XCTAssertTrue(errno == EAGAIN || errno == EWOULDBLOCK)
         XCTAssertLessThan(elapsed, 1.0)
     }
+
+    func testConfigureNoSigpipeAcceptsOpenUnixSocket() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0)
+        defer {
+            close(fds[0])
+            close(fds[1])
+        }
+
+        try HybridSearchHelperClient.configureNoSigpipe(fd: fds[0])
+
+        var value: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        XCTAssertEqual(getsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &value, &length), 0)
+        XCTAssertEqual(value, 1)
+    }
 }
