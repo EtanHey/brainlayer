@@ -108,7 +108,8 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
 
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
-    assert "LaunchAgent: canonical install" in result.stdout
+    assert "UI LaunchAgent: canonical install" in result.stdout
+    assert "Daemon LaunchAgent: canonical install" in result.stdout
 
 
 def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
@@ -174,7 +175,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
 
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
-    assert "LaunchAgent: skipped for DEV worktree build" in result.stdout
+    assert "LaunchAgents: skipped for DEV worktree build" in result.stdout
 
 
 def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) -> None:
@@ -306,3 +307,22 @@ def test_build_app_rejects_untracked_dirty_repo_even_when_status_hides_untracked
     assert result.returncode != 0
     assert "dirty" in result.stderr.lower()
     assert "UNTRACKED.txt" in result.stderr
+
+
+def test_brainbar_daemon_launchagent_runs_interactive_daemon_binary() -> None:
+    plist = Path(__file__).resolve().parents[1] / "brain-bar" / "bundle" / "com.brainlayer.brainbar-daemon.plist"
+    content = plist.read_text()
+
+    assert "<string>com.brainlayer.brainbar-daemon</string>" in content
+    assert "<string>/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon</string>" in content
+    assert "<key>ProcessType</key>" in content
+    assert "<string>Interactive</string>" in content
+
+
+def test_brainbar_package_declares_separate_ui_and_daemon_products() -> None:
+    package = Path(__file__).resolve().parents[1] / "brain-bar" / "Package.swift"
+    content = package.read_text()
+
+    assert '.executable(name: "BrainBar", targets: ["BrainBar"])' in content
+    assert '.executable(name: "BrainBarDaemon", targets: ["BrainBarDaemon"])' in content
+    assert 'path: "Sources/BrainBarDaemon"' in content

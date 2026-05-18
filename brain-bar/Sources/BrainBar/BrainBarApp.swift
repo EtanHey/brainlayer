@@ -20,6 +20,18 @@ enum BrainBarAppSupport {
             brainBusEvents: brainBusEvents
         )
     }
+
+    @MainActor
+    static func makeUIStatsCollector(
+        dbPath: String,
+        brainBusEvents: BrainBusEventSource? = BrainBusClient()
+    ) -> StatsCollector {
+        makeStatsCollector(
+            dbPath: dbPath,
+            targetPID: 0,
+            brainBusEvents: brainBusEvents
+        )
+    }
 }
 
 @MainActor
@@ -27,20 +39,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
     private static let menuBarWindowAutosaveKey = "NSWindow Frame BrainBarMenuBarExtraWindow"
 
-    private var server: BrainBarServer?
     private var statusPopoverController: BrainBarStatusPopoverController?
     private var legacyStatusItem: NSStatusItem?
     private var legacyPopover: NSPopover?
     private var collector: StatsCollector?
-    private var injectionStore: InjectionStore?
-    private var quickCapturePanel: QuickCapturePanelController?
     private var searchPanel: SearchPanelController?
     private var dashboardPanel: BrainBarDashboardPanelController?
     private var quickCaptureHotkey: HotkeyManager?
     private weak var menuBarExtraWindow: NSWindow?
     private weak var discoveredMenuBarWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
-    private var sharedDatabase: BrainDatabase?
     private var pendingBrainBarURLs: [URL] = []
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
     private var menuBarWindowObservers: [NSObjectProtocol] = []
@@ -85,44 +93,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let dbPath = BrainBarServer.defaultDBPath()
-        NSLog("[BrainBar] Starting server before database readiness at %@", dbPath)
-        let server = BrainBarServer(dbPath: dbPath)
-        server.onStartRejected = { reason in
-            NSLog("[BrainBar] Startup rejected: %@", reason)
-            Task { @MainActor in
-                NSApp.terminate(nil)
-            }
-        }
-        server.onDatabaseReady = { [weak self] database in
-            Task { @MainActor in
-                guard let self else { return }
-                self.sharedDatabase = database
-                self.configureQuickCapture(database: database)
-                self.runtime.install(
-                    collector: self.collector ?? BrainBarAppSupport.makeStatsCollector(
-                        dbPath: dbPath,
-                        targetPID: ProcessInfo.processInfo.processIdentifier,
-                        brainBusEvents: BrainBusClient()
-                    ),
-                    injectionStore: self.injectionStore,
-                    database: database
-                )
-                self.flushPendingBrainBarURLs()
-            }
-        }
-
-        let collector = BrainBarAppSupport.makeStatsCollector(
+        NSLog("[BrainBar] Starting UI shell; daemon owns %@", BrainBarServer.defaultSocketPath())
+        let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
-            targetPID: ProcessInfo.processInfo.processIdentifier,
             brainBusEvents: BrainBusClient()
         )
-        let injectionStore = try? InjectionStore(databasePath: dbPath)
-
-        self.server = server
         self.collector = collector
-        self.injectionStore = injectionStore
+        runtime.install(
+            collector: collector,
+            injectionStore: nil,
+            database: nil
+        )
 
-        server.start()
+        flushPendingBrainBarURLs()
 
         if launchMode == .legacyStatusItem {
             installLegacyMenuBarSurface(with: collector)
@@ -143,8 +126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyFileWatcher?.cancel()
         quickCaptureHotkey?.stop()
         collector?.stop()
-        injectionStore?.stop()
-        server?.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -167,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showQuickCapturePanel() {
         guard launchMode == .menuBarWindow else {
-            quickCapturePanel?.toggle()
+            NSLog("[BrainBar] Quick capture requires the menu-bar command surface in UI-split mode")
             return
         }
 
@@ -827,16 +808,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func configureQuickCapture(database: BrainDatabase) {
-        guard launchMode == .legacyStatusItem else { return }
-        guard quickCapturePanel == nil else { return }
-        quickCapturePanel = QuickCapturePanelController(db: database)
-        if searchPanel == nil {
-            searchPanel = SearchPanelController(db: database)
-        }
-        flushPendingBrainBarURLs()
-    }
-
     private func ingestBrainBarURLs(_ urls: [URL]) {
         for url in urls {
             guard BrainBarURLAction.parse(url: url) != nil else { continue }
@@ -857,18 +828,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// URL actions are dispatched once the backing surface is ready. In
-    /// menuBarWindow mode the command bar is driven by `runtime.database` +
-    /// the MenuBarExtra window, so readiness means the database has been
-    /// installed into the runtime. In legacy mode the floating panel still
-    /// drives routing.
     private func isReadyToHandleBrainBarURL() -> Bool {
-        switch launchMode {
-        case .menuBarWindow:
-            return runtime.database != nil
-        case .legacyStatusItem:
-            return quickCapturePanel != nil
-        }
+        true
     }
 
     private func handleBrainBarURL(_ url: URL) {
