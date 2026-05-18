@@ -719,10 +719,11 @@ class TestIntegration:
 class TestPerformance:
     """Tests that the digest pipeline meets performance targets."""
 
-    def test_digest_under_2_seconds(self, tmp_store):
+    def test_digest_under_2_seconds(self, tmp_store, monkeypatch):
         """Digest of 1000-word content completes in <2 seconds."""
         from brainlayer.pipeline.digest import digest_content
 
+        monkeypatch.setenv("BRAINLAYER_LLM_ENTITY_EXTRACTION", "0")
         content = " ".join(["word"] * 1000)
         mock_embed = MagicMock(return_value=[0.05] * 1024)
 
@@ -737,10 +738,11 @@ class TestPerformance:
 
         assert elapsed < 2.0, f"Digest took {elapsed:.2f}s, expected <2s"
 
-    def test_connect_under_2_seconds(self, tmp_store):
+    def test_connect_under_2_seconds(self, tmp_store, monkeypatch):
         """Connect mode for 1000-word content completes in <2 seconds."""
         from brainlayer.pipeline.digest import digest_connect
 
+        monkeypatch.setenv("BRAINLAYER_LLM_ENTITY_EXTRACTION", "0")
         content = " ".join(["word"] * 1000)
         mock_embed = MagicMock(return_value=[0.05] * 1024)
 

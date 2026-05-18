@@ -3,6 +3,8 @@ import XCTest
 @testable import BrainBar
 
 final class HybridSearchHelperClientTests: XCTestCase {
+    deinit {}
+
     func testResolvePythonExecutableUsesInstallTimeRepoRoot() throws {
         let repoRoot = NSTemporaryDirectory() + "brainbar-helper-repo-\(UUID().uuidString)"
         let pythonPath = "\(repoRoot)/.venv/bin/python"

@@ -15,6 +15,7 @@ protocol HybridSearchClientProtocol: AnyObject, Sendable {
 }
 
 final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sendable {
+    private static let maxResponseBytes = 10 * 1024 * 1024
     private let socketPath: String
     private let dbPath: String
     private let pythonExecutable: String
@@ -160,7 +161,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         env["PYTHONUNBUFFERED"] = "1"
         proc.environment = env
         proc.standardInput = Pipe()
-        proc.standardOutput = Pipe()
+        proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.standardError
 
         do {
@@ -273,6 +274,9 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
                 break
             }
             result.append(byte)
+            if result.count > Self.maxResponseBytes {
+                throw HybridSearchHelperError.responseTooLarge(Self.maxResponseBytes)
+            }
         }
         guard !result.isEmpty else {
             throw HybridSearchHelperError.invalidResponse
@@ -287,6 +291,7 @@ enum HybridSearchHelperError: LocalizedError {
     case connect(Int32)
     case write(Int32)
     case read(Int32)
+    case responseTooLarge(Int)
     case invalidResponse
     case helperError(String)
 
@@ -302,6 +307,8 @@ enum HybridSearchHelperError: LocalizedError {
             return "hybrid helper write failed: errno \(code)"
         case .read(let code):
             return "hybrid helper read failed: errno \(code)"
+        case .responseTooLarge(let limit):
+            return "hybrid helper response exceeded \(limit) bytes"
         case .invalidResponse:
             return "hybrid helper returned an invalid response"
         case .helperError(let message):
