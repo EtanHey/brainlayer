@@ -12,12 +12,14 @@ enum BrainBarAppSupport {
     static func makeStatsCollector(
         dbPath: String,
         targetPID: pid_t,
-        brainBusEvents: BrainBusEventSource? = BrainBusClient()
+        brainBusEvents: BrainBusEventSource? = BrainBusClient(),
+        databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) -> StatsCollector {
         StatsCollector(
             dbPath: dbPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
-            brainBusEvents: brainBusEvents
+            brainBusEvents: brainBusEvents,
+            databaseOpenConfiguration: databaseOpenConfiguration
         )
     }
 
@@ -29,7 +31,8 @@ enum BrainBarAppSupport {
         makeStatsCollector(
             dbPath: dbPath,
             targetPID: 0,
-            brainBusEvents: brainBusEvents
+            brainBusEvents: brainBusEvents,
+            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
     }
 }

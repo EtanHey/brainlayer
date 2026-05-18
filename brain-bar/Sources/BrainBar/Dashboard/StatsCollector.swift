@@ -38,9 +38,10 @@ final class StatsCollector: ObservableObject {
         dbPath: String,
         daemonMonitor: DaemonHealthMonitor,
         agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
-        brainBusEvents: BrainBusEventSource? = nil
+        brainBusEvents: BrainBusEventSource? = nil,
+        databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
-        self.database = BrainDatabase(path: dbPath)
+        self.database = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
         self.daemonMonitor = daemonMonitor
         self.agentActivityMonitor = agentActivityMonitor
         self.brainBusEvents = brainBusEvents
@@ -94,6 +95,7 @@ final class StatsCollector: ObservableObject {
         agentActivity = agentActivityMonitor.sample()
 
         do {
+            database.reopenIfNeeded()
             let currentDataVersion = try database.dataVersion()
             if force || currentDataVersion != lastDataVersion {
                 stats = try database.dashboardStats(
