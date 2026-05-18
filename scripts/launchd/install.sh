@@ -39,7 +39,7 @@ if [ ! -x "$BRAINLAYER_BIN" ]; then
     exit 1
 fi
 
-mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
+mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
 mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
 
 resolve_google_api_key() {

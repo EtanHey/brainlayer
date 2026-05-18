@@ -18,14 +18,14 @@
     </array>
 
     <key>StandardOutPath</key>
-    <string>/Users/etanheyman/.local/share/brainlayer/logs/watch.log</string>
+    <string>/Users/etanheyman/Library/Logs/brainlayer/watch.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/etanheyman/.local/share/brainlayer/logs/watch.err</string>
+    <string>/Users/etanheyman/Library/Logs/brainlayer/watch.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/Users/etanheyman/.local/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/etanheyman/.local/bin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>AXIOM_TOKEN</key>
@@ -46,5 +46,14 @@
 
     <key>ProcessType</key>
     <string>Background</string>
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
 </dict>
 </plist>
