@@ -271,6 +271,50 @@ class TestBrainSearchToSearch:
         assert store.kg_hybrid_search.call_args[1]["include_checkpoints"] is True
         mock_search.assert_not_awaited()
 
+    def test_source_all_does_not_skip_entity_routing(self):
+        """source='all' means unfiltered global search, not an active source filter."""
+        store = MagicMock(count=MagicMock(return_value=100))
+        store.kg_hybrid_search.return_value = {
+            "chunks": {
+                "ids": [[]],
+                "documents": [[]],
+                "metadatas": [[]],
+                "distances": [[]],
+            }
+        }
+        fact_items = [{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch("brainlayer.mcp.search_handler._expanded_fts_query", return_value=None),
+            patch(
+                "brainlayer.mcp.search_handler._get_embedding_model",
+                return_value=MagicMock(embed_query=MagicMock(return_value=[0.1] * 1024)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._detect_entities",
+                return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
+            ) as mock_detect,
+            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=fact_items),
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ) as mock_search,
+            patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
+        ):
+            _content, structured = asyncio.run(
+                _brain_search(
+                    query="Etan BrainLayer context",
+                    source="all",
+                )
+            )
+
+        mock_detect.assert_called_once_with("Etan BrainLayer context", store)
+        store.kg_hybrid_search.assert_called_once()
+        mock_search.assert_not_awaited()
+        assert structured["entity"] == "Etan"
+        assert structured["facts"] == fact_items
+
 
 # ── Input schema validation ──────────────────────────────────────────────────
 

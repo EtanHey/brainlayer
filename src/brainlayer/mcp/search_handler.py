@@ -618,6 +618,7 @@ async def _brain_search(
         return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
 
     store = _get_vector_store()
+    effective_source = None if source == "all" else source
     exact_chunk_hit = _exact_chunk_lookup_result(
         query,
         store,
@@ -628,7 +629,7 @@ async def _brain_search(
         importance_min=importance_min,
         date_from=date_from,
         date_to=date_to,
-        source=source,
+        source=effective_source,
         intent=intent,
         sentiment=sentiment,
         source_filter=source_filter,
@@ -647,7 +648,7 @@ async def _brain_search(
     has_active_filters = any(
         [
             content_type,
-            source,
+            effective_source,
             tag,
             intent,
             importance_min,
