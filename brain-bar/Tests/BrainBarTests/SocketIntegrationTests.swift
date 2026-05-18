@@ -225,7 +225,7 @@ final class SocketIntegrationTests: XCTestCase {
 
     func testMCPBrainSearchOverSocketUsesInjectedHybridHelper() throws {
         server.stop()
-        let helper = SocketRecordingHybridSearchClient(
+        let helper = RecordingHybridSearchClient(
             response: HybridSearchResponse(
                 text: #"""
 ┌─ brain_search: "techgym speakers workshop" ─ 1 result
@@ -1032,19 +1032,5 @@ final class SocketIntegrationTests: XCTestCase {
             }
         }
         throw NSError(domain: "test", code: 5, userInfo: [NSLocalizedDescriptionKey: "Timeout reading line JSON"])
-    }
-}
-
-private final class SocketRecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked Sendable {
-    private let response: HybridSearchResponse
-    private(set) var requests: [[String: Any]] = []
-
-    init(response: HybridSearchResponse) {
-        self.response = response
-    }
-
-    func search(arguments: [String: Any]) throws -> HybridSearchResponse {
-        requests.append(arguments)
-        return response
     }
 }

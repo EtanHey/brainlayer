@@ -66,6 +66,7 @@ class HybridSearchHelper:
                         break
                     raise
                 with conn:
+                    conn.settimeout(0.25)
                     self._handle_connection(conn)
         finally:
             server.close()
@@ -91,17 +92,22 @@ class HybridSearchHelper:
     @staticmethod
     def _read_line(conn: socket.socket) -> bytes:
         chunks: list[bytes] = []
+        total = 0
         while True:
             chunk = conn.recv(65536)
             if not chunk:
                 break
             if b"\n" in chunk:
                 before, _, _ = chunk.partition(b"\n")
+                total += len(before)
+                if total > 1_000_000:
+                    raise ValueError("request exceeds 1MB")
                 chunks.append(before)
                 break
-            chunks.append(chunk)
-            if sum(len(part) for part in chunks) > 1_000_000:
+            total += len(chunk)
+            if total > 1_000_000:
                 raise ValueError("request exceeds 1MB")
+            chunks.append(chunk)
         if not chunks:
             raise ValueError("empty request")
         return b"".join(chunks)
@@ -157,19 +163,28 @@ class HybridSearchHelper:
         text = getattr(content, "text", None)
         if text is not None:
             return str(text)
+        if isinstance(content, dict):
+            text = content.get("text")
+            if text is not None:
+                return str(text)
         return str(content)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BrainBar persistent hybrid search helper")
     parser.add_argument("--socket-path", required=True)
-    parser.add_argument("--db-path", required=True)
+    parser.add_argument("--db-path")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    helper = HybridSearchHelper(socket_path=Path(args.socket_path), db_path=Path(args.db_path))
+    if args.db_path:
+        os.environ["BRAINLAYER_DB"] = args.db_path
+
+    from brainlayer.paths import get_db_path
+
+    helper = HybridSearchHelper(socket_path=Path(args.socket_path), db_path=get_db_path())
     signal.signal(signal.SIGTERM, helper.stop)
     signal.signal(signal.SIGINT, helper.stop)
     helper.serve_forever()

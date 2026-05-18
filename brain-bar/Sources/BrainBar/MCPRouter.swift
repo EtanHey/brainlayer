@@ -276,21 +276,7 @@ final class MCPRouter: @unchecked Sendable {
             }
         }
 
-        let textSection: String
-        let metadata: [String: Any]
-        if let hybridSearchClient, subscriberID == nil, !unreadOnly {
-            let response = try hybridSearchClient.search(arguments: hybridSearchArguments(
-                query: query,
-                limit: limit,
-                project: project,
-                source: source,
-                tag: tag,
-                importanceMin: importanceMin,
-                detail: args["detail"] as? String
-            ))
-            textSection = response.text
-            metadata = response.metadata
-        } else {
+        func searchViaBrainBarDatabase() throws -> (text: String, metadata: [String: Any]) {
             let results = try db.search(
                 query: query,
                 limit: limit,
@@ -302,8 +288,37 @@ final class MCPRouter: @unchecked Sendable {
                 unreadOnly: unreadOnly
             )
             let typedResults = results.map(SearchResult.init(payload:))
-            textSection = TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count)
-            metadata = [:]
+            return (
+                TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count),
+                [:]
+            )
+        }
+
+        let textSection: String
+        let metadata: [String: Any]
+        if let hybridSearchClient, subscriberID == nil, !unreadOnly {
+            do {
+                let response = try hybridSearchClient.search(arguments: hybridSearchArguments(
+                    query: query,
+                    limit: limit,
+                    project: project,
+                    source: source,
+                    tag: tag,
+                    importanceMin: importanceMin,
+                    detail: args["detail"] as? String
+                ))
+                textSection = response.text
+                metadata = response.metadata
+            } catch {
+                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
+                let fallback = try searchViaBrainBarDatabase()
+                textSection = fallback.text
+                metadata = fallback.metadata
+            }
+        } else {
+            let fallback = try searchViaBrainBarDatabase()
+            textSection = fallback.text
+            metadata = fallback.metadata
         }
 
         // KG section goes before the <brain_search> envelope

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from mcp.types import TextContent
+import pytest
 
 from brainlayer.brainbar_hybrid_helper import HybridSearchHelper
 
@@ -53,3 +54,19 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
             "detail": "compact",
         }
     ]
+
+
+def test_content_text_extracts_single_dict_text():
+    assert HybridSearchHelper._content_text({"type": "text", "text": "dict text"}) == "dict text"
+
+
+def test_read_line_rejects_oversized_chunk_before_newline():
+    class FakeSocket:
+        def __init__(self):
+            self.chunks = [b"x" * 1_000_001 + b"\n"]
+
+        def recv(self, _size):
+            return self.chunks.pop(0) if self.chunks else b""
+
+    with pytest.raises(ValueError, match="request exceeds 1MB"):
+        HybridSearchHelper._read_line(FakeSocket())
