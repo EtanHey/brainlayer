@@ -908,7 +908,10 @@ def enrich(
     try:
         from .. import cloud_backfill
         from ..enrichment_controller import enrich_realtime
+        from ..parent_death import install_parent_death_watcher
         from ..vector_store import VectorStore
+
+        install_parent_death_watcher()
 
         if mode not in ("realtime", "batch"):
             raise typer.BadParameter(f"Invalid mode: {mode}")
@@ -1639,9 +1642,12 @@ def watch(
     """
     import signal
 
+    from ..parent_death import install_parent_death_watcher
     from ..paths import get_db_path
     from ..watcher import JSONLWatcher
     from ..watcher_bridge import create_flush_callback
+
+    install_parent_death_watcher()
 
     db_path = get_db_path()
     offsets_path = db_path.parent / "offsets.json"

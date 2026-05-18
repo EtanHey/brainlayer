@@ -1371,6 +1371,10 @@ def run_enrichment(
 if __name__ == "__main__":
     import argparse
 
+    from brainlayer.parent_death import install_parent_death_watcher
+
+    install_parent_death_watcher()
+
     parser = argparse.ArgumentParser(description="Enrich BrainLayer chunks with LLM metadata")
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--max", type=int, default=0, help="Max chunks to process (0=unlimited)")

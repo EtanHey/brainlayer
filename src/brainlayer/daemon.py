@@ -1267,6 +1267,10 @@ def main():
     """Main daemon entry point."""
     import argparse
 
+    from brainlayer.parent_death import install_parent_death_watcher
+
+    install_parent_death_watcher()
+
     parser = argparse.ArgumentParser(description="BrainLayer daemon")
     parser.add_argument("--http", type=int, default=None, help="Also serve on HTTP port (e.g. --http 8787)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind address (default: 127.0.0.1)")

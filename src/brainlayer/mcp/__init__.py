@@ -1588,6 +1588,10 @@ def serve():
     Note: MCP uses stdin/stdout for communication, not network ports.
     This is designed for integration with Claude Code via mcpServers config.
     """
+    from brainlayer.parent_death import install_parent_death_watcher
+
+    install_parent_death_watcher()
+
     # Validate configuration at startup
     config_errors = validate_config()
     fatal = [e for e in config_errors if e["severity"] == "error"]

@@ -187,6 +187,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from brainlayer.parent_death import install_parent_death_watcher
+
+    install_parent_death_watcher()
+
     args = parse_args(argv)
     if args.db_path:
         os.environ["BRAINLAYER_DB"] = args.db_path

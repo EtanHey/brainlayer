@@ -19,6 +19,14 @@ def write_all(fd: int, data: bytes) -> None:
 
 
 def main() -> int:
+    try:
+        from brainlayer.parent_death import install_parent_death_watcher
+    except ModuleNotFoundError:
+        install_parent_death_watcher = None
+
+    if install_parent_death_watcher is not None:
+        install_parent_death_watcher()
+
     parser = argparse.ArgumentParser(description="Bridge stdio to BrainBar's Unix socket.")
     parser.add_argument(
         "--socket",
