@@ -4,6 +4,7 @@ import SwiftUI
 final class KGViewModel: ObservableObject {
     @Published var nodes: [KGNode] = []
     @Published var edges: [KGEdge] = []
+    @Published var isLoading = false
     @Published var selectedNodeId: String?
     @Published var selectedEntity: EntityCard?
     @Published var selectedEntityChunks: [BrainDatabase.KGChunkRow] = []
@@ -27,43 +28,72 @@ final class KGViewModel: ObservableObject {
 
     // MARK: - Data Loading
 
-    func loadGraph() {
+    func loadGraph() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+
         do {
-            let entityRows = try database.fetchKGEntities()
-            let relationRows = try database.fetchKGRelations()
-
-            let entityIds = Set(entityRows.map(\.id))
-
-            let seededNodes = entityRows.map { row in
-                KGNode(
-                    id: row.id,
-                    name: row.name,
-                    entityType: row.entityType,
-                    importance: row.importance
-                )
-            }
-            nodes = KGAtlasLayout.seededNodes(
-                seededNodes,
-                canvasSize: CGSize(
-                    width: max(canvasCenter.x * 2, 640),
-                    height: max(canvasCenter.y * 2, 480)
-                )
-            )
-
-            // Only include edges where both endpoints exist
-            edges = relationRows.compactMap { row in
-                guard entityIds.contains(row.sourceId), entityIds.contains(row.targetId) else {
-                    return nil
-                }
-                return KGEdge(
-                    sourceId: row.sourceId,
-                    targetId: row.targetId,
-                    relationType: row.relationType
-                )
-            }
+            let graph = try await Self.fetchGraphRows(database: database)
+            applyGraph(entityRows: graph.entities, relationRows: graph.relations)
         } catch {
             nodes = []
             edges = []
+        }
+    }
+
+    private struct GraphRows: Sendable {
+        let entities: [BrainDatabase.KGEntityRow]
+        let relations: [BrainDatabase.KGRelationRow]
+    }
+
+    private nonisolated static func fetchGraphRows(database: BrainDatabase) async throws -> GraphRows {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: GraphRows(
+                        entities: try database.fetchKGEntities(),
+                        relations: try database.fetchKGRelations(limit: 5_000)
+                    ))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func applyGraph(
+        entityRows: [BrainDatabase.KGEntityRow],
+        relationRows: [BrainDatabase.KGRelationRow]
+    ) {
+        let entityIds = Set(entityRows.map(\.id))
+
+        let seededNodes = entityRows.map { row in
+            KGNode(
+                id: row.id,
+                name: row.name,
+                entityType: row.entityType,
+                importance: row.importance
+            )
+        }
+        nodes = KGAtlasLayout.seededNodes(
+            seededNodes,
+            canvasSize: CGSize(
+                width: max(canvasCenter.x * 2, 640),
+                height: max(canvasCenter.y * 2, 480)
+            )
+        )
+
+        // Only include edges where both endpoints exist
+        edges = relationRows.compactMap { row in
+            guard entityIds.contains(row.sourceId), entityIds.contains(row.targetId) else {
+                return nil
+            }
+            return KGEdge(
+                sourceId: row.sourceId,
+                targetId: row.targetId,
+                relationType: row.relationType
+            )
         }
     }
 

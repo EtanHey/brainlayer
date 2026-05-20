@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct KGNode: Identifiable, Equatable {
+struct KGNode: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let entityType: String

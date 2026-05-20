@@ -2,6 +2,10 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum BrainBarPlaceholderCopy {
+    static let injectionFeedNotWired = "Injection feed not yet wired in this build."
+}
+
 struct BrainBarWindowRootView: View {
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
@@ -113,7 +117,7 @@ struct BrainBarWindowRootView: View {
         if let store = runtime.injectionStore {
             BrainBarInjectionTab(store: store)
         } else {
-            BrainBarLoadingView(title: "Injections", subtitle: "Injection store unavailable.")
+            BrainBarLoadingView(title: "Injections", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)
         }
     }
 

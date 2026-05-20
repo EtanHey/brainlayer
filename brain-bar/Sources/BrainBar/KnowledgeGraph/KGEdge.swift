@@ -1,6 +1,6 @@
 import Foundation
 
-struct KGEdge: Identifiable, Equatable {
+struct KGEdge: Identifiable, Equatable, Sendable {
     let sourceId: String
     let targetId: String
     let relationType: String
