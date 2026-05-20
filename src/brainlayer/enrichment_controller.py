@@ -44,6 +44,8 @@ RATE_LIMITS = {
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
+MAX_COMMIT_BATCH = int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH", "25"))
+MAX_COMMIT_INTERVAL_SECONDS = float(os.environ.get("BRAINLAYER_MAX_COMMIT_INTERVAL_MS", "250")) / 1000.0
 WRITE_QUEUE_MAXSIZE = int(os.environ.get("BRAINLAYER_WRITE_QUEUE_MAXSIZE", "1000"))
 RATE_LIMIT_BURST = int(os.environ.get("BRAINLAYER_ENRICH_BURST", "10"))
 
@@ -168,33 +170,94 @@ def _arbitrated_writes_enabled() -> bool:
     return os.environ.get("BRAINLAYER_ARBITRATED") == "1"
 
 
-def _enqueue_enrichment_write(chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
-    from .queue_io import enqueue_enrichment_update
-
-    content = chunk.get("content", "")
+def _bounded_positive_int(value: Any, default: int) -> int:
     try:
-        enqueue_enrichment_update(
-            chunk_id=chunk["id"],
-            enrichment=enrichment,
-            content_hash=_content_hash(content) if content else None,
-            entities=enrichment.get("entities", []),
-        )
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return max(1, default)
+    return max(1, parsed)
+
+
+def _current_max_commit_batch() -> int:
+    return _bounded_positive_int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH"), MAX_COMMIT_BATCH)
+
+
+def _enrichment_update_payload(chunk: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
+    content = chunk.get("content", "")
+    return {
+        "chunk_id": chunk["id"],
+        "enrichment": enrichment,
+        "content_hash": _content_hash(content) if content else None,
+        "entities": enrichment.get("entities", []),
+    }
+
+
+def _enqueue_enrichment_write(chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+    from .queue_io import enqueue_enrichment_updates
+
+    try:
+        enqueue_enrichment_updates([_enrichment_update_payload(chunk, enrichment)])
     except Exception:
         logger.exception("Failed to enqueue enrichment update for chunk %s", chunk.get("id"))
         raise
 
 
-def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
+def _enqueue_enrichment_write_batch(items: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
+    if not items:
+        return
+
+    from .queue_io import enqueue_enrichment_updates
+
+    try:
+        enqueue_enrichment_updates([_enrichment_update_payload(chunk, enrichment) for chunk, enrichment in items])
+    except Exception:
+        chunk_ids = ",".join(str(chunk.get("id")) for chunk, _ in items)
+        logger.exception("Failed to enqueue enrichment update batch for chunks %s", chunk_ids)
+        raise
+
+
+class _EnrichmentWriteBatcher:
+    def __init__(
+        self,
+        *,
+        max_batch: int | None = None,
+        max_interval_seconds: float = MAX_COMMIT_INTERVAL_SECONDS,
+    ) -> None:
+        self.max_batch = max(1, max_batch if max_batch is not None else _current_max_commit_batch())
+        self.max_interval_seconds = max(0.0, max_interval_seconds)
+        self._pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        self._last_flush: float | None = None
+
+    def enqueue(self, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+        now = time.monotonic()
+        if not self._pending:
+            self._last_flush = now
+        self._pending.append((chunk, enrichment))
+        elapsed = now - self._last_flush if self._last_flush is not None else 0.0
+        if len(self._pending) >= self.max_batch or (len(self._pending) > 1 and elapsed >= self.max_interval_seconds):
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._pending:
+            return
+        pending = self._pending
+        self._pending = []
+        self._last_flush = None
+        _enqueue_enrichment_write_batch(pending)
+
+
+def _meta_research_enrichment(chunk: dict[str, Any]) -> dict[str, Any]:
     tags = _normalize_chunk_tags(chunk.get("tags"))
     if "meta-research" not in tags:
         tags.append("meta-research")
-    _enqueue_enrichment_write(
-        chunk,
-        {
-            "summary": None,
-            "tags": tags,
-        },
-    )
+    return {
+        "summary": None,
+        "tags": tags,
+    }
+
+
+def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
+    _enqueue_enrichment_write(chunk, _meta_research_enrichment(chunk))
 
 
 def _ensure_enrichment_columns(store) -> None:
@@ -833,56 +896,61 @@ def enrich_realtime(
         sanitizer = Sanitizer.from_env()
         config = _build_gemini_config()
         rate_limiter = _get_store_rate_limiter(store, rate_per_second=rate_per_second)
+        write_batcher = _EnrichmentWriteBatcher() if _arbitrated_writes_enabled() else None
 
         def is_duplicate(content: str) -> bool:
             return _is_duplicate_content(store, content)
 
-        with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
-            futures = []
-            for chunk in candidates:
-                futures.append(
-                    executor.submit(
-                        _enrich_single_chunk,
-                        client,
-                        GEMINI_REALTIME_MODEL,
-                        config,
-                        chunk,
-                        sanitizer,
-                        is_duplicate=is_duplicate,
-                        rate_limiter=rate_limiter,
-                        max_retries=max_retries,
+        try:
+            with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
+                futures = []
+                for chunk in candidates:
+                    futures.append(
+                        executor.submit(
+                            _enrich_single_chunk,
+                            client,
+                            GEMINI_REALTIME_MODEL,
+                            config,
+                            chunk,
+                            sanitizer,
+                            is_duplicate=is_duplicate,
+                            rate_limiter=rate_limiter,
+                            max_retries=max_retries,
+                        )
                     )
-                )
 
-            for future in as_completed(futures):
-                chunk, status, data = future.result()
-                if status == "skip":
-                    result.skipped += 1
-                    continue
-                if status == "meta":
-                    if _arbitrated_writes_enabled():
-                        _enqueue_meta_research_write(chunk)
+                for future in as_completed(futures):
+                    chunk, status, data = future.result()
+                    if status == "skip":
+                        result.skipped += 1
+                        continue
+                    if status == "meta":
+                        if write_batcher is not None:
+                            write_batcher.enqueue(chunk, _meta_research_enrichment(chunk))
+                        else:
+                            _submit_write(
+                                store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                            )
+                        result.skipped += 1
+                        continue
+                    if status == "error":
+                        result.failed += 1
+                        result.errors.append(f"{chunk['id']}: {data}")
+                        _emit_enrichment_error("realtime", chunk["id"], str(data))
+                        continue
+
+                    if write_batcher is not None:
+                        write_batcher.enqueue(chunk, data)
                     else:
                         _submit_write(
-                            store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                            store,
+                            f"apply-enrichment:{chunk['id']}",
+                            lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
                         )
-                    result.skipped += 1
-                    continue
-                if status == "error":
-                    result.failed += 1
-                    result.errors.append(f"{chunk['id']}: {data}")
-                    _emit_enrichment_error("realtime", chunk["id"], str(data))
-                    continue
-
-                if _arbitrated_writes_enabled():
-                    _enqueue_enrichment_write(chunk, data)
-                else:
-                    _submit_write(
-                        store,
-                        f"apply-enrichment:{chunk['id']}",
-                        lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
-                    )
-                result.enriched += 1
+                    result.enriched += 1
+        finally:
+            if write_batcher is not None:
+                write_batcher.flush()
 
         duration_ms = (time.monotonic() - start_time) * 1000
         _emit_enrichment_complete(result, duration_ms)
@@ -929,58 +997,63 @@ def enrich_batch(
         sanitizer = Sanitizer.from_env()
         config = _build_gemini_config()
         rate_limiter = _get_store_rate_limiter(store, rate_per_second=RATE_LIMITS["batch"])
+        write_batcher = _EnrichmentWriteBatcher() if _arbitrated_writes_enabled() else None
 
-        for chunk in candidates:
-            if is_meta_research(chunk.get("content", "")):
-                if _arbitrated_writes_enabled():
-                    _enqueue_meta_research_write(chunk)
-                else:
-                    _submit_write(
-                        store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
-                    )
-                result.skipped += 1
-                continue
-            if _is_duplicate_content(store, chunk.get("content", "")):
-                result.skipped += 1
-                continue
-
-            try:
-                prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
-            except Exception as exc:
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: prompt_build_error: {exc}")
-                continue
-
-            try:
-                response = _retry_with_backoff(
-                    lambda: _generate_content_with_rate_limit(
-                        client,
-                        GEMINI_REALTIME_MODEL,
-                        prompt,
-                        config,
-                        rate_limiter,
-                    ),
-                    max_retries=max_retries,
-                )
-                enrichment = parse_enrichment(response.text)
-                if not enrichment:
-                    result.failed += 1
-                    result.errors.append(f"{chunk['id']}: invalid_enrichment")
-                    _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
+        try:
+            for chunk in candidates:
+                if is_meta_research(chunk.get("content", "")):
+                    if write_batcher is not None:
+                        write_batcher.enqueue(chunk, _meta_research_enrichment(chunk))
+                    else:
+                        _submit_write(
+                            store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                        )
+                    result.skipped += 1
                     continue
-                if _arbitrated_writes_enabled():
-                    _enqueue_enrichment_write(chunk, enrichment)
-                else:
-                    _submit_write(
-                        store,
-                        f"apply-enrichment:{chunk['id']}",
-                        lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
+                if _is_duplicate_content(store, chunk.get("content", "")):
+                    result.skipped += 1
+                    continue
+
+                try:
+                    prompt, _sanitize_result = build_external_prompt(chunk, sanitizer)
+                except Exception as exc:
+                    result.failed += 1
+                    result.errors.append(f"{chunk['id']}: prompt_build_error: {exc}")
+                    continue
+
+                try:
+                    response = _retry_with_backoff(
+                        lambda: _generate_content_with_rate_limit(
+                            client,
+                            GEMINI_REALTIME_MODEL,
+                            prompt,
+                            config,
+                            rate_limiter,
+                        ),
+                        max_retries=max_retries,
                     )
-                result.enriched += 1
-            except Exception as exc:
-                result.failed += 1
-                result.errors.append(f"{chunk['id']}: {exc}")
-                _emit_enrichment_error("batch", chunk["id"], str(exc))
+                    enrichment = parse_enrichment(response.text)
+                    if not enrichment:
+                        result.failed += 1
+                        result.errors.append(f"{chunk['id']}: invalid_enrichment")
+                        _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
+                        continue
+                    if write_batcher is not None:
+                        write_batcher.enqueue(chunk, enrichment)
+                    else:
+                        _submit_write(
+                            store,
+                            f"apply-enrichment:{chunk['id']}",
+                            lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
+                        )
+                    result.enriched += 1
+                except Exception as exc:
+                    result.failed += 1
+                    result.errors.append(f"{chunk['id']}: {exc}")
+                    _emit_enrichment_error("batch", chunk["id"], str(exc))
+        finally:
+            if write_batcher is not None:
+                write_batcher.flush()
 
         duration_ms = (time.monotonic() - start_time) * 1000
         _emit_enrichment_complete(result, duration_ms)

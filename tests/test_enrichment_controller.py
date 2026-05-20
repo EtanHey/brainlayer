@@ -1244,7 +1244,8 @@ def test_enrichment_plist_matches_validated_flex_realtime_profile():
     assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.out.log"
     assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.err.log"
     assert env["BRAINLAYER_ENRICH_RATE"] == "15"
-    assert env["BRAINLAYER_ENRICH_CONCURRENCY"] == "18"
+    assert env["BRAINLAYER_ENRICH_CONCURRENCY"] == "4"
+    assert env["BRAINLAYER_MAX_COMMIT_BATCH"] == "25"
     assert env["BRAINLAYER_GEMINI_SERVICE_TIER"] == "flex"
 
 
