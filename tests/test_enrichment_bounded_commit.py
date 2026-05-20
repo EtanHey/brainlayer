@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -54,3 +57,43 @@ def test_enrich_batch_batches_arbitrated_enrichment_writes(monkeypatch, tmp_path
     assert result.enriched == 5
     assert sorted(line_counts, reverse=True) == [2, 2, 1]
     assert sorted(queued_chunk_ids) == ["c0", "c1", "c2", "c3", "c4"]
+
+
+def test_enrichment_batcher_flushes_overdue_single_pending_item(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    flushed_batches = []
+    ticks = iter([10.0, 10.2, 10.2])
+    monkeypatch.setattr(controller.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(controller, "_enqueue_enrichment_write_batch", lambda items: flushed_batches.append(items))
+
+    batcher = controller._EnrichmentWriteBatcher(max_batch=25, max_interval_seconds=0.1)
+
+    batcher.enqueue(_candidate("c0"), {"summary": "s0", "tags": []})
+    batcher.enqueue(_candidate("c1"), {"summary": "s1", "tags": []})
+
+    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"]]
+
+    batcher.flush()
+
+    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"], ["c1"]]
+
+
+def test_invalid_commit_interval_env_does_not_crash_import():
+    env = os.environ.copy()
+    env["BRAINLAYER_MAX_COMMIT_INTERVAL_MS"] = "not-a-number"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from brainlayer import enrichment_controller as c; print(c.MAX_COMMIT_INTERVAL_SECONDS)",
+        ],
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0.25"
