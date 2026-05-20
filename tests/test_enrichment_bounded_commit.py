@@ -110,6 +110,67 @@ def test_enrichment_batcher_retains_pending_items_when_flush_fails(monkeypatch):
     assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"]]
 
 
+def test_enrichment_batcher_retains_current_item_when_overdue_flush_fails(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    ticks = iter([10.0, 10.2])
+
+    def fail_enqueue(items):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(controller.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(controller, "_enqueue_enrichment_write_batch", fail_enqueue)
+
+    batcher = controller._EnrichmentWriteBatcher(max_batch=25, max_interval_seconds=0.1)
+    batcher.enqueue(_candidate("c0"), {"summary": "s0", "tags": []})
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        batcher.enqueue(_candidate("c1"), {"summary": "s1", "tags": []})
+
+    assert [chunk["id"] for chunk, _ in batcher._pending] == ["c0", "c1"]
+
+
+def test_enrich_batch_reports_final_flush_failure_without_crashing(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c0")]
+    errors = []
+    completed = []
+
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setattr(controller, "MAX_COMMIT_BATCH", 25, raising=False)
+    monkeypatch.setattr(controller, "_ensure_enrichment_columns", lambda store: None)
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda store, content: False)
+    monkeypatch.setattr(controller, "build_external_prompt", lambda chunk, sanitizer: ("prompt", SimpleNamespace()))
+    monkeypatch.setattr(controller, "parse_enrichment", lambda text: {"summary": text, "tags": ["python"]})
+    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *args, **kwargs: True)
+    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda result, duration_ms: completed.append(result))
+    monkeypatch.setattr(
+        controller, "_emit_enrichment_error", lambda mode, chunk_id, error: errors.append((mode, chunk_id, error))
+    )
+    monkeypatch.setattr(
+        controller,
+        "_generate_content_with_rate_limit",
+        lambda client, model, prompt, config, rate_limiter: SimpleNamespace(text="summary"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_enqueue_enrichment_write_batch",
+        lambda items: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+
+    result = controller.enrich_batch(store, limit=1)
+
+    assert result.enriched == 1
+    assert result.failed == 1
+    assert result.errors == ["c0: queue unavailable"]
+    assert errors == [("batch", "c0", "queue unavailable")]
+    assert completed == [result]
+
+
 def test_invalid_commit_interval_env_does_not_crash_import():
     env = os.environ.copy()
     env["BRAINLAYER_MAX_COMMIT_INTERVAL_MS"] = "not-a-number"
