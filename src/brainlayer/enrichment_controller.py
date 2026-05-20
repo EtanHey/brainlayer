@@ -43,6 +43,14 @@ def _bounded_nonnegative_float(value: Any, default: float) -> float:
     return max(0.0, parsed)
 
 
+def _bounded_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return max(1, default)
+    return max(1, parsed)
+
+
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
 AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
 
@@ -54,7 +62,7 @@ RATE_LIMITS = {
     "batch": float(os.environ.get("BRAINLAYER_BATCH_RATE", "0")),  # no limit (async)
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
-MAX_COMMIT_BATCH = int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH", "25"))
+MAX_COMMIT_BATCH = _bounded_positive_int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH"), 25)
 MAX_COMMIT_INTERVAL_SECONDS = (
     _bounded_nonnegative_float(os.environ.get("BRAINLAYER_MAX_COMMIT_INTERVAL_MS"), DEFAULT_MAX_COMMIT_INTERVAL_MS)
     / 1000.0
@@ -181,14 +189,6 @@ def _submit_write(store, name: str, callback) -> Any:
 
 def _arbitrated_writes_enabled() -> bool:
     return os.environ.get("BRAINLAYER_ARBITRATED") == "1"
-
-
-def _bounded_positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return max(1, default)
-    return max(1, parsed)
 
 
 def _current_max_commit_batch() -> int:

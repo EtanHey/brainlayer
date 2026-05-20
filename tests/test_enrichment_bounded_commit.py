@@ -128,3 +128,23 @@ def test_invalid_commit_interval_env_does_not_crash_import():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0.25"
+
+
+def test_invalid_commit_batch_env_does_not_crash_import():
+    env = os.environ.copy()
+    env["BRAINLAYER_MAX_COMMIT_BATCH"] = "not-a-number"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from brainlayer import enrichment_controller as c; print(c.MAX_COMMIT_BATCH)",
+        ],
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "25"
