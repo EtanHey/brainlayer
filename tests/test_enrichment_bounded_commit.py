@@ -5,6 +5,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 
 def _candidate(chunk_id: str) -> dict:
     return {
@@ -77,6 +79,35 @@ def test_enrichment_batcher_flushes_overdue_single_pending_item(monkeypatch):
     batcher.flush()
 
     assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"], ["c1"]]
+
+
+def test_enrichment_batcher_retains_pending_items_when_flush_fails(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    flushed_batches = []
+    attempts = 0
+
+    def flaky_enqueue(items):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("queue unavailable")
+        flushed_batches.append(items)
+
+    monkeypatch.setattr(controller, "_enqueue_enrichment_write_batch", flaky_enqueue)
+
+    batcher = controller._EnrichmentWriteBatcher(max_batch=25, max_interval_seconds=10)
+    batcher.enqueue(_candidate("c0"), {"summary": "s0", "tags": []})
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        batcher.flush()
+
+    assert [chunk["id"] for chunk, _ in batcher._pending] == ["c0"]
+
+    batcher.flush()
+
+    assert batcher._pending == []
+    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"]]
 
 
 def test_invalid_commit_interval_env_does_not_crash_import():
