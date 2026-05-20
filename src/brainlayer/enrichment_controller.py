@@ -259,9 +259,9 @@ class _EnrichmentWriteBatcher:
         if not self._pending:
             return
         pending = self._pending
+        _enqueue_enrichment_write_batch(pending)
         self._pending = []
         self._last_flush = None
-        _enqueue_enrichment_write_batch(pending)
 
 
 def _meta_research_enrichment(chunk: dict[str, Any]) -> dict[str, Any]:
