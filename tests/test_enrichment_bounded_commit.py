@@ -102,7 +102,7 @@ def test_enrichment_batcher_retains_pending_items_when_flush_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="queue unavailable"):
         batcher.flush()
 
-    assert [chunk["id"] for chunk, _ in batcher._pending] == ["c0"]
+    assert [chunk["id"] for chunk, _, _ in batcher._pending] == ["c0"]
 
     batcher.flush()
 
@@ -124,10 +124,9 @@ def test_enrichment_batcher_retains_current_item_when_overdue_flush_fails(monkey
     batcher = controller._EnrichmentWriteBatcher(max_batch=25, max_interval_seconds=0.1)
     batcher.enqueue(_candidate("c0"), {"summary": "s0", "tags": []})
 
-    with pytest.raises(RuntimeError, match="queue unavailable"):
-        batcher.enqueue(_candidate("c1"), {"summary": "s1", "tags": []})
+    batcher.enqueue(_candidate("c1"), {"summary": "s1", "tags": []})
 
-    assert [chunk["id"] for chunk, _ in batcher._pending] == ["c0", "c1"]
+    assert [chunk["id"] for chunk, _, _ in batcher._pending] == ["c0", "c1"]
 
 
 def test_enrich_batch_reports_final_flush_failure_without_crashing(monkeypatch):
@@ -164,7 +163,7 @@ def test_enrich_batch_reports_final_flush_failure_without_crashing(monkeypatch):
 
     result = controller.enrich_batch(store, limit=1)
 
-    assert result.enriched == 1
+    assert result.enriched == 0
     assert result.failed == 1
     assert result.errors == ["c0: queue unavailable"]
     assert errors == [("batch", "c0", "queue unavailable")]

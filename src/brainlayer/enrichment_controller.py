@@ -238,10 +238,10 @@ class _EnrichmentWriteBatcher:
     ) -> None:
         self.max_batch = max(1, max_batch if max_batch is not None else _current_max_commit_batch())
         self.max_interval_seconds = max(0.0, max_interval_seconds)
-        self._pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        self._pending: list[tuple[dict[str, Any], dict[str, Any], str | None]] = []
         self._last_flush: float | None = None
 
-    def enqueue(self, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+    def enqueue(self, chunk: dict[str, Any], enrichment: dict[str, Any], *, counted_as: str | None = None) -> None:
         now = time.monotonic()
         if self._pending and self._last_flush is not None:
             elapsed = now - self._last_flush
@@ -249,25 +249,27 @@ class _EnrichmentWriteBatcher:
                 try:
                     # Flush overdue writes before appending the next result so drain gets smaller DB lock windows.
                     self.flush()
+                    now = time.monotonic()
                 except Exception:
-                    self._pending.append((chunk, enrichment))
-                    raise
-                now = time.monotonic()
+                    logger.exception("Deferred overdue enrichment batch flush; retaining pending writes")
         if not self._pending:
             self._last_flush = now
-        self._pending.append((chunk, enrichment))
+        self._pending.append((chunk, enrichment, counted_as))
         if len(self._pending) >= self.max_batch:
-            self.flush()
+            try:
+                self.flush()
+            except Exception:
+                logger.exception("Deferred full enrichment batch flush; retaining pending writes")
 
     def flush(self) -> None:
         if not self._pending:
             return
         pending = self._pending
-        _enqueue_enrichment_write_batch(pending)
+        _enqueue_enrichment_write_batch([(chunk, enrichment) for chunk, enrichment, _ in pending])
         self._pending = []
         self._last_flush = None
 
-    def pending_items(self) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    def pending_items(self) -> list[tuple[dict[str, Any], dict[str, Any], str | None]]:
         return list(self._pending)
 
 
@@ -283,7 +285,11 @@ def _flush_enrichment_batcher(
         if not pending:
             raise
         result.failed += len(pending)
-        for chunk, _ in pending:
+        for chunk, _, counted_as in pending:
+            if counted_as == "enriched" and result.enriched > 0:
+                result.enriched -= 1
+            elif counted_as == "skipped" and result.skipped > 0:
+                result.skipped -= 1
             chunk_id = chunk.get("id")
             result.errors.append(f"{chunk_id}: {exc}")
             _emit_enrichment_error(mode, str(chunk_id), str(exc))
@@ -969,7 +975,7 @@ def enrich_realtime(
                         continue
                     if status == "meta":
                         if write_batcher is not None:
-                            write_batcher.enqueue(chunk, _meta_research_enrichment(chunk))
+                            write_batcher.enqueue(chunk, _meta_research_enrichment(chunk), counted_as="skipped")
                         else:
                             _submit_write(
                                 store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
@@ -983,7 +989,7 @@ def enrich_realtime(
                         continue
 
                     if write_batcher is not None:
-                        write_batcher.enqueue(chunk, data)
+                        write_batcher.enqueue(chunk, data, counted_as="enriched")
                     else:
                         _submit_write(
                             store,
@@ -1046,7 +1052,7 @@ def enrich_batch(
             for chunk in candidates:
                 if is_meta_research(chunk.get("content", "")):
                     if write_batcher is not None:
-                        write_batcher.enqueue(chunk, _meta_research_enrichment(chunk))
+                        write_batcher.enqueue(chunk, _meta_research_enrichment(chunk), counted_as="skipped")
                     else:
                         _submit_write(
                             store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
@@ -1082,7 +1088,7 @@ def enrich_batch(
                         _emit_enrichment_error("batch", chunk["id"], "invalid_enrichment")
                         continue
                     if write_batcher is not None:
-                        write_batcher.enqueue(chunk, enrichment)
+                        write_batcher.enqueue(chunk, enrichment, counted_as="enriched")
                     else:
                         _submit_write(
                             store,
