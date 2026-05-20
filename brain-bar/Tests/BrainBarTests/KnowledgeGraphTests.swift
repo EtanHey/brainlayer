@@ -130,6 +130,18 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(relations.count, 2)
     }
 
+    func testFetchKGRelationsHandlesOversizedLimit() throws {
+        try db.insertEntity(id: "root", type: "project", name: "Root")
+        for index in 0..<5 {
+            try db.insertEntity(id: "e-\(index)", type: "person", name: "Entity \(index)")
+            try db.insertRelation(sourceId: "e-\(index)", targetId: "root", relationType: "builds")
+        }
+
+        let relations = try db.fetchKGRelations(limit: Int.max)
+
+        XCTAssertEqual(relations.count, 5)
+    }
+
     func testFetchKGRelationsEmptyDB() throws {
         let relations = try db.fetchKGRelations()
         XCTAssertTrue(relations.isEmpty)
@@ -274,8 +286,8 @@ final class KGViewModelTests: XCTestCase {
 
         await vm.loadGraph()
 
-        XCTAssertTrue(mainActorRanDuringLoad, "loadGraph should suspend off the MainActor while database work runs")
         await marker.value
+        XCTAssertTrue(mainActorRanDuringLoad, "loadGraph should suspend off the MainActor while database work runs")
     }
 
     func testLoadGraphEmptyDB() async throws {
@@ -366,6 +378,8 @@ final class KGViewModelTests: XCTestCase {
 }
 
 final class BrainBarInjectionsPlaceholderTests: XCTestCase {
+    deinit {}
+
     func testInjectionsTabShowsClearMessageWhenStoreNil() {
         let subtitle = BrainBarPlaceholderCopy.injectionFeedNotWired
 

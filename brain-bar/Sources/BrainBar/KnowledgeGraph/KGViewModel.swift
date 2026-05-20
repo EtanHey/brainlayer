@@ -28,17 +28,20 @@ final class KGViewModel: ObservableObject {
 
     // MARK: - Data Loading
 
-    func loadGraph() async {
-        guard !isLoading else { return }
+    @discardableResult
+    func loadGraph() async -> Bool {
+        guard !isLoading else { return false }
         isLoading = true
         defer { isLoading = false }
 
         do {
             let graph = try await Self.fetchGraphRows(database: database)
             applyGraph(entityRows: graph.entities, relationRows: graph.relations)
+            return true
         } catch {
             nodes = []
             edges = []
+            return false
         }
     }
 
