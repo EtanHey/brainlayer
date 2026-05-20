@@ -246,8 +246,12 @@ class _EnrichmentWriteBatcher:
         if self._pending and self._last_flush is not None:
             elapsed = now - self._last_flush
             if elapsed >= self.max_interval_seconds:
-                # Flush overdue writes before appending the next result so drain gets smaller DB lock windows.
-                self.flush()
+                try:
+                    # Flush overdue writes before appending the next result so drain gets smaller DB lock windows.
+                    self.flush()
+                except Exception:
+                    self._pending.append((chunk, enrichment))
+                    raise
                 now = time.monotonic()
         if not self._pending:
             self._last_flush = now
@@ -262,6 +266,27 @@ class _EnrichmentWriteBatcher:
         _enqueue_enrichment_write_batch(pending)
         self._pending = []
         self._last_flush = None
+
+    def pending_items(self) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        return list(self._pending)
+
+
+def _flush_enrichment_batcher(
+    write_batcher: _EnrichmentWriteBatcher,
+    result: EnrichmentResult,
+    mode: str,
+) -> None:
+    try:
+        write_batcher.flush()
+    except Exception as exc:
+        pending = write_batcher.pending_items()
+        if not pending:
+            raise
+        result.failed += len(pending)
+        for chunk, _ in pending:
+            chunk_id = chunk.get("id")
+            result.errors.append(f"{chunk_id}: {exc}")
+            _emit_enrichment_error(mode, str(chunk_id), str(exc))
 
 
 def _meta_research_enrichment(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -968,7 +993,7 @@ def enrich_realtime(
                     result.enriched += 1
         finally:
             if write_batcher is not None:
-                write_batcher.flush()
+                _flush_enrichment_batcher(write_batcher, result, "realtime")
 
         duration_ms = (time.monotonic() - start_time) * 1000
         _emit_enrichment_complete(result, duration_ms)
@@ -1071,7 +1096,7 @@ def enrich_batch(
                     _emit_enrichment_error("batch", chunk["id"], str(exc))
         finally:
             if write_batcher is not None:
-                write_batcher.flush()
+                _flush_enrichment_batcher(write_batcher, result, "batch")
 
         duration_ms = (time.monotonic() - start_time) * 1000
         _emit_enrichment_complete(result, duration_ms)
