@@ -287,7 +287,7 @@ final class StatusPopoverView: NSViewController {
         if let hosting = injectionHosting { return hosting.view }
 
         guard let store = injectionStore else {
-            return makePlaceholder("Injection store unavailable")
+            return makePlaceholder(BrainBarPlaceholderCopy.injectionFeedNotWired)
         }
 
         store.start()

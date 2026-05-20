@@ -3299,7 +3299,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - Knowledge Graph bulk queries
 
-    struct KGEntityRow: Equatable {
+    struct KGEntityRow: Equatable, Sendable {
         let id: String
         let name: String
         let entityType: String
@@ -3307,21 +3307,21 @@ final class BrainDatabase: @unchecked Sendable {
         let importance: Double
     }
 
-    struct KGRelationRow: Equatable {
+    struct KGRelationRow: Equatable, Sendable {
         let id: String
         let sourceId: String
         let targetId: String
         let relationType: String
     }
 
-    struct KGChunkRow: Equatable {
+    struct KGChunkRow: Equatable, Sendable {
         let chunkID: String
         let snippet: String
         let importance: Int
         let relevance: Double
     }
 
-    struct EnrichmentStatsSummary: Equatable {
+    struct EnrichmentStatsSummary: Equatable, Sendable {
         let totalChunks: Int
         let enriched: Int
         let unenrichedEligible: Int
@@ -3370,16 +3370,23 @@ final class BrainDatabase: @unchecked Sendable {
         return rows
     }
 
-    func fetchKGRelations() throws -> [KGRelationRow] {
+    func fetchKGRelations(limit: Int = 5_000) throws -> [KGRelationRow] {
         guard let db else { throw DBError.notOpen }
         // Exclude co_occurs_with — these are auto-generated from text proximity
         // and produce noisy, often incorrect edges in the graph view.
-        let sql = "SELECT id, source_id, target_id, relation_type FROM kg_relations WHERE relation_type != 'co_occurs_with'"
+        let sql = """
+            SELECT id, source_id, target_id, relation_type
+            FROM kg_relations
+            WHERE relation_type != 'co_occurs_with'
+            ORDER BY id
+            LIMIT ?
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(max(0, limit)))
 
         var rows: [KGRelationRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

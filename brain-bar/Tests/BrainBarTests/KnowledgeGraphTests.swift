@@ -118,6 +118,18 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(relations.count, 2)
     }
 
+    func testFetchKGRelationsRespectsLimit() throws {
+        try db.insertEntity(id: "root", type: "project", name: "Root")
+        for index in 0..<5 {
+            try db.insertEntity(id: "e-\(index)", type: "person", name: "Entity \(index)")
+            try db.insertRelation(sourceId: "e-\(index)", targetId: "root", relationType: "builds")
+        }
+
+        let relations = try db.fetchKGRelations(limit: 2)
+
+        XCTAssertEqual(relations.count, 2)
+    }
+
     func testFetchKGRelationsEmptyDB() throws {
         let relations = try db.fetchKGRelations()
         XCTAssertTrue(relations.isEmpty)
@@ -237,32 +249,49 @@ final class KGViewModelTests: XCTestCase {
         super.tearDown()
     }
 
-    func testLoadGraphPopulatesNodesAndEdges() throws {
+    func testLoadGraphPopulatesNodesAndEdges() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
 
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
 
         XCTAssertEqual(vm.nodes.count, 2)
         XCTAssertEqual(vm.edges.count, 1)
     }
 
-    func testLoadGraphEmptyDB() throws {
+    func testLoadGraphKeepsMainActorAvailableWhileLoading() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        var mainActorRanDuringLoad = false
+        let marker = Task { @MainActor in
+            mainActorRanDuringLoad = true
+        }
+
+        await vm.loadGraph()
+
+        XCTAssertTrue(mainActorRanDuringLoad, "loadGraph should suspend off the MainActor while database work runs")
+        await marker.value
+    }
+
+    func testLoadGraphEmptyDB() async throws {
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
 
         XCTAssertTrue(vm.nodes.isEmpty)
         XCTAssertTrue(vm.edges.isEmpty)
     }
 
-    func testSelectNodeUpdatesSelectedEntity() throws {
+    func testSelectNodeUpdatesSelectedEntity() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
 
         vm.selectNode(id: "a")
         XCTAssertEqual(vm.selectedNodeId, "a")
@@ -270,12 +299,12 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntity?.name, "Alice")
     }
 
-    func testSelectNodeNilDeselects() throws {
+    func testSelectNodeNilDeselects() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
 
         vm.selectNode(id: "a")
         vm.selectNode(id: nil)
@@ -283,13 +312,13 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertNil(vm.selectedEntity)
     }
 
-    func testForceTickMovesNodes() throws {
+    func testForceTickMovesNodes() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
 
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
 
         let positionsBefore = vm.nodes.map(\.position)
         vm.tick() // one simulation step
@@ -300,12 +329,12 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertTrue(moved, "Force tick should move at least one node")
     }
 
-    func testNodeHitTestFindsCorrectNode() throws {
+    func testNodeHitTestFindsCorrectNode() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
 
         // Place node at known position
         vm.nodes[0].position = CGPoint(x: 100, y: 100)
@@ -317,7 +346,7 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertNil(miss)
     }
 
-    func testSelectedEntityChunksPopulated() throws {
+    func testSelectedEntityChunksPopulated() async throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
         try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
         try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "builds")
@@ -328,11 +357,20 @@ final class KGViewModelTests: XCTestCase {
         try db.linkEntityChunk(entityId: "e1", chunkId: "c1", relevance: 0.9)
 
         let vm = KGViewModel(database: db)
-        vm.loadGraph()
+        await vm.loadGraph()
         vm.selectNode(id: "e1")
 
         XCTAssertFalse(vm.selectedEntityChunks.isEmpty)
         XCTAssertTrue(vm.selectedEntityChunks.first?.snippet.contains("Alice") ?? false)
+    }
+}
+
+final class BrainBarInjectionsPlaceholderTests: XCTestCase {
+    func testInjectionsTabShowsClearMessageWhenStoreNil() {
+        let subtitle = BrainBarPlaceholderCopy.injectionFeedNotWired
+
+        XCTAssertEqual(subtitle, "Injection feed not yet wired in this build.")
+        XCTAssertFalse(subtitle.localizedCaseInsensitiveContains("unavailable"))
     }
 }
 
