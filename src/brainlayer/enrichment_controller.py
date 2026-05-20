@@ -32,6 +32,16 @@ from .pipeline.write_queue import WriteQueue
 logger = logging.getLogger(__name__)
 
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
+DEFAULT_MAX_COMMIT_INTERVAL_MS = 250.0
+
+
+def _bounded_nonnegative_float(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return max(0.0, default)
+    return max(0.0, parsed)
+
 
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
 AUTO_ENRICH_ENABLED = os.environ.get("BRAINLAYER_AUTO_ENRICH", "1").lower() not in ("0", "false", "no")
@@ -45,7 +55,10 @@ RATE_LIMITS = {
 }
 ENRICH_CONCURRENCY = int(os.environ.get("BRAINLAYER_ENRICH_CONCURRENCY", "10"))
 MAX_COMMIT_BATCH = int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH", "25"))
-MAX_COMMIT_INTERVAL_SECONDS = float(os.environ.get("BRAINLAYER_MAX_COMMIT_INTERVAL_MS", "250")) / 1000.0
+MAX_COMMIT_INTERVAL_SECONDS = (
+    _bounded_nonnegative_float(os.environ.get("BRAINLAYER_MAX_COMMIT_INTERVAL_MS"), DEFAULT_MAX_COMMIT_INTERVAL_MS)
+    / 1000.0
+)
 WRITE_QUEUE_MAXSIZE = int(os.environ.get("BRAINLAYER_WRITE_QUEUE_MAXSIZE", "1000"))
 RATE_LIMIT_BURST = int(os.environ.get("BRAINLAYER_ENRICH_BURST", "10"))
 
@@ -230,11 +243,16 @@ class _EnrichmentWriteBatcher:
 
     def enqueue(self, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
         now = time.monotonic()
+        if self._pending and self._last_flush is not None:
+            elapsed = now - self._last_flush
+            if elapsed >= self.max_interval_seconds:
+                # Flush overdue writes before appending the next result so drain gets smaller DB lock windows.
+                self.flush()
+                now = time.monotonic()
         if not self._pending:
             self._last_flush = now
         self._pending.append((chunk, enrichment))
-        elapsed = now - self._last_flush if self._last_flush is not None else 0.0
-        if len(self._pending) >= self.max_batch or (len(self._pending) > 1 and elapsed >= self.max_interval_seconds):
+        if len(self._pending) >= self.max_batch:
             self.flush()
 
     def flush(self) -> None:
