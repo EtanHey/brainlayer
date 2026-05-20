@@ -22,22 +22,36 @@ def get_queue_dir() -> Path:
     return Path.home() / ".brainlayer" / "queue"
 
 
-def enqueue_jsonl(event: dict[str, Any], *, source: str, queue_dir: Path | None = None) -> Path:
-    """Atomically append a write intent as a one-line JSONL file."""
+def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir: Path | None = None) -> Path:
+    """Atomically append one or more write intents as a JSONL file."""
+    if not events:
+        raise ValueError("enqueue_jsonl_batch requires at least one event")
     resolved_dir = queue_dir or get_queue_dir()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     now_ms = int(time.time() * 1000)
+    queued_at = time.time()
     safe_source = _safe_source_name(source)
-    event = {
-        **event,
-        "source": source,
-        "queued_at": time.time(),
-    }
+    lines = [
+        json.dumps(
+            {
+                **event,
+                "source": source,
+                "queued_at": queued_at,
+            },
+            ensure_ascii=True,
+        )
+        for event in events
+    ]
     final_path = resolved_dir / f"{safe_source}-{now_ms}-{uuid.uuid4().hex}.jsonl"
     tmp_path = final_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(event, ensure_ascii=True) + "\n", encoding="utf-8")
+    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp_path.replace(final_path)
     return final_path
+
+
+def enqueue_jsonl(event: dict[str, Any], *, source: str, queue_dir: Path | None = None) -> Path:
+    """Atomically append a write intent as a one-line JSONL file."""
+    return enqueue_jsonl_batch([event], source=source, queue_dir=queue_dir)
 
 
 def enqueue_store(
@@ -142,14 +156,32 @@ def enqueue_enrichment_update(
     entities: list[Any] | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
-    return enqueue_jsonl(
-        {
-            "kind": "enrichment_update",
-            "chunk_id": chunk_id,
-            "enrichment": enrichment,
-            "content_hash": content_hash,
-            "entities": entities,
-        },
-        source="enrichment",
+    return enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": chunk_id,
+                "enrichment": enrichment,
+                "content_hash": content_hash,
+                "entities": entities,
+            }
+        ],
         queue_dir=queue_dir,
     )
+
+
+def enqueue_enrichment_updates(
+    updates: list[dict[str, Any]],
+    *,
+    queue_dir: Path | None = None,
+) -> Path:
+    events = [
+        {
+            "kind": "enrichment_update",
+            "chunk_id": update["chunk_id"],
+            "enrichment": update["enrichment"],
+            "content_hash": update.get("content_hash"),
+            "entities": update.get("entities"),
+        }
+        for update in updates
+    ]
+    return enqueue_jsonl_batch(events, source="enrichment", queue_dir=queue_dir)

@@ -41,7 +41,9 @@
         <key>BRAINLAYER_ENRICH_RATE</key>
         <string>15</string>
         <key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-        <string>18</string>
+        <string>4</string>
+        <key>BRAINLAYER_MAX_COMMIT_BATCH</key>
+        <string>25</string>
         <key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
         <string>flex</string>
         <key>GOOGLE_API_KEY</key>
