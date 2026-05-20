@@ -3386,7 +3386,7 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(max(0, limit)))
+        sqlite3_bind_int64(stmt, 1, Int64(max(0, limit)))
 
         var rows: [KGRelationRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

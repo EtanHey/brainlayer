@@ -58,8 +58,9 @@ struct KGCanvasView: View {
             }
             .task {
                 guard !hasLoadedGraph else { return }
-                await viewModel.loadGraph()
-                hasLoadedGraph = true
+                if await viewModel.loadGraph() {
+                    hasLoadedGraph = true
+                }
             }
             .onChange(of: geo.size) { _, newSize in
                 setCanvas(size: newSize)
