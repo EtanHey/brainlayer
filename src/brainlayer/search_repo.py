@@ -1548,7 +1548,10 @@ class SearchMixin:
                     if not _is_sqlite_busy_error(exc) or attempt == 2:
                         raise
                     time.sleep(0.05 * (2**attempt))
-            for i, row in enumerate(recent_rows):
+            # Recency fallback supplements lexical search, so append ranks after
+            # existing FTS hits instead of tying the top exact match at rank 0.
+            recent_rank_offset = max(fts_ranks.values(), default=-1) + 1
+            for i, row in enumerate(recent_rows, start=recent_rank_offset):
                 chunk_id = row[0]
                 fts_ranks.setdefault(chunk_id, i)
                 keyword_data.setdefault(
