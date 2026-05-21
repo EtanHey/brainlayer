@@ -37,10 +37,10 @@ def _get_search_vector_store():
     if _search_vector_store is None:
         with _search_store_lock:
             if _search_vector_store is None:
-                from ..paths import DEFAULT_DB_PATH
+                from ..paths import get_db_path
                 from ..vector_store import VectorStore
 
-                _search_vector_store = VectorStore(DEFAULT_DB_PATH, readonly=True)
+                _search_vector_store = VectorStore(get_db_path(), readonly=True)
     return _search_vector_store
 
 
