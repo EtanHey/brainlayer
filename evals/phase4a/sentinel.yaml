@@ -1,0 +1,29 @@
+# Phase 4a sentinel queries — 5 fast-running probes for pre-commit smoke
+# Target: <30s wall-clock total
+# One representative query per category
+
+sentinel:
+  - id: heb-02
+    query: "שגית"
+    expected_entity: Sagit-Stern
+    category: hebrew
+    must_pass: true
+    note: "Hebrew canonical Sagit-Stern — must hit"
+  - id: hlt-01
+    query: "WHOOP recovery low"
+    category: health
+    must_pass: true
+  - id: con-04
+    query: "what's my philosophy on agents"
+    category: conceptual
+    must_pass: true
+  - id: fru-01
+    query: "missing output paths Cursor audit prompts"
+    category: frustration
+    must_pass: true
+    note: "recurring frustration that must surface"
+  - id: ent-01
+    query: "Etan Heyman"
+    category: entity
+    must_pass: true
+    note: "owner identity baseline"

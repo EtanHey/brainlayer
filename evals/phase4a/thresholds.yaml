@@ -1,0 +1,21 @@
+# Phase 4a eval thresholds
+# Pass criteria for the full 80-query eval (aggregate and per-category)
+
+aggregate:
+  recall_at_20_minimum_per_category: 0.90  # 90% per category
+  ndcg_at_10_minimum: 0.85                  # aggregate across all 80
+  no_category_regression_percent: -5        # no category may regress more than 5% vs baseline.json
+
+per_category_minimum:
+  hebrew: 0.85          # higher tolerance for Hebrew given trigram-fuzziness probe (heb-03) and Bug E known miss (heb-05)
+  health: 0.92
+  conceptual: 0.90
+  frustration: 0.95     # frustration items are recurring corrections — must surface
+  temporal: 0.85        # temporal can be tricky depending on time-decay
+  entity: 0.95          # known entities should always surface
+
+latency:
+  sentinel_total_wall_clock_seconds_max: 30
+  full_eval_total_wall_clock_seconds_max: 120
+  per_query_p95_milliseconds_max: 500       # post-Phase-3 deploy observed ~100ms — generous headroom
+  per_query_max_milliseconds: 8000           # cold-start tail (Phase 4 work to eliminate)

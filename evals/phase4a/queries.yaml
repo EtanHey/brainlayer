@@ -1,0 +1,218 @@
+# Phase 4a eval queries — 80 queries across 6 categories
+# Source: ~/Gits/orchestrator/docs.local/handoffs/2026-05-22/phase-4a-eval-framework-dispatch.md
+# Captured by: orcClaude-successor s:42, 2026-05-22 02:57 IDT
+# Sequencing: this file lands FIRST as a data seed; runner.py + metrics.py + ci_gate.py
+# follow in subsequent commits within the same PR or chained PRs.
+
+hebrew:
+  - id: heb-01
+    query: "מיכל"
+    expected_entity: Michal-the-coach
+    expected_min_recall_at_20: 1
+    note: "post-anonymization probe; needs Bug C deanonymize for clean pass"
+  - id: heb-02
+    query: "שגית"
+    expected_entity: Sagit-Stern
+    expected_min_recall_at_20: 2
+    note: "canonical Hebrew spelling (shin-gimel-yod-tav)"
+  - id: heb-03
+    query: "סגית"
+    expected_entity: Sagit-Stern
+    expected_min_recall_at_20: 1
+    expected_score_range: [0.30, 0.50]
+    note: "wrong-letter variant (samekh instead of shin) — trigram fuzziness robustness test"
+  - id: heb-04
+    query: "מערכת BrainLayer"
+    expected_entity: BrainLayer-system
+    note: "Hebrew+English mix — cross-language hybrid verification"
+  - id: heb-05
+    query: "טכג'ים"
+    expected_entity: TechGym
+    note: "Hebrew transliteration of English entity — Bug E probe; expected MISS pre-multilingual-embed (Phase 4c fix)"
+  - id: heb-06
+    query: "החיים שלי"
+    note: "Hebrew possessive 'my life' — conceptual"
+  - id: heb-07
+    query: "אתן הריון"
+    note: "Hebrew everyday phrase — token coverage test"
+  - id: heb-08
+    query: "רבעוני"
+    note: "Hebrew adjective 'quarterly' — domain"
+  - id: heb-09
+    query: "השיחה שלי עם רותם"
+    expected_entity: Rotem-client
+    note: "Hebrew + entity name (Rotem)"
+  - id: heb-10
+    query: "תזכיר לי לגבי"
+    note: "Hebrew 'remind me about' — frustration-style query"
+  - id: heb-11
+    query: "שיגרה יומית"
+    note: "Hebrew 'daily routine'"
+  - id: heb-12
+    query: "כאב גב"
+    note: "Hebrew 'back pain' — health domain"
+  - id: heb-13
+    query: "חוזה freelance"
+    note: "Hebrew+English mix — freelance contract"
+  - id: heb-14
+    query: "ראיון עבודה ב-Anthropic"
+    note: "Hebrew+English entity — recruiting domain"
+  - id: heb-15
+    query: "מה אמרתי על Linear"
+    note: "Hebrew about English tool — full hybrid mix"
+
+health:
+  - id: hlt-01
+    query: "WHOOP recovery low"
+  - id: hlt-02
+    query: "sleep score below 75"
+  - id: hlt-03
+    query: "deep sleep minutes"
+  - id: hlt-04
+    query: "REM minutes"
+  - id: hlt-05
+    query: "HRV trend"
+  - id: hlt-06
+    query: "what did I do when recovery was green"
+  - id: hlt-07
+    query: "back pain triggers"
+  - id: hlt-08
+    query: "morning energy levels"
+  - id: hlt-09
+    query: "exercise after low sleep"
+  - id: hlt-10
+    query: "supplement protocol"
+  - id: hlt-11
+    query: "caffeine after 2pm impact"
+  - id: hlt-12
+    query: "what did I eat this week"
+
+conceptual:
+  - id: con-01
+    query: "decision making under uncertainty"
+  - id: con-02
+    query: "why did I choose Codex over Claude"
+  - id: con-03
+    query: "tradeoff between speed and quality"
+  - id: con-04
+    query: "what's my philosophy on agents"
+  - id: con-05
+    query: "when to dispatch a sub-agent vs do it myself"
+  - id: con-06
+    query: "context window management strategy"
+  - id: con-07
+    query: "what counts as a real bug vs review noise"
+  - id: con-08
+    query: "how I think about premature optimization"
+  - id: con-09
+    query: "when does a feature deserve a /large-plan"
+  - id: con-10
+    query: "evaluation rubric design"
+  - id: con-11
+    query: "what makes a skill discoverable"
+  - id: con-12
+    query: "trust calibration with sub-agents"
+  - id: con-13
+    query: "when to checkpoint vs continue"
+  - id: con-14
+    query: "design vs implementation responsibility"
+  - id: con-15
+    query: "framing problems vs solving them"
+
+frustration:
+  - id: fru-01
+    query: "missing output paths Cursor audit prompts"
+    note: "recurring frustration, March + April + May"
+  - id: fru-02
+    query: "raw cursor agent inline CLI prompt anti-pattern"
+    note: "spawn-and-wait-then-send pattern correction"
+  - id: fru-03
+    query: "orc deflection LEAD sub-orc"
+    note: "2026-04-28 + 2026-05-21 recurrences"
+  - id: fru-04
+    query: "21 second unilateral kill brainlayerClaude"
+    note: "Phase 2 INFEASIBLE killed without Etan consult"
+  - id: fru-05
+    query: "redundant clarification prior response"
+    note: "2026-05-21 motherfucker correction"
+  - id: fru-06
+    query: "fast flag banned cmux dispatch"
+    note: "AP11 enforcement"
+  - id: fru-07
+    query: "squash banned brainlayer queue stranded"
+    note: "Etan conditional ban, condition not satisfied"
+  - id: fru-08
+    query: "TechGym Sunday vs Wednesday correction"
+    note: "C2 verbatim 2026-05-21"
+  - id: fru-09
+    query: "anonymization Etan local privacy egress"
+    note: "C11 — REMOVE on-write, keep egress"
+  - id: fru-10
+    query: "Hebrew Sagit-Stern wrong letter samekh"
+    note: "C10 robustness finding"
+  - id: fru-11
+    query: "context bar broken 1M model"
+    note: "R13 invariant"
+  - id: fru-12
+    query: "telegram off as comms channel"
+    note: "R28 invariant"
+  - id: fru-13
+    query: "iOS 26 not iOS 16"
+    note: "C10 OS version correction"
+  - id: fru-14
+    query: "Codex over-iteration past green CI AP12"
+    note: "anti-pattern observed PR #303 + #304 + #305"
+  - id: fru-15
+    query: "spawn and wait then send pattern"
+    note: "7-step canonical spawn"
+
+temporal:
+  - id: tmp-01
+    query: "what happened yesterday around 9pm"
+  - id: tmp-02
+    query: "PRs merged this week"
+  - id: tmp-03
+    query: "decision made in March 2026"
+  - id: tmp-04
+    query: "last hour enrichment activity"
+  - id: tmp-05
+    query: "research dispatched today"
+  - id: tmp-06
+    query: "what was the state at 21:30 IDT"
+  - id: tmp-07
+    query: "this morning's coach conversation"
+  - id: tmp-08
+    query: "two days ago what did I commit"
+
+entity:
+  - id: ent-01
+    query: "Etan Heyman"
+    note: "owner identity baseline"
+  - id: ent-02
+    query: "Sagit-Stern"
+  - id: ent-03
+    query: "TechGym lecture"
+  - id: ent-04
+    query: "Anthropic Claude API"
+  - id: ent-05
+    query: "BrainBar dashboard"
+  - id: ent-06
+    query: "Michal-the-coach"
+  - id: ent-07
+    query: "Rotem-client"
+  - id: ent-08
+    query: "VoiceLayer VoiceBar"
+  - id: ent-09
+    query: "Golems Codex CLI"
+  - id: ent-10
+    query: "Mehayom app"
+  - id: ent-11
+    query: "WHOOP recovery API"
+  - id: ent-12
+    query: "Cursor IDE bug bot"
+  - id: ent-13
+    query: "Phase 4 hnlx Int8"
+  - id: ent-14
+    query: "Single-writer arbitration audit"
+  - id: ent-15
+    query: "PHASE4-DESIGN.md"
