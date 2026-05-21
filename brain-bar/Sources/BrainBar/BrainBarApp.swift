@@ -3,40 +3,6 @@ import ApplicationServices
 import Combine
 import SwiftUI
 
-enum BrainBarAppSupport {
-    static func hotkeyPermissionFailureMessage(permissions: HotkeyPermissionStatus) -> String {
-        "BrainBar could not start the fallback hotkey listener. Enable \(permissions.missingPermissionsMessage) in System Settings. The CGEventTap fallback requires both Input Monitoring and Accessibility."
-    }
-
-    @MainActor
-    static func makeStatsCollector(
-        dbPath: String,
-        targetPID: pid_t,
-        brainBusEvents: BrainBusEventSource? = BrainBusClient(),
-        databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
-    ) -> StatsCollector {
-        StatsCollector(
-            dbPath: dbPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
-            brainBusEvents: brainBusEvents,
-            databaseOpenConfiguration: databaseOpenConfiguration
-        )
-    }
-
-    @MainActor
-    static func makeUIStatsCollector(
-        dbPath: String,
-        brainBusEvents: BrainBusEventSource? = BrainBusClient()
-    ) -> StatsCollector {
-        makeStatsCollector(
-            dbPath: dbPath,
-            targetPID: 0,
-            brainBusEvents: brainBusEvents,
-            databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
-        )
-    }
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
