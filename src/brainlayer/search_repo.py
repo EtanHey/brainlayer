@@ -1532,7 +1532,7 @@ class SearchMixin:
                            summary, tags, importance, intent,
                            created_at, source, sender, language, decay_score
                     FROM chunks
-                    WHERE created_at >= datetime('now', '-7 days') {" ".join(recent_extra)}
+                    WHERE datetime(created_at) >= datetime('now', '-7 days') {" ".join(recent_extra)}
                     ORDER BY created_at DESC
                     LIMIT ?
                     """,

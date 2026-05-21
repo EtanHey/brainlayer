@@ -138,8 +138,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def _writer_pidfile_path(self) -> Path:
         pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp"))
-        path_hash = hashlib.sha256(str(self.db_path.resolve()).encode("utf-8")).hexdigest()[:16]
-        return pidfile_dir / f"brainlayer-writer-{path_hash}-{self.db_path.name}.pid"
+        resolved_path = self.db_path.resolve()
+        path_hash = hashlib.sha256(str(resolved_path).encode("utf-8")).hexdigest()[:16]
+        return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
     def _acquire_writer_pidfile(self) -> None:
         pidfile = self._writer_pidfile_path()
@@ -194,7 +195,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             except FileNotFoundError:
                 return False
             if os.path.samestat(os.fstat(fd), path_stat):
-                pidfile.unlink()
+                try:
+                    pidfile.unlink()
+                except FileNotFoundError:
+                    pass
             return False
         finally:
             os.close(fd)
