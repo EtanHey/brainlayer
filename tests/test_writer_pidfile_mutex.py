@@ -546,6 +546,17 @@ def test_drain_busy_timeout_non_positive_env_falls_back_to_30s(tmp_path, monkeyp
         conn.close()
 
 
+def test_drain_busy_timeout_overflow_env_falls_back_to_30s(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "3000000000")
+
+    conn = drain._open_connection(tmp_path / "drain.db")
+    try:
+        busy_timeout_ms = conn.cursor().execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout_ms == 30000
+    finally:
+        conn.close()
+
+
 def test_enrichment_plist_throttle_interval_at_least_60s():
     plist_path = Path(__file__).resolve().parents[1] / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     plist = plistlib.loads(plist_path.read_bytes())

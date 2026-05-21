@@ -33,13 +33,18 @@ from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
+_MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+
 
 def _drain_busy_timeout_ms() -> int:
     try:
-        timeout_ms = int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000"))
+        timeout_ms = int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", str(_DEFAULT_DRAIN_BUSY_TIMEOUT_MS)))
     except (TypeError, ValueError):
-        return 30000
-    return timeout_ms if timeout_ms > 0 else 30000
+        return _DEFAULT_DRAIN_BUSY_TIMEOUT_MS
+    if timeout_ms <= 0 or timeout_ms > _MAX_APSW_BUSY_TIMEOUT_MS:
+        return _DEFAULT_DRAIN_BUSY_TIMEOUT_MS
+    return timeout_ms
 
 
 @dataclass
