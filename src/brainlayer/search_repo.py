@@ -64,7 +64,6 @@ _NOISE_CONTENT_PATTERNS = (
     "# session-restore",
 )
 _NOISE_RERANK_DEMOTION = 0.05
-_RECENCY_QUERY_TERMS = frozenset({"recent", "today", "current", "latest", "this week"})
 _RECENCY_SINGLE_TERM_RE = re.compile(r"\b(?:current|latest|recent|today)\b", re.IGNORECASE)
 _RECENCY_THIS_WEEK_RE = re.compile(r"\bthis\s+week\b", re.IGNORECASE)
 AUDIT_RECURSION_TAG_PATTERNS = (
