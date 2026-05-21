@@ -1,5 +1,7 @@
 """Tests for brainlayer enrichment and maintenance CLI routing."""
 
+import os
+import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -26,6 +28,64 @@ def test_cli_enrich_mode_realtime_routes_to_controller(monkeypatch):
     assert result.exit_code == 0
     assert called["limit"] == 9
     assert called["since_hours"] == 12
+
+
+def test_cli_enrich_supervisor_routes_to_controller(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    called = {}
+
+    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
+        called.update({"db_path": str(db_path), "limit": limit, "since_hours": since_hours, "stop_event": stop_event})
+        return SimpleNamespace(
+            mode="supervisor",
+            cycles=2,
+            attempted=3,
+            enriched=2,
+            skipped=1,
+            failed=0,
+            errors=[],
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+
+    result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
+
+    assert result.exit_code == 0
+    assert called["db_path"] == "/tmp/test.db"
+    assert called["limit"] == 200000
+    assert called["since_hours"] == 87600
+    assert called["stop_event"] is not None
+    assert "mode=supervisor" in result.stdout
+    assert "cycles=2" in result.stdout
+
+
+def test_cli_enrich_supervisor_handles_sigterm_gracefully(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    called = {}
+
+    def fake_supervisor(db_path, stop_event=None, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        called["stop_event_set"] = stop_event.is_set()
+        return SimpleNamespace(
+            mode="supervisor",
+            cycles=1,
+            attempted=1,
+            enriched=1,
+            skipped=0,
+            failed=0,
+            errors=[],
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+
+    result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
+
+    assert result.exit_code == 0
+    assert called["stop_event_set"] is True
+    assert "Stopping enrich supervisor" in result.stdout
+    assert "mode=supervisor" in result.stdout
 
 
 def test_cli_enrich_mode_batch_submit_routes_to_cloud_backfill(monkeypatch):

@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
 DEFAULT_MAX_COMMIT_INTERVAL_MS = 250.0
+DEFAULT_ENRICH_SUPERVISOR_LIMIT = 200_000
+DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600
+DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
 
 
 def _bounded_nonnegative_float(value: Any, default: float) -> float:
@@ -101,6 +104,95 @@ class EnrichmentResult:
     skipped: int
     failed: int
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EnrichmentSupervisorResult:
+    mode: str = "supervisor"
+    cycles: int = 0
+    attempted: int = 0
+    enriched: int = 0
+    skipped: int = 0
+    failed: int = 0
+    errors: list[str] = field(default_factory=list)
+    exit_code: int = 0
+
+
+def _current_idle_poll_seconds() -> float:
+    return _bounded_nonnegative_float(
+        os.environ.get("BRAINLAYER_ENRICH_IDLE_POLL_SECONDS"),
+        DEFAULT_ENRICH_IDLE_POLL_SECONDS,
+    )
+
+
+def _sleep_or_wait_for_stop(stop_event: threading.Event | None, seconds: float, sleep_fn) -> None:
+    if seconds <= 0:
+        return
+    if stop_event is not None and sleep_fn is time.sleep:
+        stop_event.wait(seconds)
+        return
+    sleep_fn(seconds)
+
+
+def run_enrich_supervisor(
+    db_path: Path | str,
+    *,
+    limit: int = DEFAULT_ENRICH_SUPERVISOR_LIMIT,
+    since_hours: int = DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
+    idle_poll_seconds: float | None = None,
+    max_cycles: int | None = None,
+    stop_event: threading.Event | None = None,
+    vector_store_cls=None,
+    enrich_fn=None,
+    sleep_fn=time.sleep,
+) -> EnrichmentSupervisorResult:
+    """Run realtime enrichment as a long-lived supervisor around one VectorStore.
+
+    PR-alpha's writer pidfile mutex is acquired by the writable VectorStore
+    constructor. Keeping that store alive here keeps the pidfile for the whole
+    supervisor lifetime instead of reacquiring it on every launchd respawn.
+    """
+    from .vector_store import VectorStore
+
+    if vector_store_cls is None:
+        vector_store_cls = VectorStore
+    if enrich_fn is None:
+        enrich_fn = enrich_realtime
+    if idle_poll_seconds is None:
+        idle_poll_seconds = _current_idle_poll_seconds()
+
+    db_path = Path(db_path)
+    stats = EnrichmentSupervisorResult()
+    store = vector_store_cls(db_path)
+    logger.info("VectorStore initialized for enrich supervisor: %s", db_path)
+    try:
+        while stop_event is None or not stop_event.is_set():
+            if max_cycles is not None and stats.cycles >= max_cycles:
+                break
+
+            try:
+                result = enrich_fn(store, limit=limit, since_hours=since_hours)
+            except Exception as exc:  # noqa: BLE001
+                stats.cycles += 1
+                stats.failed += 1
+                error = f"supervisor: {exc}"
+                stats.errors.append(error)
+                logger.exception("Enrich supervisor cycle failed; continuing")
+                continue
+
+            stats.cycles += 1
+            stats.attempted += result.attempted
+            stats.enriched += result.enriched
+            stats.skipped += result.skipped
+            stats.failed += result.failed
+            stats.errors.extend(result.errors)
+
+            if result.attempted == 0 and (max_cycles is None or stats.cycles < max_cycles):
+                logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
+                _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
+    finally:
+        store.close()
+    return stats
 
 
 def _load_cloud_backfill_module():
