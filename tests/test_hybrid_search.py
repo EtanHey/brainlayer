@@ -630,6 +630,43 @@ class TestHybridSearch:
         assert sleeps == [0.05]
         assert "recent-after-busy" in results["ids"][0]
 
+    def test_recency_intent_fallback_appends_ranks_after_fts_hits(self, store, monkeypatch):
+        _insert_chunk(
+            store,
+            chunk_id="exact-fts-hit",
+            content="latest arbitration mutex exact lexical match",
+            embedding=_embed("distant exact"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="recent-only",
+            content="fresh unrelated operational note",
+            embedding=_embed("distant recent"),
+            created_at="2999-01-02T00:00:00Z",
+        )
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **_kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+        monkeypatch.setattr(store, "_trigram_fts_available", False)
+        captured_scores: dict[str, float] = {}
+
+        def capture_scores(scored, *, n_results):
+            captured_scores.update({chunk_id: score for score, chunk_id, *_rest in scored})
+            return scored
+
+        monkeypatch.setattr(store, "_mmr_rerank_scored_results", capture_scores)
+
+        store.hybrid_search(
+            query_embedding=_embed("latest arbitration mutex"),
+            query_text="latest arbitration mutex",
+            n_results=5,
+        )
+
+        assert captured_scores["exact-fts-hit"] > captured_scores["recent-only"]
+
     def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
         monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
 
