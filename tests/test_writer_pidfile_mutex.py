@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import plistlib
 import subprocess
@@ -11,7 +12,8 @@ from brainlayer.vector_store import VectorStore
 
 
 def _expected_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
-    return pidfile_dir / f"brainlayer-writer-{db_path.name}.pid"
+    path_hash = hashlib.sha256(str(db_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return pidfile_dir / f"brainlayer-writer-{path_hash}-{db_path.name}.pid"
 
 
 def test_pidfile_created_on_rw_init(tmp_path, monkeypatch):
@@ -64,6 +66,40 @@ raise SystemExit("second writer unexpectedly acquired the pidfile")
         assert result.returncode == 0, result.stderr
         assert "WriterInUseError" in result.stdout
         assert f"another writer is using {db_path} (pid {os.getpid()})" in result.stdout
+    finally:
+        store.close()
+
+
+def test_pidfile_allows_different_directories_with_same_db_basename(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    first_db = tmp_path / "first" / "writer.db"
+    second_db = tmp_path / "second" / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+
+    store = VectorStore(first_db)
+    try:
+        script = """
+from pathlib import Path
+from brainlayer.vector_store import VectorStore
+
+store = VectorStore(Path(__import__("os").environ["DB_PATH"]))
+store.close()
+"""
+        env = {
+            **os.environ,
+            "BRAINLAYER_WRITER_PIDFILE_DIR": str(pidfile_dir),
+            "DB_PATH": str(second_db),
+            "PYTHONPATH": f"{Path(__file__).resolve().parents[1] / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
     finally:
         store.close()
 
@@ -128,6 +164,17 @@ def test_init_retries_10_with_extended_backoff():
 
 def test_drain_busy_timeout_30s(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000")
+
+    conn = drain._open_connection(tmp_path / "drain.db")
+    try:
+        busy_timeout_ms = conn.cursor().execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout_ms >= 30000
+    finally:
+        conn.close()
+
+
+def test_drain_busy_timeout_invalid_env_falls_back_to_30s(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "not-an-int")
 
     conn = drain._open_connection(tmp_path / "drain.db")
     try:

@@ -1479,12 +1479,18 @@ class SearchMixin:
             if language_filter:
                 recent_extra.append("AND language = ?")
                 recent_params.append(language_filter)
+            if entity_id:
+                recent_extra.append("AND id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
+                recent_params.append(entity_id)
             if tag_filter:
                 recent_extra.append("AND id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
                 recent_params.append(tag_filter)
             if intent_filter:
                 recent_extra.append("AND intent = ?")
                 recent_params.append(intent_filter)
+            if sentiment_filter:
+                recent_extra.append("AND sentiment_label = ?")
+                recent_params.append(sentiment_filter)
             if importance_min is not None:
                 recent_extra.append("AND importance >= ?")
                 recent_params.append(importance_min)

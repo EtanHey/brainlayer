@@ -431,6 +431,65 @@ class TestHybridSearch:
     def test_noise_demoter_does_not_treat_arbitrary_true_metadata_as_quarantine(self):
         assert not _contains_precompact_or_quarantined_meta({"feature_enabled": "true"}, "ordinary content")
 
+    def test_recency_intent_fallback_preserves_entity_filter(self, store):
+        store.upsert_entity("person-a", "person", "Person A")
+        store.upsert_entity("person-b", "person", "Person B")
+        _insert_chunk(
+            store,
+            chunk_id="recent-a",
+            content="fresh unrelated notes for person a",
+            embedding=_embed("fresh a"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="recent-b",
+            content="fresh unrelated notes for person b",
+            embedding=_embed("fresh b"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        store.link_entity_chunk("person-a", "recent-a")
+        store.link_entity_chunk("person-b", "recent-b")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest work"),
+            query_text="latest work",
+            n_results=5,
+            entity_id="person-a",
+        )
+
+        assert "recent-a" in results["ids"][0]
+        assert "recent-b" not in results["ids"][0]
+
+    def test_recency_intent_fallback_preserves_sentiment_filter(self, store):
+        _insert_chunk(
+            store,
+            chunk_id="recent-positive",
+            content="fresh unrelated positive notes",
+            embedding=_embed("fresh positive"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="recent-negative",
+            content="fresh unrelated negative notes",
+            embedding=_embed("fresh negative"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        cursor = store.conn.cursor()
+        cursor.execute("UPDATE chunks SET sentiment_label = 'positive' WHERE id = 'recent-positive'")
+        cursor.execute("UPDATE chunks SET sentiment_label = 'negative' WHERE id = 'recent-negative'")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest work"),
+            query_text="latest work",
+            n_results=5,
+            sentiment_filter="positive",
+        )
+
+        assert "recent-positive" in results["ids"][0]
+        assert "recent-negative" not in results["ids"][0]
+
     def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
         monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
 
