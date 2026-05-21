@@ -171,7 +171,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     atexit.register(self._release_writer_pidfile)
                     return
 
-        for attempt in range(2):
+        max_create_attempts = 4
+        for attempt in range(max_create_attempts):
             try:
                 fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 try:
@@ -189,8 +190,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             except FileExistsError:
                 if self._handle_existing_writer_pidfile(pidfile, pid):
                     return
-                if attempt == 1:
+                if attempt == max_create_attempts - 1:
                     raise
+                time.sleep(0.01 * (attempt + 1))
 
     def _handle_existing_writer_pidfile(self, pidfile: Path, pid: int) -> bool:
         try:
