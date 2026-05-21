@@ -41,9 +41,9 @@ class HybridSearchHelper:
 
     def warm(self) -> None:
         os.environ["BRAINLAYER_DB"] = os.fspath(self.db_path)
-        from brainlayer.mcp._shared import _get_embedding_model, _get_vector_store
+        from brainlayer.mcp._shared import _get_embedding_model, _get_search_vector_store
 
-        _get_vector_store()
+        _get_search_vector_store()
         model = _get_embedding_model()
         model.embed_query("brainbar hybrid helper warmup")
 

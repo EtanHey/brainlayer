@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded globals with thread-safe initialization
 _vector_store = None
+_search_vector_store = None
 _embedding_model = None
 _store_lock = threading.Lock()
+_search_store_lock = threading.Lock()
 _model_lock = threading.Lock()
 
 
@@ -27,6 +29,19 @@ def _get_vector_store():
 
                 _vector_store = VectorStore(DEFAULT_DB_PATH)
     return _vector_store
+
+
+def _get_search_vector_store():
+    """Get or initialize the read-only VectorStore for search-only handlers."""
+    global _search_vector_store
+    if _search_vector_store is None:
+        with _search_store_lock:
+            if _search_vector_store is None:
+                from ..paths import DEFAULT_DB_PATH
+                from ..vector_store import VectorStore
+
+                _search_vector_store = VectorStore(DEFAULT_DB_PATH, readonly=True)
+    return _search_vector_store
 
 
 def _get_embedding_model():
