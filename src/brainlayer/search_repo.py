@@ -65,6 +65,8 @@ _NOISE_CONTENT_PATTERNS = (
 )
 _NOISE_RERANK_DEMOTION = 0.05
 _RECENCY_QUERY_TERMS = frozenset({"recent", "today", "current", "latest", "this week"})
+_RECENCY_SINGLE_TERM_RE = re.compile(r"\b(?:current|latest|recent|today)\b", re.IGNORECASE)
+_RECENCY_THIS_WEEK_RE = re.compile(r"\bthis\s+week\b", re.IGNORECASE)
 AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} = 'audit'",
     "{tag_expr} = 'audit-recursion'",
@@ -77,6 +79,11 @@ AUDIT_RECURSION_TAG_PATTERNS = (
 
 # Module-level LRU cache: {cache_key: (result, timestamp)}
 _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
+
+
+def _has_recency_intent(query_text: str) -> bool:
+    """Return true when recency words appear as terms, not substrings."""
+    return bool(_RECENCY_SINGLE_TERM_RE.search(query_text) or _RECENCY_THIS_WEEK_RE.search(query_text))
 
 
 def clear_hybrid_search_cache(store_key: Any = None) -> None:
@@ -1463,7 +1470,7 @@ class SearchMixin:
         _ingest_keyword_rows(fts_results, fts_ranks)
         _ingest_keyword_rows(trigram_fts_results, trigram_ranks)
 
-        recency_intent = any(term in query_text.lower() for term in _RECENCY_QUERY_TERMS)
+        recency_intent = _has_recency_intent(query_text)
         if recency_intent and not date_from:
             recent_extra = []
             recent_params: list = []
