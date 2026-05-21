@@ -10,6 +10,7 @@ Covers:
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from brainlayer.mcp.search_handler import _brain_recall, _brain_search
@@ -314,6 +315,105 @@ class TestBrainSearchToSearch:
         mock_search.assert_not_awaited()
         assert structured["entity"] == "Etan"
         assert structured["facts"] == fact_items
+
+
+class TestKgDegradeObservability:
+    """KG hybrid degrade paths should be visible in structured output and logs."""
+
+    def _run_entity_search_with_degraded_hybrid(
+        self,
+        *,
+        fact_items=None,
+        search_fallback=None,
+    ):
+        store = MagicMock(count=MagicMock(return_value=100))
+        store.kg_hybrid_search.side_effect = RuntimeError("embedding backend unavailable")
+        fact_items = [] if fact_items is None else fact_items
+        search_fallback = (
+            ([MagicMock(type="text", text="fallback")], {"query": "Etan BrainLayer context", "total": 0})
+            if search_fallback is None
+            else search_fallback
+        )
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch(
+                "brainlayer.mcp.search_handler._get_embedding_model",
+                return_value=MagicMock(embed_query=MagicMock(return_value=[0.1] * 1024)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._detect_entities",
+                return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
+            ),
+            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=fact_items),
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=search_fallback,
+            ) as mock_search,
+            patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
+        ):
+            result = asyncio.run(_brain_search(query="Etan BrainLayer context"))
+
+        return result, store, mock_search
+
+    def test_kg_degrade_emits_structured_reason(self):
+        """Runtime hybrid failures expose a stable reason in structuredContent."""
+        _content, structured = self._run_entity_search_with_degraded_hybrid(
+            fact_items=[{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
+        )[0]
+
+        assert structured["kg_degraded"] is True
+        assert structured["kg_degrade_reason"] == "embedding_or_model"
+
+    def test_kg_degrade_emits_log_line(self, caplog):
+        """Every degrade log includes reason, entity, and query for operators."""
+        caplog.set_level(logging.WARNING, logger="brainlayer.mcp._shared")
+
+        self._run_entity_search_with_degraded_hybrid(
+            fact_items=[{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
+        )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            "KG hybrid search degraded" in message
+            and "reason=embedding_or_model" in message
+            and "entity=Etan" in message
+            and "query='Etan BrainLayer context'" in message
+            for message in messages
+        )
+
+    def test_kg_degrade_fall_through_logs(self, caplog):
+        """Hybrid degrade is logged even when empty KG output falls back to normal search."""
+        caplog.set_level(logging.WARNING, logger="brainlayer.mcp._shared")
+
+        _result, _store, mock_search = self._run_entity_search_with_degraded_hybrid(fact_items=[])
+
+        mock_search.assert_awaited_once()
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            "KG degrade hidden by fall-through" in message
+            and "reason=embedding_or_model" in message
+            and "entity=Etan" in message
+            for message in messages
+        )
+
+    def test_kg_degrade_axiom_emit_attempted(self, monkeypatch):
+        """Axiom degrade telemetry is attempted when AXIOM_TOKEN is configured."""
+        monkeypatch.setenv("AXIOM_TOKEN", "test-token")
+
+        with patch("brainlayer.telemetry.emit", return_value=True) as emit:
+            self._run_entity_search_with_degraded_hybrid(
+                fact_items=[{"source": "Etan", "relation": "works_on", "target": "BrainLayer"}]
+            )
+
+        emit.assert_called_once()
+        dataset, event = emit.call_args.args
+        assert dataset == "brainlayer-search-degrade"
+        assert event["_type"] == "kg_degraded"
+        assert event["reason"] == "embedding_or_model"
+        assert event["entity"] == "Etan"
+        assert event["query_preview"] == "Etan BrainLayer context"
 
 
 # ── Input schema validation ──────────────────────────────────────────────────

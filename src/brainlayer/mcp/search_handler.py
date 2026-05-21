@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import platform
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -9,6 +11,7 @@ from typing import Any
 import apsw
 from mcp.types import TextContent
 
+from .. import telemetry
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
@@ -680,6 +683,26 @@ async def _brain_search(
         # Path 2: Try full hybrid search (embedding + vector + KG)
         structured_results = []
         kg_degraded = False
+        kg_degrade_reason = None
+
+        def _emit_kg_degrade(reason: str) -> None:
+            if not os.environ.get("AXIOM_TOKEN"):
+                return
+            try:
+                telemetry.emit(
+                    "brainlayer-search-degrade",
+                    {
+                        "_type": "kg_degraded",
+                        "reason": reason,
+                        "entity": entity_name,
+                        "query_preview": query[:200],
+                        "timestamp": _utcnow_iso(),
+                        "mcp_host": platform.node(),
+                    },
+                )
+            except Exception:
+                pass
+
         try:
             normalized_project = _normalize_project_name(project)
             loop = asyncio.get_running_loop()
@@ -727,11 +750,30 @@ async def _brain_search(
                         }
                     structured_results.append(item)
         except (RuntimeError, OSError, MemoryError) as e:
-            logger.warning("KG hybrid search failed (embedding/model issue), using SQL-only: %s", e)
+            reason = "embedding_or_model"
+            logger.warning(
+                "KG hybrid search degraded: reason=%s entity=%s query=%r err=%s",
+                reason,
+                entity_name,
+                query,
+                e,
+            )
             kg_degraded = True
+            kg_degrade_reason = reason
+            _emit_kg_degrade(reason)
         except Exception as e:
-            logger.warning("KG hybrid search failed unexpectedly: %s", e, exc_info=True)
+            reason = e.__class__.__name__
+            logger.warning(
+                "KG hybrid search degraded (unexpected): reason=%s entity=%s query=%r err=%s",
+                reason,
+                entity_name,
+                query,
+                e,
+                exc_info=True,
+            )
             kg_degraded = True
+            kg_degrade_reason = reason
+            _emit_kg_degrade(reason)
 
         # If we have KG facts OR chunk results, return them
         if fact_items or structured_results:
@@ -744,10 +786,19 @@ async def _brain_search(
             }
             if kg_degraded:
                 structured["kg_degraded"] = True
+                structured["kg_degrade_reason"] = kg_degrade_reason
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
             if kg_degraded:
-                formatted_text += "\n⚠ KG search degraded — showing SQL-only results"
+                formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
             return ([TextContent(type="text", text=formatted_text)], structured)
+
+        if kg_degraded:
+            logger.warning(
+                "KG degrade hidden by fall-through: reason=%s entity=%s query=%r",
+                kg_degrade_reason,
+                entity_name,
+                query,
+            )
 
     return await _search(
         query=query,
