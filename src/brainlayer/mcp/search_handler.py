@@ -27,7 +27,6 @@ from ._shared import (
     _error_result,
     _extract_file_path,
     _get_embedding_model,
-    _get_vector_store,
     _memory_to_dict,
     _normalize_project_name,
     _query_has_regression_signal,
@@ -35,6 +34,9 @@ from ._shared import (
     _query_signals_recall,
     _query_signals_think,
     logger,
+)
+from ._shared import (
+    _get_search_vector_store as _get_vector_store,
 )
 
 _CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")

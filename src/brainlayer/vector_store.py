@@ -82,7 +82,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     _INIT_MAX_RETRIES = 5
     _INIT_BASE_DELAY = 0.5  # seconds
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, readonly: bool = False):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts5_health_cache: dict[str, Any] = {}
@@ -94,7 +94,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._checkpoint_count_cache_data_version: int | None = None
         self._audit_recursion_count_cache: int | None = None
         self._audit_recursion_count_cache_data_version: int | None = None
-        self._readonly = self.db_path.exists() and not os.access(self.db_path, os.W_OK)
+        self._readonly = readonly or (self.db_path.exists() and not os.access(self.db_path, os.W_OK))
         if self._readonly:
             self._init_readonly_db()
         else:
