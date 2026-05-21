@@ -1486,6 +1486,9 @@ class SearchMixin:
             if language_filter:
                 recent_extra.append("AND language = ?")
                 recent_params.append(language_filter)
+            if content_type_filter:
+                recent_extra.append("AND content_type = ?")
+                recent_params.append(content_type_filter)
             if entity_id:
                 recent_extra.append("AND id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 recent_params.append(entity_id)
@@ -1498,6 +1501,9 @@ class SearchMixin:
             if sentiment_filter:
                 recent_extra.append("AND sentiment_label = ?")
                 recent_params.append(sentiment_filter)
+            if date_to:
+                recent_extra.append("AND datetime(created_at) <= datetime(?)")
+                recent_params.append(date_to)
             if importance_min is not None:
                 recent_extra.append("AND importance >= ?")
                 recent_params.append(importance_min)
@@ -1524,9 +1530,7 @@ class SearchMixin:
                 recent_extra.append("AND COALESCE(archived, 0) = 0")
                 recent_extra.append("AND COALESCE(status, 'active') = 'active'")
 
-            recent_rows = list(
-                cursor.execute(
-                    f"""
+            recent_query = f"""
                     SELECT id, content, metadata, source_file, project,
                            content_type, value_type, char_count,
                            summary, tags, importance, intent,
@@ -1535,10 +1539,16 @@ class SearchMixin:
                     WHERE datetime(created_at) >= datetime('now', '-7 days') {" ".join(recent_extra)}
                     ORDER BY created_at DESC
                     LIMIT ?
-                    """,
-                    [*recent_params, min(candidate_fetch_count, 25)],
-                )
-            )
+                    """
+            recent_query_params = [*recent_params, min(candidate_fetch_count, 25)]
+            for attempt in range(3):
+                try:
+                    recent_rows = list(cursor.execute(recent_query, recent_query_params))
+                    break
+                except apsw.Error as exc:
+                    if not _is_sqlite_busy_error(exc) or attempt == 2:
+                        raise
+                    time.sleep(0.05 * (2**attempt))
             for i, row in enumerate(recent_rows):
                 chunk_id = row[0]
                 fts_ranks.setdefault(chunk_id, i)
