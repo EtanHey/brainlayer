@@ -5,6 +5,8 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 """
 
 import atexit
+import fcntl
+import hashlib
 import json
 import os
 import struct
@@ -136,7 +138,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def _writer_pidfile_path(self) -> Path:
         pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp"))
-        return pidfile_dir / f"brainlayer-writer-{self.db_path.name}.pid"
+        path_hash = hashlib.sha256(str(self.db_path.resolve()).encode("utf-8")).hexdigest()[:16]
+        return pidfile_dir / f"brainlayer-writer-{path_hash}-{self.db_path.name}.pid"
 
     def _acquire_writer_pidfile(self) -> None:
         pidfile = self._writer_pidfile_path()
@@ -164,27 +167,50 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 atexit.register(self._release_writer_pidfile)
                 return
             except FileExistsError:
-                other_pid = self._read_writer_pidfile(pidfile)
-                if other_pid == pid:
-                    with self._PIDFILE_REFS_LOCK:
-                        self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
-                    self._writer_pidfile_acquired = True
-                    self._writer_pidfile_path_value = pidfile
-                    atexit.register(self._release_writer_pidfile)
+                if self._handle_existing_writer_pidfile(pidfile, pid):
                     return
-                if other_pid is not None and self._pid_is_alive(other_pid):
-                    raise WriterInUseError(f"another writer is using {self.db_path} (pid {other_pid})")
-                try:
-                    pidfile.unlink()
-                except FileNotFoundError:
-                    pass
                 if attempt == 1:
                     raise
+
+    def _handle_existing_writer_pidfile(self, pidfile: Path, pid: int) -> bool:
+        try:
+            fd = os.open(pidfile, os.O_RDONLY)
+        except FileNotFoundError:
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            other_pid = self._read_writer_pidfile_fd(fd)
+            if other_pid == pid:
+                with self._PIDFILE_REFS_LOCK:
+                    self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
+                self._writer_pidfile_acquired = True
+                self._writer_pidfile_path_value = pidfile
+                atexit.register(self._release_writer_pidfile)
+                return True
+            if other_pid is not None and self._pid_is_alive(other_pid):
+                raise WriterInUseError(f"another writer is using {self.db_path} (pid {other_pid})")
+            try:
+                path_stat = pidfile.stat()
+            except FileNotFoundError:
+                return False
+            if os.path.samestat(os.fstat(fd), path_stat):
+                pidfile.unlink()
+            return False
+        finally:
+            os.close(fd)
 
     @staticmethod
     def _read_writer_pidfile(pidfile: Path) -> int | None:
         try:
             return int(pidfile.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _read_writer_pidfile_fd(fd: int) -> int | None:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            return int(os.read(fd, 64).decode("utf-8").strip())
         except (OSError, ValueError):
             return None
 

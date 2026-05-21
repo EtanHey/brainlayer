@@ -34,6 +34,13 @@ from .paths import get_db_path
 logger = logging.getLogger(__name__)
 
 
+def _drain_busy_timeout_ms() -> int:
+    try:
+        return int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000"))
+    except (TypeError, ValueError):
+        return 30000
+
+
 @dataclass
 class ApplyResult:
     chunk_id: str | None = None
@@ -63,7 +70,7 @@ def _log(path: Path, message: str) -> None:
 
 def _open_connection(db_path: Path) -> apsw.Connection:
     conn = apsw.Connection(str(db_path))
-    conn.setbusytimeout(int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000")))
+    conn.setbusytimeout(_drain_busy_timeout_ms())
     conn.enableloadextension(True)
     conn.loadextension(sqlite_vec.loadable_path())
     conn.enableloadextension(False)
