@@ -5,6 +5,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import apsw
@@ -163,6 +164,55 @@ def test_same_process_pidfile_reuse_registers_atexit_release(tmp_path, monkeypat
     finally:
         second.close()
         first.close()
+
+
+def test_release_keeps_pidfile_ref_until_unlink_finishes(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+
+    first = VectorStore(db_path)
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    release_started = threading.Event()
+    opener_done = threading.Event()
+    opened: list[VectorStore] = []
+    errors: list[BaseException] = []
+    original_read = VectorStore._read_writer_pidfile
+
+    def delayed_pidfile_read(path: Path) -> int | None:
+        result = original_read(path)
+        if path == pidfile and not release_started.is_set():
+            release_started.set()
+            opener_done.wait(0.5)
+        return result
+
+    def open_second_writer() -> None:
+        release_started.wait(5)
+        try:
+            opened.append(VectorStore(db_path))
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            opener_done.set()
+
+    monkeypatch.setattr(VectorStore, "_read_writer_pidfile", staticmethod(delayed_pidfile_read))
+    opener_thread = threading.Thread(target=open_second_writer)
+    release_thread = threading.Thread(target=first.close)
+
+    opener_thread.start()
+    release_thread.start()
+    release_thread.join(5)
+    opener_thread.join(5)
+
+    assert not release_thread.is_alive()
+    assert not opener_thread.is_alive()
+    assert not errors
+    assert opened
+    try:
+        assert pidfile.exists()
+        assert pidfile.read_text(encoding="utf-8").strip() == str(os.getpid())
+    finally:
+        opened[0].close()
 
 
 def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
