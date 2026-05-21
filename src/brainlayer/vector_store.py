@@ -71,6 +71,25 @@ apsw.connection_hooks.insert(0, _set_busy_timeout_hook)
 apsw.bestpractice.apply(apsw.bestpractice.recommended)
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_mmap_bytes() -> int:
+    return max(_int_env("BRAINLAYER_READ_MMAP_BYTES", 30_000_000_000), 0)
+
+
+def _read_cache_size_kb() -> int:
+    return -abs(_int_env("BRAINLAYER_READ_CACHE_KB", 64_000))
+
+
+def _wal_autocheckpoint_pages() -> int:
+    return max(_int_env("BRAINLAYER_WAL_AUTOCHECKPOINT", 10_000), 0)
+
+
 class VectorStore(SearchMixin, KGMixin, SessionMixin):
     """SQLite-vec based vector store.
 
@@ -180,6 +199,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         # WAL mode is persistent on the DB file — set it every time
         cursor.execute("PRAGMA journal_mode = WAL")
+        cursor.execute(f"PRAGMA wal_autocheckpoint = {_wal_autocheckpoint_pages()}")
 
         # Create tables
         cursor.execute("""
@@ -1177,6 +1197,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             conn.loadextension(sqlite_vec.loadable_path())
             conn.enableloadextension(False)
             conn.setbusytimeout(30_000)
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA mmap_size = {_read_mmap_bytes()}")
+            cursor.execute(f"PRAGMA cache_size = {_read_cache_size_kb()}")
             self._local.read_conn = conn
         return conn
 

@@ -431,7 +431,9 @@ class TestHybridSearch:
     def test_noise_demoter_does_not_treat_arbitrary_true_metadata_as_quarantine(self):
         assert not _contains_precompact_or_quarantined_meta({"feature_enabled": "true"}, "ordinary content")
 
-    def test_mmr_rerank_dedupes_near_duplicates(self, store):
+    def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
+        monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
+
         def embedding(primary: float, secondary: float = 0.0) -> list[float]:
             vector = [0.0] * 1024
             vector[0] = primary
@@ -487,7 +489,9 @@ class TestHybridSearch:
         assert "distinct-relevant" in ids[:2], ids
         assert set(ids[:2]) != {"dup-primary", "dup-secondary"}, ids
 
-    def test_mmr_rerank_keeps_nonvector_hits_in_original_score_slots(self, store):
+    def test_mmr_rerank_keeps_nonvector_hits_in_original_score_slots(self, store, monkeypatch):
+        monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
+
         def embedding(primary: float, secondary: float = 0.0) -> list[float]:
             vector = [0.0] * 1024
             vector[0] = primary
