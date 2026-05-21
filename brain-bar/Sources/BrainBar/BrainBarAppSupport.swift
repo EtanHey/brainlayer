@@ -52,7 +52,7 @@ enum BrainBarAppSupport {
                 return pid
             }
         }
-        if let pid = pidFromFile(daemonPIDFile) {
+        if let pid = daemonPIDFromFile(daemonPIDFile) {
             return pid
         }
         if let pid = runningApplicationPID() {
@@ -114,13 +114,28 @@ enum BrainBarAppSupport {
         return nil
     }
 
-    private static func pidFromFile(_ path: String) -> pid_t? {
+    static func daemonPIDFromFile(_ path: String) -> pid_t? {
         guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         let token = contents.trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: CharacterSet.whitespacesAndNewlines)
             .first ?? ""
         guard let rawPID = Int32(token), rawPID > 0 else { return nil }
-        return pid_t(rawPID)
+        let pid = pid_t(rawPID)
+        return processMatchesDaemon(pid) ? pid : nil
+    }
+
+    private static func processMatchesDaemon(_ pid: pid_t) -> Bool {
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            return daemonBundleIdentifiers.contains(app.bundleIdentifier ?? "") ||
+                app.localizedName == "BrainBarDaemon" ||
+                app.executableURL?.lastPathComponent == "BrainBarDaemon"
+        }
+
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let result = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard result > 0 else { return false }
+        let path = String(decoding: buffer.prefix(Int(result)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return URL(fileURLWithPath: path).lastPathComponent == "BrainBarDaemon"
     }
 
     private static func runningApplicationPID() -> pid_t? {
