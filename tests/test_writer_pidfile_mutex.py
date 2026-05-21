@@ -264,6 +264,26 @@ def test_pidfile_removed_on_close(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_close_releases_pidfile_when_connection_close_raises(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+
+    store = VectorStore(db_path)
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+
+    class BrokenConnection:
+        def close(self):
+            raise RuntimeError("close failed")
+
+    store.conn = BrokenConnection()
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        store.close()
+
+    assert not pidfile.exists()
+
+
 def test_readonly_init_skips_pidfile(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
@@ -282,7 +302,8 @@ def test_readonly_init_skips_pidfile(tmp_path, monkeypatch):
         reader.close()
 
 
-def test_init_retries_10_with_extended_backoff():
+def test_init_retries_10_with_extended_backoff(monkeypatch):
+    monkeypatch.setattr(VectorStore, "_INIT_MAX_RETRIES", 10)
     assert VectorStore._INIT_MAX_RETRIES == 10
     delays = [
         min(VectorStore._INIT_BASE_DELAY * (2**attempt), VectorStore._INIT_MAX_DELAY)

@@ -2024,15 +2024,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def close(self) -> None:
         """Close database connections."""
-        # Close thread-local read connection if it exists
-        if hasattr(self, "_local"):
-            read_conn = getattr(self._local, "read_conn", None)
-            if read_conn is not None:
-                read_conn.close()
-                self._local.read_conn = None
-        if hasattr(self, "conn"):
-            self.conn.close()
-        self._release_writer_pidfile()
+        try:
+            # Close thread-local read connection if it exists
+            if hasattr(self, "_local"):
+                read_conn = getattr(self._local, "read_conn", None)
+                if read_conn is not None:
+                    read_conn.close()
+                    self._local.read_conn = None
+            if hasattr(self, "conn"):
+                self.conn.close()
+        finally:
+            self._release_writer_pidfile()
 
     def __enter__(self):
         return self

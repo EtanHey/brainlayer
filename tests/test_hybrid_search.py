@@ -3,6 +3,7 @@
 import json
 import uuid
 
+import apsw
 import pytest
 
 from brainlayer._helpers import serialize_f32
@@ -44,6 +45,7 @@ def _insert_chunk(
     resolved_query: str | None = None,
     importance: float | None = None,
     created_at: str | None = "2026-04-05T00:00:00Z",
+    content_type: str = "assistant_text",
     project: str = "hybrid-test",
     sender: str | None = None,
     language: str | None = None,
@@ -54,12 +56,13 @@ def _insert_chunk(
         """INSERT INTO chunks (
             id, content, metadata, source_file, project, content_type,
             char_count, source, sender, language, summary, tags, resolved_query, importance, created_at
-        ) VALUES (?, ?, ?, 'test.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?, ?, ?, ?, ?, ?)""",
+        ) VALUES (?, ?, ?, 'test.jsonl', ?, ?, ?, 'claude_code', ?, ?, ?, ?, ?, ?, ?)""",
         (
             chunk_id,
             content,
             json.dumps(metadata_obj) if metadata_obj is not None else "{}",
             project,
+            content_type,
             len(content),
             sender,
             language,
@@ -490,6 +493,39 @@ class TestHybridSearch:
         assert "recent-positive" in results["ids"][0]
         assert "recent-negative" not in results["ids"][0]
 
+    def test_recency_intent_fallback_preserves_content_type_filter(self, store, monkeypatch):
+        _insert_chunk(
+            store,
+            chunk_id="recent-ai-code",
+            content="fresh unrelated code notes",
+            embedding=_embed("fresh code"),
+            created_at="2999-01-01T00:00:00Z",
+            content_type="ai_code",
+        )
+        _insert_chunk(
+            store,
+            chunk_id="recent-assistant",
+            content="fresh unrelated assistant notes",
+            embedding=_embed("fresh assistant"),
+            created_at="2999-01-01T00:00:00Z",
+            content_type="assistant_text",
+        )
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **_kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest work"),
+            query_text="latest work",
+            n_results=5,
+            content_type_filter="ai_code",
+        )
+
+        assert "recent-ai-code" in results["ids"][0]
+        assert "recent-assistant" not in results["ids"][0]
+
     def test_recency_intent_uses_term_boundaries(self):
         assert _has_recency_intent("latest work progress")
         assert _has_recency_intent("what changed this week")
@@ -518,6 +554,81 @@ class TestHybridSearch:
         )
 
         assert "stale-boundary" not in results["ids"][0]
+
+    def test_recency_intent_fallback_respects_date_to(self, store, monkeypatch):
+        cursor = store.conn.cursor()
+        before_date_to = cursor.execute("SELECT datetime('now', '-2 days')").fetchone()[0].replace(" ", "T") + "Z"
+        date_to = cursor.execute("SELECT datetime('now', '-1 days')").fetchone()[0].replace(" ", "T") + "Z"
+        after_date_to = cursor.execute("SELECT datetime('now')").fetchone()[0].replace(" ", "T") + "Z"
+        _insert_chunk(
+            store,
+            chunk_id="recent-before-date-to",
+            content="fresh before date_to payload",
+            embedding=_embed("fresh before date to"),
+            created_at=before_date_to,
+        )
+        _insert_chunk(
+            store,
+            chunk_id="recent-after-date-to",
+            content="fresh after date_to payload",
+            embedding=_embed("fresh after date to"),
+            created_at=after_date_to,
+        )
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **_kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest unrelated"),
+            query_text="latest unrelated",
+            n_results=5,
+            date_to=date_to,
+        )
+
+        assert "recent-before-date-to" in results["ids"][0]
+        assert "recent-after-date-to" not in results["ids"][0]
+
+    def test_recency_intent_fallback_retries_busy_query(self, store, monkeypatch):
+        _insert_chunk(
+            store,
+            chunk_id="recent-after-busy",
+            content="fresh after transient busy payload",
+            embedding=_embed("fresh busy"),
+            created_at="2999-01-01T00:00:00Z",
+        )
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **_kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+        real_cursor = store.conn.cursor()
+
+        class BusyOnceCursor:
+            def __init__(self):
+                self.busy_count = 0
+
+            def execute(self, sql, params=()):
+                if "WHERE datetime(created_at) >= datetime('now', '-7 days')" in str(sql) and self.busy_count == 0:
+                    self.busy_count += 1
+                    raise apsw.BusyError("database is locked")
+                return real_cursor.execute(sql, params)
+
+        busy_cursor = BusyOnceCursor()
+        sleeps: list[float] = []
+        monkeypatch.setattr(store, "_read_cursor", lambda: busy_cursor)
+        monkeypatch.setattr("time.sleep", sleeps.append)
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest unrelated"),
+            query_text="latest unrelated",
+            n_results=5,
+        )
+
+        assert busy_cursor.busy_count == 1
+        assert sleeps == [0.05]
+        assert "recent-after-busy" in results["ids"][0]
 
     def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
         monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
