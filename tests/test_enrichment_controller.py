@@ -1227,13 +1227,10 @@ def test_enrichment_plist_invokes_cli_enrich_entrypoint():
     plist = _load_enrichment_plist()
 
     args = plist["ProgramArguments"]
-    assert args[:2] == ["/bin/zsh", "-lc"]
-    command = args[2]
-    assert "__BRAINLAYER_BIN__" in command
-    assert "while true" in command
-    assert "enrich --mode realtime" in command
-    assert "--limit 200000" in command
-    assert "--since-hours 87600" in command
+    assert args == ["__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
+    assert "while true" not in " ".join(args)
+    assert "--limit" not in args
+    assert "--since-hours" not in args
 
 
 def test_enrichment_plist_matches_validated_flex_realtime_profile():

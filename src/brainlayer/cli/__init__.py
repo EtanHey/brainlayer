@@ -903,11 +903,17 @@ def enrich(
         help="Batch mode Gemini model override",
     ),
     stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
+    supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
 ) -> None:
     """Enrich chunks via Gemini-backed realtime or batch modes."""
     try:
         from .. import cloud_backfill
-        from ..enrichment_controller import enrich_realtime
+        from ..enrichment_controller import (
+            DEFAULT_ENRICH_SUPERVISOR_LIMIT,
+            DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
+            enrich_realtime,
+            run_enrich_supervisor,
+        )
         from ..parent_death import install_parent_death_watcher
         from ..vector_store import VectorStore
 
@@ -935,6 +941,39 @@ def enrich(
             return
 
         if mode == "realtime":
+            if supervisor:
+                import signal
+                import threading
+
+                stop_event = threading.Event()
+
+                def handle_signal(signum, frame):
+                    rprint("\n[bold yellow]Stopping enrich supervisor...[/]")
+                    stop_event.set()
+
+                previous_sigterm = signal.getsignal(signal.SIGTERM)
+                previous_sigint = signal.getsignal(signal.SIGINT)
+                signal.signal(signal.SIGTERM, handle_signal)
+                signal.signal(signal.SIGINT, handle_signal)
+                try:
+                    result = run_enrich_supervisor(
+                        db_path,
+                        limit=limit or DEFAULT_ENRICH_SUPERVISOR_LIMIT,
+                        since_hours=since_hours
+                        if since_hours != DEFAULT_REALTIME_ENRICH_SINCE_HOURS
+                        else DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
+                        stop_event=stop_event,
+                    )
+                finally:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+                    signal.signal(signal.SIGINT, previous_sigint)
+                console.print(
+                    f"[bold green]Done![/] mode={result.mode} cycles={result.cycles} "
+                    f"attempted={result.attempted} enriched={result.enriched} "
+                    f"skipped={result.skipped} failed={result.failed}"
+                )
+                raise typer.Exit(result.exit_code)
+
             store = VectorStore(db_path)
             try:
                 result = enrich_realtime(store, limit=limit or 25, since_hours=since_hours)
@@ -978,6 +1017,8 @@ def enrich(
             return
 
         raise typer.BadParameter(f"Invalid batch phase: {phase}")
+    except typer.Exit:
+        raise
     except Exception as e:
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

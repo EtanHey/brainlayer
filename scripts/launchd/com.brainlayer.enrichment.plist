@@ -6,13 +6,15 @@
     <string>com.brainlayer.enrichment</string>
 
     <!-- Realtime Gemini enrichment LaunchAgent.
-         Runs a supervised shell loop so the one-shot enrich command stays continuous. -->
+         Runs one long-lived supervisor; launchd restarts only on process crash. -->
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/zsh</string>
-        <string>-lc</string>
-        <string>cd "__BRAINLAYER_DIR__" || exit 1; while true; do "__BRAINLAYER_BIN__" enrich --mode realtime --limit 200000 --since-hours 87600; sleep 5; done</string>
+        <string>__BRAINLAYER_BIN__</string>
+        <string>enrich</string>
+        <string>--mode</string>
+        <string>realtime</string>
+        <string>--supervisor</string>
     </array>
 
     <key>WorkingDirectory</key>
