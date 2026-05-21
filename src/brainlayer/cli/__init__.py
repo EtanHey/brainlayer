@@ -889,8 +889,8 @@ def enrich(
         "-n",
         help="Realtime: max chunks to process. Batch submit/run: optional sample size; defaults to all.",
     ),
-    since_hours: int = typer.Option(
-        DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
+    since_hours: Optional[int] = typer.Option(
+        None,
         "--since-hours",
         help=(
             f"Realtime mode: only enrich chunks from the last N hours. Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
@@ -959,9 +959,7 @@ def enrich(
                     result = run_enrich_supervisor(
                         db_path,
                         limit=limit or DEFAULT_ENRICH_SUPERVISOR_LIMIT,
-                        since_hours=since_hours
-                        if since_hours != DEFAULT_REALTIME_ENRICH_SINCE_HOURS
-                        else DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
+                        since_hours=since_hours if since_hours is not None else DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
                         stop_event=stop_event,
                     )
                 finally:
@@ -976,7 +974,11 @@ def enrich(
 
             store = VectorStore(db_path)
             try:
-                result = enrich_realtime(store, limit=limit or 25, since_hours=since_hours)
+                result = enrich_realtime(
+                    store,
+                    limit=limit or 25,
+                    since_hours=since_hours if since_hours is not None else DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
+                )
                 console.print(
                     f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
                     f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
