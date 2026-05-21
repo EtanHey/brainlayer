@@ -84,7 +84,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     def __init__(self, db_path: Path, readonly: bool = False):
         self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not readonly:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts5_health_cache: dict[str, Any] = {}
         self._retrieval_strengthening_pending: dict[str, dict[str, float]] = {}
         self._retrieval_strengthening_query_count = 0

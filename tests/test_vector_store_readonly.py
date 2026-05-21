@@ -2,14 +2,22 @@ import apsw
 import pytest
 
 from brainlayer._helpers import serialize_f32
+from brainlayer.mcp import _shared
 from brainlayer.search_repo import _hybrid_cache
 from brainlayer.vector_store import VectorStore
 
 
 @pytest.fixture(autouse=True)
 def clear_hybrid_cache():
+    _shared._search_vector_store = None
+    _shared._vector_store = None
     _hybrid_cache.clear()
     yield
+    for store in (_shared._search_vector_store, _shared._vector_store):
+        if store is not None:
+            store.close()
+    _shared._search_vector_store = None
+    _shared._vector_store = None
     _hybrid_cache.clear()
 
 
@@ -139,3 +147,75 @@ def test_readonly_busyerror_resilience(tmp_path, monkeypatch):
     finally:
         writer_cursor.execute("ROLLBACK")
         writer_conn.close()
+
+
+def test_explicit_readonly_does_not_create_parent_directory(tmp_path, monkeypatch):
+    db_path = tmp_path / "missing-parent" / "readonly.db"
+
+    def fake_init_readonly(self):
+        self._local = None
+
+    monkeypatch.setattr(VectorStore, "_init_readonly_db", fake_init_readonly)
+
+    VectorStore(db_path, readonly=True)
+
+    assert not db_path.parent.exists()
+
+
+def test_search_vector_store_bootstraps_missing_db_then_reopens_readonly(tmp_path, monkeypatch):
+    db_path = tmp_path / "fresh" / "brainlayer.db"
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+
+    store = _shared._get_search_vector_store()
+    try:
+        assert db_path.exists()
+        assert store._readonly is True
+        assert store.count() == 0
+        with pytest.raises(apsw.ReadOnlyError):
+            store.conn.cursor().execute(
+                "INSERT INTO chunks (id, content, metadata, source_file) VALUES ('x', 'x', '{}', 'x')"
+            )
+    finally:
+        store.close()
+        _shared._search_vector_store = None
+
+
+def test_search_vector_store_bootstraps_stale_schema_then_reopens_readonly(tmp_path, monkeypatch):
+    db_path = tmp_path / "stale.db"
+    conn = apsw.Connection(str(db_path))
+    conn.cursor().execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            project TEXT,
+            content_type TEXT,
+            value_type TEXT,
+            char_count INTEGER,
+            source TEXT,
+            sender TEXT,
+            language TEXT,
+            conversation_id TEXT,
+            position INTEGER,
+            context_summary TEXT,
+            chunk_origin TEXT DEFAULT 'unknown'
+        )
+        """
+    )
+    conn.close()
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+
+    store = _shared._get_search_vector_store()
+    try:
+        columns = {row[1] for row in store.conn.cursor().execute("PRAGMA table_info(chunks)")}
+        assert {"status", "archived", "summary", "resolved_queries", "chunk_origin"}.issubset(columns)
+        assert store._readonly is True
+        with pytest.raises(apsw.ReadOnlyError):
+            store.conn.cursor().execute(
+                "INSERT INTO chunks (id, content, metadata, source_file) VALUES ('x', 'x', '{}', 'x')"
+            )
+    finally:
+        store.close()
+        _shared._search_vector_store = None
