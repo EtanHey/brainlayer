@@ -32,7 +32,10 @@ from .ingest_guard import recursive_mcp_output_reason
 _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 _MMR_CANDIDATE_LIMIT = 50
-_MMR_LAMBDA = 0.65
+try:
+    _MMR_LAMBDA = float(os.environ.get("BRAINLAYER_MMR_LAMBDA", "1.0"))
+except (TypeError, ValueError):
+    _MMR_LAMBDA = 1.0
 _FILTERED_KNN_MAX = 2000
 META_NOISE_PATTERNS = [
     "brain_search(",
@@ -477,6 +480,8 @@ class SearchMixin:
     ) -> List[tuple[float, str, str, Dict[str, Any], Any]]:
         """Diversify the top candidate pool with MMR while preserving overall recall."""
         if len(scored) < 2:
+            return scored
+        if _MMR_LAMBDA >= 1.0:
             return scored
 
         candidate_limit = min(len(scored), _MMR_CANDIDATE_LIMIT)
