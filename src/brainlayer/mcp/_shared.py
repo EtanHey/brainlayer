@@ -5,6 +5,7 @@ import os
 import re
 import threading
 
+import apsw
 from mcp.types import CallToolResult, TextContent
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,45 @@ _store_lock = threading.Lock()
 _search_store_lock = threading.Lock()
 _model_lock = threading.Lock()
 
+_SEARCH_REQUIRED_TABLES = {"chunks", "chunk_vectors"}
+_SEARCH_REQUIRED_CHUNK_COLUMNS = {
+    "archived",
+    "chunk_origin",
+    "resolved_queries",
+    "status",
+    "summary",
+}
+
+
+def _search_store_needs_bootstrap(db_path) -> bool:
+    """Return true when readonly search would skip required first-run migrations."""
+    if not db_path.exists():
+        return True
+
+    conn = None
+    try:
+        conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+        cursor = conn.cursor()
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+        if not _SEARCH_REQUIRED_TABLES.issubset(tables):
+            return True
+
+        chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+        return not _SEARCH_REQUIRED_CHUNK_COLUMNS.issubset(chunk_columns)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _bootstrap_search_store(db_path) -> None:
+    if not _search_store_needs_bootstrap(db_path):
+        return
+
+    from ..vector_store import VectorStore
+
+    bootstrap_store = VectorStore(db_path)
+    bootstrap_store.close()
+
 
 def _get_vector_store():
     """Get or initialize the global VectorStore (thread-safe)."""
@@ -24,10 +64,10 @@ def _get_vector_store():
     if _vector_store is None:
         with _store_lock:
             if _vector_store is None:
-                from ..paths import DEFAULT_DB_PATH
+                from ..paths import get_db_path
                 from ..vector_store import VectorStore
 
-                _vector_store = VectorStore(DEFAULT_DB_PATH)
+                _vector_store = VectorStore(get_db_path())
     return _vector_store
 
 
@@ -40,7 +80,9 @@ def _get_search_vector_store():
                 from ..paths import get_db_path
                 from ..vector_store import VectorStore
 
-                _search_vector_store = VectorStore(get_db_path(), readonly=True)
+                db_path = get_db_path()
+                _bootstrap_search_store(db_path)
+                _search_vector_store = VectorStore(db_path, readonly=True)
     return _search_vector_store
 
 
