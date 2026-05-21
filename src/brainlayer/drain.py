@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 
 def _drain_busy_timeout_ms() -> int:
     try:
-        return int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000"))
+        timeout_ms = int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000"))
     except (TypeError, ValueError):
         return 30000
+    return timeout_ms if timeout_ms > 0 else 30000
 
 
 @dataclass

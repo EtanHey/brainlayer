@@ -149,16 +149,19 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         with self._PIDFILE_REFS_LOCK:
             if self._PIDFILE_REFS.get(pidfile, 0) > 0:
-                self._PIDFILE_REFS[pidfile] += 1
-                self._writer_pidfile_acquired = True
-                self._writer_pidfile_path_value = pidfile
-                atexit.register(self._release_writer_pidfile)
-                return
+                if self._read_writer_pidfile(pidfile) == pid:
+                    self._PIDFILE_REFS[pidfile] += 1
+                    self._writer_pidfile_acquired = True
+                    self._writer_pidfile_path_value = pidfile
+                    atexit.register(self._release_writer_pidfile)
+                    return
+                self._PIDFILE_REFS.pop(pidfile, None)
 
         for attempt in range(2):
             try:
                 fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
                     os.write(fd, f"{pid}\n".encode("utf-8"))
                 finally:
                     os.close(fd)

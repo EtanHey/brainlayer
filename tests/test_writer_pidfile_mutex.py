@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import plistlib
@@ -12,7 +13,7 @@ import apsw
 import pytest
 
 from brainlayer import drain
-from brainlayer.vector_store import VectorStore
+from brainlayer.vector_store import VectorStore, WriterInUseError
 
 
 def _expected_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
@@ -164,6 +165,56 @@ def test_same_process_pidfile_reuse_registers_atexit_release(tmp_path, monkeypat
     finally:
         second.close()
         first.close()
+
+
+def test_inherited_pidfile_ref_must_match_current_pid(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    pidfile.write_text("1\n", encoding="utf-8")
+    store = object.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+
+    with VectorStore._PIDFILE_REFS_LOCK:
+        VectorStore._PIDFILE_REFS[pidfile] = 1
+
+    try:
+        with pytest.raises(WriterInUseError, match="another writer is using"):
+            store._acquire_writer_pidfile()
+        assert not store._writer_pidfile_acquired
+    finally:
+        with VectorStore._PIDFILE_REFS_LOCK:
+            VectorStore._PIDFILE_REFS.pop(pidfile, None)
+
+
+def test_pidfile_create_locks_before_writing_pid(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    events: list[str] = []
+    original_flock = fcntl.flock
+    original_write = os.write
+
+    def record_flock(fd: int, operation: int) -> None:
+        if operation == fcntl.LOCK_EX:
+            events.append("flock")
+        original_flock(fd, operation)
+
+    def record_write(fd: int, data: bytes) -> int:
+        events.append("write")
+        return original_write(fd, data)
+
+    monkeypatch.setattr("fcntl.flock", record_flock)
+    monkeypatch.setattr("os.write", record_write)
+
+    store = VectorStore(db_path)
+    try:
+        assert events[:2] == ["flock", "write"]
+    finally:
+        store.close()
 
 
 def test_release_keeps_pidfile_ref_until_unlink_finishes(tmp_path, monkeypatch):
@@ -347,6 +398,17 @@ def test_drain_busy_timeout_30s(tmp_path, monkeypatch):
 
 def test_drain_busy_timeout_invalid_env_falls_back_to_30s(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "not-an-int")
+
+    conn = drain._open_connection(tmp_path / "drain.db")
+    try:
+        busy_timeout_ms = conn.cursor().execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout_ms >= 30000
+    finally:
+        conn.close()
+
+
+def test_drain_busy_timeout_non_positive_env_falls_back_to_30s(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "0")
 
     conn = drain._open_connection(tmp_path / "drain.db")
     try:
