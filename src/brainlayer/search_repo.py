@@ -34,6 +34,9 @@ _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 _MMR_CANDIDATE_LIMIT = 50
 try:
     _MMR_LAMBDA = float(os.environ.get("BRAINLAYER_MMR_LAMBDA", "1.0"))
+    if not math.isfinite(_MMR_LAMBDA):
+        raise ValueError
+    _MMR_LAMBDA = max(0.0, min(1.0, _MMR_LAMBDA))
 except (TypeError, ValueError):
     _MMR_LAMBDA = 1.0
 _FILTERED_KNN_MAX = 2000

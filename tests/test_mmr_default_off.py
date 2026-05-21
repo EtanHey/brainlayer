@@ -53,3 +53,26 @@ def test_invalid_mmr_env_override_falls_back_to_default_off(monkeypatch):
     search_repo = importlib.reload(search_repo)
 
     assert search_repo._MMR_LAMBDA == 1.0
+
+
+def test_nonfinite_mmr_env_override_falls_back_to_default_off(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "nan")
+    import brainlayer.search_repo as search_repo
+
+    search_repo = importlib.reload(search_repo)
+
+    assert search_repo._MMR_LAMBDA == 1.0
+
+
+def test_out_of_range_mmr_env_override_is_clamped(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "-0.25")
+    import brainlayer.search_repo as search_repo
+
+    search_repo = importlib.reload(search_repo)
+
+    assert search_repo._MMR_LAMBDA == 0.0
+
+    monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "1.25")
+    search_repo = importlib.reload(search_repo)
+
+    assert search_repo._MMR_LAMBDA == 1.0
