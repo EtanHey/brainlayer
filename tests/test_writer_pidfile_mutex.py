@@ -15,8 +15,9 @@ from brainlayer.vector_store import VectorStore
 
 
 def _expected_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
-    path_hash = hashlib.sha256(str(db_path.resolve()).encode("utf-8")).hexdigest()[:16]
-    return pidfile_dir / f"brainlayer-writer-{path_hash}-{db_path.name}.pid"
+    resolved_path = db_path.resolve()
+    path_hash = hashlib.sha256(str(resolved_path).encode("utf-8")).hexdigest()[:16]
+    return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
 def test_pidfile_created_on_rw_init(tmp_path, monkeypatch):
@@ -107,6 +108,47 @@ store.close()
         store.close()
 
 
+def test_pidfile_blocks_symlink_alias_to_same_database(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    real_db = tmp_path / "real" / "writer.db"
+    symlink_db = tmp_path / "alias.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+
+    store = VectorStore(real_db)
+    try:
+        symlink_db.symlink_to(real_db)
+        script = """
+from pathlib import Path
+from brainlayer.vector_store import VectorStore, WriterInUseError
+
+try:
+    VectorStore(Path(__import__("os").environ["DB_PATH"]))
+except WriterInUseError as exc:
+    print(type(exc).__name__)
+    print(str(exc))
+    raise SystemExit(0)
+raise SystemExit("symlink writer unexpectedly acquired the pidfile")
+"""
+        env = {
+            **os.environ,
+            "BRAINLAYER_WRITER_PIDFILE_DIR": str(pidfile_dir),
+            "DB_PATH": str(symlink_db),
+            "PYTHONPATH": f"{Path(__file__).resolve().parents[1] / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "WriterInUseError" in result.stdout
+    finally:
+        store.close()
+
+
 def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
@@ -121,6 +163,25 @@ def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
         assert pidfile.read_text(encoding="utf-8").strip() == str(os.getpid())
     finally:
         store.close()
+
+
+def test_stale_pidfile_unlink_missing_race_is_ignored(tmp_path, monkeypatch):
+    pidfile = tmp_path / "writer.pid"
+    pidfile.write_text("999999", encoding="utf-8")
+    store = object.__new__(VectorStore)
+    store.db_path = tmp_path / "writer.db"
+    monkeypatch.setattr(store, "_pid_is_alive", lambda _pid: False)
+
+    original_unlink = Path.unlink
+
+    def unlink_race(path: Path, *args, **kwargs):
+        if path == pidfile:
+            raise FileNotFoundError
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink_race)
+
+    assert store._handle_existing_writer_pidfile(pidfile, os.getpid()) is False
 
 
 def test_pidfile_removed_on_close(tmp_path, monkeypatch):

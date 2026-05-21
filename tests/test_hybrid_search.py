@@ -496,6 +496,29 @@ class TestHybridSearch:
         assert not _has_recency_intent("concurrent writer arbitration")
         assert not _has_recency_intent("recurrent pattern analysis")
 
+    def test_recency_intent_fallback_compares_created_at_as_datetime(self, store, monkeypatch):
+        cutoff_date = store.conn.cursor().execute("SELECT date('now', '-7 days')").fetchone()[0]
+        _insert_chunk(
+            store,
+            chunk_id="stale-boundary",
+            content="stale boundary payload",
+            embedding=_embed("stale boundary"),
+            created_at=f"{cutoff_date}T00:00:00Z",
+        )
+        monkeypatch.setattr(
+            store,
+            "search",
+            lambda **_kwargs: {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]},
+        )
+
+        results = store.hybrid_search(
+            query_embedding=_embed("latest unrelated"),
+            query_text="latest unrelated",
+            n_results=5,
+        )
+
+        assert "stale-boundary" not in results["ids"][0]
+
     def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
         monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
 
