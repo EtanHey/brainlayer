@@ -64,6 +64,7 @@ _NOISE_CONTENT_PATTERNS = (
     "# session-restore",
 )
 _NOISE_RERANK_DEMOTION = 0.05
+_RECENCY_QUERY_TERMS = frozenset({"recent", "today", "current", "latest", "this week"})
 AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} = 'audit'",
     "{tag_expr} = 'audit-recursion'",
@@ -1462,6 +1463,94 @@ class SearchMixin:
         _ingest_keyword_rows(fts_results, fts_ranks)
         _ingest_keyword_rows(trigram_fts_results, trigram_ranks)
 
+        recency_intent = any(term in query_text.lower() for term in _RECENCY_QUERY_TERMS)
+        if recency_intent and not date_from:
+            recent_extra = []
+            recent_params: list = []
+            if project_filter:
+                recent_extra.append("AND (project = ? OR project IS NULL)")
+                recent_params.append(project_filter)
+            if source_filter:
+                recent_extra.append("AND source = ?")
+                recent_params.append(source_filter)
+            if sender_filter:
+                recent_extra.append("AND sender = ?")
+                recent_params.append(sender_filter)
+            if language_filter:
+                recent_extra.append("AND language = ?")
+                recent_params.append(language_filter)
+            if tag_filter:
+                recent_extra.append("AND id IN (SELECT chunk_id FROM chunk_tags WHERE tag = ?)")
+                recent_params.append(tag_filter)
+            if intent_filter:
+                recent_extra.append("AND intent = ?")
+                recent_params.append(intent_filter)
+            if importance_min is not None:
+                recent_extra.append("AND importance >= ?")
+                recent_params.append(importance_min)
+            if source_filter_like:
+                recent_extra.append("AND source LIKE ?")
+                recent_params.append(source_filter_like)
+            if correction_category:
+                recent_extra.append("AND id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
+                recent_params.append(f"correction:{correction_category}%")
+            if not include_audit:
+                recent_extra.append(f"AND {self._audit_recursion_exclusion_sql('id', 'tags', 'content')}")
+            if not include_checkpoints:
+                checkpoint_clause = self._checkpoint_exclusion_clause()
+                if checkpoint_clause:
+                    recent_extra.append(f"AND {checkpoint_clause}")
+            if filter_meta_noise:
+                for pattern in META_NOISE_PATTERNS_CASEFOLDED:
+                    recent_extra.append("AND LOWER(content) NOT LIKE ?")
+                    recent_params.append(f"%{pattern}%")
+            if not include_archived:
+                recent_extra.append("AND superseded_by IS NULL")
+                recent_extra.append("AND aggregated_into IS NULL")
+                recent_extra.append("AND archived_at IS NULL")
+                recent_extra.append("AND COALESCE(archived, 0) = 0")
+                recent_extra.append("AND COALESCE(status, 'active') = 'active'")
+
+            recent_rows = list(
+                cursor.execute(
+                    f"""
+                    SELECT id, content, metadata, source_file, project,
+                           content_type, value_type, char_count,
+                           summary, tags, importance, intent,
+                           created_at, source, sender, language, decay_score
+                    FROM chunks
+                    WHERE created_at >= datetime('now', '-7 days') {" ".join(recent_extra)}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    [*recent_params, min(candidate_fetch_count, 25)],
+                )
+            )
+            for i, row in enumerate(recent_rows):
+                chunk_id = row[0]
+                fts_ranks.setdefault(chunk_id, i)
+                keyword_data.setdefault(
+                    chunk_id,
+                    {
+                        "content": row[1],
+                        "metadata": json.loads(row[2]) if row[2] else {},
+                        "source_file": row[3],
+                        "project": row[4],
+                        "content_type": row[5],
+                        "value_type": row[6],
+                        "char_count": row[7],
+                        "summary": row[8],
+                        "tags": row[9],
+                        "importance": row[10],
+                        "intent": row[11],
+                        "created_at": row[12],
+                        "source": row[13],
+                        "sender": row[14],
+                        "language": row[15],
+                        "decay_score": row[16],
+                    },
+                )
+
         # 3. Reciprocal Rank Fusion — deduplicate by chunk_id
         # Build semantic rank map keyed by actual chunk_id
         semantic_by_id = {}
@@ -1575,6 +1664,8 @@ class SearchMixin:
                     age_days = max((now - dt).total_seconds() / 86400, 0)
                     recency = math.exp(-0.023 * age_days)  # ~0.5 at 30 days
                     boost *= 0.7 + 0.3 * recency  # range: 0.7x (old) to 1.0x (fresh)
+                    if recency_intent and age_days <= 7:
+                        boost *= 2.0
                 except (ValueError, TypeError):
                     pass
 

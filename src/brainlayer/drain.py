@@ -63,7 +63,7 @@ def _log(path: Path, message: str) -> None:
 
 def _open_connection(db_path: Path) -> apsw.Connection:
     conn = apsw.Connection(str(db_path))
-    conn.setbusytimeout(200)
+    conn.setbusytimeout(int(os.environ.get("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "30000")))
     conn.enableloadextension(True)
     conn.loadextension(sqlite_vec.loadable_path())
     conn.enableloadextension(False)

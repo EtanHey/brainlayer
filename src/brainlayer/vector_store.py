@@ -4,6 +4,7 @@ Thin facade: VectorStore inherits from focused mixin modules.
 See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 """
 
+import atexit
 import json
 import os
 import struct
@@ -90,6 +91,10 @@ def _wal_autocheckpoint_pages() -> int:
     return max(_int_env("BRAINLAYER_WAL_AUTOCHECKPOINT", 10_000), 0)
 
 
+class WriterInUseError(RuntimeError):
+    """Raised when a live process already owns the writer pidfile."""
+
+
 class VectorStore(SearchMixin, KGMixin, SessionMixin):
     """SQLite-vec based vector store.
 
@@ -98,11 +103,15 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     """
 
     # Retry settings for DB init under contention (multiple MCP instances + enrichment)
-    _INIT_MAX_RETRIES = 5
+    _INIT_MAX_RETRIES = _int_env("BRAINLAYER_INIT_MAX_RETRIES", 10)
     _INIT_BASE_DELAY = 0.5  # seconds
+    _INIT_MAX_DELAY = 30  # seconds
+    _PIDFILE_REFS: dict[Path, int] = {}
+    _PIDFILE_REFS_LOCK = threading.Lock()
 
     def __init__(self, db_path: Path, readonly: bool = False):
         self.db_path = db_path
+        self._writer_pidfile_acquired = False
         if not readonly:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts5_health_cache: dict[str, Any] = {}
@@ -118,7 +127,101 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if self._readonly:
             self._init_readonly_db()
         else:
-            self._init_db_with_retry()
+            self._acquire_writer_pidfile()
+            try:
+                self._init_db_with_retry()
+            except Exception:
+                self._release_writer_pidfile()
+                raise
+
+    def _writer_pidfile_path(self) -> Path:
+        pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp"))
+        return pidfile_dir / f"brainlayer-writer-{self.db_path.name}.pid"
+
+    def _acquire_writer_pidfile(self) -> None:
+        pidfile = self._writer_pidfile_path()
+        pidfile.parent.mkdir(parents=True, exist_ok=True)
+        pid = os.getpid()
+
+        with self._PIDFILE_REFS_LOCK:
+            if self._PIDFILE_REFS.get(pidfile, 0) > 0:
+                self._PIDFILE_REFS[pidfile] += 1
+                self._writer_pidfile_acquired = True
+                self._writer_pidfile_path_value = pidfile
+                return
+
+        for attempt in range(2):
+            try:
+                fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                try:
+                    os.write(fd, f"{pid}\n".encode("utf-8"))
+                finally:
+                    os.close(fd)
+                with self._PIDFILE_REFS_LOCK:
+                    self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
+                self._writer_pidfile_acquired = True
+                self._writer_pidfile_path_value = pidfile
+                atexit.register(self._release_writer_pidfile)
+                return
+            except FileExistsError:
+                other_pid = self._read_writer_pidfile(pidfile)
+                if other_pid == pid:
+                    with self._PIDFILE_REFS_LOCK:
+                        self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
+                    self._writer_pidfile_acquired = True
+                    self._writer_pidfile_path_value = pidfile
+                    atexit.register(self._release_writer_pidfile)
+                    return
+                if other_pid is not None and self._pid_is_alive(other_pid):
+                    raise WriterInUseError(f"another writer is using {self.db_path} (pid {other_pid})")
+                try:
+                    pidfile.unlink()
+                except FileNotFoundError:
+                    pass
+                if attempt == 1:
+                    raise
+
+    @staticmethod
+    def _read_writer_pidfile(pidfile: Path) -> int | None:
+        try:
+            return int(pidfile.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _release_writer_pidfile(self) -> None:
+        if not self._writer_pidfile_acquired:
+            return
+
+        pidfile = getattr(self, "_writer_pidfile_path_value", None)
+        if pidfile is None:
+            self._writer_pidfile_acquired = False
+            return
+
+        should_unlink = False
+        with self._PIDFILE_REFS_LOCK:
+            refs = self._PIDFILE_REFS.get(pidfile, 0)
+            if refs <= 1:
+                self._PIDFILE_REFS.pop(pidfile, None)
+                should_unlink = True
+            else:
+                self._PIDFILE_REFS[pidfile] = refs - 1
+
+        if should_unlink and self._read_writer_pidfile(pidfile) == os.getpid():
+            try:
+                pidfile.unlink()
+            except FileNotFoundError:
+                pass
+        self._writer_pidfile_acquired = False
 
     def _init_readonly_db(self) -> None:
         """Open an existing DB in readonly mode without running migrations."""
@@ -164,21 +267,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         contend for write locks during DDL. Retry with exponential backoff
         instead of crashing on the first BusyError.
         """
-        import time
-
         last_err = None
+        start = time.monotonic()
         for attempt in range(self._INIT_MAX_RETRIES):
             try:
                 self._init_db()
                 return
             except apsw.BusyError as e:
                 last_err = e
-                delay = self._INIT_BASE_DELAY * (2**attempt)
+                delay = min(self._INIT_BASE_DELAY * (2**attempt), self._INIT_MAX_DELAY)
                 import sys
 
+                elapsed = time.monotonic() - start
                 print(
                     f"  DB init BusyError (attempt {attempt + 1}/{self._INIT_MAX_RETRIES}), "
-                    f"retrying in {delay:.1f}s...",
+                    f"elapsed {elapsed:.1f}s, retrying in {delay:.1f}s...",
                     file=sys.stderr,
                 )
                 time.sleep(delay)
@@ -1899,6 +2002,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 self._local.read_conn = None
         if hasattr(self, "conn"):
             self.conn.close()
+        self._release_writer_pidfile()
 
     def __enter__(self):
         return self

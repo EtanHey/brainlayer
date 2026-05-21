@@ -18,7 +18,7 @@ from brainlayer.vector_store import VectorStore
 @pytest.fixture(scope="module")
 def store():
     """Shared VectorStore for all tests in this module."""
-    s = VectorStore(DEFAULT_DB_PATH)
+    s = VectorStore(DEFAULT_DB_PATH, readonly=True)
     yield s
     s.close()
 
