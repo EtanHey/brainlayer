@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from brainlayer._helpers import serialize_f32
-from brainlayer.search_repo import _contains_precompact_or_quarantined_meta, _hybrid_cache
+from brainlayer.search_repo import _contains_precompact_or_quarantined_meta, _has_recency_intent, _hybrid_cache
 from brainlayer.vector_store import VectorStore
 
 
@@ -489,6 +489,12 @@ class TestHybridSearch:
 
         assert "recent-positive" in results["ids"][0]
         assert "recent-negative" not in results["ids"][0]
+
+    def test_recency_intent_uses_term_boundaries(self):
+        assert _has_recency_intent("latest work progress")
+        assert _has_recency_intent("what changed this week")
+        assert not _has_recency_intent("concurrent writer arbitration")
+        assert not _has_recency_intent("recurrent pattern analysis")
 
     def test_mmr_rerank_dedupes_near_duplicates(self, store, monkeypatch):
         monkeypatch.setattr("brainlayer.search_repo._MMR_LAMBDA", 0.65)
