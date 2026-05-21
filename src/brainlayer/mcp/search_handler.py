@@ -688,18 +688,17 @@ async def _brain_search(
         def _emit_kg_degrade(reason: str) -> None:
             if not os.environ.get("AXIOM_TOKEN"):
                 return
+            event = {
+                "_type": "kg_degraded",
+                "reason": reason,
+                "entity": entity_name,
+                "query_preview": query[:200],
+                "timestamp": _utcnow_iso(),
+                "mcp_host": platform.node(),
+            }
             try:
-                telemetry.emit(
-                    "brainlayer-search-degrade",
-                    {
-                        "_type": "kg_degraded",
-                        "reason": reason,
-                        "entity": entity_name,
-                        "query_preview": query[:200],
-                        "timestamp": _utcnow_iso(),
-                        "mcp_host": platform.node(),
-                    },
-                )
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, telemetry.emit, "brainlayer-search-degrade", event)
             except Exception:
                 pass
 
