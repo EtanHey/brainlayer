@@ -155,6 +155,45 @@ class TestSearchFallback:
         assert used_hybrid is False
         assert [row["id"] for row in rows] == ["fts-best"]
 
+    def test_hybrid_search_opens_vector_store_readonly(self, prompt_search, monkeypatch, tmp_path):
+        opened = []
+
+        class FakeEmbeddingModel:
+            def embed_query(self, _prompt):
+                return [0.1, 0.2, 0.3]
+
+        class FakeCursor:
+            def execute(self, *_args, **_kwargs):
+                return []
+
+        class FakeVectorStore:
+            _binary_index_available = False
+
+            def __init__(self, path, readonly=False):
+                opened.append((Path(path), readonly))
+
+            def search(self, *, query_embedding, n_results):
+                assert query_embedding == [0.1, 0.2, 0.3]
+                assert n_results == 9
+                return {"ids": [[]], "metadatas": [[]], "documents": [[]]}
+
+            def _read_cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        import brainlayer.embeddings
+        import brainlayer.vector_store
+
+        monkeypatch.setattr(brainlayer.embeddings, "get_embedding_model", lambda: FakeEmbeddingModel())
+        monkeypatch.setattr(brainlayer.vector_store, "VectorStore", FakeVectorStore)
+
+        rows = prompt_search.run_hybrid_search("recent project notes", tmp_path / "brainlayer.db", ["recent"], 3)
+
+        assert rows == []
+        assert opened == [(tmp_path / "brainlayer.db", True)]
+
     def test_no_results_falls_back_to_low_confidence_message(self, prompt_search):
         message = prompt_search.build_low_confidence_fallback([])
 

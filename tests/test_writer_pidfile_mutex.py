@@ -22,6 +22,10 @@ def _expected_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
     return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
+def _pidfile_pid(pidfile: Path) -> str:
+    return pidfile.read_text(encoding="utf-8").splitlines()[0].strip()
+
+
 def test_pidfile_created_on_rw_init(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
@@ -31,7 +35,7 @@ def test_pidfile_created_on_rw_init(tmp_path, monkeypatch):
     try:
         pidfile = _expected_pidfile(pidfile_dir, db_path)
         assert pidfile.exists()
-        assert pidfile.read_text(encoding="utf-8").strip() == str(os.getpid())
+        assert _pidfile_pid(pidfile) == str(os.getpid())
     finally:
         store.close()
 
@@ -180,6 +184,7 @@ def test_inherited_pidfile_ref_must_match_current_pid(tmp_path, monkeypatch):
 
     with VectorStore._PIDFILE_REFS_LOCK:
         VectorStore._PIDFILE_REFS[pidfile] = 1
+        VectorStore._PIDFILE_REF_PIDS[pidfile] = 1
 
     try:
         with pytest.raises(WriterInUseError, match="another writer is using"):
@@ -188,6 +193,69 @@ def test_inherited_pidfile_ref_must_match_current_pid(tmp_path, monkeypatch):
     finally:
         with VectorStore._PIDFILE_REFS_LOCK:
             VectorStore._PIDFILE_REFS.pop(pidfile, None)
+            VectorStore._PIDFILE_REF_PIDS.pop(pidfile, None)
+
+
+def test_pidfile_ref_mismatch_does_not_clear_existing_refs(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    pidfile.write_text("999999\n", encoding="utf-8")
+    store = object.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+
+    with VectorStore._PIDFILE_REFS_LOCK:
+        VectorStore._PIDFILE_REFS[pidfile] = 2
+        VectorStore._PIDFILE_REF_PIDS[pidfile] = os.getpid()
+
+    try:
+        with pytest.raises(WriterInUseError, match="pidfile ref mismatch"):
+            store._acquire_writer_pidfile()
+        with VectorStore._PIDFILE_REFS_LOCK:
+            assert VectorStore._PIDFILE_REFS[pidfile] == 2
+        assert _pidfile_pid(pidfile) == "999999"
+    finally:
+        with VectorStore._PIDFILE_REFS_LOCK:
+            VectorStore._PIDFILE_REFS.pop(pidfile, None)
+            VectorStore._PIDFILE_REF_PIDS.pop(pidfile, None)
+
+
+def test_pidfile_reused_pid_requires_matching_start_time(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(
+        VectorStore,
+        "_pid_start_time",
+        staticmethod(lambda _pid: "current-process-start"),
+        raising=False,
+    )
+    pidfile_dir.mkdir()
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    pidfile.write_text(f"{os.getpid()}\nstart_time=previous-process-start\n", encoding="utf-8")
+
+    store = VectorStore(db_path)
+    try:
+        contents = pidfile.read_text(encoding="utf-8")
+        assert contents.startswith(f"{os.getpid()}\n")
+        assert "start_time=current-process-start" in contents
+    finally:
+        store.close()
+
+
+def test_relative_pidfile_dir_is_normalized_to_tmp(tmp_path, monkeypatch):
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", "brainlayer-relative-locks")
+    store = object.__new__(VectorStore)
+    store.db_path = db_path
+
+    pidfile = store._writer_pidfile_path()
+
+    assert pidfile.is_absolute()
+    assert pidfile.parent == (Path("/tmp") / "brainlayer-relative-locks").resolve()
 
 
 def test_pidfile_create_locks_before_writing_pid(tmp_path, monkeypatch):
@@ -261,7 +329,7 @@ def test_release_keeps_pidfile_ref_until_unlink_finishes(tmp_path, monkeypatch):
     assert opened
     try:
         assert pidfile.exists()
-        assert pidfile.read_text(encoding="utf-8").strip() == str(os.getpid())
+        assert _pidfile_pid(pidfile) == str(os.getpid())
     finally:
         opened[0].close()
 
@@ -277,7 +345,7 @@ def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
     store = VectorStore(db_path)
     try:
         assert pidfile.exists()
-        assert pidfile.read_text(encoding="utf-8").strip() == str(os.getpid())
+        assert _pidfile_pid(pidfile) == str(os.getpid())
     finally:
         store.close()
 

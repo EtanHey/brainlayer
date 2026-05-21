@@ -773,7 +773,7 @@ def run_hybrid_search(prompt, db_path, keywords, limit):
     model = get_embedding_model()
     query_embedding = model.embed_query(prompt)
 
-    store = VectorStore(Path(db_path))
+    store = VectorStore(Path(db_path), readonly=True)
     try:
         semantic_limit = limit * 3
         if getattr(store, "_binary_index_available", False):
