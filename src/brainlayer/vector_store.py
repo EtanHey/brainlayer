@@ -158,15 +158,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 if ref_pid is not None and ref_pid != pid:
                     self._PIDFILE_REFS.pop(pidfile, None)
                     self._PIDFILE_REF_PIDS.pop(pidfile, None)
-                elif self._read_writer_pidfile_owner(pidfile) == (pid, self._pid_start_time(pid)):
+                else:
+                    owner_pid, owner_start_time = self._read_writer_pidfile_owner(pidfile)
+                    if owner_pid != pid or not self._pidfile_owner_matches(owner_pid, owner_start_time):
+                        raise WriterInUseError(
+                            f"pidfile ref mismatch for {self.db_path}; refusing to clear active refs"
+                        )
                     self._PIDFILE_REFS[pidfile] += 1
                     self._PIDFILE_REF_PIDS[pidfile] = pid
                     self._writer_pidfile_acquired = True
                     self._writer_pidfile_path_value = pidfile
                     atexit.register(self._release_writer_pidfile)
                     return
-                else:
-                    raise WriterInUseError(f"pidfile ref mismatch for {self.db_path}; refusing to clear active refs")
 
         for attempt in range(2):
             try:

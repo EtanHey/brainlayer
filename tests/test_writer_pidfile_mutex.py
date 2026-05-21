@@ -223,6 +223,34 @@ def test_pidfile_ref_mismatch_does_not_clear_existing_refs(tmp_path, monkeypatch
             VectorStore._PIDFILE_REF_PIDS.pop(pidfile, None)
 
 
+def test_same_process_reuse_accepts_pid_only_pidfile_when_owner_is_alive(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "current-process-start"))
+    pidfile_dir.mkdir()
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    pidfile.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    store = object.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+
+    with VectorStore._PIDFILE_REFS_LOCK:
+        VectorStore._PIDFILE_REFS[pidfile] = 1
+        VectorStore._PIDFILE_REF_PIDS[pidfile] = os.getpid()
+
+    try:
+        store._acquire_writer_pidfile()
+        assert store._writer_pidfile_acquired
+        with VectorStore._PIDFILE_REFS_LOCK:
+            assert VectorStore._PIDFILE_REFS[pidfile] == 2
+    finally:
+        store._release_writer_pidfile()
+        with VectorStore._PIDFILE_REFS_LOCK:
+            VectorStore._PIDFILE_REFS.pop(pidfile, None)
+            VectorStore._PIDFILE_REF_PIDS.pop(pidfile, None)
+
+
 def test_pidfile_reused_pid_requires_matching_start_time(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
