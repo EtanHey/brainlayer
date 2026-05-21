@@ -41,10 +41,9 @@ ENTITY_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|[\u0590-\u05FF]+")
 _ENTITY_CACHE = None
 _ENTITY_CACHE_DB_PATH = None
 LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.30
-LOW_CONFIDENCE_FALLBACK_MESSAGE = (
-    "No high-confidence memories found. Use brain_search() for deeper retrieval."
-)
+LOW_CONFIDENCE_FALLBACK_MESSAGE = "No high-confidence memories found. Use brain_search() for deeper retrieval."
 _KG_ENTITY_CHUNKS_RELATION_TYPE_CACHE = {}
+AMBIGUOUS_SINGLE_TOKEN_ENTITY_TYPES = {"technology", "tool"}
 
 
 def get_session_context(conn, session_id: str, limit: int = 3) -> list[str]:
@@ -541,6 +540,8 @@ def _match_entity_spans(tokens, candidates_by_name, max_tokens, inject_types, se
             normalized = " ".join(token[1] for token in tokens[index : index + span])
             for candidate in candidates_by_name.get(normalized, []):
                 if candidate["entity_type"] not in inject_types or candidate["id"] in seen_ids:
+                    continue
+                if span == 1 and candidate["entity_type"] in AMBIGUOUS_SINGLE_TOKEN_ENTITY_TYPES:
                     continue
                 found = candidate
                 break

@@ -65,7 +65,7 @@ def live_store():
     if not os.path.exists(db):
         pytest.skip(f"Live DB not found at {db}")
 
-    store = VectorStore(db)
+    store = VectorStore(db, readonly=True)
     yield store
     store.close()
 
@@ -686,7 +686,7 @@ def run_baseline() -> dict:
     from brainlayer.vector_store import VectorStore
 
     db = get_db_path()
-    store = VectorStore(db)
+    store = VectorStore(db, readonly=True)
     model = get_embedding_model()
 
     # All eval cases: (name, query, expected_snippets, top_n, project, tag)

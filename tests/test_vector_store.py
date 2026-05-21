@@ -11,7 +11,7 @@ from brainlayer.vector_store import VectorStore
 @pytest.fixture(scope="module")
 def store():
     """Read-only connection to the production DB for integration tests."""
-    s = VectorStore(DEFAULT_DB_PATH)
+    s = VectorStore(DEFAULT_DB_PATH, readonly=True)
     yield s
     s.close()
 

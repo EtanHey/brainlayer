@@ -345,7 +345,7 @@ class TestSessionsIntegration:
         from brainlayer.paths import DEFAULT_DB_PATH
         from brainlayer.vector_store import VectorStore
 
-        s = VectorStore(DEFAULT_DB_PATH)
+        s = VectorStore(DEFAULT_DB_PATH, readonly=True)
         yield s
         s.close()
 
@@ -390,7 +390,7 @@ class TestRecallFileIntegration:
         from brainlayer.paths import DEFAULT_DB_PATH
         from brainlayer.vector_store import VectorStore
 
-        s = VectorStore(DEFAULT_DB_PATH)
+        s = VectorStore(DEFAULT_DB_PATH, readonly=True)
         yield s
         s.close()
 
