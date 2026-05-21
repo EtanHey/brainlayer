@@ -313,6 +313,38 @@ def test_pidfile_create_locks_before_writing_pid(tmp_path, monkeypatch):
         store.close()
 
 
+def test_pidfile_acquire_retries_transient_file_exists_races(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    store = object.__new__(VectorStore)
+    store.db_path = db_path
+    store._writer_pidfile_acquired = False
+    original_open = os.open
+    create_attempts = 0
+
+    def flaky_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal create_attempts
+        if Path(path).name.startswith("brainlayer-writer-") and flags & os.O_CREAT:
+            create_attempts += 1
+            if create_attempts < 3:
+                raise FileExistsError(17, "File exists", str(path))
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("os.open", flaky_open)
+    monkeypatch.setattr(store, "_handle_existing_writer_pidfile", lambda _pidfile, _pid: False)
+
+    store._acquire_writer_pidfile()
+
+    try:
+        assert store._writer_pidfile_acquired
+        assert create_attempts == 3
+    finally:
+        store._release_writer_pidfile()
+
+
 def test_release_keeps_pidfile_ref_until_unlink_finishes(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
