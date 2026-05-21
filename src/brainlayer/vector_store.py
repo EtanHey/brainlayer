@@ -152,6 +152,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 self._PIDFILE_REFS[pidfile] += 1
                 self._writer_pidfile_acquired = True
                 self._writer_pidfile_path_value = pidfile
+                atexit.register(self._release_writer_pidfile)
                 return
 
         for attempt in range(2):

@@ -149,6 +149,22 @@ raise SystemExit("symlink writer unexpectedly acquired the pidfile")
         store.close()
 
 
+def test_same_process_pidfile_reuse_registers_atexit_release(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    registrations = []
+    monkeypatch.setattr("atexit.register", registrations.append)
+
+    first = VectorStore(db_path)
+    second = VectorStore(db_path)
+    try:
+        assert len(registrations) == 2
+    finally:
+        second.close()
+        first.close()
+
+
 def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
     pidfile_dir = tmp_path / "pidfiles"
     db_path = tmp_path / "writer.db"
