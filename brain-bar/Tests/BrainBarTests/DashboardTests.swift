@@ -331,7 +331,58 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
-    func testPipelineStateTreatsMissingDaemonSnapshotAsDegraded() {
+    func test_DaemonHealthMonitor_returns_non_nil_when_PID_provided() throws {
+        let monitor = DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+
+        let snapshot = try XCTUnwrap(monitor.sample())
+
+        XCTAssertEqual(snapshot.pid, ProcessInfo.processInfo.processIdentifier)
+        XCTAssertTrue(snapshot.isResponsive)
+    }
+
+    @MainActor
+    func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() throws {
+        let collector = BrainBarAppSupport.makeUIStatsCollector(
+            dbPath: tempDBPath,
+            brainBusEvents: nil,
+            daemonPIDProvider: { ProcessInfo.processInfo.processIdentifier }
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+
+        let snapshot = try XCTUnwrap(collector.daemon)
+        XCTAssertEqual(snapshot.pid, ProcessInfo.processInfo.processIdentifier)
+    }
+
+    func test_DashboardFlowSummary_renders_lanes_with_nil_daemon_snapshot() {
+        let now = Date()
+        let stats = DashboardStats(
+            chunkCount: 12,
+            enrichedChunkCount: 9,
+            pendingEnrichmentCount: 3,
+            enrichmentPercent: 75,
+            enrichmentRatePerMinute: 1.5,
+            databaseSizeBytes: 8192,
+            recentActivityBuckets: [0, 1, 2, 0],
+            recentEnrichmentBuckets: [0, 0, 1, 1],
+            activityWindowMinutes: 30,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastWriteAt: now.addingTimeInterval(-15),
+            lastEnrichedAt: now.addingTimeInterval(-20)
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+
+        XCTAssertEqual(summary.ingress.status, .live)
+        XCTAssertEqual(summary.enrichment.status, .live)
+        XCTAssertNotEqual(summary.queue.status, .unavailable)
+        XCTAssertEqual(summary.ingress.volumeText, "3 in 30m")
+        XCTAssertEqual(summary.enrichment.volumeText, "2 in 30m")
+    }
+
+    func testPipelineStateTreatsMissingDaemonSnapshotAsIdleWhenDatabaseIsSettled() {
         let stats = DashboardStats(
             chunkCount: 10,
             enrichedChunkCount: 10,
@@ -345,10 +396,10 @@ final class DashboardTests: XCTestCase {
 
         let state = PipelineState.derive(daemon: nil, stats: stats)
 
-        XCTAssertEqual(state, .degraded)
+        XCTAssertEqual(state, .idle)
     }
 
-    func testPipelineStatePrefersDegradedOverBusyWhenDaemonIsUnhealthy() {
+    func testPipelineStateDerivesDatabaseActivityWhenDaemonIsUnhealthy() {
         let stats = DashboardStats(
             chunkCount: 20,
             enrichedChunkCount: 10,
@@ -370,7 +421,7 @@ final class DashboardTests: XCTestCase {
 
         let state = PipelineState.derive(daemon: daemon, stats: stats)
 
-        XCTAssertEqual(state, .degraded)
+        XCTAssertEqual(state, .indexing)
     }
 
     func testPipelineStateReportsIndexingForRecentWriteBurst() {

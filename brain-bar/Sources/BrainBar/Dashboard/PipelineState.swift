@@ -180,62 +180,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let ingressColor = NSColor.systemBlue
         let enrichmentColor = NSColor.systemGreen
 
-        guard let daemon, daemon.isResponsive else {
-            return DashboardFlowSummary(
-                headline: "Pipeline visibility is degraded",
-                detail: "Daemon metrics are unavailable, so live flow state may be stale.",
-                windowLabel: windowLabel,
-                ingress: DashboardFlowLane(
-                    name: "Writes",
-                    status: .unavailable,
-                    statusText: "Unavailable",
-                    windowLabel: windowLabel,
-                    rateText: DashboardMetricFormatter.rateString(
-                        totalEvents: stats.recentWriteCount,
-                        activityWindowMinutes: stats.activityWindowMinutes
-                    ),
-                    volumeText: DashboardMetricFormatter.activitySummaryString(
-                        totalEvents: stats.recentWriteCount,
-                        activityWindowMinutes: stats.activityWindowMinutes
-                    ),
-                    lastEventText: DashboardMetricFormatter.lastEventString(
-                        lastEventAt: stats.lastWriteAt,
-                        activityWindowMinutes: stats.activityWindowMinutes,
-                        now: now
-                    ),
-                    values: stats.recentActivityBuckets,
-                    accentColor: ingressColor
-                ),
-                queue: DashboardQueueSummary(
-                    status: .unavailable,
-                    backlogCount: stats.pendingEnrichmentCount,
-                    title: "Queue visibility unavailable",
-                    detail: "\(stats.pendingEnrichmentCount) chunks pending"
-                ),
-                enrichment: DashboardFlowLane(
-                    name: "Enrichments",
-                    status: .unavailable,
-                    statusText: "Unavailable",
-                    windowLabel: windowLabel,
-                    rateText: DashboardMetricFormatter.rateString(
-                        totalEvents: stats.recentEnrichmentCount,
-                        activityWindowMinutes: stats.activityWindowMinutes
-                    ),
-                    volumeText: DashboardMetricFormatter.activitySummaryString(
-                        totalEvents: stats.recentEnrichmentCount,
-                        activityWindowMinutes: stats.activityWindowMinutes
-                    ),
-                    lastEventText: DashboardMetricFormatter.lastEventString(
-                        lastEventAt: stats.lastEnrichedAt,
-                        activityWindowMinutes: stats.activityWindowMinutes,
-                        now: now
-                    ),
-                    values: stats.recentEnrichmentBuckets,
-                    accentColor: enrichmentColor
-                )
-            )
-        }
-
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
         let enrichmentsLive = stats.eventIsLive(stats.lastEnrichedAt, now: now)
         let backlogCount = stats.pendingEnrichmentCount
