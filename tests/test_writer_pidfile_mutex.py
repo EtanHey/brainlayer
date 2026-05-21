@@ -7,6 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import apsw
+import pytest
+
 from brainlayer import drain
 from brainlayer.vector_store import VectorStore
 
@@ -160,6 +163,27 @@ def test_init_retries_10_with_extended_backoff():
     ]
     assert delays == [0.5, 1, 2, 4, 8, 16, 30, 30, 30, 30]
     assert sum(delays) <= 600
+
+
+def test_init_retry_zero_budget_reraises_original_busy(monkeypatch):
+    store = object.__new__(VectorStore)
+    store._INIT_MAX_RETRIES = 0
+    store._INIT_BASE_DELAY = 0
+    store._INIT_MAX_DELAY = 0
+    calls = 0
+
+    def busy_init():
+        nonlocal calls
+        calls += 1
+        raise apsw.BusyError("locked")
+
+    monkeypatch.setattr(store, "_init_db", busy_init)
+    monkeypatch.setattr("time.sleep", lambda _delay: None)
+
+    with pytest.raises(apsw.BusyError, match="locked"):
+        store._init_db_with_retry()
+
+    assert calls == 1
 
 
 def test_drain_busy_timeout_30s(tmp_path, monkeypatch):

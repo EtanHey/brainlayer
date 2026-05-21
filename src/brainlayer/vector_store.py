@@ -105,7 +105,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     """
 
     # Retry settings for DB init under contention (multiple MCP instances + enrichment)
-    _INIT_MAX_RETRIES = _int_env("BRAINLAYER_INIT_MAX_RETRIES", 10)
+    _INIT_MAX_RETRIES = max(_int_env("BRAINLAYER_INIT_MAX_RETRIES", 10), 1)
     _INIT_BASE_DELAY = 0.5  # seconds
     _INIT_MAX_DELAY = 30  # seconds
     _PIDFILE_REFS: dict[Path, int] = {}
@@ -295,7 +295,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         """
         last_err = None
         start = time.monotonic()
-        for attempt in range(self._INIT_MAX_RETRIES):
+        retry_budget = max(int(self._INIT_MAX_RETRIES), 1)
+        for attempt in range(retry_budget):
             try:
                 self._init_db()
                 return
@@ -306,7 +307,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
                 elapsed = time.monotonic() - start
                 print(
-                    f"  DB init BusyError (attempt {attempt + 1}/{self._INIT_MAX_RETRIES}), "
+                    f"  DB init BusyError (attempt {attempt + 1}/{retry_budget}), "
                     f"elapsed {elapsed:.1f}s, retrying in {delay:.1f}s...",
                     file=sys.stderr,
                 )
