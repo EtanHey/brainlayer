@@ -238,20 +238,18 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             self._writer_pidfile_acquired = False
             return
 
-        should_unlink = False
         with self._PIDFILE_REFS_LOCK:
             refs = self._PIDFILE_REFS.get(pidfile, 0)
             if refs <= 1:
+                if self._read_writer_pidfile(pidfile) == os.getpid():
+                    try:
+                        pidfile.unlink()
+                    except FileNotFoundError:
+                        pass
                 self._PIDFILE_REFS.pop(pidfile, None)
-                should_unlink = True
             else:
                 self._PIDFILE_REFS[pidfile] = refs - 1
 
-        if should_unlink and self._read_writer_pidfile(pidfile) == os.getpid():
-            try:
-                pidfile.unlink()
-            except FileNotFoundError:
-                pass
         self._writer_pidfile_acquired = False
 
     def _init_readonly_db(self) -> None:
