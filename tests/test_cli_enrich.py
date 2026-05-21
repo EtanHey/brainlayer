@@ -60,6 +60,31 @@ def test_cli_enrich_supervisor_routes_to_controller(monkeypatch):
     assert "cycles=2" in result.stdout
 
 
+def test_cli_enrich_supervisor_preserves_explicit_since_hours(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    called = {}
+
+    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
+        called.update({"limit": limit, "since_hours": since_hours})
+        return SimpleNamespace(
+            mode="supervisor",
+            cycles=1,
+            attempted=0,
+            enriched=0,
+            skipped=0,
+            failed=0,
+            errors=[],
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+
+    result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor", "--since-hours", "8760"])
+
+    assert result.exit_code == 0
+    assert called == {"limit": 200000, "since_hours": 8760}
+
+
 def test_cli_enrich_supervisor_handles_sigterm_gracefully(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}

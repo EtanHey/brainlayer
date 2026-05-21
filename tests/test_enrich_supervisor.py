@@ -84,9 +84,39 @@ def test_supervisor_logs_gemini_error_and_continues(tmp_path, caplog):
 
     assert calls == 2
     assert result.enriched == 1
-    assert result.failed == 1
+    assert result.failed == 0
+    assert result.failed_cycles == 1
     assert result.errors == ["supervisor: gemini 503"]
     assert "Enrich supervisor cycle failed; continuing" in caplog.text
+
+
+def test_supervisor_backs_off_between_persistent_cycle_errors(tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path):
+            self.db_path = db_path
+
+        def close(self):
+            pass
+
+    sleeps = []
+
+    def failing_enrich(store, **kwargs):
+        raise RuntimeError("gemini still down")
+
+    result = controller.run_enrich_supervisor(
+        tmp_path / "brainlayer.db",
+        max_cycles=3,
+        vector_store_cls=FakeVectorStore,
+        enrich_fn=failing_enrich,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result.cycles == 3
+    assert result.failed == 0
+    assert result.failed_cycles == 3
+    assert sleeps == [30.0, 30.0]
 
 
 def test_supervisor_graceful_shutdown_closes_store_after_inflight_cycle(tmp_path):

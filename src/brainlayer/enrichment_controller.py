@@ -114,6 +114,7 @@ class EnrichmentSupervisorResult:
     enriched: int = 0
     skipped: int = 0
     failed: int = 0
+    failed_cycles: int = 0
     errors: list[str] = field(default_factory=list)
     exit_code: int = 0
 
@@ -174,10 +175,12 @@ def run_enrich_supervisor(
                 result = enrich_fn(store, limit=limit, since_hours=since_hours)
             except Exception as exc:  # noqa: BLE001
                 stats.cycles += 1
-                stats.failed += 1
+                stats.failed_cycles += 1
                 error = f"supervisor: {exc}"
                 stats.errors.append(error)
                 logger.exception("Enrich supervisor cycle failed; continuing")
+                if max_cycles is None or stats.cycles < max_cycles:
+                    _sleep_or_wait_for_stop(stop_event, idle_poll_seconds, sleep_fn)
                 continue
 
             stats.cycles += 1
