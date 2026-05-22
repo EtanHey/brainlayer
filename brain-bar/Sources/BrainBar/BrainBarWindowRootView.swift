@@ -750,9 +750,17 @@ private struct BrainBarInjectionTab: View {
     @State private var filterText = ""
 
     var body: some View {
-        InjectionFeedView(store: store, filterText: $filterText)
-            .padding(16)
-            .onAppear { store.start() }
+        ZStack(alignment: .topTrailing) {
+            InjectionFeedView(store: store, filterText: $filterText)
+                .padding(16)
+                .onAppear { store.start() }
+
+            if store.degradationState.isDegraded {
+                DegradationBadge(reason: store.degradationState.reason)
+                    .padding(.top, 20)
+                    .padding(.trailing, 20)
+            }
+        }
     }
 }
 
@@ -764,8 +772,42 @@ private struct BrainBarGraphTab: View {
     }
 
     var body: some View {
-        KGCanvasView(viewModel: viewModel)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack(alignment: .topTrailing) {
+            KGCanvasView(viewModel: viewModel)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if viewModel.degradationState.isDegraded {
+                DegradationBadge(reason: viewModel.degradationState.reason)
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+            }
+        }
+    }
+}
+
+// AIDEV-NOTE: User-facing indicator that a BrainBar surface is reading from a
+// degraded source (transient ReadOnly / busy / locked errors from the writer-
+// pidfile contention introduced by PR #309 + amplified post-PR #312). Shown as
+// an unobtrusive amber pill so the user sees "data may be stale" rather than
+// "blank screen" or "warming memory" lingering — per Etan-mandate 2026-05-22:
+// "WITHOUT DEGRATION!" (no blank states, but visible when degraded).
+struct DegradationBadge: View {
+    let reason: String?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text("Degraded")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+            Capsule().fill(Color.orange.opacity(0.85))
+        )
+        .help(reason ?? "Data source temporarily degraded.")
     }
 }
 

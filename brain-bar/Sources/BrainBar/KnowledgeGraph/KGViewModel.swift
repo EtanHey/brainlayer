@@ -9,6 +9,7 @@ final class KGViewModel: ObservableObject {
     @Published var selectedEntity: EntityCard?
     @Published var selectedEntityChunks: [BrainDatabase.KGChunkRow] = []
     @Published var selectedConversation: BrainDatabase.ExpandedConversation?
+    @Published private(set) var degradationState: DegradationState = .healthy
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
@@ -34,15 +35,37 @@ final class KGViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        do {
-            let graph = try await Self.fetchGraphRows(database: database)
-            applyGraph(entityRows: graph.entities, relationRows: graph.relations)
-            return true
-        } catch {
-            nodes = []
-            edges = []
-            return false
+        // Retry once on transient ReadOnly/busy/locked failures from the writer
+        // pidfile contention (PR #309). The Python enrich-supervisor + drain
+        // hold the writer briefly; one retry after a short backoff usually
+        // suffices. Persistent failures surface as a degradation badge.
+        let attemptLimit = 2
+        var lastError: Error?
+        for attempt in 1...attemptLimit {
+            do {
+                let graph = try await Self.fetchGraphRows(database: database)
+                applyGraph(entityRows: graph.entities, relationRows: graph.relations)
+                degradationState = .healthy
+                return true
+            } catch {
+                lastError = error
+                if attempt < attemptLimit {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
         }
+
+        let reason: String
+        if let lastError {
+            reason = String(describing: lastError)
+        } else {
+            reason = "unknown"
+        }
+        NSLog("[BrainBar.KG] loadGraph failed: %@", reason)
+        degradationState = .degraded(reason: reason)
+        // Keep previously-loaded nodes/edges so the user sees last-known-good
+        // data rather than a blank canvas — degraded ≠ hidden.
+        return false
     }
 
     private struct GraphRows: Sendable {
