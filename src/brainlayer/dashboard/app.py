@@ -7,7 +7,7 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
-from ..paths import DEFAULT_DB_PATH
+from ..paths import get_db_path
 from ..vector_store import VectorStore
 from .search import HybridSearchEngine
 from .views import HomeView, MemoryView
@@ -26,7 +26,7 @@ class DashboardApp:
     def setup_database(self):
         """Initialize database connection using sqlite-vec."""
         try:
-            self.vector_store = VectorStore(DEFAULT_DB_PATH)
+            self.vector_store = VectorStore(get_db_path(), readonly=True)
             self.stats = self.vector_store.get_stats()
         except Exception as e:
             self.console.print(f"[red]Database error: {e}[/]")

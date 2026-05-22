@@ -34,8 +34,7 @@ graph TD
 
     subgraph Interfaces
         E1["MCP Server<br/>brainlayer-mcp (8 tools)"]
-        E2["CLI<br/>brainlayer"]
-        E3["FastAPI Daemon<br/>:8787"]
+        E2["CLI<br/>brainlayer direct SQLite"]
         E4["TUI Dashboard"]
     end
 
@@ -43,7 +42,7 @@ graph TD
     A6 --> C
     B1 --> B2 --> B3 --> B4 --> C
     C --> D1 & D2 & D3
-    C --> E1 & E2 & E3 & E4
+    C --> E1 & E2 & E4
 ```
 
 ## Pipeline Stages

@@ -133,14 +133,14 @@ Each enriched chunk gets these fields:
 ### Enrichment hangs or is very slow
 
 1. **Check Ollama thinking mode**: `"think": false` must be set in the API call. Without it, GLM-4.7 adds 350+ reasoning tokens per chunk (20s vs 1s).
-2. **Check DB locks**: `lsof ~/.local/share/brainlayer/brainlayer.db` — if daemon + MCP + enrichment are all running, the `busy_timeout` should handle it, but check the logs.
+2. **Check DB locks**: `lsof ~/.local/share/brainlayer/brainlayer.db` — if MCP, CLI, watch, drain, and enrichment are all running, the `busy_timeout` should handle it, but check the logs.
 3. **Stale lock file**: `rm /tmp/brainlayer-enrichment.lock` if enrichment died and left a lock.
 
 ### DB locked errors
 
 The pipeline has `busy_timeout = 5000ms` + 3-attempt retry. If you still see lock errors:
 1. Check who has the DB open: `lsof ~/.local/share/brainlayer/brainlayer.db`
-2. Restart the daemon: `brainlayer serve --http 8787` (it reconnects cleanly)
+2. Restart long-running MCP/BrainBar clients if they hold stale handles
 3. Make sure only one enrichment process runs at a time
 
 ### Enrichment produces bad JSON
@@ -159,16 +159,14 @@ sqlite3 ~/.local/share/brainlayer/brainlayer.db \
 
 **To restore from backup:**
 ```bash
-# Stop daemon and any enrichment
-pkill -f "brainlayer serve" || true
+# Stop enrichment before replacing the DB
 rm /tmp/brainlayer-enrichment.lock 2>/dev/null || true
 
 # Copy backup over current DB
 cp ~/.local/share/brainlayer/backups/brainlayer-YYYYMMDD-HHMM.db \
    ~/.local/share/brainlayer/brainlayer.db
 
-# Restart daemon
-brainlayer serve --http 8787
+# Restart MCP/BrainBar clients that should reopen the DB
 ```
 
 ### Queue keeps growing

@@ -1,14 +1,43 @@
-"""Updated CLI commands using daemon client."""
+"""CLI commands backed by direct readonly SQLite access."""
+
+import time
+from contextlib import contextmanager
+from typing import Iterator
 
 import typer
 from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
-from .client import get_client
 from .paths import get_db_path
+from .vector_store import VectorStore
 
 console = Console()
+
+
+@contextmanager
+def _readonly_store() -> Iterator[VectorStore]:
+    store = VectorStore(get_db_path(), readonly=True)
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def get_embedding_model():
+    from .embeddings import get_embedding_model as _get_embedding_model
+
+    return _get_embedding_model()
+
+
+def _flatten_search_results(results: dict, total_time_ms: float) -> dict:
+    return {
+        "ids": results.get("ids", [[]])[0],
+        "documents": results.get("documents", [[]])[0],
+        "metadatas": results.get("metadatas", [[]])[0],
+        "distances": results.get("distances", [[]])[0],
+        "total_time_ms": total_time_ms,
+    }
 
 
 def search_command(
@@ -19,7 +48,7 @@ def search_command(
     text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search"),
     hybrid: bool = True,
 ) -> None:
-    """Search the knowledge base using fast daemon."""
+    """Search the knowledge base using direct readonly SQLite."""
     try:
         # Auto-detect domain-like queries and use text search
         if not text and ("." in query or query.startswith("http") or "/" in query):
@@ -29,18 +58,34 @@ def search_command(
         search_type = "text" if text else ("hybrid" if hybrid else "semantic")
         rprint(f"[bold blue]זיכרון[/] - Searching ({search_type}): [italic]{query}[/]")
 
-        # Search using daemon
-        client = get_client()
-
         with console.status("[bold green]Searching..."):
-            results = client.search(
-                query=query,
-                n_results=n,
-                project_filter=project,
-                content_type_filter=content_type,
-                use_semantic=not text,
-                hybrid=hybrid and not text,
-            )
+            start = time.time()
+            with _readonly_store() as store:
+                if text:
+                    raw_results = store.search(
+                        query_text=query,
+                        n_results=n,
+                        project_filter=project,
+                        content_type_filter=content_type,
+                    )
+                elif hybrid:
+                    query_embedding = get_embedding_model().embed_query(query)
+                    raw_results = store.hybrid_search(
+                        query_embedding=query_embedding,
+                        query_text=query,
+                        n_results=n,
+                        project_filter=project,
+                        content_type_filter=content_type,
+                    )
+                else:
+                    query_embedding = get_embedding_model().embed_query(query)
+                    raw_results = store.search(
+                        query_embedding=query_embedding,
+                        n_results=n,
+                        project_filter=project,
+                        content_type_filter=content_type,
+                    )
+            results = _flatten_search_results(raw_results, (time.time() - start) * 1000)
 
         # Display results
         if not results["documents"]:
@@ -77,10 +122,9 @@ def search_command(
 def stats_command() -> None:
     """Show knowledge base statistics."""
     try:
-        client = get_client()
-
         with console.status("[bold green]Getting stats..."):
-            stats = client.get_stats()
+            with _readonly_store() as store:
+                stats = store.get_stats()
 
         rprint("[bold blue]זיכרון[/] - Knowledge Base Statistics\n")
 
@@ -126,7 +170,7 @@ def migrate_command() -> None:
 
         if success:
             rprint("[bold green]✓[/] Migration completed successfully!")
-            rprint("You can now use the fast daemon service.")
+            rprint("You can now use direct SQLite search.")
         else:
             rprint("[bold red]✗[/] Migration failed or skipped")
             raise typer.Exit(1)

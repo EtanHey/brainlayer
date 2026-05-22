@@ -15,11 +15,6 @@ dependencies = [
     # Embeddings (local bge-large-en-v1.5)
     "sentence-transformers>=2.2.0",
 
-    # Daemon (FastAPI + Unix socket)
-    "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
-    "httpx>=0.24.0",
-
     # MCP server
     "mcp>=1.0.0",
 
@@ -101,7 +96,6 @@ Issues = "https://github.com/EtanHey/brainlayer/issues"
 [project.scripts]
 brainlayer = "brainlayer.cli:app"
 brainlayer-mcp = "brainlayer.mcp:serve"
-brainlayer-daemon = "brainlayer.daemon:main"
 
 [build-system]
 requires = ["hatchling"]

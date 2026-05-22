@@ -24,7 +24,6 @@ def test_parent_death_watcher_noops_without_kqueue(monkeypatch):
 def test_long_running_python_sidecar_entrypoints_install_parent_death_watcher():
     entrypoints = {
         "src/brainlayer/mcp/__init__.py",
-        "src/brainlayer/daemon.py",
         "src/brainlayer/drain.py",
         "src/brainlayer/pipeline/enrichment.py",
         "src/brainlayer/brainbar_hybrid_helper.py",

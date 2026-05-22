@@ -195,7 +195,7 @@ def main():
 
     if success:
         print("\nMigration completed successfully!")
-        print("You can now use the new fast daemon service:")
+        print("You can now use direct SQLite search:")
         print("  brainlayer search 'your query'")
     else:
         print("\nMigration failed or skipped")
