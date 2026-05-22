@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .embeddings import get_embedding_model
-from .vector_store import VectorStore
+from .vector_store import VectorStore, WriterInUseError
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,23 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting brainlayer daemon...")
 
-    vector_store = VectorStore(DEFAULT_DB_PATH)
-    logger.info(f"Loaded vector store: {vector_store.count()} chunks")
+    # Try RW first (some endpoints write: /digest, /store, /entity PATCH, /backlog/items POST/PATCH/DELETE).
+    # If another live writer holds the pidfile mutex (added in PR #309), gracefully fall back to readonly.
+    # In readonly mode, read endpoints (search/stats/context/dashboard) still work; write endpoints
+    # will return 500 on the SQL layer until the operator restarts the daemon when no writer is active.
+    # This prevents the entire FastAPI daemon from failing to start just because enrich is running.
+    try:
+        vector_store = VectorStore(DEFAULT_DB_PATH)
+        logger.info(f"Loaded vector store (READ-WRITE): {vector_store.count()} chunks")
+    except WriterInUseError as exc:
+        logger.warning(
+            "Another writer holds the pidfile mutex (%s); falling back to READONLY mode. "
+            "Search/stats/context endpoints work; write endpoints (/digest, /store, /entity PATCH, "
+            "/backlog/items POST/PATCH/DELETE) will return 500 until daemon is restarted with no live writer.",
+            exc,
+        )
+        vector_store = VectorStore(DEFAULT_DB_PATH, readonly=True)
+        logger.info(f"Loaded vector store (READONLY fallback): {vector_store.count()} chunks")
 
     embedding_model = get_embedding_model()
     logger.info(f"Loaded embedding model: {embedding_model.model_name}")
