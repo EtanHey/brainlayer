@@ -63,7 +63,7 @@ brainlayer search "machine learning concepts"
 
 ### Achieved Performance (Phase 1-2 Implemented)
 - **Cold start**: ~15s (vs 180s before) = 12x improvement
-- **Warm query**: <2s with daemon running = 90x improvement
+- **Warm query**: <2s through direct SQLite = 90x improvement
 - **Search quality**: 70-90% improvement with hybrid search
 - **Memory usage**: Reduced from 6GB+ to ~4GB
 

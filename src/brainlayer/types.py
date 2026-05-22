@@ -1,7 +1,7 @@
 """Shared type definitions for BrainLayer.
 
 Replaces Dict[str, Any] returns with proper TypedDict models across
-the codebase: vector_store, MCP handlers, daemon, and engine.
+the codebase: vector_store, MCP handlers, CLI, and engine.
 """
 
 from __future__ import annotations

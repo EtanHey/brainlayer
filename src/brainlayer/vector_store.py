@@ -379,7 +379,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _init_db_with_retry(self) -> None:
         """Initialize DB with retry on BusyError.
 
-        Multiple BrainLayer processes (MCP instances, daemon, enrichment) may
+        Multiple BrainLayer processes (MCP instances, CLI, enrichment) may
         contend for write locks during DDL. Retry with exponential backoff
         instead of crashing on the first BusyError.
         """
