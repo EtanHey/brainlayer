@@ -62,17 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let dbPath = BrainBarServer.defaultDBPath()
-        NSLog("[BrainBar] Starting UI shell; daemon owns %@", BrainBarServer.defaultSocketPath())
+        NSLog("[BrainBar] Starting UI shell; database at %@", dbPath)
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
             brainBusEvents: BrainBusClient()
         )
         self.collector = collector
-        runtime.install(
-            collector: collector,
-            injectionStore: nil,
-            database: nil
-        )
+        BrainBarAppSupport.wireRuntime(runtime, dbPath: dbPath, collector: collector)
 
         flushPendingBrainBarURLs()
 
@@ -82,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         collector.start()
         configureQuickCaptureHotkey()
-        NSLog("[BrainBar] Socket ready; database will self-heal — launchMode=%@", String(describing: launchMode))
+        NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: launchMode))
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -46,6 +46,44 @@ enum BrainBarAppSupport {
         )
     }
 
+    // AIDEV-NOTE: Wires the UI runtime's database + injection store after PR #312
+    // removed the FastAPI daemon. Pre-#312 the daemon owned the writer and the UI
+    // process consumed via socket; post-#312 each consumer opens SQLite directly.
+    // The UI runtime is opened READ-ONLY so the writer pidfile stays uncontended;
+    // InjectionStore opens its own writable connection internally for ack writes.
+    @MainActor
+    static func wireRuntime(
+        _ runtime: BrainBarRuntime,
+        dbPath: String,
+        collector: StatsCollector
+    ) {
+        let database = BrainDatabase(
+            path: dbPath,
+            openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        if !database.isOpen {
+            NSLog(
+                "[BrainBar] Read-only database open failed at %@: %@",
+                dbPath,
+                String(describing: database.lastOpenError)
+            )
+        }
+
+        let injectionStore: InjectionStore?
+        do {
+            injectionStore = try InjectionStore(databasePath: dbPath)
+        } catch {
+            NSLog("[BrainBar] InjectionStore init failed: %@", String(describing: error))
+            injectionStore = nil
+        }
+
+        runtime.install(
+            collector: collector,
+            injectionStore: injectionStore,
+            database: database
+        )
+    }
+
     static func discoverDaemonPID() -> pid_t {
         for label in daemonLaunchdLabels {
             if let pid = launchctlPID(for: label) {
