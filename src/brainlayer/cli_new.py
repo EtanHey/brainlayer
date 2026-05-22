@@ -1,7 +1,9 @@
 """CLI commands backed by direct readonly SQLite access."""
 
+import sqlite3
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 import typer
@@ -26,12 +28,35 @@ def _readonly_store() -> Iterator[VectorStore]:
         store.close()
 
 
-def _ensure_readonly_db_ready(db_path) -> None:
-    if db_path.exists():
+def _ensure_readonly_db_ready(db_path: Path) -> None:
+    if _has_readonly_schema(db_path):
         return
 
     bootstrap_store = VectorStore(db_path)
-    bootstrap_store.close()
+    try:
+        pass
+    finally:
+        bootstrap_store.close()
+
+
+def _has_readonly_schema(db_path: Path) -> bool:
+    if not db_path.exists():
+        return False
+
+    required_tables = {"chunks", "schema_migrations", "chunk_vectors", "chunks_fts"}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
+            existing_tables = {row[0] for row in rows}
+            if not required_tables.issubset(existing_tables):
+                return False
+            chunk_columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            return {"id", "content", "metadata", "source_file"}.issubset(chunk_columns)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
 
 
 def get_embedding_model():

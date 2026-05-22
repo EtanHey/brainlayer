@@ -84,12 +84,36 @@ def test_cli_stats_bootstraps_missing_db_before_readonly(tmp_path: Path) -> None
     assert _daemon_pids() == []
 
 
+def test_cli_stats_bootstraps_empty_existing_db_before_readonly(tmp_path: Path) -> None:
+    db_path = tmp_path / "brainlayer.db"
+    db_path.touch()
+
+    env = os.environ.copy()
+    env["BRAINLAYER_DB"] = str(db_path)
+    env["PATH"] = str(tmp_path)
+    env["PYTHONPATH"] = f"{REPO_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from brainlayer.cli import app; app()", "stats"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Total Chunks" in result.stdout
+    assert _daemon_pids() == []
+
+
 def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import brainlayer.cli_new as cli_new
     from brainlayer.cli import app
 
     db_path = tmp_path / "brainlayer.db"
-    db_path.touch()
+    _seed_empty_db(db_path)
     calls: list[tuple[Path, bool]] = []
 
     class SpyStore:
@@ -121,7 +145,7 @@ def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytes
     from brainlayer.cli import app
 
     db_path = tmp_path / "brainlayer.db"
-    db_path.touch()
+    _seed_empty_db(db_path)
     calls: list[tuple[Path, bool]] = []
 
     class FastStatsStore:
