@@ -7,6 +7,7 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
+from ..cli_new import _ensure_readonly_db_ready
 from ..paths import get_db_path
 from ..vector_store import VectorStore
 from .search import HybridSearchEngine
@@ -27,11 +28,14 @@ class DashboardApp:
         """Initialize database connection using sqlite-vec."""
         try:
             db_path = get_db_path()
-            if not db_path.exists():
-                bootstrap_store = VectorStore(db_path)
-                bootstrap_store.close()
+            _ensure_readonly_db_ready(db_path)
             self.vector_store = VectorStore(db_path, readonly=True)
-            self.stats = self.vector_store.get_stats()
+            try:
+                self.stats = self.vector_store.get_stats()
+            except Exception:
+                self.vector_store.close()
+                self.vector_store = None
+                raise
         except Exception as e:
             self.console.print(f"[red]Database error: {e}[/]")
             self.stats = {"total_chunks": 0, "projects": [], "content_types": []}
