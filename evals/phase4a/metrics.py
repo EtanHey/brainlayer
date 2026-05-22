@@ -16,30 +16,38 @@ from typing import Any, Iterable
 def _is_relevant(chunk: dict[str, Any], query_meta: dict[str, Any]) -> bool:
     """Determine if a chunk is relevant to a query.
 
-    Heuristics (in order):
-    1. If query_meta declares `expected_entity`, chunk_id containing the entity (case-insensitive)
-       OR chunk score above expected_score_range[0] qualifies.
-    2. If query_meta has no expectations, any non-empty chunk with score>0 counts.
-    3. Future: replace with explicit relevance judgements once gathered.
+    Relevance heuristic (in priority order — first match wins):
+
+    1. If `expected_entity` is set: ONLY a chunk_id containing the entity counts as relevant.
+       Score-based fallback is NOT used (a high-score chunk that doesn't mention the expected
+       entity is not relevant for THIS query — see test_aggregate_category_basic).
+
+    2. Else if `expected_score_range` is set: chunk score within (or above lower bound of) the
+       range counts as relevant.
+
+    3. Else (no explicit expectation): chunk with score > 0 counts.
+
+    Future: replace with explicit relevance judgements once gathered.
     """
     chunk_id = (chunk.get("chunk_id") or "").lower()
     score = chunk.get("score")
     expected_entity = query_meta.get("expected_entity")
     score_range = query_meta.get("expected_score_range")
 
+    # Branch 1: explicit entity expectation — only entity match counts
     if expected_entity:
         entity_lower = expected_entity.lower().replace("-", "").replace(" ", "")
         if entity_lower and entity_lower in chunk_id.replace("-", "").replace(" ", ""):
             return True
+        return False
 
+    # Branch 2: explicit score-range expectation
     if score_range and isinstance(score, (int, float)):
         lo = score_range[0] if len(score_range) > 0 else 0.0
         return score >= lo
 
+    # Branch 3: default — score > 0 (strictly positive)
     if score is not None and isinstance(score, (int, float)) and score > 0:
-        return True
-
-    if chunk_id and not expected_entity and not score_range:
         return True
 
     return False
