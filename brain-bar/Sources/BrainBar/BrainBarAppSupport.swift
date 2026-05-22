@@ -49,32 +49,47 @@ enum BrainBarAppSupport {
     // AIDEV-NOTE: Wires the UI runtime's database + injection store after PR #312
     // removed the FastAPI daemon. Pre-#312 the daemon owned the writer and the UI
     // process consumed via socket; post-#312 each consumer opens SQLite directly.
-    // The UI runtime is opened READ-ONLY so the writer pidfile stays uncontended;
-    // InjectionStore opens its own writable connection internally for ack writes.
+    //
+    // Order matters: InjectionStore opens its internal connection in default
+    // writable mode and creates the schema if the file doesn't exist (fresh
+    // install / cleared state). The UI runtime's read-only handle MUST open
+    // after that, otherwise on a missing DB the read-only open fails and the UI
+    // installs a permanently-closed handle that satisfies `database != nil` but
+    // breaks search/graph. If the read-only open still fails after
+    // bootstrapping, try `reopenIfNeeded()` once — in practice the DB at
+    // ~/.local/share/brainlayer/brainlayer.db is always present, but tests +
+    // fresh-install + cleared-state must work too.
+    //
+    // The UI runtime opens read-only so the writer pidfile stays uncontended
+    // with the Python enrich supervisor + drain. InjectionStore keeps its own
+    // writable connection for ack writes.
     @MainActor
     static func wireRuntime(
         _ runtime: BrainBarRuntime,
         dbPath: String,
         collector: StatsCollector
     ) {
-        let database = BrainDatabase(
-            path: dbPath,
-            openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
-        )
-        if !database.isOpen {
-            NSLog(
-                "[BrainBar] Read-only database open failed at %@: %@",
-                dbPath,
-                String(describing: database.lastOpenError)
-            )
-        }
-
         let injectionStore: InjectionStore?
         do {
             injectionStore = try InjectionStore(databasePath: dbPath)
         } catch {
             NSLog("[BrainBar] InjectionStore init failed: %@", String(describing: error))
             injectionStore = nil
+        }
+
+        let database = BrainDatabase(
+            path: dbPath,
+            openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        if !database.isOpen {
+            database.reopenIfNeeded()
+        }
+        if !database.isOpen {
+            NSLog(
+                "[BrainBar] Read-only database open failed at %@: %@",
+                dbPath,
+                String(describing: database.lastOpenError)
+            )
         }
 
         runtime.install(
