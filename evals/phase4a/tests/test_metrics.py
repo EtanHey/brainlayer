@@ -50,8 +50,11 @@ def test_is_relevant_with_score_range_fail():
 
 
 def test_is_relevant_default_falls_back_to_score_gt_zero():
+    # score > 0 with no explicit expectation → relevant
     assert _is_relevant({"chunk_id": "x", "score": 0.5}, {}) is True
-    assert _is_relevant({"chunk_id": "x", "score": 0.0}, {}) is True
+    # score == 0.0 means no signal — NOT relevant (we require strictly positive)
+    assert _is_relevant({"chunk_id": "x", "score": 0.0}, {}) is False
+    # None/missing chunk_id with no signal → not relevant
     assert _is_relevant({"chunk_id": "", "score": None}, {}) is False
 
 
