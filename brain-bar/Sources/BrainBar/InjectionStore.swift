@@ -18,6 +18,7 @@ private func injectionStoreDarwinNotificationCallback(
 @MainActor
 final class InjectionStore: ObservableObject {
     @Published private(set) var events: [InjectionEvent] = []
+    @Published private(set) var degradationState: DegradationState = .healthy
 
     private let database: BrainDatabase
     private var pollTask: Task<Void, Never>?
@@ -102,8 +103,15 @@ final class InjectionStore: ObservableObject {
                 )
                 lastDataVersion = currentDataVersion
             }
+            // Clear degradation flag on a clean refresh — transient ReadOnly /
+            // busy / locked errors during writer-pidfile contention should not
+            // stick beyond the next successful poll cycle.
+            if degradationState.isDegraded {
+                degradationState = .healthy
+            }
         } catch {
             NSLog("[BrainBar] InjectionStore refresh failed: %@", String(describing: error))
+            degradationState = .degraded(reason: String(describing: error))
         }
     }
 
