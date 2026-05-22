@@ -96,12 +96,15 @@ def context(
 ) -> None:
     """Show surrounding conversation context for a search result."""
     try:
+        from ..cli_new import _ensure_readonly_db_ready
         from ..vector_store import VectorStore
 
         rprint(f"[bold blue]זיכרון[/] - Context for chunk: [dim]{chunk_id[:40]}...[/]")
 
         with console.status("[bold green]Fetching context..."):
-            store = VectorStore(get_db_path(), readonly=True)
+            db_path = get_db_path()
+            _ensure_readonly_db_ready(db_path)
+            store = VectorStore(db_path, readonly=True)
             try:
                 result = store.get_context(chunk_id, before=before, after=after)
             finally:

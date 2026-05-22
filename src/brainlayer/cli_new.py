@@ -17,11 +17,21 @@ console = Console()
 
 @contextmanager
 def _readonly_store() -> Iterator[VectorStore]:
-    store = VectorStore(get_db_path(), readonly=True)
+    db_path = get_db_path()
+    _ensure_readonly_db_ready(db_path)
+    store = VectorStore(db_path, readonly=True)
     try:
         yield store
     finally:
         store.close()
+
+
+def _ensure_readonly_db_ready(db_path) -> None:
+    if db_path.exists():
+        return
+
+    bootstrap_store = VectorStore(db_path)
+    bootstrap_store.close()
 
 
 def get_embedding_model():

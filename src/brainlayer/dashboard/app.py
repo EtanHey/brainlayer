@@ -26,7 +26,11 @@ class DashboardApp:
     def setup_database(self):
         """Initialize database connection using sqlite-vec."""
         try:
-            self.vector_store = VectorStore(get_db_path(), readonly=True)
+            db_path = get_db_path()
+            if not db_path.exists():
+                bootstrap_store = VectorStore(db_path)
+                bootstrap_store.close()
+            self.vector_store = VectorStore(db_path, readonly=True)
             self.stats = self.vector_store.get_stats()
         except Exception as e:
             self.console.print(f"[red]Database error: {e}[/]")
