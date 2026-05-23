@@ -23,7 +23,7 @@ struct KGSidebarView: View {
             }
             .padding(18)
         }
-        .frame(width: 320)
+        .frame(width: KGCanvasMetrics.sidebarWidth)
         .background(
             LinearGradient(
                 colors: [

@@ -2,6 +2,20 @@ import XCTest
 @testable import BrainBar
 
 final class KGAtlasLayoutTests: XCTestCase {
+    deinit {}
+
+    func testCanvasMetricsSubtractSidebarAndCanvasPadding() {
+        // Regression guard: Macroscope PR #315 flagged that resizing used the
+        // outer window size, which placed graph nodes behind the visible sidebar.
+        let size = KGCanvasMetrics.drawableSize(
+            windowSize: CGSize(width: 1_200, height: 800),
+            sidebarVisible: true
+        )
+
+        XCTAssertEqual(size.width, 844)
+        XCTAssertEqual(size.height, 764)
+    }
+
     func testSeededNodesPlaceEntityTypesIntoStableRegions() {
         let nodes = [
             KGNode(id: "p1", name: "Etan Heyman", entityType: "person", importance: 9, position: .zero),

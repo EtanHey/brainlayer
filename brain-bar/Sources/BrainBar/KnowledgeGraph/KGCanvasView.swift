@@ -1,5 +1,21 @@
 import SwiftUI
 
+enum KGCanvasMetrics {
+    static let sidebarWidth: CGFloat = 320
+    static let canvasPadding: CGFloat = 18
+
+    static func sidebarVisible(windowWidth: CGFloat, selectedEntityVisible: Bool) -> Bool {
+        windowWidth >= 980 || selectedEntityVisible
+    }
+
+    static func drawableSize(windowSize: CGSize, sidebarVisible: Bool) -> CGSize {
+        CGSize(
+            width: max(windowSize.width - (sidebarVisible ? sidebarWidth : 0) - canvasPadding * 2, 0),
+            height: max(windowSize.height - canvasPadding * 2, 0)
+        )
+    }
+}
+
 struct KGCanvasView: View {
     @ObservedObject var viewModel: KGViewModel
     @Environment(\.colorScheme) private var colorScheme
@@ -24,7 +40,10 @@ struct KGCanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let sidebarVisible = geo.size.width >= 980 || viewModel.selectedEntity != nil
+            let sidebarVisible = KGCanvasMetrics.sidebarVisible(
+                windowWidth: geo.size.width,
+                selectedEntityVisible: viewModel.selectedEntity != nil
+            )
 
             HStack(spacing: 0) {
                 ZStack(alignment: .topLeading) {
@@ -54,7 +73,10 @@ struct KGCanvasView: View {
                 }
             }
             .onAppear {
-                setCanvas(size: geo.size)
+                setCanvas(size: KGCanvasMetrics.drawableSize(
+                    windowSize: geo.size,
+                    sidebarVisible: sidebarVisible
+                ))
             }
             .task {
                 guard !hasLoadedGraph else { return }
@@ -63,9 +85,19 @@ struct KGCanvasView: View {
                 }
             }
             .onChange(of: geo.size) { _, newSize in
-                setCanvas(size: newSize)
-                guard hasLoadedGraph, !viewModel.nodes.isEmpty else { return }
-                viewModel.nodes = KGAtlasLayout.seededNodes(viewModel.nodes, canvasSize: newSize)
+                resizeCanvas(size: KGCanvasMetrics.drawableSize(
+                    windowSize: newSize,
+                    sidebarVisible: KGCanvasMetrics.sidebarVisible(
+                        windowWidth: newSize.width,
+                        selectedEntityVisible: viewModel.selectedEntity != nil
+                    )
+                ))
+            }
+            .onChange(of: sidebarVisible) { _, newSidebarVisible in
+                resizeCanvas(size: KGCanvasMetrics.drawableSize(
+                    windowSize: geo.size,
+                    sidebarVisible: newSidebarVisible
+                ))
             }
         }
     }
@@ -112,7 +144,7 @@ struct KGCanvasView: View {
                 Color.clear
                     .onAppear { setCanvas(size: geo.size) }
                     .onChange(of: geo.size) { _, newSize in
-                        setCanvas(size: newSize)
+                        resizeCanvas(size: newSize)
                     }
             }
         )
@@ -121,7 +153,7 @@ struct KGCanvasView: View {
         .gesture(tapGesture(snapshot: snapshot))
         .gesture(dragGesture)
         .gesture(magnifyGesture)
-        .padding(18)
+        .padding(KGCanvasMetrics.canvasPadding)
     }
 
     private var atlasBackground: some View {
@@ -344,6 +376,12 @@ struct KGCanvasView: View {
         guard size != .zero else { return }
         canvasSize = size
         viewModel.canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+    }
+
+    private func resizeCanvas(size: CGSize) {
+        setCanvas(size: size)
+        guard hasLoadedGraph, !viewModel.nodes.isEmpty else { return }
+        viewModel.nodes = KGAtlasLayout.seededNodes(viewModel.nodes, canvasSize: size)
     }
 
     private var toolbarInteractionGesture: some Gesture {
