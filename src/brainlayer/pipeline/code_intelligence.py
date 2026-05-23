@@ -602,10 +602,11 @@ def _add_dependency_relation(
             if existing[2] is not None and not dry_run:
                 conn.execute(
                     """UPDATE kg_relations
-                       SET valid_from = COALESCE(valid_from, ?),
+                       SET properties = ?,
+                           valid_from = COALESCE(valid_from, ?),
                            valid_until = ?, expired_at = NULL
                        WHERE id = ?""",
-                    (observed_at, valid_until, existing[0]),
+                    (_code_intelligence_properties(existing[1]), observed_at, valid_until, existing[0]),
                 )
             return target_id
         if not dry_run:
