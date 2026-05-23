@@ -8,7 +8,6 @@ Usage:
     python -m brainlayer.pipeline.code_intelligence [--base-dir ~/Gits] [--dry-run]
 """
 
-import fcntl
 import hashlib
 import json
 import logging
@@ -22,6 +21,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised via monkeypatch on Unix CI
+    fcntl = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +211,8 @@ def _code_intelligence_writer_lock(db_path: str | Path, dry_run: bool):
         try:
             fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
                 os.write(fd, _pidfile_payload(pid))
             finally:
                 os.close(fd)

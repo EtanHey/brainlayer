@@ -103,8 +103,8 @@ def test_manual_fallback_averages_only_qrels_queries(qrels_file: Path):
     assert scores["recall@10"] == pytest.approx(0.25)
 
 
-def test_manual_fallback_map_at_k_uses_cutoff_relevant_count(tmp_path: Path):
-    """regression-guard: perfect top-k AP should be 1.0 even when more relevant docs exist."""
+def test_manual_fallback_map_at_k_uses_full_relevant_count(tmp_path: Path):
+    """regression-guard: map@k fallback must match ranx full-relevance denominator semantics."""
     from brainlayer.eval.benchmark import SearchBenchmark
 
     qrels_path = tmp_path / "qrels.json"
@@ -114,7 +114,17 @@ def test_manual_fallback_map_at_k_uses_cutoff_relevant_count(tmp_path: Path):
 
     scores = benchmark._evaluate_without_ranx(run_dict, ["map@10"])
 
-    assert scores["map@10"] == pytest.approx(1.0)
+    assert scores["map@10"] == pytest.approx(0.5)
+
+
+def test_manual_fallback_rejects_non_positive_metric_cutoff(qrels_file: Path):
+    """regression-guard: metric cutoffs must fail clearly before AP denominator math."""
+    from brainlayer.eval.benchmark import SearchBenchmark
+
+    benchmark = SearchBenchmark(str(qrels_file))
+
+    with pytest.raises(ValueError, match="Metric cutoff must be > 0"):
+        benchmark._evaluate_without_ranx({"q1": {"doc-a": 1.0}}, ["map@0"])
 
 
 def test_manual_fallback_ndcg_uses_linear_gain(qrels_file: Path):
