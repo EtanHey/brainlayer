@@ -11,6 +11,7 @@ Covers:
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from brainlayer.mcp.search_handler import _brain_recall, _brain_search
@@ -40,6 +41,43 @@ def test_kg_facts_sql_excludes_expired_relations(tmp_path):
         store.soft_close_relation("rel-fastapi")
 
         assert _kg_facts_sql(store, "brainlayer") == []
+    finally:
+        store.close()
+
+
+def test_kg_facts_sql_uses_timestamp_aware_validity(tmp_path):
+    """regression-guard: brain_search KG SQL must not lexicographically compare offset timestamps."""
+    from brainlayer.mcp.search_handler import _kg_facts_sql
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "kg.db")
+    try:
+        store.upsert_entity("proj-brainlayer", "project", "brainlayer")
+        store.upsert_entity("lib-fastapi", "library", "fastapi")
+        store.add_relation(
+            "rel-fastapi",
+            "proj-brainlayer",
+            "lib-fastapi",
+            "depends_on",
+            properties={"source": "code_intelligence"},
+            confidence=0.99,
+        )
+        offset = timezone(timedelta(hours=1))
+        valid_from = (
+            (datetime.now(timezone.utc) - timedelta(seconds=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+        valid_until = (
+            (datetime.now(timezone.utc) + timedelta(days=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+        store.conn.cursor().execute(
+            "UPDATE kg_relations SET valid_from = ?, valid_until = ? WHERE id = 'rel-fastapi'",
+            (valid_from, valid_until),
+        )
+
+        facts = _kg_facts_sql(store, "brainlayer")
+
+        assert len(facts) == 1
+        assert facts[0]["relation"] == "depends_on"
     finally:
         store.close()
 

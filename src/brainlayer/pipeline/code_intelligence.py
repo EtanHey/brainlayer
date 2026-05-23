@@ -104,7 +104,9 @@ def _code_intelligence_properties(properties: str | None = None) -> str:
             loaded["source"] = [*source, CODE_INTELLIGENCE_SOURCE]
     elif source != CODE_INTELLIGENCE_SOURCE:
         existing_sources = sources if isinstance(sources, list) else []
-        loaded["sources"] = [*dict.fromkeys([*existing_sources, source, CODE_INTELLIGENCE_SOURCE])]
+        loaded["sources"] = [
+            item for item in dict.fromkeys([*existing_sources, source, CODE_INTELLIGENCE_SOURCE]) if item is not None
+        ]
     return json.dumps(loaded, sort_keys=True)
 
 
@@ -117,13 +119,20 @@ def _writer_pidfile_path(db_path: str | Path) -> Path:
     return pidfile_dir.resolve() / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
+def _linux_proc_stat_start_time(stat_text: str) -> str | None:
+    end_comm = stat_text.rfind(")")
+    if end_comm == -1:
+        fields = stat_text.split()
+        return fields[21] if len(fields) > 21 else None
+    fields_after_comm = stat_text[end_comm + 2 :].split()
+    return fields_after_comm[19] if len(fields_after_comm) > 19 else None
+
+
 def _pid_start_time(pid: int) -> str | None:
     try:
         stat_path = Path("/proc") / str(pid) / "stat"
         if stat_path.exists():
-            fields = stat_path.read_text(encoding="utf-8").split()
-            if len(fields) > 21:
-                return fields[21]
+            return _linux_proc_stat_start_time(stat_path.read_text(encoding="utf-8"))
     except OSError:
         pass
     try:
@@ -206,7 +215,10 @@ def _code_intelligence_writer_lock(db_path: str | Path, dry_run: bool):
             break
         except FileExistsError:
             owner_pid, owner_start_time = _read_pidfile_owner(pidfile)
-            if owner_pid is not None and _pidfile_owner_matches(owner_pid, owner_start_time):
+            if owner_pid is None:
+                time.sleep(0.01 * (attempt + 1))
+                continue
+            if _pidfile_owner_matches(owner_pid, owner_start_time):
                 raise RuntimeError(f"another writer is using {db_path} (pid {owner_pid})")
             try:
                 pidfile.unlink()
@@ -220,7 +232,9 @@ def _code_intelligence_writer_lock(db_path: str | Path, dry_run: bool):
     try:
         yield
     finally:
-        if _read_pidfile_owner(pidfile)[0] == pid:
+        owner_pid, owner_start_time = _read_pidfile_owner(pidfile)
+        current_start_time = _pid_start_time(pid)
+        if owner_pid == pid and (owner_start_time is None or owner_start_time == current_start_time):
             try:
                 pidfile.unlink()
             except FileNotFoundError:
@@ -250,8 +264,8 @@ def _ensure_reconciliation_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE VIEW IF NOT EXISTS kg_current_facts AS
         SELECT * FROM kg_relations
-        WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-          AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        WHERE (valid_from IS NULL OR julianday(valid_from) <= julianday('now'))
+          AND (valid_until IS NULL OR julianday(valid_until) >= julianday('now'))
           AND expired_at IS NULL
     """)
 
@@ -634,17 +648,17 @@ def _expire_stale_dependency_relations(
             stats["relations_expired"] += 1
 
     for target_id in stale_target_ids:
-        active_depends_on = conn.execute(
+        active_fact = conn.execute(
             """
             SELECT 1
             FROM kg_current_facts
-            WHERE target_id = ?
-              AND relation_type = 'depends_on'
+            WHERE source_id = ?
+               OR target_id = ?
             LIMIT 1
             """,
-            (target_id,),
+            (target_id, target_id),
         ).fetchone()
-        if active_depends_on:
+        if active_fact:
             continue
         result = conn.execute(
             """
