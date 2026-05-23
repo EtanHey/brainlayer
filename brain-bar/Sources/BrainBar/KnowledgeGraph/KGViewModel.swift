@@ -44,7 +44,9 @@ final class KGViewModel: ObservableObject {
     // MARK: - Data Loading
 
     @discardableResult
-    func loadGraph() async -> Bool {
+    func loadGraph(
+        retrySleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> Bool {
         guard !isLoading else { return false }
         isLoading = true
         defer { isLoading = false }
@@ -65,22 +67,16 @@ final class KGViewModel: ObservableObject {
                 lastError = error
                 if attempt < attemptLimit {
                     do {
-                        try await Task.sleep(for: .milliseconds(200))
+                        try await retrySleep(.milliseconds(200))
                     } catch {
+                        markDegraded(from: lastError)
                         return false
                     }
                 }
             }
         }
 
-        let reason: String
-        if let lastError {
-            reason = String(describing: lastError)
-        } else {
-            reason = "unknown"
-        }
-        NSLog("[BrainBar.KG] loadGraph failed: %@", reason)
-        degradationState = .degraded(reason: reason)
+        markDegraded(from: lastError)
         // Keep previously-loaded nodes/edges so the user sees last-known-good
         // data rather than a blank canvas — degraded ≠ hidden.
         return false
@@ -102,6 +98,35 @@ final class KGViewModel: ObservableObject {
             }
         }
         return false
+    }
+
+    @discardableResult
+    func loadGraphRepeatedly(
+        refreshDelay: Duration = .seconds(30),
+        retryDelay: Duration = .seconds(5),
+        sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        onSuccessfulLoad: @MainActor () -> Void = {}
+    ) async -> Bool {
+        var loadedOnce = false
+        while !Task.isCancelled {
+            let loaded = await loadGraph()
+            if loaded {
+                loadedOnce = true
+                onSuccessfulLoad()
+            }
+            do {
+                try await sleep(loaded ? refreshDelay : retryDelay)
+            } catch {
+                return loadedOnce
+            }
+        }
+        return loadedOnce
+    }
+
+    private func markDegraded(from error: Error?) {
+        let reason = error.map { String(describing: $0) } ?? "unknown"
+        NSLog("[BrainBar.KG] loadGraph failed: %@", reason)
+        degradationState = .degraded(reason: reason)
     }
 
     private struct GraphRows: Sendable {

@@ -27,6 +27,7 @@ struct KGCanvasView: View {
     @State private var canvasSize: CGSize = .zero
     @State private var minimumImportance: Double = 3
     @State private var hasLoadedGraph = false
+    @State private var hasStartedGraphPolling = false
     @GestureState private var toolbarInteractionActive = false
 
     private var atlas: KGAtlasPresentation.Snapshot {
@@ -72,32 +73,15 @@ struct KGCanvasView: View {
                     )
                 }
             }
-            .onAppear {
-                setCanvas(size: KGCanvasMetrics.drawableSize(
-                    windowSize: geo.size,
-                    sidebarVisible: sidebarVisible
-                ))
-            }
             .task {
-                guard !hasLoadedGraph else { return }
-                if await viewModel.loadGraphUntilSuccessful() {
+                guard !hasStartedGraphPolling else { return }
+                hasStartedGraphPolling = true
+                defer { hasStartedGraphPolling = false }
+                if await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
+                    hasLoadedGraph = true
+                }) {
                     hasLoadedGraph = true
                 }
-            }
-            .onChange(of: geo.size) { _, newSize in
-                resizeCanvas(size: KGCanvasMetrics.drawableSize(
-                    windowSize: newSize,
-                    sidebarVisible: KGCanvasMetrics.sidebarVisible(
-                        windowWidth: newSize.width,
-                        selectedEntityVisible: viewModel.selectedEntity != nil
-                    )
-                ))
-            }
-            .onChange(of: sidebarVisible) { _, newSidebarVisible in
-                resizeCanvas(size: KGCanvasMetrics.drawableSize(
-                    windowSize: geo.size,
-                    sidebarVisible: newSidebarVisible
-                ))
             }
         }
     }
@@ -142,6 +126,8 @@ struct KGCanvasView: View {
         .background(
             GeometryReader { geo in
                 Color.clear
+                    // This reports the actual drawable Canvas size after the
+                    // sidebar and padding have been applied.
                     .onAppear { setCanvas(size: geo.size) }
                     .onChange(of: geo.size) { _, newSize in
                         resizeCanvas(size: newSize)
