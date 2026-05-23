@@ -273,6 +273,53 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.edges.count, 1)
     }
 
+    func testLoadGraphRefreshPreservesExistingLayoutForStableNodes() async throws {
+        // Regression guard: Cursor Bugbot PR #315 flagged repeated graph refresh
+        // resetting node positions and discarding in-progress force layout state.
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.nodes[0].position = CGPoint(x: 123, y: 234)
+        vm.nodes[0].velocity = CGVector(dx: 5, dy: 7)
+        vm.nodes[1].position = CGPoint(x: 456, y: 345)
+        vm.nodes[1].velocity = CGVector(dx: -3, dy: 2)
+
+        await vm.loadGraph()
+
+        let nodeA = try XCTUnwrap(vm.nodes.first { $0.id == "a" })
+        let nodeB = try XCTUnwrap(vm.nodes.first { $0.id == "b" })
+        XCTAssertEqual(nodeA.position, CGPoint(x: 123, y: 234))
+        XCTAssertEqual(nodeA.velocity, CGVector(dx: 5, dy: 7))
+        XCTAssertEqual(nodeB.position, CGPoint(x: 456, y: 345))
+        XCTAssertEqual(nodeB.velocity, CGVector(dx: -3, dy: 2))
+    }
+
+    func testUpdateCanvasSizeReseedsLoadedGraphFromActualDrawableSize() async throws {
+        // Regression guard: Cursor Bugbot PR #315 flagged a race where data can
+        // load before the inner Canvas reports its real size, leaving nodes
+        // seeded against the default center until a later size change.
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        let defaultPositions = Dictionary(uniqueKeysWithValues: vm.nodes.map { ($0.id, $0.position) })
+
+        vm.updateCanvasSize(CGSize(width: 1_200, height: 800))
+
+        XCTAssertEqual(vm.canvasCenter, CGPoint(x: 600, y: 400))
+        let nodeA = try XCTUnwrap(vm.nodes.first { $0.id == "a" })
+        let nodeB = try XCTUnwrap(vm.nodes.first { $0.id == "b" })
+        XCTAssertNotEqual(nodeA.position, defaultPositions["a"])
+        XCTAssertNotEqual(nodeB.position, defaultPositions["b"])
+        XCTAssertEqual(nodeA.position, CGPoint(x: 264, y: 192))
+        XCTAssertEqual(nodeB.position, CGPoint(x: 600, y: 192))
+    }
+
     func testLoadGraphKeepsMainActorAvailableWhileLoading() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
