@@ -418,9 +418,10 @@ dependencies = [
 
     def test_reconcile_preserves_non_code_intelligence_dependency_owner(self, tmp_repos: Path, tmp_db: str) -> None:
         """regression-guard: code scanner must not take ownership of non-scanner relations."""
-        from brainlayer.pipeline.code_intelligence import enrich_projects
+        from brainlayer.pipeline.code_intelligence import _ensure_reconciliation_schema, enrich_projects
 
         conn = sqlite3.connect(tmp_db)
+        _ensure_reconciliation_schema(conn)
         conn.execute(
             "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('proj-manual', 'project', 'brainlayer', '{}')"
         )
@@ -460,6 +461,65 @@ dependencies = [
         assert row is not None
         assert json.loads(row[0]) == {"source": "manual"}
         assert row[1] is None
+
+    def test_observed_manual_dependency_is_reactivated_without_taking_ownership(
+        self, tmp_repos: Path, tmp_db: str
+    ) -> None:
+        """regression-guard: live scan evidence must revive an expired manual edge without changing provenance."""
+        from brainlayer.pipeline.code_intelligence import _ensure_reconciliation_schema, enrich_projects
+
+        conn = sqlite3.connect(tmp_db)
+        _ensure_reconciliation_schema(conn)
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('proj-manual', 'project', 'brainlayer', '{}')"
+        )
+        conn.execute(
+            """
+            INSERT INTO kg_entities
+                (id, entity_type, name, metadata, valid_until, expired_at)
+            VALUES
+                ('lib-manual', 'library', 'fastapi', '{}',
+                 '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO kg_relations
+                (id, source_id, target_id, relation_type, properties, confidence, valid_until, expired_at)
+            VALUES
+                ('rel-manual', 'proj-manual', 'lib-manual', 'depends_on', '{"source":"manual"}', 0.8,
+                 '2026-01-01T00:00:00.000000Z', '2026-01-01T00:00:00.000000Z')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        row = conn.execute(
+            """
+            SELECT properties, valid_until, expired_at
+            FROM kg_relations
+            WHERE id = 'rel-manual'
+            """
+        ).fetchone()
+        active_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM kg_current_facts
+            WHERE source_id = 'proj-manual'
+              AND target_id = 'lib-manual'
+              AND relation_type = 'depends_on'
+            """
+        ).fetchone()[0]
+        conn.close()
+
+        assert row is not None
+        assert json.loads(row[0]) == {"source": "manual"}
+        assert row[1] != "2026-01-01T00:00:00.000000Z"
+        assert row[2] is None
+        assert active_count == 1
 
     def test_library_entity_not_expired_when_other_depends_on_remains(self, tmp_repos: Path, tmp_db: str) -> None:
         """regression-guard: expiring one source fact must not hide another active depends_on fact."""
