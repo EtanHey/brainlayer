@@ -47,7 +47,10 @@ def _search_store_needs_bootstrap(db_path) -> bool:
         if not _SEARCH_REQUIRED_CHUNK_COLUMNS.issubset(chunk_columns):
             return True
 
-        if {"kg_entities", "kg_relations"}.issubset(tables):
+        kg_tables = {"kg_entities", "kg_relations"}
+        if kg_tables & tables:
+            if not kg_tables.issubset(tables):
+                return True
             entity_columns = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
             relation_columns = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
             if not _SEARCH_REQUIRED_KG_ENTITY_COLUMNS.issubset(entity_columns):

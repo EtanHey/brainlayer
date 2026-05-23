@@ -8,11 +8,17 @@ Usage:
     python -m brainlayer.pipeline.code_intelligence [--base-dir ~/Gits] [--dry-run]
 """
 
+import fcntl
+import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
+import subprocess
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +28,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_DIR = Path.home() / "Gits"
 OBSERVATION_VALIDITY_DAYS = 30
 CODE_INTELLIGENCE_SOURCE = "code_intelligence"
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 NOTABLE_DEPENDENCIES = {
     # Frameworks & runtimes
     "react",
@@ -60,36 +67,184 @@ NOTABLE_DEPENDENCIES = {
 
 
 def _timestamp(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return f"{dt:%Y-%m-%dT%H:%M:%S}.{dt.microsecond // 1000:03d}Z"
+
+
+def _load_relation_properties(properties: str | None) -> dict[str, Any]:
+    if not properties:
+        return {}
+    try:
+        loaded = json.loads(properties)
+    except (TypeError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _is_code_intelligence_relation(properties: str | None) -> bool:
-    if not properties:
-        return False
+    loaded = _load_relation_properties(properties)
+    source = loaded.get("source")
+    sources = loaded.get("sources")
+    return (
+        source == CODE_INTELLIGENCE_SOURCE
+        or (isinstance(source, list) and CODE_INTELLIGENCE_SOURCE in source)
+        or (isinstance(sources, list) and CODE_INTELLIGENCE_SOURCE in sources)
+    )
+
+
+def _code_intelligence_properties(properties: str | None = None) -> str:
+    loaded = _load_relation_properties(properties)
+    source = loaded.get("source")
+    sources = loaded.get("sources")
+    if source is None and sources is None:
+        loaded["source"] = CODE_INTELLIGENCE_SOURCE
+    elif isinstance(source, list):
+        if CODE_INTELLIGENCE_SOURCE not in source:
+            loaded["source"] = [*source, CODE_INTELLIGENCE_SOURCE]
+    elif source != CODE_INTELLIGENCE_SOURCE:
+        existing_sources = sources if isinstance(sources, list) else []
+        loaded["sources"] = [*dict.fromkeys([*existing_sources, source, CODE_INTELLIGENCE_SOURCE])]
+    return json.dumps(loaded, sort_keys=True)
+
+
+def _writer_pidfile_path(db_path: str | Path) -> Path:
+    pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp")).expanduser()
+    if not pidfile_dir.is_absolute():
+        pidfile_dir = Path("/tmp") / pidfile_dir
+    resolved_path = Path(db_path).expanduser().resolve()
+    path_hash = hashlib.sha256(str(resolved_path).encode("utf-8")).hexdigest()[:16]
+    return pidfile_dir.resolve() / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
+
+
+def _pid_start_time(pid: int) -> str | None:
     try:
-        return json.loads(properties).get("source") == CODE_INTELLIGENCE_SOURCE
-    except (TypeError, ValueError):
+        stat_path = Path("/proc") / str(pid) / "stat"
+        if stat_path.exists():
+            fields = stat_path.read_text(encoding="utf-8").split()
+            if len(fields) > 21:
+                return fields[21]
+    except OSError:
+        pass
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return " ".join(result.stdout.split()) or None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _pidfile_payload(pid: int) -> bytes:
+    start_time = _pid_start_time(pid)
+    if start_time:
+        return f"{pid}\nstart_time={start_time}\n".encode("utf-8")
+    return f"{pid}\n".encode("utf-8")
+
+
+def _read_pidfile_owner(pidfile: Path) -> tuple[int | None, str | None]:
+    try:
+        lines = pidfile.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            return None, None
+        pid = int(lines[0].strip())
+        start_time = None
+        for line in lines[1:]:
+            if line.startswith("start_time="):
+                start_time = line.removeprefix("start_time=").strip() or None
+                break
+        return pid, start_time
+    except (OSError, ValueError):
+        return None, None
+
+
+def _pidfile_owner_matches(pid: int, start_time: str | None) -> bool:
+    if not _pid_is_alive(pid):
+        return False
+    if not start_time:
+        return True
+    current_start_time = _pid_start_time(pid)
+    return current_start_time is None or current_start_time == start_time
+
+
+@contextmanager
+def _code_intelligence_writer_lock(db_path: str | Path, dry_run: bool):
+    if dry_run:
+        yield
+        return
+
+    pidfile = _writer_pidfile_path(db_path)
+    pidfile.parent.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    acquired = False
+
+    for attempt in range(4):
+        try:
+            fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                os.write(fd, _pidfile_payload(pid))
+            finally:
+                os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            owner_pid, owner_start_time = _read_pidfile_owner(pidfile)
+            if owner_pid == pid and _pidfile_owner_matches(owner_pid, owner_start_time):
+                yield
+                return
+            if owner_pid is not None and _pidfile_owner_matches(owner_pid, owner_start_time):
+                raise RuntimeError(f"another writer is using {db_path} (pid {owner_pid})")
+            try:
+                pidfile.unlink()
+            except FileNotFoundError:
+                pass
+            time.sleep(0.01 * (attempt + 1))
+
+    if not acquired:
+        raise RuntimeError(f"could not acquire writer pidfile for {db_path}")
+
+    try:
+        yield
+    finally:
+        if _read_pidfile_owner(pidfile)[0] == pid:
+            try:
+                pidfile.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _ensure_reconciliation_schema(conn: sqlite3.Connection) -> None:
     """Apply the KG validity columns needed by code-intelligence reconciliation."""
     entity_cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_entities)")}
-    for col, definition in [
-        ("valid_until", "TEXT"),
-        ("expired_at", "TEXT"),
-    ]:
-        if col not in entity_cols:
-            conn.execute(f"ALTER TABLE kg_entities ADD COLUMN {col} {definition}")
+    if "valid_until" not in entity_cols:
+        conn.execute("ALTER TABLE kg_entities ADD COLUMN valid_until TEXT")
+    if "expired_at" not in entity_cols:
+        conn.execute("ALTER TABLE kg_entities ADD COLUMN expired_at TEXT")
 
     relation_cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_relations)")}
-    for col, definition in [
-        ("valid_from", "TEXT"),
-        ("valid_until", "TEXT"),
-        ("expired_at", "TEXT"),
-    ]:
-        if col not in relation_cols:
-            conn.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {definition}")
+    if "valid_from" not in relation_cols:
+        conn.execute("ALTER TABLE kg_relations ADD COLUMN valid_from TEXT")
+    if "valid_until" not in relation_cols:
+        conn.execute("ALTER TABLE kg_relations ADD COLUMN valid_until TEXT")
+    if "expired_at" not in relation_cols:
+        conn.execute("ALTER TABLE kg_relations ADD COLUMN expired_at TEXT")
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_expired ON kg_entities(expired_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_expired ON kg_relations(expired_at)")
@@ -266,11 +421,6 @@ def enrich_projects(
             "dep_entities_expired": 0,
         }
 
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    if not dry_run:
-        _ensure_reconciliation_schema(conn)
-
     observed_dt = datetime.now(timezone.utc)
     observed_at = _timestamp(observed_dt)
     valid_until = _timestamp(observed_dt + timedelta(days=OBSERVATION_VALIDITY_DAYS))
@@ -285,14 +435,23 @@ def enrich_projects(
         "dep_entities_expired": 0,
     }
 
-    try:
-        for project in projects:
-            _upsert_project(conn, project, stats, dry_run, observed_at, valid_until)
-
+    with _code_intelligence_writer_lock(db_path, dry_run):
+        conn = sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA journal_mode = WAL")
         if not dry_run:
-            conn.commit()
-    finally:
-        conn.close()
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+            _ensure_reconciliation_schema(conn)
+
+        try:
+            for project in projects:
+                _upsert_project(conn, project, stats, dry_run, observed_at, valid_until)
+
+            if not dry_run:
+                conn.commit()
+                conn.execute("PRAGMA wal_checkpoint(FULL)")
+        finally:
+            conn.close()
 
     return stats
 
@@ -425,12 +584,12 @@ def _add_dependency_relation(
                    SET properties = ?, confidence = 0.99, valid_from = COALESCE(valid_from, ?),
                        valid_until = ?, expired_at = NULL
                    WHERE id = ?""",
-                (json.dumps({"source": CODE_INTELLIGENCE_SOURCE}), observed_at, valid_until, existing[0]),
+                (_code_intelligence_properties(existing[1]), observed_at, valid_until, existing[0]),
             )
         return target_id
 
     rel_id = f"rel-{uuid.uuid4().hex[:12]}"
-    props = json.dumps({"source": CODE_INTELLIGENCE_SOURCE})
+    props = _code_intelligence_properties()
 
     if not dry_run:
         conn.execute(

@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -525,3 +526,85 @@ dependencies = [
         assert relation_expired_at is not None
         assert entity_expired_at is None
         assert manual_active_count == 1
+
+    def test_timestamp_precision_matches_sqlite_current_fact_view(self) -> None:
+        """regression-guard: Python validity timestamps must sort with SQLite strftime('%f') values."""
+        from brainlayer.pipeline.code_intelligence import _timestamp
+
+        observed = datetime(2026, 5, 23, 10, 0, 45, 123456, tzinfo=timezone.utc)
+
+        assert _timestamp(observed) == "2026-05-23T10:00:45.123Z"
+
+    def test_refresh_preserves_code_intelligence_relation_metadata(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: refreshing scanner-owned facts must not clobber extra provenance metadata."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            """
+            UPDATE kg_relations
+            SET properties = '{"source":"code_intelligence","evidence":"manual-note"}'
+            WHERE id IN (
+                SELECT r.id
+                FROM kg_relations r
+                JOIN kg_entities src ON r.source_id = src.id
+                JOIN kg_entities tgt ON r.target_id = tgt.id
+                WHERE src.name = 'brainlayer'
+                  AND tgt.name = 'fastapi'
+                  AND r.relation_type = 'depends_on'
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        row = conn.execute(
+            """
+            SELECT r.properties
+            FROM kg_relations r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities tgt ON r.target_id = tgt.id
+            WHERE src.name = 'brainlayer'
+              AND tgt.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert json.loads(row[0])["evidence"] == "manual-note"
+
+    def test_reconcile_checkpoints_wal_around_bulk_writes(
+        self, tmp_repos: Path, tmp_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """regression-guard: KG reconciliation bulk writes checkpoint WAL before and after the pass."""
+        from brainlayer.pipeline import code_intelligence
+
+        real_connect = sqlite3.connect
+        executed_sql: list[str] = []
+
+        class RecordingConnection:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, sql: str, *args, **kwargs):
+                executed_sql.append(sql)
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name: str):
+                return getattr(self._conn, name)
+
+        def recording_connect(*args, **kwargs):
+            return RecordingConnection(real_connect(*args, **kwargs))
+
+        monkeypatch.setattr(code_intelligence.sqlite3, "connect", recording_connect)
+
+        code_intelligence.enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        checkpoint_count = sum(1 for sql in executed_sql if "PRAGMA wal_checkpoint(FULL)" in sql)
+        assert checkpoint_count >= 2

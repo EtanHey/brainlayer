@@ -33,6 +33,10 @@ def test_kg_facts_sql_excludes_expired_relations(tmp_path):
             properties={"source": "code_intelligence"},
             confidence=0.99,
         )
+        facts_before = _kg_facts_sql(store, "brainlayer")
+        assert len(facts_before) == 1
+        assert facts_before[0]["relation"] == "depends_on"
+
         store.soft_close_relation("rel-fastapi")
 
         assert _kg_facts_sql(store, "brainlayer") == []

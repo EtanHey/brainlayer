@@ -290,7 +290,7 @@ class SearchBenchmark:
         return name, int(cutoff_text) if sep else None
 
     def _mean_query_score(self, run_dict: dict[str, dict[str, Any]], score_fn: Callable[[str], float]) -> float:
-        query_ids = sorted(set(self.qrels) | set(run_dict))
+        query_ids = sorted(self.qrels)
         if not query_ids:
             return 0.0
         return sum(score_fn(query_id) for query_id in query_ids) / len(query_ids)
