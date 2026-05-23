@@ -26,8 +26,9 @@ class KGMixin:
             "importance": row[9],
             "valid_from": row[10],
             "valid_until": row[11],
-            "group_id": row[12],
-            "parent_id": row[13] if len(row) > 13 else None,
+            "expired_at": row[12] if len(row) > 12 else None,
+            "group_id": row[13] if len(row) > 13 else None,
+            "parent_id": row[14] if len(row) > 14 else None,
         }
 
     def _fetch_entities_by_lower_name(self, name: str, entity_type: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -35,7 +36,7 @@ class KGMixin:
         base_query = """
             SELECT id, entity_type, name, metadata, created_at, updated_at,
                    canonical_name, description, confidence, importance,
-                   valid_from, valid_until, group_id, parent_id
+                   valid_from, valid_until, expired_at, group_id, parent_id
             FROM kg_entities
             WHERE LOWER(name) = LOWER(?)
         """
@@ -177,6 +178,7 @@ class KGMixin:
                     importance = COALESCE(?, importance),
                     valid_from = COALESCE(?, valid_from),
                     valid_until = COALESCE(?, valid_until),
+                    expired_at = NULL,
                     group_id = COALESCE(?, group_id),
                     parent_id = COALESCE(?, parent_id),
                     updated_at = ?
@@ -222,6 +224,7 @@ class KGMixin:
                 importance = excluded.importance,
                 valid_from = COALESCE(excluded.valid_from, kg_entities.valid_from),
                 valid_until = COALESCE(excluded.valid_until, kg_entities.valid_until),
+                expired_at = NULL,
                 group_id = COALESCE(excluded.group_id, kg_entities.group_id),
                 parent_id = COALESCE(excluded.parent_id, kg_entities.parent_id),
                 updated_at = excluded.updated_at
@@ -292,6 +295,7 @@ class KGMixin:
                 importance = COALESCE(excluded.importance, kg_relations.importance),
                 valid_from = COALESCE(excluded.valid_from, kg_relations.valid_from),
                 valid_until = COALESCE(excluded.valid_until, kg_relations.valid_until),
+                expired_at = NULL,
                 source_chunk_id = COALESCE(excluded.source_chunk_id, kg_relations.source_chunk_id)
             """,
             (
@@ -350,7 +354,7 @@ class KGMixin:
             cursor.execute(
                 """SELECT id, entity_type, name, metadata, created_at, updated_at,
                           canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id, parent_id
+                          valid_from, valid_until, expired_at, group_id, parent_id
                    FROM kg_entities WHERE id = ?""",
                 (entity_id,),
             )
@@ -951,7 +955,7 @@ class KGMixin:
             cursor.execute(
                 """SELECT id, entity_type, name, metadata, created_at, updated_at,
                           canonical_name, description, confidence, importance,
-                          valid_from, valid_until, group_id
+                          valid_from, valid_until, expired_at, group_id
                    FROM kg_entities WHERE LOWER(canonical_name) = LOWER(?)""",
                 (name_or_alias,),
             )
@@ -971,7 +975,8 @@ class KGMixin:
                 "importance": row[9],
                 "valid_from": row[10],
                 "valid_until": row[11],
-                "group_id": row[12],
+                "expired_at": row[12],
+                "group_id": row[13],
             }
 
         # 4. Stored phonetic alias fallback

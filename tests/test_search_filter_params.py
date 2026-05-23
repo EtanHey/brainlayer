@@ -15,6 +15,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from brainlayer.mcp.search_handler import _brain_recall, _brain_search
 
+
+def test_kg_facts_sql_excludes_expired_relations(tmp_path):
+    """regression-guard: brain_search's SQL KG path must not return stale facts."""
+    from brainlayer.mcp.search_handler import _kg_facts_sql
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "kg.db")
+    try:
+        store.upsert_entity("proj-brainlayer", "project", "brainlayer")
+        store.upsert_entity("lib-fastapi", "library", "fastapi")
+        store.add_relation(
+            "rel-fastapi",
+            "proj-brainlayer",
+            "lib-fastapi",
+            "depends_on",
+            properties={"source": "code_intelligence"},
+            confidence=0.99,
+        )
+        store.soft_close_relation("rel-fastapi")
+
+        assert _kg_facts_sql(store, "brainlayer") == []
+    finally:
+        store.close()
+
+
 # ── New filter params passthrough ────────────────────────────────────────────
 
 

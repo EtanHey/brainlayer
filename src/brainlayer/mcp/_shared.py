@@ -26,6 +26,8 @@ _SEARCH_REQUIRED_CHUNK_COLUMNS = {
     "status",
     "summary",
 }
+_SEARCH_REQUIRED_KG_ENTITY_COLUMNS = {"valid_until", "expired_at"}
+_SEARCH_REQUIRED_KG_RELATION_COLUMNS = {"valid_from", "valid_until", "expired_at"}
 
 
 def _search_store_needs_bootstrap(db_path) -> bool:
@@ -42,7 +44,18 @@ def _search_store_needs_bootstrap(db_path) -> bool:
             return True
 
         chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
-        return not _SEARCH_REQUIRED_CHUNK_COLUMNS.issubset(chunk_columns)
+        if not _SEARCH_REQUIRED_CHUNK_COLUMNS.issubset(chunk_columns):
+            return True
+
+        if {"kg_entities", "kg_relations"}.issubset(tables):
+            entity_columns = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entities)")}
+            relation_columns = {row[1] for row in cursor.execute("PRAGMA table_info(kg_relations)")}
+            if not _SEARCH_REQUIRED_KG_ENTITY_COLUMNS.issubset(entity_columns):
+                return True
+            if not _SEARCH_REQUIRED_KG_RELATION_COLUMNS.issubset(relation_columns):
+                return True
+
+        return False
     finally:
         if conn is not None:
             conn.close()
