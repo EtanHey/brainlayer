@@ -586,13 +586,27 @@ def _add_dependency_relation(
             )
 
     # Check if relation already exists
+    relation_cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_relations)")}
+    expired_column = "expired_at" if "expired_at" in relation_cols else "NULL AS expired_at"
     existing = conn.execute(
-        "SELECT id, properties FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = 'depends_on'",
+        """
+        SELECT id, properties, {expired_column}
+        FROM kg_relations
+        WHERE source_id = ? AND target_id = ? AND relation_type = 'depends_on'
+        """.format(expired_column=expired_column),
         (source_id, target_id),
     ).fetchone()
 
     if existing:
         if not _is_code_intelligence_relation(existing[1]):
+            if existing[2] is not None and not dry_run:
+                conn.execute(
+                    """UPDATE kg_relations
+                       SET valid_from = COALESCE(valid_from, ?),
+                           valid_until = ?, expired_at = NULL
+                       WHERE id = ?""",
+                    (observed_at, valid_until, existing[0]),
+                )
             return target_id
         if not dry_run:
             conn.execute(
