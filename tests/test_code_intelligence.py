@@ -413,3 +413,115 @@ dependencies = [
         assert row[0] is not None
         assert row[0] != "2026-01-01T00:00:00.000000Z"
         assert row[1] is None
+
+    def test_reconcile_preserves_non_code_intelligence_dependency_owner(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: code scanner must not take ownership of non-scanner relations."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('proj-manual', 'project', 'brainlayer', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('lib-manual', 'library', 'fastapi', '{}')"
+        )
+        conn.execute(
+            """
+            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence)
+            VALUES ('rel-manual', 'proj-manual', 'lib-manual', 'depends_on', '{"source":"manual"}', 0.8)
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        (tmp_repos / "brainlayer" / "pyproject.toml").write_text(
+            """
+[project]
+name = "brainlayer"
+version = "1.0.0"
+description = "Memory for AI agents"
+dependencies = [
+    "apsw>=3.45.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+"""
+        )
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        row = conn.execute("SELECT properties, expired_at FROM kg_relations WHERE id = 'rel-manual'").fetchone()
+        conn.close()
+
+        assert row is not None
+        assert json.loads(row[0]) == {"source": "manual"}
+        assert row[1] is None
+
+    def test_library_entity_not_expired_when_other_depends_on_remains(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: expiring one source fact must not hide another active depends_on fact."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        fastapi_id = conn.execute(
+            "SELECT id FROM kg_entities WHERE entity_type = 'library' AND name = 'fastapi'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('proj-other', 'project', 'other', '{}')"
+        )
+        conn.execute(
+            """
+            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence)
+            VALUES ('rel-other', 'proj-other', ?, 'depends_on', '{"source":"manual"}', 0.8)
+            """,
+            (fastapi_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        (tmp_repos / "brainlayer" / "pyproject.toml").write_text(
+            """
+[project]
+name = "brainlayer"
+version = "1.0.0"
+description = "Memory for AI agents"
+dependencies = [
+    "apsw>=3.45.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+"""
+        )
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        relation_expired_at, entity_expired_at = conn.execute(
+            """
+            SELECT r.expired_at, lib.expired_at
+            FROM kg_relations r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities lib ON r.target_id = lib.id
+            WHERE src.name = 'brainlayer'
+              AND lib.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()
+        manual_active_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM kg_current_facts r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities lib ON r.target_id = lib.id
+            WHERE src.name = 'other'
+              AND lib.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()[0]
+        conn.close()
+
+        assert relation_expired_at is not None
+        assert entity_expired_at is None
+        assert manual_active_count == 1
