@@ -361,13 +361,11 @@ struct KGCanvasView: View {
     private func setCanvas(size: CGSize) {
         guard size != .zero else { return }
         canvasSize = size
-        viewModel.canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+        viewModel.updateCanvasSize(size)
     }
 
     private func resizeCanvas(size: CGSize) {
         setCanvas(size: size)
-        guard hasLoadedGraph, !viewModel.nodes.isEmpty else { return }
-        viewModel.nodes = KGAtlasLayout.seededNodes(viewModel.nodes, canvasSize: size)
     }
 
     private var toolbarInteractionGesture: some Gesture {

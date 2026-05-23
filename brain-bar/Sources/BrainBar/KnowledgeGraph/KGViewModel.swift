@@ -23,6 +23,7 @@ final class KGViewModel: ObservableObject {
 
     private let database: BrainDatabase?
     private let graphReader: KnowledgeGraphReading
+    private var layoutCanvasSize: CGSize?
 
     // Force simulation parameters
     private let repulsionStrength: CGFloat = 5000
@@ -154,22 +155,23 @@ final class KGViewModel: ObservableObject {
         relationRows: [BrainDatabase.KGRelationRow]
     ) {
         let entityIds = Set(entityRows.map(\.id))
+        let existingNodes = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
 
-        let seededNodes = entityRows.map { row in
-            KGNode(
+        let incomingNodes = entityRows.map { row in
+            let existingNode = existingNodes[row.id]
+            return KGNode(
                 id: row.id,
                 name: row.name,
                 entityType: row.entityType,
-                importance: row.importance
+                importance: row.importance,
+                position: existingNode?.position,
+                velocity: existingNode?.velocity ?? .zero
             )
         }
-        nodes = KGAtlasLayout.seededNodes(
-            seededNodes,
-            canvasSize: CGSize(
-                width: max(canvasCenter.x * 2, 640),
-                height: max(canvasCenter.y * 2, 480)
-            )
-        )
+        let seededNodes = KGAtlasLayout.seededNodes(incomingNodes, canvasSize: graphCanvasSize)
+        nodes = zip(incomingNodes, seededNodes).map { incomingNode, seededNode in
+            existingNodes[incomingNode.id] == nil ? seededNode : incomingNode
+        }
 
         // Only include edges where both endpoints exist
         edges = relationRows.compactMap { row in
@@ -182,6 +184,25 @@ final class KGViewModel: ObservableObject {
                 relationType: row.relationType
             )
         }
+    }
+
+    private var graphCanvasSize: CGSize {
+        layoutCanvasSize ?? CGSize(
+            width: max(canvasCenter.x * 2, 640),
+            height: max(canvasCenter.y * 2, 480)
+        )
+    }
+
+    func updateCanvasSize(_ size: CGSize) {
+        guard size != .zero else { return }
+        guard layoutCanvasSize != size else {
+            canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+            return
+        }
+        layoutCanvasSize = size
+        canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+        guard !nodes.isEmpty else { return }
+        nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size)
     }
 
     // MARK: - Selection
