@@ -1189,6 +1189,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("importance", "REAL DEFAULT 0.5"),
             ("valid_from", "TEXT"),
             ("valid_until", "TEXT"),
+            ("expired_at", "TEXT"),
             ("group_id", "TEXT"),
         ]:
             if col not in kg_entity_cols:
@@ -1198,6 +1199,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "CREATE INDEX IF NOT EXISTS idx_kg_entities_canonical ON kg_entities(canonical_name, entity_type)"
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_valid ON kg_entities(valid_from, valid_until)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_expired ON kg_entities(expired_at)")
 
         for col, default in [
             ("fact", "TEXT"),
@@ -1211,6 +1213,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {default}")
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_expired ON kg_relations(expired_at)")
 
         ec_cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
         if "mention_type" not in ec_cols:

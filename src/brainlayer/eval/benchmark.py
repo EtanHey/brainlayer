@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 os.environ.setdefault("IR_DATASETS_HOME", "/tmp/ir_datasets")
@@ -18,6 +19,7 @@ from brainlayer._helpers import _escape_fts5_query
 
 DEFAULT_RUN_METRICS = ["ndcg@10", "recall@20", "map@10", "mrr"]
 DEFAULT_COMPARE_METRICS = ["ndcg@10", "recall@20"]
+_RANX_RUN_FALLBACK_PATCHED = False
 MINED_FRUSTRATION_QUERY_SUITE: list[tuple[str, str]] = [
     (
         "frustration_001",
@@ -160,19 +162,59 @@ class ReadOnlyBenchmarkStore:
         self.close()
 
 
+def _patch_ranx_run_fallback() -> None:
+    global _RANX_RUN_FALLBACK_PATCHED
+    if _RANX_RUN_FALLBACK_PATCHED:
+        return
+
+    def _init(self, name: str | None = None, run: dict[str, dict[str, Any]] | None = None, **_kwargs):
+        self.name = name
+        self.run = run or {}
+
+    def _to_dict(self):
+        return self.run
+
+    def _keys(self):
+        return self.run.keys()
+
+    def _getitem(self, key: str):
+        return self.run[key]
+
+    Run.__init__ = _init
+    Run.to_dict = _to_dict
+    Run.keys = _keys
+    Run.__getitem__ = _getitem
+    _RANX_RUN_FALLBACK_PATCHED = True
+
+
+def _run_from_dict(run_dict: dict[str, dict[str, float]]) -> Run:
+    try:
+        return Run(run=run_dict)
+    except Exception:
+        _patch_ranx_run_fallback()
+        return Run(run=run_dict)
+
+
 class SearchBenchmark:
     """Benchmarks search pipelines against graded relevance judgments."""
 
     def __init__(self, qrels_path: str):
         self.qrels_path = Path(qrels_path)
         self.qrels = self._load_qrels(self.qrels_path)
-        self.ranx_qrels = Qrels.from_dict(self.qrels)
+        self.ranx_qrels = self._build_ranx_qrels()
 
     def _load_qrels(self, qrels_path: Path) -> dict[str, dict[str, int]]:
         payload = json.loads(qrels_path.read_text())
         if not isinstance(payload, dict):
             raise ValueError("Qrels JSON must be a dict of query_id -> {doc_id: grade}")
         return payload
+
+    def _build_ranx_qrels(self) -> Qrels | None:
+        try:
+            return Qrels.from_dict(self.qrels)
+        except Exception:
+            _patch_ranx_run_fallback()
+            return None
 
     def queries_in_qrels(self, queries: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
         return [query for query in queries if query[0] in self.qrels and query[1].strip()]
@@ -186,27 +228,116 @@ class SearchBenchmark:
         for query_id, query_text in queries:
             results = pipeline_fn(query_text)
             run_dict[query_id] = {chunk_id: float(score) for chunk_id, score in results}
-        return Run(run=run_dict)
+        return _run_from_dict(run_dict)
 
     def evaluate_pipeline(self, run: Run, metrics: list[str] | None = None) -> dict[str, float]:
         metric_list = metrics or DEFAULT_RUN_METRICS
-        scores = evaluate(self.ranx_qrels, run, metric_list, make_comparable=True)
-        if isinstance(scores, dict):
-            return scores
-        if len(metric_list) == 1:
-            return {metric_list[0]: float(scores)}
-        raise TypeError(f"Unexpected Ranx evaluate() result type: {type(scores)!r}")
+        if self.ranx_qrels is not None:
+            try:
+                scores = evaluate(self.ranx_qrels, run, metric_list, make_comparable=True)
+                if isinstance(scores, dict):
+                    return scores
+                if len(metric_list) == 1:
+                    return {metric_list[0]: float(scores)}
+                raise TypeError(f"Unexpected Ranx evaluate() result type: {type(scores)!r}")
+            except Exception:
+                pass
+        return self._evaluate_without_ranx(run.to_dict(), metric_list)
 
     def compare_pipelines(self, runs: dict[str, Run], metrics: list[str] | None = None) -> str:
-        named_runs = [Run(name=name, run=run.to_dict()) for name, run in runs.items()]
-        report = compare(
-            self.ranx_qrels,
-            runs=named_runs,
-            metrics=metrics or DEFAULT_COMPARE_METRICS,
-            max_p=0.05,
-            rounding_digits=4,
-        )
-        return str(report)
+        metric_list = metrics or DEFAULT_COMPARE_METRICS
+        if self.ranx_qrels is not None:
+            try:
+                named_runs = [Run(name=name, run=run.to_dict()) for name, run in runs.items()]
+                report = compare(
+                    self.ranx_qrels,
+                    runs=named_runs,
+                    metrics=metric_list,
+                    max_p=0.05,
+                    rounding_digits=4,
+                )
+                return str(report)
+            except Exception:
+                pass
+        lines = []
+        for name, run in runs.items():
+            scores = self._evaluate_without_ranx(run.to_dict(), metric_list)
+            metrics_text = ", ".join(f"{metric}={score:.4f}" for metric, score in scores.items())
+            lines.append(f"{name}: {metrics_text}")
+        return "\n".join(lines)
+
+    def _evaluate_without_ranx(self, run_dict: dict[str, dict[str, Any]], metrics: list[str]) -> dict[str, float]:
+        return {metric: self._manual_metric(run_dict, metric) for metric in metrics}
+
+    def _manual_metric(self, run_dict: dict[str, dict[str, Any]], metric: str) -> float:
+        name, cutoff = self._parse_metric(metric)
+        if name == "ndcg":
+            return self._mean_query_score(run_dict, lambda qid: self._ndcg(run_dict.get(qid, {}), qid, cutoff))
+        if name == "recall":
+            return self._mean_query_score(run_dict, lambda qid: self._recall(run_dict.get(qid, {}), qid, cutoff))
+        if name == "map":
+            return self._mean_query_score(
+                run_dict, lambda qid: self._average_precision(run_dict.get(qid, {}), qid, cutoff)
+            )
+        if name == "mrr":
+            return self._mean_query_score(
+                run_dict, lambda qid: self._reciprocal_rank(run_dict.get(qid, {}), qid, cutoff)
+            )
+        raise ValueError(f"Unsupported metric without ranx: {metric}")
+
+    def _parse_metric(self, metric: str) -> tuple[str, int | None]:
+        name, sep, cutoff_text = metric.partition("@")
+        return name, int(cutoff_text) if sep else None
+
+    def _mean_query_score(self, run_dict: dict[str, dict[str, Any]], score_fn: Callable[[str], float]) -> float:
+        query_ids = sorted(set(self.qrels) | set(run_dict))
+        if not query_ids:
+            return 0.0
+        return sum(score_fn(query_id) for query_id in query_ids) / len(query_ids)
+
+    def _ranked_docs(self, run: dict[str, Any], cutoff: int | None) -> list[str]:
+        ranked = [doc_id for doc_id, _score in sorted(run.items(), key=lambda item: float(item[1]), reverse=True)]
+        return ranked[:cutoff] if cutoff is not None else ranked
+
+    def _relevant_docs(self, query_id: str) -> dict[str, int]:
+        return {doc_id: grade for doc_id, grade in self.qrels.get(query_id, {}).items() if grade > 0}
+
+    def _ndcg(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
+        ranked = self._ranked_docs(run, cutoff)
+        gains = self.qrels.get(query_id, {})
+        dcg = sum((2 ** gains.get(doc_id, 0) - 1) / math.log2(rank + 2) for rank, doc_id in enumerate(ranked))
+        ideal_grades = sorted((grade for grade in gains.values() if grade > 0), reverse=True)
+        if cutoff is not None:
+            ideal_grades = ideal_grades[:cutoff]
+        idcg = sum((2**grade - 1) / math.log2(rank + 2) for rank, grade in enumerate(ideal_grades))
+        return dcg / idcg if idcg else 0.0
+
+    def _recall(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
+        relevant = self._relevant_docs(query_id)
+        if not relevant:
+            return 0.0
+        retrieved = set(self._ranked_docs(run, cutoff))
+        return len(retrieved & set(relevant)) / len(relevant)
+
+    def _average_precision(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
+        relevant = set(self._relevant_docs(query_id))
+        if not relevant:
+            return 0.0
+        hits = 0
+        precision_sum = 0.0
+        for rank, doc_id in enumerate(self._ranked_docs(run, cutoff), start=1):
+            if doc_id not in relevant:
+                continue
+            hits += 1
+            precision_sum += hits / rank
+        return precision_sum / len(relevant)
+
+    def _reciprocal_rank(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
+        relevant = set(self._relevant_docs(query_id))
+        for rank, doc_id in enumerate(self._ranked_docs(run, cutoff), start=1):
+            if doc_id in relevant:
+                return 1 / rank
+        return 0.0
 
 
 def pipeline_fts5_only(store, query: str, n_results: int = 20) -> list[tuple[str, float]]:

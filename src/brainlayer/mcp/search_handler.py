@@ -423,6 +423,11 @@ def _kg_facts_sql(
                    {source_chunk_join}
                    WHERE (r.source_id = ? OR r.target_id = ?)
                      AND r.relation_type != 'co_occurs_with'
+                     AND r.expired_at IS NULL
+                     AND (r.valid_from IS NULL OR r.valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                     AND (r.valid_until IS NULL OR r.valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                     AND (se.expired_at IS NULL)
+                     AND (te.expired_at IS NULL)
                      {checkpoint_filter}
                      {audit_filter}
                    ORDER BY r.confidence DESC

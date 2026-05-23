@@ -315,3 +315,101 @@ class TestEnrichProjects:
         conn.close()
         # Should be exactly the number from first run, not doubled
         assert count > 0
+
+    def test_reconcile_removed_dependency_expires_relation(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: removed code_intelligence dependencies are expired, not left current."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        (tmp_repos / "brainlayer" / "pyproject.toml").write_text(
+            """
+[project]
+name = "brainlayer"
+version = "1.0.0"
+description = "Memory for AI agents"
+dependencies = [
+    "apsw>=3.45.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+"""
+        )
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        row = conn.execute(
+            """
+            SELECT r.expired_at
+            FROM kg_relations r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities tgt ON r.target_id = tgt.id
+            WHERE src.name = 'brainlayer'
+              AND tgt.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()
+        active_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM kg_current_facts r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities tgt ON r.target_id = tgt.id
+            WHERE src.name = 'brainlayer'
+              AND tgt.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()[0]
+        conn.close()
+
+        assert row is not None
+        assert row[0] is not None
+        assert active_count == 0
+
+    def test_reobserved_dependency_refreshes_valid_until_without_expiring(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: positive re-observation revives the fact and extends validity."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            """
+            UPDATE kg_relations
+            SET valid_until = '2026-01-01T00:00:00.000000Z',
+                expired_at = '2026-01-01T00:00:00.000000Z'
+            WHERE id IN (
+                SELECT r.id
+                FROM kg_relations r
+                JOIN kg_entities src ON r.source_id = src.id
+                JOIN kg_entities tgt ON r.target_id = tgt.id
+                WHERE src.name = 'brainlayer'
+                  AND tgt.name = 'fastapi'
+                  AND r.relation_type = 'depends_on'
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        row = conn.execute(
+            """
+            SELECT r.valid_until, r.expired_at
+            FROM kg_relations r
+            JOIN kg_entities src ON r.source_id = src.id
+            JOIN kg_entities tgt ON r.target_id = tgt.id
+            WHERE src.name = 'brainlayer'
+              AND tgt.name = 'fastapi'
+              AND r.relation_type = 'depends_on'
+            """
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row[0] is not None
+        assert row[0] != "2026-01-01T00:00:00.000000Z"
+        assert row[1] is None

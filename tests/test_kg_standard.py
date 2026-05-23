@@ -160,6 +160,7 @@ class TestKGStandardColumns:
             "importance",
             "valid_from",
             "valid_until",
+            "expired_at",
             "group_id",
         ):
             assert col in cols, f"Missing column: {col}"
@@ -226,6 +227,7 @@ class TestEntityStandardCRUD:
         assert entity["description"] is None
         assert entity["valid_from"] is None
         assert entity["valid_until"] is None
+        assert entity["expired_at"] is None
         assert entity["group_id"] is None
 
     def test_backward_compat_metadata_still_works(self, store):

@@ -88,6 +88,7 @@ class TestKGTableCreation:
             "importance",
             "valid_from",
             "valid_until",
+            "expired_at",
             "group_id",
             "parent_id",
             "entity_subtype",
@@ -125,6 +126,14 @@ class TestKGTableCreation:
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         assert "source_project_id" in cols
+
+    def test_expired_at_indexes_exist(self, store):
+        """regression-guard: stateful reconciliation needs efficient current-fact filtering."""
+        cursor = store._read_cursor()
+        entity_indexes = {row[1] for row in cursor.execute("PRAGMA index_list(kg_entities)")}
+        relation_indexes = {row[1] for row in cursor.execute("PRAGMA index_list(kg_relations)")}
+        assert "idx_kg_entities_expired" in entity_indexes
+        assert "idx_kg_relations_expired" in relation_indexes
 
 
 # ── Entity CRUD Tests ────────────────────────────────────────

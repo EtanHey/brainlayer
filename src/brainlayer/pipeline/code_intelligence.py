@@ -13,12 +13,95 @@ import logging
 import re
 import sqlite3
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_DIR = Path.home() / "Gits"
+OBSERVATION_VALIDITY_DAYS = 30
+CODE_INTELLIGENCE_SOURCE = "code_intelligence"
+NOTABLE_DEPENDENCIES = {
+    # Frameworks & runtimes
+    "react",
+    "react-dom",
+    "react-native",
+    "next",
+    "express",
+    "fastify",
+    "convex",
+    "expo",
+    "electron",
+    # AI/ML
+    "@anthropic-ai/sdk",
+    "@modelcontextprotocol/sdk",
+    "openai",
+    "langchain",
+    "sentence-transformers",
+    "onnxruntime-node",
+    # Databases
+    "apsw",
+    "sqlite-vec",
+    "prisma",
+    "@prisma/client",
+    "drizzle-orm",
+    # Infra
+    "fastapi",
+    "uvicorn",
+    "@axiomhq/js",
+    # Python notable
+    "pyyaml",
+    "typer",
+    "rich",
+    "textual",
+    "mcp",
+}
+
+
+def _timestamp(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _is_code_intelligence_relation(properties: str | None) -> bool:
+    if not properties:
+        return False
+    try:
+        return json.loads(properties).get("source") == CODE_INTELLIGENCE_SOURCE
+    except (TypeError, ValueError):
+        return False
+
+
+def _ensure_reconciliation_schema(conn: sqlite3.Connection) -> None:
+    """Apply the KG validity columns needed by code-intelligence reconciliation."""
+    entity_cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_entities)")}
+    for col, definition in [
+        ("valid_until", "TEXT"),
+        ("expired_at", "TEXT"),
+    ]:
+        if col not in entity_cols:
+            conn.execute(f"ALTER TABLE kg_entities ADD COLUMN {col} {definition}")
+
+    relation_cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_relations)")}
+    for col, definition in [
+        ("valid_from", "TEXT"),
+        ("valid_until", "TEXT"),
+        ("expired_at", "TEXT"),
+    ]:
+        if col not in relation_cols:
+            conn.execute(f"ALTER TABLE kg_relations ADD COLUMN {col} {definition}")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_kg_entities_expired ON kg_entities(expired_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_expired ON kg_relations(expired_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
+    conn.execute("DROP VIEW IF EXISTS kg_current_facts")
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS kg_current_facts AS
+        SELECT * FROM kg_relations
+        WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          AND expired_at IS NULL
+    """)
 
 
 def scan_projects(base_dir: Path) -> list[dict[str, Any]]:
@@ -179,10 +262,18 @@ def enrich_projects(
             "entities_updated": 0,
             "relations_added": 0,
             "dep_entities_created": 0,
+            "relations_expired": 0,
+            "dep_entities_expired": 0,
         }
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
+    if not dry_run:
+        _ensure_reconciliation_schema(conn)
+
+    observed_dt = datetime.now(timezone.utc)
+    observed_at = _timestamp(observed_dt)
+    valid_until = _timestamp(observed_dt + timedelta(days=OBSERVATION_VALIDITY_DAYS))
 
     stats = {
         "projects_scanned": len(projects),
@@ -190,11 +281,13 @@ def enrich_projects(
         "entities_updated": 0,
         "relations_added": 0,
         "dep_entities_created": 0,
+        "relations_expired": 0,
+        "dep_entities_expired": 0,
     }
 
     try:
         for project in projects:
-            _upsert_project(conn, project, stats, dry_run)
+            _upsert_project(conn, project, stats, dry_run, observed_at, valid_until)
 
         if not dry_run:
             conn.commit()
@@ -209,6 +302,8 @@ def _upsert_project(
     project: dict[str, Any],
     stats: dict[str, int],
     dry_run: bool,
+    observed_at: str,
+    valid_until: str,
 ) -> None:
     """Create or update a project entity with its metadata and relations."""
     name = project["name"]
@@ -241,9 +336,10 @@ def _upsert_project(
             conn.execute(
                 """UPDATE kg_entities
                    SET description = ?, metadata = ?, importance = ?,
+                       valid_until = ?, expired_at = NULL,
                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
                    WHERE id = ?""",
-                (description, metadata_json, importance, entity_id),
+                (description, metadata_json, importance, valid_until, entity_id),
             )
         stats["entities_updated"] += 1
         logger.info("Updated project: %s (id=%s)", name, entity_id)
@@ -251,16 +347,22 @@ def _upsert_project(
         entity_id = f"proj-{uuid.uuid4().hex[:12]}"
         if not dry_run:
             conn.execute(
-                """INSERT INTO kg_entities (id, entity_type, name, description, metadata, importance, created_at, updated_at)
-                   VALUES (?, 'project', ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
-                (entity_id, name, description, metadata_json, importance),
+                """INSERT INTO kg_entities
+                   (id, entity_type, name, description, metadata, importance, valid_until, expired_at, created_at, updated_at)
+                   VALUES (?, 'project', ?, ?, ?, ?, ?, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
+                (entity_id, name, description, metadata_json, importance, valid_until),
             )
         stats["entities_created"] += 1
         logger.info("Created project: %s (id=%s)", name, entity_id)
 
     # Add depends_on relations for key dependencies
+    observed_targets: set[str] = set()
     for dep_name in project.get("dependencies", []):
-        _add_dependency_relation(conn, entity_id, name, dep_name, stats, dry_run)
+        target_id = _add_dependency_relation(conn, entity_id, name, dep_name, stats, dry_run, observed_at, valid_until)
+        if target_id is not None:
+            observed_targets.add(target_id)
+
+    _expire_stale_dependency_relations(conn, entity_id, observed_targets, stats, dry_run, observed_at)
 
 
 def _add_dependency_relation(
@@ -270,51 +372,16 @@ def _add_dependency_relation(
     dep_name: str,
     stats: dict[str, int],
     dry_run: bool,
-) -> None:
+    observed_at: str,
+    valid_until: str,
+) -> str | None:
     """Add a depends_on relation from project to dependency.
 
     Creates the dependency as a 'library' entity if it doesn't exist.
     Only creates relations for notable dependencies (frameworks, SDKs, key tools).
     """
-    # Only track notable dependencies to avoid noise
-    notable_patterns = {
-        # Frameworks & runtimes
-        "react",
-        "react-dom",
-        "react-native",
-        "next",
-        "express",
-        "fastify",
-        "convex",
-        "expo",
-        "electron",
-        # AI/ML
-        "@anthropic-ai/sdk",
-        "@modelcontextprotocol/sdk",
-        "openai",
-        "langchain",
-        "sentence-transformers",
-        "onnxruntime-node",
-        # Databases
-        "apsw",
-        "sqlite-vec",
-        "prisma",
-        "@prisma/client",
-        "drizzle-orm",
-        # Infra
-        "fastapi",
-        "uvicorn",
-        "@axiomhq/js",
-        # Python notable
-        "pyyaml",
-        "typer",
-        "rich",
-        "textual",
-        "mcp",
-    }
-
-    if dep_name not in notable_patterns:
-        return
+    if dep_name not in NOTABLE_DEPENDENCIES:
+        return None
 
     # Find or create the dependency entity
     target_row = conn.execute(
@@ -326,13 +393,22 @@ def _add_dependency_relation(
         target_id = f"lib-{uuid.uuid4().hex[:12]}"
         if not dry_run:
             conn.execute(
-                """INSERT INTO kg_entities (id, entity_type, name, importance, created_at, updated_at)
-                   VALUES (?, 'library', ?, 3.0, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
-                (target_id, dep_name),
+                """INSERT INTO kg_entities
+                   (id, entity_type, name, importance, valid_until, expired_at, created_at, updated_at)
+                   VALUES (?, 'library', ?, 3.0, ?, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
+                (target_id, dep_name, valid_until),
             )
         stats["dep_entities_created"] += 1
     else:
         target_id = target_row[0]
+        if not dry_run:
+            conn.execute(
+                """UPDATE kg_entities
+                   SET valid_until = ?, expired_at = NULL,
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE id = ?""",
+                (valid_until, target_id),
+            )
 
     # Check if relation already exists
     existing = conn.execute(
@@ -341,20 +417,88 @@ def _add_dependency_relation(
     ).fetchone()
 
     if existing:
-        return
+        if not dry_run:
+            conn.execute(
+                """UPDATE kg_relations
+                   SET properties = ?, confidence = 0.99, valid_from = COALESCE(valid_from, ?),
+                       valid_until = ?, expired_at = NULL
+                   WHERE id = ?""",
+                (json.dumps({"source": CODE_INTELLIGENCE_SOURCE}), observed_at, valid_until, existing[0]),
+            )
+        return target_id
 
     rel_id = f"rel-{uuid.uuid4().hex[:12]}"
-    props = json.dumps({"source": "code_intelligence"})
+    props = json.dumps({"source": CODE_INTELLIGENCE_SOURCE})
 
     if not dry_run:
         conn.execute(
             """INSERT OR IGNORE INTO kg_relations
-               (id, source_id, target_id, relation_type, properties, confidence, created_at)
-               VALUES (?, ?, ?, 'depends_on', ?, 0.99, strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
-            (rel_id, source_id, target_id, props),
+               (id, source_id, target_id, relation_type, properties, confidence, valid_from, valid_until, expired_at, created_at)
+               VALUES (?, ?, ?, 'depends_on', ?, 0.99, ?, ?, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
+            (rel_id, source_id, target_id, props, observed_at, valid_until),
         )
     stats["relations_added"] += 1
     logger.info("Added relation: %s --depends_on--> %s", source_name, dep_name)
+    return target_id
+
+
+def _expire_stale_dependency_relations(
+    conn: sqlite3.Connection,
+    source_id: str,
+    observed_targets: set[str],
+    stats: dict[str, int],
+    dry_run: bool,
+    observed_at: str,
+) -> None:
+    """Expire code_intelligence depends_on facts absent from the current project scan."""
+    if dry_run:
+        return
+
+    stale_target_ids: set[str] = set()
+    rows = conn.execute(
+        """
+        SELECT id, target_id, properties, expired_at
+        FROM kg_relations
+        WHERE source_id = ? AND relation_type = 'depends_on'
+        """,
+        (source_id,),
+    ).fetchall()
+
+    for rel_id, target_id, properties, expired_at in rows:
+        if target_id in observed_targets or not _is_code_intelligence_relation(properties):
+            continue
+        stale_target_ids.add(target_id)
+        if expired_at is None:
+            conn.execute(
+                "UPDATE kg_relations SET valid_until = ?, expired_at = ? WHERE id = ?",
+                (observed_at, observed_at, rel_id),
+            )
+            stats["relations_expired"] += 1
+
+    for target_id in stale_target_ids:
+        active_rows = conn.execute(
+            """
+            SELECT properties
+            FROM kg_relations
+            WHERE target_id = ?
+              AND relation_type = 'depends_on'
+              AND expired_at IS NULL
+            """,
+            (target_id,),
+        ).fetchall()
+        has_active_code_fact = any(_is_code_intelligence_relation(properties) for (properties,) in active_rows)
+        if has_active_code_fact:
+            continue
+        result = conn.execute(
+            """
+            UPDATE kg_entities
+            SET valid_until = ?, expired_at = COALESCE(expired_at, ?),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE id = ? AND entity_type = 'library'
+            """,
+            (observed_at, observed_at, target_id),
+        )
+        stats["dep_entities_expired"] += result.rowcount
 
 
 if __name__ == "__main__":
