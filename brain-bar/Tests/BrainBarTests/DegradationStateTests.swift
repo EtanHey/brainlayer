@@ -3,6 +3,8 @@ import XCTest
 
 @MainActor
 final class KGDegradationStateTests: XCTestCase {
+    deinit {}
+
     var db: BrainDatabase!
     var tempDBPath: String!
 
@@ -58,10 +60,60 @@ final class KGDegradationStateTests: XCTestCase {
         XCTAssertEqual(vm.nodes.count, 2)
         XCTAssertEqual(vm.edges.count, 1)
     }
+
+    func testLoadGraphUntilSuccessfulRecoversAfterInitialDegradation() async {
+        // Regression guard: Cursor Bugbot PR #315 flagged that KGCanvasView
+        // only performed one load. A first failed read must be retried so the
+        // graph badge can clear after a later successful graph query.
+        let reader = ScriptedKnowledgeGraphReader(results: [
+            .failure(ScriptedKnowledgeGraphError.fetchFailed),
+            .failure(ScriptedKnowledgeGraphError.fetchFailed),
+            .success((
+                entities: [
+                    BrainDatabase.KGEntityRow(
+                        id: "a",
+                        name: "Alice",
+                        entityType: "person",
+                        description: nil,
+                        importance: 7
+                    ),
+                    BrainDatabase.KGEntityRow(
+                        id: "b",
+                        name: "BrainLayer",
+                        entityType: "project",
+                        description: nil,
+                        importance: 8
+                    ),
+                ],
+                relations: [
+                    BrainDatabase.KGRelationRow(
+                        id: "r1",
+                        sourceId: "a",
+                        targetId: "b",
+                        relationType: "builds"
+                    ),
+                ]
+            )),
+        ])
+        let vm = KGViewModel(graphReader: reader)
+        var retrySleeps = 0
+
+        let success = await vm.loadGraphUntilSuccessful(retryDelay: .milliseconds(1)) { _ in
+            retrySleeps += 1
+        }
+
+        XCTAssertTrue(success)
+        XCTAssertEqual(vm.degradationState, .healthy)
+        XCTAssertEqual(vm.nodes.count, 2)
+        XCTAssertEqual(vm.edges.count, 1)
+        XCTAssertEqual(retrySleeps, 1)
+    }
 }
 
 @MainActor
 final class InjectionStoreDegradationStateTests: XCTestCase {
+    deinit {}
+
     var tempDBPath: String!
 
     override func setUp() {
@@ -90,6 +142,8 @@ final class InjectionStoreDegradationStateTests: XCTestCase {
 
 @MainActor
 final class DegradationStateTypeTests: XCTestCase {
+    deinit {}
+
     func testHealthyIsNotDegraded() {
         let state: DegradationState = .healthy
         XCTAssertFalse(state.isDegraded)
@@ -110,5 +164,42 @@ final class DegradationStateTypeTests: XCTestCase {
             DegradationState.degraded(reason: "x"),
             DegradationState.degraded(reason: "y")
         )
+    }
+}
+
+private enum ScriptedKnowledgeGraphError: Error {
+    case fetchFailed
+}
+
+private final class ScriptedKnowledgeGraphReader: KnowledgeGraphReading, @unchecked Sendable {
+    deinit {}
+
+    typealias GraphResult = (
+        entities: [BrainDatabase.KGEntityRow],
+        relations: [BrainDatabase.KGRelationRow]
+    )
+
+    private var results: [Result<GraphResult, Error>]
+    private var activeRelations: [BrainDatabase.KGRelationRow] = []
+
+    init(results: [Result<GraphResult, Error>]) {
+        self.results = results
+    }
+
+    func fetchKGEntities(limit: Int) throws -> [BrainDatabase.KGEntityRow] {
+        guard !results.isEmpty else {
+            throw ScriptedKnowledgeGraphError.fetchFailed
+        }
+        switch results.removeFirst() {
+        case .success(let graph):
+            activeRelations = graph.relations
+            return graph.entities
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func fetchKGRelations(limit: Int) throws -> [BrainDatabase.KGRelationRow] {
+        activeRelations
     }
 }

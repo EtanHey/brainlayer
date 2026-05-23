@@ -9,7 +9,7 @@ import Foundation
 /// surfaces report a degradation state so the user sees a small badge and
 /// knows data may be stale rather than absent.
 ///
-/// Etan-mandate 2026-05-22 ~18:00 IDT: "WITHOUT DEGRATION" — no blank screens,
+/// Etan-mandate 2026-05-22 ~18:00 IDT: "WITHOUT DEGRATION" [sic] — no blank screens,
 /// no "warming memory" lingering after data should be available; degraded ≠
 /// hidden.
 enum DegradationState: Equatable, Sendable {
