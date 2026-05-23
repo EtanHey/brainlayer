@@ -108,6 +108,60 @@ final class KGDegradationStateTests: XCTestCase {
         XCTAssertEqual(vm.edges.count, 1)
         XCTAssertEqual(retrySleeps, 1)
     }
+
+    func testLoadGraphRepeatedlyMarksLaterFailureAfterInitialSuccess() async {
+        // Regression guard: Cursor Bugbot PR #315 flagged that the graph tab
+        // stopped checking the read path after the first successful load.
+        let reader = ScriptedKnowledgeGraphReader(results: [
+            .success((
+                entities: [
+                    BrainDatabase.KGEntityRow(
+                        id: "a",
+                        name: "Alice",
+                        entityType: "person",
+                        description: nil,
+                        importance: 7
+                    ),
+                ],
+                relations: []
+            )),
+            .failure(ScriptedKnowledgeGraphError.fetchFailed),
+            .failure(ScriptedKnowledgeGraphError.fetchFailed),
+        ])
+        let vm = KGViewModel(graphReader: reader)
+        var sleepCount = 0
+
+        let loadedOnce = await vm.loadGraphRepeatedly(
+            refreshDelay: .milliseconds(1),
+            retryDelay: .milliseconds(1)
+        ) { _ in
+            sleepCount += 1
+            if sleepCount == 2 {
+                throw CancellationError()
+            }
+        }
+
+        XCTAssertTrue(loadedOnce)
+        XCTAssertTrue(vm.degradationState.isDegraded)
+        XCTAssertEqual(vm.degradationState.reason, "fetchFailed")
+    }
+
+    func testLoadGraphMarksDegradedWhenRetrySleepIsCancelledAfterReadFailure() async {
+        // Regression guard: Cursor Bugbot PR #315 flagged cancellation between
+        // failed graph-read attempts as a path that hid the degraded badge.
+        let reader = ScriptedKnowledgeGraphReader(results: [
+            .failure(ScriptedKnowledgeGraphError.fetchFailed),
+        ])
+        let vm = KGViewModel(graphReader: reader)
+
+        let success = await vm.loadGraph { _ in
+            throw CancellationError()
+        }
+
+        XCTAssertFalse(success)
+        XCTAssertTrue(vm.degradationState.isDegraded)
+        XCTAssertEqual(vm.degradationState.reason, "fetchFailed")
+    }
 }
 
 @MainActor
@@ -171,6 +225,9 @@ private enum ScriptedKnowledgeGraphError: Error {
     case fetchFailed
 }
 
+// ScriptedKnowledgeGraphReader is @unchecked Sendable because the mutable
+// results and activeRelations buffers are test-confined and only accessed via
+// fetchKGEntities/fetchKGRelations from @MainActor tests.
 private final class ScriptedKnowledgeGraphReader: KnowledgeGraphReading, @unchecked Sendable {
     deinit {}
 
