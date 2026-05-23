@@ -516,10 +516,43 @@ dependencies = [
         conn.close()
 
         assert row is not None
-        assert json.loads(row[0]) == {"source": "manual"}
+        properties = json.loads(row[0])
+        assert properties["source"] == "manual"
+        assert properties["sources"] == ["manual", "code_intelligence"]
         assert row[1] != "2026-01-01T00:00:00.000000Z"
         assert row[2] is None
         assert active_count == 1
+
+        (tmp_repos / "brainlayer" / "pyproject.toml").write_text(
+            """
+[project]
+name = "brainlayer"
+version = "1.0.0"
+description = "Memory for AI agents"
+dependencies = [
+    "apsw>=3.45.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+"""
+        )
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        expired_at = conn.execute("SELECT expired_at FROM kg_relations WHERE id = 'rel-manual'").fetchone()[0]
+        active_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM kg_current_facts
+            WHERE source_id = 'proj-manual'
+              AND target_id = 'lib-manual'
+              AND relation_type = 'depends_on'
+            """
+        ).fetchone()[0]
+        conn.close()
+
+        assert expired_at is not None
+        assert active_count == 0
 
     def test_library_entity_not_expired_when_other_depends_on_remains(self, tmp_repos: Path, tmp_db: str) -> None:
         """regression-guard: expiring one source fact must not hide another active depends_on fact."""
