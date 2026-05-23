@@ -412,11 +412,13 @@ def _add_dependency_relation(
 
     # Check if relation already exists
     existing = conn.execute(
-        "SELECT id FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = 'depends_on'",
+        "SELECT id, properties FROM kg_relations WHERE source_id = ? AND target_id = ? AND relation_type = 'depends_on'",
         (source_id, target_id),
     ).fetchone()
 
     if existing:
+        if not _is_code_intelligence_relation(existing[1]):
+            return target_id
         if not dry_run:
             conn.execute(
                 """UPDATE kg_relations
@@ -476,18 +478,17 @@ def _expire_stale_dependency_relations(
             stats["relations_expired"] += 1
 
     for target_id in stale_target_ids:
-        active_rows = conn.execute(
+        active_depends_on = conn.execute(
             """
-            SELECT properties
-            FROM kg_relations
+            SELECT 1
+            FROM kg_current_facts
             WHERE target_id = ?
               AND relation_type = 'depends_on'
-              AND expired_at IS NULL
+            LIMIT 1
             """,
             (target_id,),
-        ).fetchall()
-        has_active_code_fact = any(_is_code_intelligence_relation(properties) for (properties,) in active_rows)
-        if has_active_code_fact:
+        ).fetchone()
+        if active_depends_on:
             continue
         result = conn.execute(
             """
