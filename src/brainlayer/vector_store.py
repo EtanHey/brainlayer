@@ -1310,8 +1310,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("""
             CREATE VIEW IF NOT EXISTS kg_current_facts AS
             SELECT * FROM kg_relations
-            WHERE (valid_from IS NULL OR valid_from <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-              AND (valid_until IS NULL OR valid_until >= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            WHERE (valid_from IS NULL OR julianday(valid_from) <= julianday('now'))
+              AND (valid_until IS NULL OR julianday(valid_until) >= julianday('now'))
               AND expired_at IS NULL
         """)
 
