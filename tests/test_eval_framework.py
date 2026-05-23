@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 
@@ -100,6 +101,34 @@ def test_manual_fallback_averages_only_qrels_queries(qrels_file: Path):
     scores = benchmark._evaluate_without_ranx(run_dict, ["recall@10"])
 
     assert scores["recall@10"] == pytest.approx(0.25)
+
+
+def test_manual_fallback_map_at_k_uses_cutoff_relevant_count(tmp_path: Path):
+    """regression-guard: perfect top-k AP should be 1.0 even when more relevant docs exist."""
+    from brainlayer.eval.benchmark import SearchBenchmark
+
+    qrels_path = tmp_path / "qrels.json"
+    qrels_path.write_text(json.dumps({"q1": {f"doc-{idx}": 1 for idx in range(20)}}))
+    benchmark = SearchBenchmark(str(qrels_path))
+    run_dict = {"q1": {f"doc-{idx}": 20 - idx for idx in range(10)}}
+
+    scores = benchmark._evaluate_without_ranx(run_dict, ["map@10"])
+
+    assert scores["map@10"] == pytest.approx(1.0)
+
+
+def test_manual_fallback_ndcg_uses_linear_gain(qrels_file: Path):
+    """regression-guard: ndcg fallback must match ranx ndcg's linear-gain semantics."""
+    from brainlayer.eval.benchmark import SearchBenchmark
+
+    benchmark = SearchBenchmark(str(qrels_file))
+    run_dict = {"q1": {"doc-b": 2.0, "doc-a": 1.0}}
+
+    scores = benchmark._evaluate_without_ranx(run_dict, ["ndcg@10"])
+
+    expected_q1 = (1 / math.log2(2) + 3 / math.log2(3)) / (3 / math.log2(2) + 1 / math.log2(3))
+    expected = (expected_q1 + 0.0) / 2
+    assert scores["ndcg@10"] == pytest.approx(expected)
 
 
 def test_benchmark_compares(qrels_file: Path):

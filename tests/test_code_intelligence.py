@@ -1,6 +1,7 @@
 """Tests for code_intelligence.py — project entity extraction from repo metadata."""
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -608,3 +609,23 @@ dependencies = [
 
         checkpoint_count = sum(1 for sql in executed_sql if "PRAGMA wal_checkpoint(FULL)" in sql)
         assert checkpoint_count >= 2
+
+    def test_writer_lock_rejects_existing_same_pid_owner(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """regression-guard: code-intelligence must not bypass another writer owned by this PID."""
+        from brainlayer.pipeline.code_intelligence import (
+            _code_intelligence_writer_lock,
+            _pidfile_payload,
+            _writer_pidfile_path,
+        )
+
+        monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "locks"))
+        db_path = tmp_path / "same-pid.db"
+        pidfile = _writer_pidfile_path(db_path)
+        pidfile.parent.mkdir(parents=True)
+        pidfile.write_bytes(_pidfile_payload(os.getpid()))
+
+        with pytest.raises(RuntimeError, match="another writer is using"):
+            with _code_intelligence_writer_lock(db_path, dry_run=False):
+                pass
+
+        assert pidfile.exists()

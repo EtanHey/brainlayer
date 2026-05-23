@@ -305,11 +305,11 @@ class SearchBenchmark:
     def _ndcg(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
         ranked = self._ranked_docs(run, cutoff)
         gains = self.qrels.get(query_id, {})
-        dcg = sum((2 ** gains.get(doc_id, 0) - 1) / math.log2(rank + 2) for rank, doc_id in enumerate(ranked))
+        dcg = sum(gains.get(doc_id, 0) / math.log2(rank + 2) for rank, doc_id in enumerate(ranked))
         ideal_grades = sorted((grade for grade in gains.values() if grade > 0), reverse=True)
         if cutoff is not None:
             ideal_grades = ideal_grades[:cutoff]
-        idcg = sum((2**grade - 1) / math.log2(rank + 2) for rank, grade in enumerate(ideal_grades))
+        idcg = sum(grade / math.log2(rank + 2) for rank, grade in enumerate(ideal_grades))
         return dcg / idcg if idcg else 0.0
 
     def _recall(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
@@ -330,7 +330,8 @@ class SearchBenchmark:
                 continue
             hits += 1
             precision_sum += hits / rank
-        return precision_sum / len(relevant)
+        denominator = min(len(relevant), cutoff) if cutoff is not None else len(relevant)
+        return precision_sum / denominator
 
     def _reciprocal_rank(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
         relevant = set(self._relevant_docs(query_id))
