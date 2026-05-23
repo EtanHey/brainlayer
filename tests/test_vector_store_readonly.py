@@ -219,3 +219,18 @@ def test_search_vector_store_bootstraps_stale_schema_then_reopens_readonly(tmp_p
     finally:
         store.close()
         _shared._search_vector_store = None
+
+
+def test_search_store_bootstrap_required_for_partial_kg_schema(tmp_path):
+    """regression-guard: readonly search must bootstrap when only one KG table exists."""
+    db_path = tmp_path / "partial-kg.db"
+    store = VectorStore(db_path)
+    store.close()
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute("DROP TABLE kg_relations")
+    finally:
+        conn.close()
+
+    assert _shared._search_store_needs_bootstrap(db_path) is True

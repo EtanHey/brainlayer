@@ -87,6 +87,21 @@ def test_benchmark_evaluates_with_mismatched_query_ids(qrels_file: Path):
     assert 0.0 <= scores["ndcg@10"] <= 1.0
 
 
+def test_manual_fallback_averages_only_qrels_queries(qrels_file: Path):
+    """regression-guard: manual fallback should match Ranx's qrels-query averaging."""
+    from brainlayer.eval.benchmark import SearchBenchmark
+
+    benchmark = SearchBenchmark(str(qrels_file))
+    run_dict = {
+        "q1": {"doc-a": 4.0},
+        "q-extra": {"doc-z": 9.0},
+    }
+
+    scores = benchmark._evaluate_without_ranx(run_dict, ["recall@10"])
+
+    assert scores["recall@10"] == pytest.approx(0.25)
+
+
 def test_benchmark_compares(qrels_file: Path):
     from brainlayer.eval.benchmark import DEFAULT_QUERY_SUITE, SearchBenchmark
 
