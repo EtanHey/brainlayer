@@ -12,6 +12,8 @@ Tests cover:
 9. YouTube source filter bug fix (project auto-scope skip for non-claude_code sources)
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from brainlayer.vector_store import VectorStore
@@ -134,6 +136,29 @@ class TestKGTableCreation:
         relation_indexes = {row[1] for row in cursor.execute("PRAGMA index_list(kg_relations)")}
         assert "idx_kg_entities_expired" in entity_indexes
         assert "idx_kg_relations_expired" in relation_indexes
+
+    def test_current_facts_view_uses_timestamp_aware_validity(self, store):
+        """regression-guard: VectorStore must recreate kg_current_facts with timestamp-aware checks."""
+        store.upsert_entity("proj-a", "project", "a")
+        store.upsert_entity("lib-b", "library", "b")
+        store.add_relation("rel-offset", "proj-a", "lib-b", "depends_on", confidence=0.9)
+        offset = timezone(timedelta(hours=1))
+        valid_from = (
+            (datetime.now(timezone.utc) - timedelta(seconds=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+        valid_until = (
+            (datetime.now(timezone.utc) + timedelta(days=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+        store.conn.cursor().execute(
+            "UPDATE kg_relations SET valid_from = ?, valid_until = ? WHERE id = 'rel-offset'",
+            (valid_from, valid_until),
+        )
+
+        count = (
+            store._read_cursor().execute("SELECT COUNT(*) FROM kg_current_facts WHERE id = 'rel-offset'").fetchone()[0]
+        )
+
+        assert count == 1
 
 
 # ── Entity CRUD Tests ────────────────────────────────────────
