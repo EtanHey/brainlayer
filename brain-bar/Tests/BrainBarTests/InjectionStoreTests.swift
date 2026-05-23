@@ -131,9 +131,12 @@ final class InjectionStoreTests: XCTestCase {
 
 private enum ScriptedInjectionError: Error {
     case listFailed
+    case unexpectedListCall
 }
 
 private final class ScriptedInjectionEventReader: InjectionEventReading {
+    deinit {}
+
     var versions: [Int]
     var eventResults: [Result<[InjectionEvent], Error>]
 
@@ -150,7 +153,9 @@ private final class ScriptedInjectionEventReader: InjectionEventReading {
     }
 
     func listInjectionEvents(sessionID: String?, limit: Int) throws -> [InjectionEvent] {
-        guard !eventResults.isEmpty else { return [] }
+        guard !eventResults.isEmpty else {
+            throw ScriptedInjectionError.unexpectedListCall
+        }
         switch eventResults.removeFirst() {
         case .success(let events):
             return events

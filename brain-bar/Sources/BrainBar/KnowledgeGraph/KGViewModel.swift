@@ -1,5 +1,12 @@
 import SwiftUI
 
+protocol KnowledgeGraphReading: AnyObject, Sendable {
+    func fetchKGEntities(limit: Int) throws -> [BrainDatabase.KGEntityRow]
+    func fetchKGRelations(limit: Int) throws -> [BrainDatabase.KGRelationRow]
+}
+
+extension BrainDatabase: KnowledgeGraphReading {}
+
 @MainActor
 final class KGViewModel: ObservableObject {
     @Published var nodes: [KGNode] = []
@@ -14,7 +21,8 @@ final class KGViewModel: ObservableObject {
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
 
-    private let database: BrainDatabase
+    private let database: BrainDatabase?
+    private let graphReader: KnowledgeGraphReading
 
     // Force simulation parameters
     private let repulsionStrength: CGFloat = 5000
@@ -25,6 +33,12 @@ final class KGViewModel: ObservableObject {
 
     init(database: BrainDatabase) {
         self.database = database
+        self.graphReader = database
+    }
+
+    init(graphReader: KnowledgeGraphReading) {
+        self.database = nil
+        self.graphReader = graphReader
     }
 
     // MARK: - Data Loading
@@ -43,14 +57,18 @@ final class KGViewModel: ObservableObject {
         var lastError: Error?
         for attempt in 1...attemptLimit {
             do {
-                let graph = try await Self.fetchGraphRows(database: database)
+                let graph = try await Self.fetchGraphRows(reader: graphReader)
                 applyGraph(entityRows: graph.entities, relationRows: graph.relations)
                 degradationState = .healthy
                 return true
             } catch {
                 lastError = error
                 if attempt < attemptLimit {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    do {
+                        try await Task.sleep(for: .milliseconds(200))
+                    } catch {
+                        return false
+                    }
                 }
             }
         }
@@ -68,18 +86,36 @@ final class KGViewModel: ObservableObject {
         return false
     }
 
+    @discardableResult
+    func loadGraphUntilSuccessful(
+        retryDelay: Duration = .seconds(5),
+        sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> Bool {
+        while !Task.isCancelled {
+            if await loadGraph() {
+                return true
+            }
+            do {
+                try await sleep(retryDelay)
+            } catch {
+                return false
+            }
+        }
+        return false
+    }
+
     private struct GraphRows: Sendable {
         let entities: [BrainDatabase.KGEntityRow]
         let relations: [BrainDatabase.KGRelationRow]
     }
 
-    private nonisolated static func fetchGraphRows(database: BrainDatabase) async throws -> GraphRows {
+    private nonisolated static func fetchGraphRows(reader: KnowledgeGraphReading) async throws -> GraphRows {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
                     continuation.resume(returning: GraphRows(
-                        entities: try database.fetchKGEntities(),
-                        relations: try database.fetchKGRelations(limit: 5_000)
+                        entities: try reader.fetchKGEntities(limit: 500),
+                        relations: try reader.fetchKGRelations(limit: 5_000)
                     ))
                 } catch {
                     continuation.resume(throwing: error)
@@ -128,6 +164,7 @@ final class KGViewModel: ObservableObject {
     func selectNode(id: String?) {
         selectedNodeId = id
         if let id {
+            guard let database else { return }
             if let lookup = try? database.lookupEntity(query: nodeById(id)?.name ?? "") {
                 selectedEntity = EntityCard(lookupPayload: lookup)
             }
@@ -140,6 +177,7 @@ final class KGViewModel: ObservableObject {
     }
 
     func openConversation(chunkID: String) {
+        guard let database else { return }
         selectedConversation = try? database.expandedConversation(id: chunkID)
     }
 

@@ -58,7 +58,7 @@ struct KGCanvasView: View {
             }
             .task {
                 guard !hasLoadedGraph else { return }
-                if await viewModel.loadGraph() {
+                if await viewModel.loadGraphUntilSuccessful() {
                     hasLoadedGraph = true
                 }
             }
