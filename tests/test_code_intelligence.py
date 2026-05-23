@@ -3,7 +3,7 @@
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -528,6 +528,61 @@ dependencies = [
         assert entity_expired_at is None
         assert manual_active_count == 1
 
+    def test_library_entity_not_expired_when_other_active_relation_remains(self, tmp_repos: Path, tmp_db: str) -> None:
+        """regression-guard: expiring one scanner fact must not hide other active KG facts."""
+        from brainlayer.pipeline.code_intelligence import enrich_projects
+
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        fastapi_id = conn.execute(
+            "SELECT id FROM kg_entities WHERE entity_type = 'library' AND name = 'fastapi'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('tool-api', 'tool', 'api-check', '{}')"
+        )
+        conn.execute(
+            """
+            INSERT INTO kg_relations (id, source_id, target_id, relation_type, properties, confidence)
+            VALUES ('rel-tool-fastapi', 'tool-api', ?, 'uses_tool', '{"source":"manual"}', 0.8)
+            """,
+            (fastapi_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        (tmp_repos / "brainlayer" / "pyproject.toml").write_text(
+            """
+[project]
+name = "brainlayer"
+version = "1.0.0"
+description = "Memory for AI agents"
+dependencies = [
+    "apsw>=3.45.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+"""
+        )
+        enrich_projects(db_path=tmp_db, base_dir=tmp_repos)
+
+        conn = sqlite3.connect(tmp_db)
+        entity_expired_at = conn.execute("SELECT expired_at FROM kg_entities WHERE id = ?", (fastapi_id,)).fetchone()[0]
+        active_tool_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM kg_current_facts
+            WHERE source_id = 'tool-api'
+              AND target_id = ?
+              AND relation_type = 'uses_tool'
+            """,
+            (fastapi_id,),
+        ).fetchone()[0]
+        conn.close()
+
+        assert entity_expired_at is None
+        assert active_tool_count == 1
+
     def test_timestamp_precision_matches_sqlite_current_fact_view(self) -> None:
         """regression-guard: Python validity timestamps must sort with SQLite strftime('%f') values."""
         from brainlayer.pipeline.code_intelligence import _timestamp
@@ -535,6 +590,38 @@ dependencies = [
         observed = datetime(2026, 5, 23, 10, 0, 45, 123456, tzinfo=timezone.utc)
 
         assert _timestamp(observed) == "2026-05-23T10:00:45.123Z"
+
+    def test_current_facts_view_uses_timestamp_aware_validity(self, tmp_db: str) -> None:
+        """regression-guard: valid_from offsets must not be compared as raw strings."""
+        from brainlayer.pipeline.code_intelligence import _ensure_reconciliation_schema
+
+        offset = timezone(timedelta(hours=1))
+        valid_from = (
+            (datetime.now(timezone.utc) - timedelta(seconds=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+        valid_until = (
+            (datetime.now(timezone.utc) + timedelta(days=1)).astimezone(offset).isoformat(timespec="milliseconds")
+        )
+
+        conn = sqlite3.connect(tmp_db)
+        _ensure_reconciliation_schema(conn)
+        conn.execute(
+            "INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('proj-a', 'project', 'a', '{}')"
+        )
+        conn.execute("INSERT INTO kg_entities (id, entity_type, name, metadata) VALUES ('lib-b', 'library', 'b', '{}')")
+        conn.execute(
+            """
+            INSERT INTO kg_relations
+                (id, source_id, target_id, relation_type, properties, confidence, valid_from, valid_until, expired_at)
+            VALUES ('rel-offset', 'proj-a', 'lib-b', 'depends_on', '{}', 0.9, ?, ?, NULL)
+            """,
+            (valid_from, valid_until),
+        )
+
+        count = conn.execute("SELECT COUNT(*) FROM kg_current_facts WHERE id = 'rel-offset'").fetchone()[0]
+        conn.close()
+
+        assert count == 1
 
     def test_refresh_preserves_code_intelligence_relation_metadata(self, tmp_repos: Path, tmp_db: str) -> None:
         """regression-guard: refreshing scanner-owned facts must not clobber extra provenance metadata."""
@@ -629,3 +716,51 @@ dependencies = [
                 pass
 
         assert pidfile.exists()
+
+    def test_writer_lock_cleanup_checks_pid_start_time(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """regression-guard: cleanup must not unlink a pidfile for a reused PID owner."""
+        from brainlayer.pipeline import code_intelligence
+
+        monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "locks"))
+        monkeypatch.setattr(code_intelligence, "_pid_start_time", lambda pid: "owner-start")
+        db_path = tmp_path / "cleanup.db"
+        pidfile = code_intelligence._writer_pidfile_path(db_path)
+
+        with code_intelligence._code_intelligence_writer_lock(db_path, dry_run=False):
+            pidfile.write_text(f"{os.getpid()}\nstart_time=reused-start\n")
+
+        assert pidfile.exists()
+
+    def test_code_intelligence_properties_do_not_write_none_sources(self) -> None:
+        """regression-guard: source merge must not persist null provenance values."""
+        from brainlayer.pipeline.code_intelligence import _code_intelligence_properties
+
+        properties = json.loads(_code_intelligence_properties('{"sources":["manual"]}'))
+
+        assert properties["sources"] == ["manual", "code_intelligence"]
+
+    def test_writer_lock_preserves_unreadable_pidfile_race(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """regression-guard: empty pidfiles may be in-flight writers and must not be unlinked immediately."""
+        from brainlayer.pipeline.code_intelligence import _code_intelligence_writer_lock, _writer_pidfile_path
+
+        monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "locks"))
+        db_path = tmp_path / "race.db"
+        pidfile = _writer_pidfile_path(db_path)
+        pidfile.parent.mkdir(parents=True)
+        pidfile.write_text("")
+
+        with pytest.raises(RuntimeError, match="could not acquire writer pidfile"):
+            with _code_intelligence_writer_lock(db_path, dry_run=False):
+                pass
+
+        assert pidfile.exists()
+
+    def test_linux_proc_stat_start_time_handles_process_names_with_spaces(self) -> None:
+        """regression-guard: /proc pid stat parsing must account for spaces inside process names."""
+        from brainlayer.pipeline.code_intelligence import _linux_proc_stat_start_time
+
+        stat_text = "1234 (python worker) S " + " ".join(str(idx) for idx in range(3, 21)) + " 987654 0"
+
+        assert _linux_proc_stat_start_time(stat_text) == "987654"
