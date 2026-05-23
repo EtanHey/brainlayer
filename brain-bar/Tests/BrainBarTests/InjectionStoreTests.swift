@@ -84,4 +84,88 @@ final class InjectionStoreTests: XCTestCase {
             ["inject-1", "inject-2", "inject-3", "inject-4"]
         )
     }
+
+    @MainActor
+    func testDegradedStoreStaysDegradedUntilEventQuerySucceeds() throws {
+        // Regression guard: Bugbot PR #315 flagged that a forced
+        // listInjectionEvents failure could mark the store degraded, then a
+        // later unchanged dataVersion poll could skip the event query and
+        // incorrectly clear the badge. Recovery must require a successful
+        // event query, not only a successful PRAGMA data_version read.
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 1, 1],
+            eventResults: [
+                .success([]),
+                .failure(ScriptedInjectionError.listFailed),
+                .success([
+                    InjectionEvent(
+                        id: 1,
+                        sessionID: "session-recovered",
+                        timestamp: "2026-05-22T18:05:00Z",
+                        query: "recovered query",
+                        chunkIDs: ["chunk-1"],
+                        tokenCount: 7
+                    )
+                ]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+
+        store.refreshForTesting(force: true)
+        XCTAssertEqual(store.degradationState, .healthy)
+
+        store.refreshForTesting(force: true)
+        XCTAssertTrue(store.degradationState.isDegraded)
+
+        store.refreshForTesting(force: false)
+        XCTAssertTrue(
+            store.degradationState.isDegraded,
+            "An unchanged dataVersion poll skipped the event query; that is not positive recovery evidence."
+        )
+
+        store.refreshForTesting(force: false)
+        XCTAssertEqual(store.degradationState, .healthy)
+        XCTAssertEqual(store.events.map(\.query), ["recovered query"])
+    }
+}
+
+private enum ScriptedInjectionError: Error {
+    case listFailed
+}
+
+private final class ScriptedInjectionEventReader: InjectionEventReading {
+    var versions: [Int]
+    var eventResults: [Result<[InjectionEvent], Error>]
+
+    init(versions: [Int], eventResults: [Result<[InjectionEvent], Error>]) {
+        self.versions = versions
+        self.eventResults = eventResults
+    }
+
+    func dataVersion() throws -> Int {
+        if versions.count > 1 {
+            return versions.removeFirst()
+        }
+        return versions.first ?? 1
+    }
+
+    func listInjectionEvents(sessionID: String?, limit: Int) throws -> [InjectionEvent] {
+        guard !eventResults.isEmpty else { return [] }
+        switch eventResults.removeFirst() {
+        case .success(let events):
+            return events
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func expandedConversation(
+        chunkID: String,
+        before: Int,
+        after: Int
+    ) throws -> BrainDatabase.ExpandedConversation {
+        throw ScriptedInjectionError.listFailed
+    }
+
+    func close() {}
 }
