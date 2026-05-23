@@ -731,6 +731,19 @@ dependencies = [
 
         assert pidfile.exists()
 
+    def test_writer_lock_allows_missing_fcntl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """regression-guard: importing code-intelligence on non-Unix hosts must not require fcntl."""
+        from brainlayer.pipeline import code_intelligence
+
+        monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "locks"))
+        monkeypatch.setattr(code_intelligence, "fcntl", None)
+        db_path = tmp_path / "portable.db"
+
+        with code_intelligence._code_intelligence_writer_lock(db_path, dry_run=False):
+            assert code_intelligence._writer_pidfile_path(db_path).exists()
+
+        assert not code_intelligence._writer_pidfile_path(db_path).exists()
+
     def test_code_intelligence_properties_do_not_write_none_sources(self) -> None:
         """regression-guard: source merge must not persist null provenance values."""
         from brainlayer.pipeline.code_intelligence import _code_intelligence_properties

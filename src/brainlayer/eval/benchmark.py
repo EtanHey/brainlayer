@@ -287,7 +287,12 @@ class SearchBenchmark:
 
     def _parse_metric(self, metric: str) -> tuple[str, int | None]:
         name, sep, cutoff_text = metric.partition("@")
-        return name, int(cutoff_text) if sep else None
+        if not sep:
+            return name, None
+        cutoff = int(cutoff_text)
+        if cutoff <= 0:
+            raise ValueError(f"Metric cutoff must be > 0: {metric}")
+        return name, cutoff
 
     def _mean_query_score(self, run_dict: dict[str, dict[str, Any]], score_fn: Callable[[str], float]) -> float:
         query_ids = sorted(self.qrels)
@@ -330,8 +335,7 @@ class SearchBenchmark:
                 continue
             hits += 1
             precision_sum += hits / rank
-        denominator = min(len(relevant), cutoff) if cutoff is not None else len(relevant)
-        return precision_sum / denominator
+        return precision_sum / len(relevant)
 
     def _reciprocal_rank(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
         relevant = set(self._relevant_docs(query_id))
