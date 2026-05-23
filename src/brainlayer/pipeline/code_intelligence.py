@@ -206,9 +206,6 @@ def _code_intelligence_writer_lock(db_path: str | Path, dry_run: bool):
             break
         except FileExistsError:
             owner_pid, owner_start_time = _read_pidfile_owner(pidfile)
-            if owner_pid == pid and _pidfile_owner_matches(owner_pid, owner_start_time):
-                yield
-                return
             if owner_pid is not None and _pidfile_owner_matches(owner_pid, owner_start_time):
                 raise RuntimeError(f"another writer is using {db_path} (pid {owner_pid})")
             try:
