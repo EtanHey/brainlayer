@@ -769,6 +769,36 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityChunks.last?.chunkID, "more-0")
     }
 
+    func testLoadMoreChunkFailureDisablesAutomaticFooterRetry() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<25 {
+            try db.insertChunk(
+                id: "fail-\(i)",
+                content: "Alice failure memory \(i)",
+                sessionId: "fail-\(i)",
+                project: "test",
+                contentType: "ai_code",
+                importance: 5
+            )
+            try updateChunk(id: "fail-\(i)", sourceFile: "/tmp/file-\(i % 2).md", createdAt: String(format: "2026-05-24T14:%02d:00Z", i))
+            try db.linkEntityChunk(entityId: "e1", chunkId: "fail-\(i)", relevance: Double(i) / 100.0)
+        }
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.selectNode(id: "e1")
+        await waitForSelectedEntityLoad(vm)
+        XCTAssertTrue(vm.selectedEntityCanLoadMoreChunks)
+
+        db.close()
+        vm.loadMoreChunks()
+        await waitForSelectedEntityChunkLoadingToFinish(vm)
+
+        XCTAssertEqual(vm.selectedEntityChunks.count, 15)
+        XCTAssertFalse(vm.selectedEntityCanLoadMoreChunks)
+        XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+    }
+
     private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
         guard let handle = db.dbHandle else {
             XCTFail("Expected database handle")
@@ -806,6 +836,15 @@ final class KGViewModelTests: XCTestCase {
     private func waitForSelectedEntityChunkCount(_ vm: KGViewModel, count: Int, iterations: Int = 200) async {
         for _ in 0..<iterations {
             if vm.selectedEntityChunks.count == count {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    private func waitForSelectedEntityChunkLoadingToFinish(_ vm: KGViewModel, iterations: Int = 200) async {
+        for _ in 0..<iterations {
+            if !vm.isLoadingSelectedEntityChunks {
                 return
             }
             await Task.yield()

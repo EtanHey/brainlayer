@@ -21,6 +21,8 @@ final class KGViewModel: ObservableObject {
     @Published var selectedConversation: BrainDatabase.ExpandedConversation?
     @Published private(set) var isLoadingSelectedEntityChunks = false
     @Published private(set) var isLoadingSelectedEntityFiles = false
+    @Published private(set) var selectedEntityCanLoadMoreChunks = false
+    @Published private(set) var selectedEntityCanLoadMoreFiles = false
     @Published private(set) var degradationState: DegradationState = .healthy
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
@@ -234,6 +236,8 @@ final class KGViewModel: ObservableObject {
             selectedEntityFileTotal = 0
             selectedEntityChunkCursor = nil
             selectedEntityFileCursor = nil
+            selectedEntityCanLoadMoreChunks = false
+            selectedEntityCanLoadMoreFiles = false
             isLoadingSelectedEntityChunks = true
             isLoadingSelectedEntityFiles = true
             let chunkPageSize = selectedEntityChunkPageSize
@@ -258,6 +262,8 @@ final class KGViewModel: ObservableObject {
                         self.selectedEntityFiles = rows.filePage.rows
                         self.selectedEntityChunkCursor = rows.chunkPage.nextCursor
                         self.selectedEntityFileCursor = rows.filePage.nextCursor
+                        self.selectedEntityCanLoadMoreChunks = rows.chunkPage.nextCursor != nil
+                        self.selectedEntityCanLoadMoreFiles = rows.filePage.nextCursor != nil
                     case .failure:
                         self.selectedEntityChunkTotal = 0
                         self.selectedEntityFileTotal = 0
@@ -265,6 +271,8 @@ final class KGViewModel: ObservableObject {
                         self.selectedEntityFiles = []
                         self.selectedEntityChunkCursor = nil
                         self.selectedEntityFileCursor = nil
+                        self.selectedEntityCanLoadMoreChunks = false
+                        self.selectedEntityCanLoadMoreFiles = false
                     }
                 }
             }
@@ -276,6 +284,8 @@ final class KGViewModel: ObservableObject {
             selectedEntityFileTotal = 0
             selectedEntityChunkCursor = nil
             selectedEntityFileCursor = nil
+            selectedEntityCanLoadMoreChunks = false
+            selectedEntityCanLoadMoreFiles = false
             isLoadingSelectedEntityChunks = false
             isLoadingSelectedEntityFiles = false
             selectedConversation = nil
@@ -301,6 +311,10 @@ final class KGViewModel: ObservableObject {
                 if case .success(let page) = result {
                     self.selectedEntityChunks.append(contentsOf: page.rows)
                     self.selectedEntityChunkCursor = page.nextCursor
+                    self.selectedEntityCanLoadMoreChunks = page.nextCursor != nil
+                } else {
+                    self.selectedEntityChunkCursor = nil
+                    self.selectedEntityCanLoadMoreChunks = false
                 }
             }
         }
@@ -325,6 +339,10 @@ final class KGViewModel: ObservableObject {
                 if case .success(let page) = result {
                     self.selectedEntityFiles.append(contentsOf: page.rows)
                     self.selectedEntityFileCursor = page.nextCursor
+                    self.selectedEntityCanLoadMoreFiles = page.nextCursor != nil
+                } else {
+                    self.selectedEntityFileCursor = nil
+                    self.selectedEntityCanLoadMoreFiles = false
                 }
             }
         }
