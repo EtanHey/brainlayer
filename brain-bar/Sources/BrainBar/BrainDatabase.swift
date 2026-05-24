@@ -1605,6 +1605,18 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    private func withReadTransaction<T>(_ body: () throws -> T) throws -> T {
+        try execute("BEGIN", retries: 3)
+        do {
+            let result = try body()
+            try execute("COMMIT", retries: 3)
+            return result
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     private func executeUpdate(
         _ sql: String,
         binds: (OpaquePointer) -> Void
@@ -3415,6 +3427,13 @@ final class BrainDatabase: @unchecked Sendable {
         let nextCursor: SourceFileCursor?
     }
 
+    struct EntitySidebarSnapshot: Equatable, Sendable {
+        let chunkTotal: Int
+        let fileTotal: Int
+        let chunkPage: ChunkPage
+        let filePage: SourceFilePage
+    }
+
     struct EnrichmentStatsSummary: Equatable, Sendable {
         let totalChunks: Int
         let enriched: Int
@@ -3691,6 +3710,17 @@ final class BrainDatabase: @unchecked Sendable {
             SourceFileCursor(topRelevance: $0.topRelevance, chunkCount: $0.chunkCount, sourceFile: $0.sourceFile)
         }
         return SourceFilePage(rows: rows, nextCursor: hasMore ? cursor : nil)
+    }
+
+    func fetchEntitySidebarSnapshot(entityId: String, chunkLimit: Int, fileLimit: Int) throws -> EntitySidebarSnapshot {
+        try withReadTransaction {
+            try EntitySidebarSnapshot(
+                chunkTotal: fetchEntityChunkCount(entityId: entityId),
+                fileTotal: fetchEntitySourceFileCount(entityId: entityId),
+                chunkPage: fetchEntityChunksPage(entityId: entityId, after: nil, limit: chunkLimit),
+                filePage: fetchEntitySourceFiles(entityId: entityId, limit: fileLimit, after: nil)
+            )
+        }
     }
 
     private func fetchCount(sql: String, entityId: String, db providedDB: OpaquePointer? = nil) throws -> Int {
