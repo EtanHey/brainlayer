@@ -1772,7 +1772,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         return [
             "insert", "update", "delete", "replace",
-            "create", "drop", "alter", "begin", "commit", "rollback"
+            "create", "drop", "alter"
         ].contains(keyword ?? "")
     }
 
