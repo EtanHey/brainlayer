@@ -4,6 +4,7 @@
 // hotkey manager configuration, and panel state management.
 
 import XCTest
+import SQLite3
 @testable import BrainBar
 
 final class QuickCaptureTests: XCTestCase {
@@ -76,6 +77,119 @@ final class QuickCaptureTests: XCTestCase {
         XCTAssertFalse(results.formatted.isEmpty, "Should return formatted text")
         XCTAssertTrue(results.formatted.contains("\u{250c}"), "Should have box-drawing header")
         XCTAssertGreaterThan(results.count, 0, "Should find at least one result")
+    }
+
+    func testSearchOverlayResultsUsePreviewTextNotFullContent() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-search-preview-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let fullContent = "BrainBar overlay preview sentinel term should not load this full content column"
+        let previewText = "Short preview from preview_text"
+        try db.insertChunk(
+            id: "preview-overlay-1",
+            content: fullContent,
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try updatePreviewText(path: tempDB, chunkID: "preview-overlay-1", previewText: previewText)
+
+        let results = try QuickCaptureController.search(db: db, query: "sentinel", limit: 5)
+
+        XCTAssertEqual(results.results.first?["chunk_id"] as? String, "preview-overlay-1")
+        XCTAssertEqual(results.results.first?["content"] as? String, previewText)
+        XCTAssertFalse(results.formatted.contains(fullContent))
+        XCTAssertTrue(results.formatted.contains(previewText))
+    }
+
+    func testSearchKeepsExactChunkIDFallback() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-search-exact-id-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "exact-id-lookup-1",
+            content: "Chunk content does not mention its identifier",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        let results = try QuickCaptureController.search(db: db, query: "exact-id-lookup-1", limit: 5)
+
+        XCTAssertEqual(results.results.first?["chunk_id"] as? String, "exact-id-lookup-1")
+    }
+
+    func testSearchKeepsExactChunkIDFallbackWhenCandidatesFillLimit() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-search-exact-id-limit-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "candidate-hit-1",
+            content: "exact-id-priority-1 appears only in this candidate text",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try db.insertChunk(
+            id: "exact-id-priority-1",
+            content: "Chunk content does not mention its identifier",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        let results = try QuickCaptureController.search(db: db, query: "exact-id-priority-1", limit: 1)
+
+        XCTAssertEqual(results.results.first?["chunk_id"] as? String, "exact-id-priority-1")
+    }
+
+    func testSearchPreservesTagsInMappedResults() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-search-tags-\(UUID().uuidString).db"
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDB)
+            try? FileManager.default.removeItem(atPath: tempDB + "-wal")
+            try? FileManager.default.removeItem(atPath: tempDB + "-shm")
+        }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "tagged-result-1",
+            content: "Tagged result should keep tag metadata",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7,
+            tags: "[\"phase-2-4\", \"search-perf\"]"
+        )
+
+        let results = try QuickCaptureController.search(db: db, query: "tagged metadata", limit: 5)
+
+        XCTAssertEqual(results.results.first?["chunk_id"] as? String, "tagged-result-1")
+        XCTAssertEqual(results.results.first?["tags"] as? String, "[\"phase-2-4\", \"search-perf\"]")
+        XCTAssertTrue(results.formatted.contains("phase-2-4"))
     }
 
     func testSearchEmptyQueryReturnsEmpty() throws {
@@ -269,5 +383,29 @@ final class QuickCaptureTests: XCTestCase {
     func testBrainBarURLRejectsOtherSchemes() {
         let url = URL(string: "https://example.com")!
         XCTAssertNil(BrainBarURLAction.parse(url: url))
+    }
+}
+
+private func updatePreviewText(path: String, chunkID: String, previewText: String) throws {
+    var sqlite: OpaquePointer?
+    let rc = sqlite3_open_v2(path, &sqlite, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
+    guard rc == SQLITE_OK, let sqlite else {
+        throw NSError(domain: "QuickCaptureTests", code: Int(rc))
+    }
+    defer { sqlite3_close(sqlite) }
+
+    var stmt: OpaquePointer?
+    let prepareRC = sqlite3_prepare_v2(sqlite, "UPDATE chunks SET preview_text = ? WHERE id = ?", -1, &stmt, nil)
+    guard prepareRC == SQLITE_OK, let stmt else {
+        throw NSError(domain: "QuickCaptureTests", code: Int(prepareRC))
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    sqlite3_bind_text(stmt, 1, previewText, -1, transient)
+    sqlite3_bind_text(stmt, 2, chunkID, -1, transient)
+    let stepRC = sqlite3_step(stmt)
+    guard stepRC == SQLITE_DONE else {
+        throw NSError(domain: "QuickCaptureTests", code: Int(stepRC))
     }
 }
