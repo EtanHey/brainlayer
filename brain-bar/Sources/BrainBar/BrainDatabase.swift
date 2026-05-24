@@ -3237,14 +3237,17 @@ final class BrainDatabase: @unchecked Sendable {
 
         // Get typed relations for found entity (excludes co_occurs_with noise)
         if let entityId, result != nil {
+            let expirationSelects = try kgRelationExpirationSelects(alias: "r")
             let relSQL = """
-                SELECT r.relation_type, e.name, 'outgoing' AS direction, r.valid_until, r.expired_at
+                SELECT r.relation_type, e.name, 'outgoing' AS direction,
+                       \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
                 FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.target_id
                 WHERE r.source_id = ?
                   AND r.relation_type != 'co_occurs_with'
                 UNION ALL
-                SELECT r.relation_type, e.name, 'incoming' AS direction, r.valid_until, r.expired_at
+                SELECT r.relation_type, e.name, 'incoming' AS direction,
+                       \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
                 FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.source_id
                 WHERE r.target_id = ?
@@ -3433,10 +3436,12 @@ final class BrainDatabase: @unchecked Sendable {
 
     func fetchKGRelations(limit: Int = 5_000) throws -> [KGRelationRow] {
         guard let db else { throw DBError.notOpen }
+        let expirationSelects = try kgRelationExpirationSelects(alias: "kg_relations")
         // Exclude co_occurs_with — these are auto-generated from text proximity
         // and produce noisy, often incorrect edges in the graph view.
         let sql = """
-            SELECT id, source_id, target_id, relation_type, valid_until, expired_at
+            SELECT id, source_id, target_id, relation_type,
+                   \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
             FROM kg_relations
             WHERE relation_type != 'co_occurs_with'
             ORDER BY id
@@ -3461,6 +3466,18 @@ final class BrainDatabase: @unchecked Sendable {
             ))
         }
         return rows
+    }
+
+    private func kgRelationExpirationSelects(alias: String) throws -> (validUntil: String, expiredAt: String) {
+        guard let db else { throw DBError.notOpen }
+        let columns = try tableColumns(name: "kg_relations", on: db)
+        let validUntil = columns.contains("valid_until")
+            ? "\(alias).valid_until AS valid_until"
+            : "NULL AS valid_until"
+        let expiredAt = columns.contains("expired_at")
+            ? "\(alias).expired_at AS expired_at"
+            : "NULL AS expired_at"
+        return (validUntil, expiredAt)
     }
 
     func linkEntityChunk(entityId: String, chunkId: String, relevance: Double = 1.0) throws {
