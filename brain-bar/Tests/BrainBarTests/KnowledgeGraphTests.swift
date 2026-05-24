@@ -283,6 +283,129 @@ final class KGDatabaseTests: XCTestCase {
         let chunks = try db.fetchEntityChunks(entityId: "e1")
         XCTAssertTrue(chunks.isEmpty)
     }
+
+    func testFetchEntityChunkCountAndCursorPagesTwentyFiveRows() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<25 {
+            try insertLinkedChunk(
+                id: "c-\(i)",
+                entityId: "e1",
+                content: "Chunk \(i) content",
+                sourceFile: "/tmp/source-\(i % 3).md",
+                createdAt: String(format: "2026-05-24T12:%02d:00Z", i),
+                relevance: Double(i) / 100.0
+            )
+        }
+
+        let firstPage = try db.fetchEntityChunksPage(entityId: "e1", after: nil, limit: 10)
+        let secondPage = try db.fetchEntityChunksPage(entityId: "e1", after: firstPage.nextCursor, limit: 10)
+
+        XCTAssertEqual(try db.fetchEntityChunkCount(entityId: "e1"), 25)
+        XCTAssertEqual(firstPage.rows.count, 10)
+        XCTAssertEqual(secondPage.rows.count, 10)
+        XCTAssertEqual(firstPage.rows.first?.chunkID, "c-24")
+        XCTAssertEqual(secondPage.rows.first?.chunkID, "c-14")
+        XCTAssertTrue(Set(firstPage.rows.map(\.chunkID)).isDisjoint(with: Set(secondPage.rows.map(\.chunkID))))
+        XCTAssertNotNil(secondPage.nextCursor)
+    }
+
+    func testFetchEntitySourceFileCountReturnsDistinctFiles() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<5 {
+            try insertLinkedChunk(
+                id: "shared-\(i)",
+                entityId: "e1",
+                content: "Shared file chunk \(i)",
+                sourceFile: "/tmp/shared.md",
+                createdAt: "2026-05-24T12:00:0\(i)Z",
+                relevance: 0.8
+            )
+        }
+        try insertLinkedChunk(
+            id: "other-1",
+            entityId: "e1",
+            content: "Other file chunk",
+            sourceFile: "/tmp/other.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.7
+        )
+
+        XCTAssertEqual(try db.fetchEntitySourceFileCount(entityId: "e1"), 2)
+    }
+
+    func testFetchEntitySourceFilesPagesAggregatedFiles() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<3 {
+            try insertLinkedChunk(
+                id: "alpha-\(i)",
+                entityId: "e1",
+                content: "Alpha file chunk \(i)",
+                sourceFile: "/tmp/alpha.md",
+                createdAt: "2026-05-24T12:00:0\(i)Z",
+                relevance: 0.6
+            )
+        }
+        try insertLinkedChunk(
+            id: "beta-1",
+            entityId: "e1",
+            content: "Beta file chunk",
+            sourceFile: "/tmp/beta.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "gamma-1",
+            entityId: "e1",
+            content: "Gamma file chunk",
+            sourceFile: "/tmp/gamma.md",
+            createdAt: "2026-05-24T12:02:00Z",
+            relevance: 0.4
+        )
+
+        let firstPage = try db.fetchEntitySourceFiles(entityId: "e1", limit: 2, after: nil)
+        let secondPage = try db.fetchEntitySourceFiles(entityId: "e1", limit: 2, after: firstPage.nextCursor)
+
+        XCTAssertEqual(firstPage.rows.map(\.sourceFile), ["/tmp/beta.md", "/tmp/alpha.md"])
+        XCTAssertEqual(firstPage.rows.map(\.chunkCount), [1, 3])
+        XCTAssertEqual(secondPage.rows.map(\.sourceFile), ["/tmp/gamma.md"])
+        XCTAssertNil(secondPage.nextCursor)
+    }
+
+    private func insertLinkedChunk(
+        id: String,
+        entityId: String,
+        content: String,
+        sourceFile: String,
+        createdAt: String,
+        relevance: Double
+    ) throws {
+        try db.insertChunk(
+            id: id,
+            content: content,
+            sessionId: "s-\(id)",
+            project: "test",
+            contentType: "ai_code",
+            importance: 5
+        )
+        try updateChunk(id: id, sourceFile: sourceFile, createdAt: createdAt)
+        try db.linkEntityChunk(entityId: entityId, chunkId: id, relevance: relevance)
+    }
+
+    private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        let sql = "UPDATE chunks SET source_file = ?, created_at = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, sql, -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, sourceFile, -1, transient)
+        sqlite3_bind_text(stmt, 2, createdAt, -1, transient)
+        sqlite3_bind_text(stmt, 3, id, -1, transient)
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
+    }
 }
 
 private func createLegacyKGDatabaseWithoutRelationExpirationColumns(path: String) throws {
@@ -553,9 +676,119 @@ final class KGViewModelTests: XCTestCase {
         let vm = KGViewModel(database: db)
         await vm.loadGraph()
         vm.selectNode(id: "e1")
+        await waitForSelectedEntityChunks(vm)
 
         XCTAssertFalse(vm.selectedEntityChunks.isEmpty)
         XCTAssertTrue(vm.selectedEntityChunks.first?.snippet.contains("Alice") ?? false)
+    }
+
+    func testSelectNodePopulatesTotalsFirstChunkPageAndFilesWithoutBlockingMainActor() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "builds")
+        for i in 0..<25 {
+            try db.insertChunk(
+                id: "c-\(i)",
+                content: "Alice memory \(i)",
+                sessionId: "s-\(i)",
+                project: "test",
+                contentType: "ai_code",
+                importance: 5
+            )
+            try updateChunk(id: "c-\(i)", sourceFile: "/tmp/file-\(i % 4).md", createdAt: String(format: "2026-05-24T12:%02d:00Z", i))
+            try db.linkEntityChunk(entityId: "e1", chunkId: "c-\(i)", relevance: Double(i) / 100.0)
+        }
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        var mainActorRanAfterSelection = false
+        let marker = Task { @MainActor in
+            mainActorRanAfterSelection = true
+        }
+
+        vm.selectNode(id: "e1")
+        await marker.value
+        await waitForSelectedEntityLoad(vm)
+
+        XCTAssertTrue(mainActorRanAfterSelection, "selectNode should not perform sidebar database reads synchronously on the MainActor")
+        XCTAssertEqual(vm.selectedEntityChunkTotal, 25)
+        XCTAssertEqual(vm.selectedEntityFileTotal, 4)
+        XCTAssertEqual(vm.selectedEntityChunks.count, 15)
+        XCTAssertEqual(vm.selectedEntityFiles.count, 4)
+    }
+
+    func testLoadMoreChunksAppendsNextPageWithoutDuplicates() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "builds")
+        for i in 0..<25 {
+            try db.insertChunk(
+                id: "more-\(i)",
+                content: "Alice paged memory \(i)",
+                sessionId: "more-\(i)",
+                project: "test",
+                contentType: "ai_code",
+                importance: 5
+            )
+            try updateChunk(id: "more-\(i)", sourceFile: "/tmp/file-\(i % 2).md", createdAt: String(format: "2026-05-24T13:%02d:00Z", i))
+            try db.linkEntityChunk(entityId: "e1", chunkId: "more-\(i)", relevance: Double(i) / 100.0)
+        }
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.selectNode(id: "e1")
+        await waitForSelectedEntityLoad(vm)
+
+        vm.loadMoreChunks()
+        await waitForSelectedEntityChunkCount(vm, count: 25)
+
+        XCTAssertEqual(vm.selectedEntityChunks.count, 25)
+        XCTAssertEqual(Set(vm.selectedEntityChunks.map(\.chunkID)).count, 25)
+        XCTAssertEqual(vm.selectedEntityChunks.first?.chunkID, "more-24")
+        XCTAssertEqual(vm.selectedEntityChunks.last?.chunkID, "more-0")
+    }
+
+    private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        let sql = "UPDATE chunks SET source_file = ?, created_at = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, sql, -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, sourceFile, -1, transient)
+        sqlite3_bind_text(stmt, 2, createdAt, -1, transient)
+        sqlite3_bind_text(stmt, 3, id, -1, transient)
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
+    }
+
+    private func waitForSelectedEntityLoad(_ vm: KGViewModel, iterations: Int = 200) async {
+        for _ in 0..<iterations {
+            if vm.selectedEntityChunkTotal == 25 && vm.selectedEntityChunks.count == 15 {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    private func waitForSelectedEntityChunks(_ vm: KGViewModel, iterations: Int = 200) async {
+        for _ in 0..<iterations {
+            if !vm.selectedEntityChunks.isEmpty {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    private func waitForSelectedEntityChunkCount(_ vm: KGViewModel, count: Int, iterations: Int = 200) async {
+        for _ in 0..<iterations {
+            if vm.selectedEntityChunks.count == count {
+                return
+            }
+            await Task.yield()
+        }
     }
 }
 
