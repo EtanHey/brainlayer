@@ -19,6 +19,8 @@ final class KGViewModel: ObservableObject {
     @Published var selectedEntityFileTotal: Int = 0
     @Published var selectedEntityFiles: [BrainDatabase.SourceFileRow] = []
     @Published var selectedConversation: BrainDatabase.ExpandedConversation?
+    @Published private(set) var isLoadingSelectedEntityChunks = false
+    @Published private(set) var isLoadingSelectedEntityFiles = false
     @Published private(set) var degradationState: DegradationState = .healthy
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
@@ -29,9 +31,8 @@ final class KGViewModel: ObservableObject {
     private var layoutCanvasSize: CGSize?
     private var selectedEntityChunkCursor: BrainDatabase.ChunkCursor?
     private var selectedEntityFileCursor: BrainDatabase.SourceFileCursor?
-    private var isLoadingSelectedEntityChunks = false
-    private var isLoadingSelectedEntityFiles = false
     private var selectedEntityLoadTask: Task<Void, Never>?
+    private var selectedEntityGeneration = 0
     private let selectedEntityChunkPageSize = 15
     private let selectedEntityFilePageSize = 15
 
@@ -219,6 +220,8 @@ final class KGViewModel: ObservableObject {
 
     func selectNode(id: String?) {
         selectedEntityLoadTask?.cancel()
+        selectedEntityGeneration += 1
+        let generation = selectedEntityGeneration
         selectedNodeId = id
         if let id {
             guard let database else { return }
@@ -244,7 +247,7 @@ final class KGViewModel: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    guard let self, self.selectedNodeId == id else { return }
+                    guard let self, self.selectedNodeId == id, self.selectedEntityGeneration == generation else { return }
                     self.isLoadingSelectedEntityChunks = false
                     self.isLoadingSelectedEntityFiles = false
                     switch result {
@@ -284,6 +287,7 @@ final class KGViewModel: ObservableObject {
         guard !isLoadingSelectedEntityChunks else { return }
         isLoadingSelectedEntityChunks = true
         let pageSize = selectedEntityChunkPageSize
+        let generation = selectedEntityGeneration
         Task { [weak self, database] in
             let result = await Self.fetchChunkPage(
                 database: database,
@@ -292,7 +296,7 @@ final class KGViewModel: ObservableObject {
                 limit: pageSize
             )
             await MainActor.run {
-                guard let self, self.selectedNodeId == entityId else { return }
+                guard let self, self.selectedNodeId == entityId, self.selectedEntityGeneration == generation else { return }
                 self.isLoadingSelectedEntityChunks = false
                 if case .success(let page) = result {
                     self.selectedEntityChunks.append(contentsOf: page.rows)
@@ -307,6 +311,7 @@ final class KGViewModel: ObservableObject {
         guard !isLoadingSelectedEntityFiles else { return }
         isLoadingSelectedEntityFiles = true
         let pageSize = selectedEntityFilePageSize
+        let generation = selectedEntityGeneration
         Task { [weak self, database] in
             let result = await Self.fetchFilePage(
                 database: database,
@@ -315,7 +320,7 @@ final class KGViewModel: ObservableObject {
                 limit: pageSize
             )
             await MainActor.run {
-                guard let self, self.selectedNodeId == entityId else { return }
+                guard let self, self.selectedNodeId == entityId, self.selectedEntityGeneration == generation else { return }
                 self.isLoadingSelectedEntityFiles = false
                 if case .success(let page) = result {
                     self.selectedEntityFiles.append(contentsOf: page.rows)
