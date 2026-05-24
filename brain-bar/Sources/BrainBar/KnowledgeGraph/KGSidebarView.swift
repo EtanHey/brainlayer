@@ -5,9 +5,11 @@ struct KGSidebarView: View {
     let chunks: [BrainDatabase.KGChunkRow]
     let chunkTotal: Int
     let isLoadingChunks: Bool
+    let canLoadMoreChunks: Bool
     let files: [BrainDatabase.SourceFileRow]
     let fileTotal: Int
     let isLoadingFiles: Bool
+    let canLoadMoreFiles: Bool
     let onOpenConversation: (String) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
@@ -200,7 +202,7 @@ struct KGSidebarView: View {
                     )
                 }
 
-                if chunks.count < chunkTotal {
+                if canLoadMoreChunks {
                     ProgressView()
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
@@ -245,7 +247,7 @@ struct KGSidebarView: View {
                             )
                     }
 
-                    if files.count < fileTotal {
+                    if canLoadMoreFiles {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
