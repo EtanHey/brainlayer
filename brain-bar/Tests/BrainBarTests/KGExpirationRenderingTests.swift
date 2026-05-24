@@ -26,6 +26,31 @@ final class KGExpirationRenderingTests: XCTestCase {
         XCTAssertNotNil(relation.expiredAt)
     }
 
+    func testEntityCardRelationDecodesPythonMicrosecondExpirationTimestamp() throws {
+        let payload: [String: Any] = [
+            "entity_id": "person-etan",
+            "name": "Etan",
+            "entity_type": "person",
+            "relations": [
+                [
+                    "relation_type": "cto_of",
+                    "target_name": "Domica",
+                    "direction": "outgoing",
+                    "expired_at": "2026-05-24T12:34:56.123456Z",
+                ]
+            ],
+        ]
+
+        let card = EntityCard(lookupPayload: payload)
+        let relation = try XCTUnwrap(card.relations.first)
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
+        let presentation = KGRelationPresentation(relation: relation, now: now)
+
+        XCTAssertNotNil(relation.expiredAt)
+        XCTAssertTrue(presentation.isDimmed)
+        XCTAssertEqual(presentation.expirationPill?.label, "expired")
+    }
+
     func testExpirationPillFormatsDateForInlineRendering() throws {
         let date = try XCTUnwrap(KGTemporalDate.parse("2026-05-24T00:00:00Z"))
 

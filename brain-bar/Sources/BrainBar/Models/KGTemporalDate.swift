@@ -8,13 +8,13 @@ enum KGTemporalDate {
         guard let text = raw as? String, !text.isEmpty else {
             return nil
         }
+        if let date = pythonMicrosecondISOFormatter().date(from: text) {
+            return date
+        }
         if let date = fractionalISOFormatter().date(from: text) {
             return date
         }
         if let date = plainISOFormatter().date(from: text) {
-            return date
-        }
-        if let date = microsecondISOFormatter().date(from: text) {
             return date
         }
         return sqliteTimestampFormatter().date(from: text)
@@ -32,7 +32,7 @@ enum KGTemporalDate {
         return formatter
     }
 
-    private static func microsecondISOFormatter() -> DateFormatter {
+    private static func pythonMicrosecondISOFormatter() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
