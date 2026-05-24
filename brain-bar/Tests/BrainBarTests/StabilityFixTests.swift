@@ -127,7 +127,7 @@ final class EnterKeySearchTests: XCTestCase {
         // Switch to search mode and populate results
         vm.setMode(.search)
         vm.inputText = "React"
-        vm.handleInputChange("React")
+        vm.submit()
 
         // Verify we have results and no selection yet is OK — submit should select first
         guard !vm.results.isEmpty else {

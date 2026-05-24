@@ -5,6 +5,8 @@ protocol QuickCaptureClipboard {
     func copy(_ string: String)
 }
 
+typealias QuickCaptureSearch = @MainActor (_ query: String, _ limit: Int) throws -> QuickCaptureController.SearchResult
+
 struct SystemQuickCaptureClipboard: QuickCaptureClipboard {
     func copy(_ string: String) {
         let pasteboard = NSPasteboard.general
@@ -55,13 +57,14 @@ struct QuickCaptureSearchRow: Identifiable, Equatable {
     static func fromSearchResult(_ result: [String: Any]) -> QuickCaptureSearchRow? {
         let rawID = (result["chunk_id"] as? String) ?? UUID().uuidString
         let title = (result["content"] as? String) ?? "Untitled result"
+        let fullContent = (result["full_content"] as? String) ?? title
         let createdAt = (result["created_at"] as? String) ?? "unknown time"
         let importance = formattedImportance(result["importance"])
 
         return QuickCaptureSearchRow(
             id: rawID,
             title: title,
-            content: title,
+            content: fullContent,
             metadata: "\(importance) • \(createdAt)"
         )
     }
@@ -103,8 +106,11 @@ final class QuickCaptureViewModel: ObservableObject {
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
     private let clipboard: QuickCaptureClipboard
+    private let search: QuickCaptureSearch
     private var copyResetTask: Task<Void, Never>?
     private var feedbackResetTask: Task<Void, Never>?
+    private let searchDebounceDelay: Duration
+    var _pendingSearchTask: Task<Void, Never>?
     /// Exposed for test awaiting — set when an async store is in flight.
     var _pendingStoreTask: Task<Void, Never>?
     /// Feedback state clears back to `.idle` after this delay on success.
@@ -115,13 +121,26 @@ final class QuickCaptureViewModel: ObservableObject {
         db: BrainDatabase,
         panelState: QuickCapturePanelState,
         clipboard: QuickCaptureClipboard = SystemQuickCaptureClipboard(),
-        feedbackAutoClearDelay: Duration = .milliseconds(2000)
+        feedbackAutoClearDelay: Duration = .milliseconds(2000),
+        searchDebounceDelay: Duration = .milliseconds(250),
+        search: QuickCaptureSearch? = nil
     ) {
         self.db = db
         self.panelState = panelState
         self.clipboard = clipboard
+        self.search = search ?? { [db] query, limit in
+            try QuickCaptureController.search(db: db, query: query, limit: limit)
+        }
         self.feedbackAutoClearDelay = feedbackAutoClearDelay
+        self.searchDebounceDelay = searchDebounceDelay
         mode = panelState.mode
+    }
+
+    deinit {
+        copyResetTask?.cancel()
+        feedbackResetTask?.cancel()
+        _pendingSearchTask?.cancel()
+        _pendingStoreTask?.cancel()
     }
 
     /// Called when the user clicks outside the overlay. Preserves `inputText`
@@ -188,6 +207,7 @@ final class QuickCaptureViewModel: ObservableObject {
         copiedResultID = nil
         isSearchOverlayDismissed = false
         if newMode == .capture {
+            _pendingSearchTask?.cancel()
             results = []
             selectedResultIndex = nil
         } else if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -240,11 +260,19 @@ final class QuickCaptureViewModel: ObservableObject {
     func handleInputChange(_ newValue: String) {
         if inputText != newValue {
             inputText = newValue
+            if mode == .search {
+                results = []
+                selectedResultIndex = nil
+                copiedResultID = nil
+            }
         }
         isSearchOverlayDismissed = false
 
-        guard mode == .search else { return }
-        submitSearch()
+        guard mode == .search else {
+            _pendingSearchTask?.cancel()
+            return
+        }
+        scheduleDebouncedSearch()
     }
 
     func handleInputReturn(modifiers: NSEvent.ModifierFlags) {
@@ -299,6 +327,7 @@ final class QuickCaptureViewModel: ObservableObject {
 
     func dismiss() {
         panelState.dismiss()
+        _pendingSearchTask?.cancel()
         mode = panelState.mode
         inputText = ""
         results = []
@@ -341,13 +370,24 @@ final class QuickCaptureViewModel: ObservableObject {
         }
     }
 
-    private func submitSearch() {
+    private func scheduleDebouncedSearch() {
+        let query = inputText
+        _pendingSearchTask?.cancel()
+        _pendingSearchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: searchDebounceDelay)
+            guard !Task.isCancelled, query == inputText else { return }
+            submitSearch(query: query, cancelPending: false)
+        }
+    }
+
+    private func submitSearch(query: String? = nil, cancelPending: Bool = true) {
+        if cancelPending {
+            _pendingSearchTask?.cancel()
+        }
+        let query = query ?? inputText
         do {
-            let searchResult = try QuickCaptureController.search(
-                db: db,
-                query: inputText,
-                limit: 8
-            )
+            let searchResult = try search(query, 8)
             results = searchResult.results.compactMap(QuickCaptureSearchRow.fromSearchResult)
             selectedResultIndex = results.isEmpty ? nil : 0
             copiedResultID = nil

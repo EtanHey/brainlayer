@@ -3524,7 +3524,7 @@ final class BrainDatabase: @unchecked Sendable {
     func getChunk(id: String) throws -> [String: Any]? {
         guard let db else { throw DBError.notOpen }
         let sql = """
-            SELECT id, content, content_type, source, summary, created_at, archived_at, superseded_by
+            SELECT id, content, content_type, source, summary, created_at, archived_at, superseded_by, tags
             FROM chunks
             WHERE id = ?
             LIMIT 1
@@ -3545,6 +3545,7 @@ final class BrainDatabase: @unchecked Sendable {
             "created_at": columnText(stmt, 5) as Any,
             "archived_at": columnText(stmt, 6) as Any,
             "superseded_by": columnText(stmt, 7) as Any,
+            "tags": columnText(stmt, 8) as Any,
         ]
     }
 

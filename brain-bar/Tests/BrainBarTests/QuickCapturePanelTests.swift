@@ -80,28 +80,174 @@ final class QuickCapturePanelTests: XCTestCase {
         XCTAssertEqual(model.selectedResultID, "search-1", "Search should preselect the first result for keyboard navigation")
     }
 
-    func testHandleInputChangeRunsSearchImmediatelyInSearchMode() throws {
+    func testHandleInputChangeDebouncesSearchByAtLeast200Milliseconds() async throws {
         let (db, path) = try makeDatabase(name: "live-search")
         defer { cleanupDatabase(db, path: path) }
-        try db.insertChunk(
-            id: "live-1",
-            content: "BrainBar live search should query while typing",
-            sessionId: "s1",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 6
-        )
 
         let panelState = QuickCapturePanelState()
         panelState.switchMode(.search)
-        let model = QuickCaptureViewModel(db: db, panelState: panelState)
+        var searchCallTimes: [Date] = []
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: panelState,
+            searchDebounceDelay: .milliseconds(250),
+            search: { _, _ in
+                searchCallTimes.append(Date())
+                return QuickCaptureController.SearchResult(count: 0, formatted: "", results: [])
+            }
+        )
 
+        let startedAt = Date()
         model.handleInputChange("live search")
+        try await Task.sleep(for: .milliseconds(200))
 
         XCTAssertEqual(model.inputText, "live search")
-        XCTAssertEqual(model.results.map(\.id), ["live-1"])
-        XCTAssertEqual(model.selectedResultID, "live-1")
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertEqual(searchCallTimes.count, 0)
+
+        try await Task.sleep(for: .milliseconds(120))
+        await model._pendingSearchTask?.value
+
+        XCTAssertEqual(searchCallTimes.count, 1)
+        XCTAssertGreaterThanOrEqual(searchCallTimes[0].timeIntervalSince(startedAt), 0.2)
         XCTAssertTrue(model.feedback.isIdle)
+    }
+
+    func testRapidInputChangesOnlyRunLatestDebouncedSearch() async throws {
+        let (db, path) = try makeDatabase(name: "live-search-coalesce")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        var searchedQueries: [String] = []
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: panelState,
+            searchDebounceDelay: .milliseconds(250),
+            search: { query, _ in
+                searchedQueries.append(query)
+                return QuickCaptureController.SearchResult(
+                    count: 1,
+                    formatted: "",
+                    results: [["chunk_id": "latest", "content": query, "created_at": "now", "importance": 5]]
+                )
+            }
+        )
+
+        model.handleInputChange("l")
+        try await Task.sleep(for: .milliseconds(100))
+        model.handleInputChange("li")
+        try await Task.sleep(for: .milliseconds(100))
+        model.handleInputChange("live")
+        try await Task.sleep(for: .milliseconds(300))
+        await model._pendingSearchTask?.value
+
+        XCTAssertEqual(searchedQueries, ["live"])
+        XCTAssertEqual(model.results.map(\.title), ["live"])
+    }
+
+    func testExplicitSubmitCancelsPendingDebouncedSearch() async throws {
+        let (db, path) = try makeDatabase(name: "submit-cancels-debounce")
+        defer { cleanupDatabase(db, path: path) }
+
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        var searchedQueries: [String] = []
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: panelState,
+            searchDebounceDelay: .milliseconds(50),
+            search: { query, _ in
+                searchedQueries.append(query)
+                return QuickCaptureController.SearchResult(
+                    count: 1,
+                    formatted: "",
+                    results: [["chunk_id": "submitted", "content": query, "created_at": "now", "importance": 5]]
+                )
+            }
+        )
+
+        model.handleInputChange("submit now")
+        model.handleInputReturn(modifiers: [])
+        try await Task.sleep(for: .milliseconds(80))
+        await model._pendingSearchTask?.value
+
+        XCTAssertEqual(searchedQueries, ["submit now"])
+        XCTAssertEqual(model.results.map(\.title), ["submit now"])
+    }
+
+    func testInputChangeClearsStaleResultsBeforeDebouncedSearchCompletes() throws {
+        let (db, path) = try makeDatabase(name: "live-search-stale-results")
+        defer { cleanupDatabase(db, path: path) }
+        try db.insertChunk(
+            id: "old-result",
+            content: "Old query result should not remain selectable",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "new-result",
+            content: "New query result should replace stale rows",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        let clipboard = TestClipboard()
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: clipboard)
+        model.inputText = "old query"
+        model.submit()
+        XCTAssertEqual(model.selectedResultID, "old-result")
+
+        model.handleInputChange("new query")
+
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertNil(model.selectedResultID)
+
+        model.handleInputReturn(modifiers: [])
+
+        XCTAssertTrue(clipboard.copiedStrings.isEmpty)
+        XCTAssertEqual(model.selectedResultID, "new-result")
+    }
+
+    func testEnterCopiesFullContentWhenSearchRowDisplaysPreview() throws {
+        let (db, path) = try makeDatabase(name: "copy-full-content-from-preview-row")
+        defer { cleanupDatabase(db, path: path) }
+
+        let clipboard = TestClipboard()
+        let panelState = QuickCapturePanelState()
+        panelState.switchMode(.search)
+        let model = QuickCaptureViewModel(
+            db: db,
+            panelState: panelState,
+            clipboard: clipboard,
+            search: { _, _ in
+                QuickCaptureController.SearchResult(
+                    count: 1,
+                    formatted: "",
+                    results: [[
+                        "chunk_id": "full-copy-1",
+                        "content": "Short overlay preview",
+                        "full_content": "Full stored chunk content that should be copied",
+                        "created_at": "now",
+                        "importance": 5,
+                    ]]
+                )
+            }
+        )
+        model.inputText = "overlay preview"
+        model.submit()
+
+        XCTAssertEqual(model.results.first?.title, "Short overlay preview")
+
+        model.submit()
+
+        XCTAssertEqual(clipboard.copiedStrings, ["Full stored chunk content that should be copied"])
     }
 
     func testTabTogglesBetweenCaptureAndSearchModes() throws {
@@ -344,7 +490,8 @@ final class QuickCapturePanelTests: XCTestCase {
         let panelState = QuickCapturePanelState()
         panelState.switchMode(.search)
         let model = QuickCaptureViewModel(db: db, panelState: panelState)
-        model.handleInputChange("dismiss test")
+        model.inputText = "dismiss test"
+        model.submit()
 
         XCTAssertFalse(model.isSearchOverlayDismissed)
         XCTAssertGreaterThan(model.results.count, 0)
@@ -377,7 +524,8 @@ final class QuickCapturePanelTests: XCTestCase {
         let panelState = QuickCapturePanelState()
         panelState.switchMode(.search)
         let model = QuickCaptureViewModel(db: db, panelState: panelState)
-        model.handleInputChange("tests")
+        model.inputText = "tests"
+        model.submit()
         XCTAssertGreaterThan(model.results.count, 0, "Initial search must populate results")
 
         // Leave search mode → results get cleared (existing contract).
@@ -591,7 +739,8 @@ final class QuickCapturePanelTests: XCTestCase {
         panelState.switchMode(.search)
         let clipboard = TestClipboard()
         let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: clipboard)
-        model.handleInputChange("copy this exact")
+        model.inputText = "copy this exact"
+        model.submit()
 
         model.copyResultToClipboard(id: "copy-1")
 
@@ -616,7 +765,8 @@ final class QuickCapturePanelTests: XCTestCase {
         let panelState = QuickCapturePanelState()
         panelState.switchMode(.search)
         let model = QuickCaptureViewModel(db: db, panelState: panelState, clipboard: TestClipboard())
-        model.handleInputChange("highlight this row")
+        model.inputText = "highlight this row"
+        model.submit()
 
         model.copyResultToClipboard(id: "copy-visual-1")
 
