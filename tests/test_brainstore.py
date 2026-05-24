@@ -10,6 +10,7 @@ are embedded at write time, and return related existing memories.
 """
 
 import json
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -182,6 +183,27 @@ class TestStoreMemory:
         created_at = rows[0][0]
         assert created_at >= before
         assert created_at <= after
+
+    def test_store_sets_ingested_at(self, store, mock_embed):
+        """Stored memory has a fresh Unix ingested_at timestamp."""
+        from brainlayer.store import store_memory
+
+        before = int(time.time())
+        result = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="brain_store ingested_at regression coverage",
+            memory_type="note",
+            project="test",
+        )
+        after = int(time.time())
+
+        cursor = store.conn.cursor()
+        row = cursor.execute("SELECT ingested_at FROM chunks WHERE id = ?", (result["id"],)).fetchone()
+
+        assert row is not None
+        assert row[0] is not None
+        assert before - 5 <= row[0] <= after + 5
 
     def test_store_returns_related_memories(self, store, mock_embed):
         """Storing a memory returns related existing memories."""

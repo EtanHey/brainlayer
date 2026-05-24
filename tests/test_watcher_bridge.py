@@ -12,6 +12,7 @@ Covers:
 
 import json
 import sqlite3
+import time
 
 from brainlayer.vector_store import VectorStore
 from brainlayer.watcher import JSONLTailer, JSONLWatcher
@@ -153,6 +154,33 @@ class TestFlushCallback:
         rows = conn.execute("SELECT id, content, source FROM chunks WHERE source = 'realtime_watcher'").fetchall()
         conn.close()
         assert len(rows) >= 1
+
+    def test_insert_sets_ingested_at(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path)
+        entry = _make_jsonl_entry(
+            text=(
+                "Watcher ingested_at regression coverage should store a fresh unix timestamp "
+                "for a substantive assistant response with enough detail to pass the classifier "
+                "and persist through the realtime watcher insert path."
+            ),
+            entry_type="assistant",
+        )
+        entry["_source_file"] = str(tmp_path / "projects" / "test-project" / "session.jsonl")
+
+        before = int(time.time())
+        flush([entry])
+        after = int(time.time())
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT ingested_at FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row[0] is not None
+        assert before - 5 <= row[0] <= after + 5
 
     def test_skips_noise_entries(self, tmp_path):
         db_path = tmp_path / "test.db"
