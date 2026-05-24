@@ -4,8 +4,10 @@ struct KGSidebarView: View {
     let entity: EntityCard?
     let chunks: [BrainDatabase.KGChunkRow]
     let chunkTotal: Int
+    let isLoadingChunks: Bool
     let files: [BrainDatabase.SourceFileRow]
     let fileTotal: Int
+    let isLoadingFiles: Bool
     let onOpenConversation: (String) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
@@ -204,6 +206,11 @@ struct KGSidebarView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .onAppear(perform: onLoadMoreChunks)
+                } else if isLoadingChunks {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                 }
             }
         }
@@ -217,7 +224,12 @@ struct KGSidebarView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if files.isEmpty {
+            if files.isEmpty, isLoadingFiles {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            } else if files.isEmpty {
                 Text("No source files are linked yet.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)

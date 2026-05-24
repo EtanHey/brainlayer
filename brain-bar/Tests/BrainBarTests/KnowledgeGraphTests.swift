@@ -309,6 +309,25 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNotNil(secondPage.nextCursor)
     }
 
+    func testFetchEntityChunkCountIgnoresOrphanedChunkLinks() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try insertLinkedChunk(
+            id: "real",
+            entityId: "e1",
+            content: "Resolvable chunk",
+            sourceFile: "/tmp/source.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try db.linkEntityChunk(entityId: "e1", chunkId: "missing", relevance: 0.8)
+
+        let page = try db.fetchEntityChunksPage(entityId: "e1", after: nil, limit: 15)
+
+        XCTAssertEqual(try db.fetchEntityChunkCount(entityId: "e1"), 1)
+        XCTAssertEqual(page.rows.map(\.chunkID), ["real"])
+        XCTAssertNil(page.nextCursor)
+    }
+
     func testFetchEntitySourceFileCountReturnsDistinctFiles() throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
         for i in 0..<5 {
@@ -707,6 +726,7 @@ final class KGViewModelTests: XCTestCase {
         }
 
         vm.selectNode(id: "e1")
+        XCTAssertTrue(vm.isLoadingSelectedEntityFiles)
         await marker.value
         await waitForSelectedEntityLoad(vm)
 
@@ -715,6 +735,7 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityFileTotal, 4)
         XCTAssertEqual(vm.selectedEntityChunks.count, 15)
         XCTAssertEqual(vm.selectedEntityFiles.count, 4)
+        XCTAssertFalse(vm.isLoadingSelectedEntityFiles)
     }
 
     func testLoadMoreChunksAppendsNextPageWithoutDuplicates() async throws {

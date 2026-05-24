@@ -3527,8 +3527,9 @@ final class BrainDatabase: @unchecked Sendable {
     func fetchEntityChunkCount(entityId: String) throws -> Int {
         let sql = """
             SELECT COUNT(*)
-            FROM kg_entity_chunks
-            WHERE entity_id = ?
+            FROM kg_entity_chunks ec
+            JOIN chunks c ON c.id = ec.chunk_id
+            WHERE ec.entity_id = ?
         """
         return try fetchCount(sql: sql, entityId: entityId)
     }
