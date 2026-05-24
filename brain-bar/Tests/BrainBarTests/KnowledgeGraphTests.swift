@@ -218,6 +218,26 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNotNil(relation.validUntil)
     }
 
+    func testReadOnlyLegacyKGRelationSchemaDoesNotRequireExpirationColumns() throws {
+        db.close()
+        try? FileManager.default.removeItem(atPath: tempDBPath)
+        try createLegacyKGDatabaseWithoutRelationExpirationColumns(path: tempDBPath)
+
+        let reader = BrainDatabase(path: tempDBPath, openConfiguration: .init(readOnly: true))
+        defer { reader.close() }
+
+        let relations = try reader.fetchKGRelations()
+        let payload = try XCTUnwrap(reader.lookupEntity(query: "Etan"))
+        let card = EntityCard(lookupPayload: payload)
+
+        XCTAssertEqual(relations.count, 1)
+        XCTAssertNil(relations.first?.validUntil)
+        XCTAssertNil(relations.first?.expiredAt)
+        XCTAssertEqual(card.relations.first?.targetName, "Domica")
+        XCTAssertNil(card.relations.first?.validUntil)
+        XCTAssertNil(card.relations.first?.expiredAt)
+    }
+
     // MARK: - linkEntityChunk + fetchEntityChunks
 
     func testLinkEntityChunkAndFetch() throws {
@@ -262,6 +282,50 @@ final class KGDatabaseTests: XCTestCase {
         try db.insertEntity(id: "e1", type: "person", name: "Lonely")
         let chunks = try db.fetchEntityChunks(entityId: "e1")
         XCTAssertTrue(chunks.isEmpty)
+    }
+}
+
+private func createLegacyKGDatabaseWithoutRelationExpirationColumns(path: String) throws {
+    var handle: OpaquePointer?
+    let openRC = sqlite3_open_v2(
+        path,
+        &handle,
+        SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+        nil
+    )
+    guard openRC == SQLITE_OK, let handle else {
+        throw NSError(domain: "KnowledgeGraphTests", code: Int(openRC))
+    }
+    defer { sqlite3_close(handle) }
+
+    let sql = """
+        CREATE TABLE kg_entities (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            metadata TEXT DEFAULT '{}',
+            description TEXT,
+            importance REAL DEFAULT 0.5
+        );
+        CREATE TABLE kg_relations (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            properties TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source_id, target_id, relation_type)
+        );
+        INSERT INTO kg_entities (id, entity_type, name, metadata, description)
+        VALUES
+            ('person-etan', 'person', 'Etan', '{}', NULL),
+            ('company-domica', 'company', 'Domica', '{}', NULL);
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type)
+        VALUES ('person-etan-cto_of-company-domica', 'person-etan', 'company-domica', 'cto_of');
+    """
+    let execRC = sqlite3_exec(handle, sql, nil, nil, nil)
+    guard execRC == SQLITE_OK else {
+        throw NSError(domain: "KnowledgeGraphTests", code: Int(execRC))
     }
 }
 

@@ -36,6 +36,7 @@ final class KGExpirationRenderingTests: XCTestCase {
     func testRelationPresentationDimsExpiredAndPillsButKeepsLiveRelationsVisible() throws {
         let expiredAt = try XCTUnwrap(KGTemporalDate.parse("2026-05-24T00:00:00Z"))
         let validUntil = try XCTUnwrap(KGTemporalDate.parse("2026-06-01T00:00:00Z"))
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
         let expired = EntityCard.Relation(
             relationType: "cto_of",
             targetName: "Domica",
@@ -51,11 +52,27 @@ final class KGExpirationRenderingTests: XCTestCase {
             validUntil: validUntil
         )
 
-        XCTAssertTrue(KGRelationPresentation(relation: expired).isDimmed)
-        XCTAssertEqual(KGRelationPresentation(relation: expired).expirationPill?.label, "expired")
-        XCTAssertFalse(KGRelationPresentation(relation: live).isDimmed)
-        XCTAssertNil(KGRelationPresentation(relation: live).expirationPill)
-        XCTAssertFalse(KGRelationPresentation(relation: forwardDated).isDimmed)
-        XCTAssertEqual(KGRelationPresentation(relation: forwardDated).expirationPill?.label, "until")
+        XCTAssertTrue(KGRelationPresentation(relation: expired, now: now).isDimmed)
+        XCTAssertEqual(KGRelationPresentation(relation: expired, now: now).expirationPill?.label, "expired")
+        XCTAssertFalse(KGRelationPresentation(relation: live, now: now).isDimmed)
+        XCTAssertNil(KGRelationPresentation(relation: live, now: now).expirationPill)
+        XCTAssertFalse(KGRelationPresentation(relation: forwardDated, now: now).isDimmed)
+        XCTAssertEqual(KGRelationPresentation(relation: forwardDated, now: now).expirationPill?.label, "until")
+    }
+
+    func testRelationPresentationDimsPastValidUntilAsExpiredWhenExpiredAtIsMissing() throws {
+        let validUntil = try XCTUnwrap(KGTemporalDate.parse("2026-05-24T00:00:00Z"))
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
+        let relation = EntityCard.Relation(
+            relationType: "cto_of",
+            targetName: "Domica",
+            validUntil: validUntil
+        )
+
+        let presentation = KGRelationPresentation(relation: relation, now: now)
+
+        XCTAssertTrue(presentation.isDimmed)
+        XCTAssertEqual(presentation.expirationPill?.label, "expired")
+        XCTAssertEqual(presentation.expirationPill?.date, validUntil)
     }
 }
