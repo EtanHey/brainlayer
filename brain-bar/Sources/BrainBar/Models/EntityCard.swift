@@ -5,11 +5,21 @@ struct EntityCard: Equatable {
         let relationType: String
         let targetName: String
         let direction: String  // "outgoing" or "incoming"
+        let validUntil: Date?
+        let expiredAt: Date?
 
-        init(relationType: String, targetName: String, direction: String = "outgoing") {
+        init(
+            relationType: String,
+            targetName: String,
+            direction: String = "outgoing",
+            validUntil: Date? = nil,
+            expiredAt: Date? = nil
+        ) {
             self.relationType = relationType
             self.targetName = targetName
             self.direction = direction
+            self.validUntil = validUntil
+            self.expiredAt = expiredAt
         }
 
         var displayText: String {
@@ -85,7 +95,9 @@ struct EntityCard: Equatable {
                 Relation(
                     relationType: $0["relation_type"] as? String ?? "related_to",
                     targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? "")),
-                    direction: $0["direction"] as? String ?? "outgoing"
+                    direction: $0["direction"] as? String ?? "outgoing",
+                    validUntil: KGTemporalDate.parse($0["valid_until"] ?? $0["validUntil"]),
+                    expiredAt: KGTemporalDate.parse($0["expired_at"] ?? $0["expiredAt"])
                 )
             }
         memories = []
