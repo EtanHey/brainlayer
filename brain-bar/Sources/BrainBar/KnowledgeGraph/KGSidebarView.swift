@@ -10,6 +10,7 @@ struct KGSidebarView: View {
     let fileTotal: Int
     let isLoadingFiles: Bool
     let canLoadMoreFiles: Bool
+    let hasLoadError: Bool
     let onOpenConversation: (String) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
@@ -63,8 +64,14 @@ struct KGSidebarView: View {
                     HStack(spacing: 8) {
                         labelChip(entity.entityType.isEmpty ? "entity" : entity.entityType.capitalized, tint: .blue)
                         labelChip("\(entity.relations.count) links", tint: .primary)
-                        labelChip("\(chunkTotal) chunks", tint: .green)
-                        if fileTotal > 0 {
+                        if hasLoadError {
+                            labelChip("chunks unavailable", tint: .green)
+                        } else if isLoadingChunks && chunkTotal == 0 && chunks.isEmpty {
+                            labelChip("chunks loading", tint: .green)
+                        } else {
+                            labelChip("\(chunkTotal) chunks", tint: .green)
+                        }
+                        if fileTotal > 0, !hasLoadError {
                             labelChip("\(fileTotal) files", tint: .amber)
                         }
                     }
@@ -186,33 +193,39 @@ struct KGSidebarView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(chunks, id: \.chunkID) { chunk in
-                    Button {
-                        onOpenConversation(chunk.chunkID)
-                    } label: {
-                        chunkCard(chunk)
+            if hasLoadError, chunks.isEmpty {
+                Text("Linked chunks are unavailable right now.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(chunks, id: \.chunkID) { chunk in
+                        Button {
+                            onOpenConversation(chunk.chunkID)
+                        } label: {
+                            chunkCard(chunk)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.primary.opacity(0.045))
+                        )
                     }
-                    .buttonStyle(.plain)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.primary.opacity(0.045))
-                    )
-                }
 
-                if canLoadMoreChunks {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .onAppear(perform: onLoadMoreChunks)
-                } else if isLoadingChunks {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                    if canLoadMoreChunks {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .onAppear(perform: onLoadMoreChunks)
+                    } else if isLoadingChunks {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
                 }
             }
         }
@@ -226,7 +239,11 @@ struct KGSidebarView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if files.isEmpty, isLoadingFiles {
+            if hasLoadError, files.isEmpty {
+                Text("Source files are unavailable right now.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else if files.isEmpty, isLoadingFiles {
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity)
