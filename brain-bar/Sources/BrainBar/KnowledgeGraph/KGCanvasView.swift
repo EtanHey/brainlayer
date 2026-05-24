@@ -66,6 +66,7 @@ struct KGCanvasView: View {
                         fileTotal: viewModel.selectedEntityFileTotal,
                         isLoadingFiles: viewModel.isLoadingSelectedEntityFiles,
                         canLoadMoreFiles: viewModel.selectedEntityCanLoadMoreFiles,
+                        hasLoadError: viewModel.selectedEntitySidebarLoadFailed,
                         onOpenConversation: { viewModel.openConversation(chunkID: $0) },
                         onLoadMoreChunks: { viewModel.loadMoreChunks() },
                         onLoadMoreFiles: { viewModel.loadMoreFiles() },

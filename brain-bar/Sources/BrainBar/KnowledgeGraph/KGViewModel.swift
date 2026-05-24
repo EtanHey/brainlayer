@@ -23,6 +23,7 @@ final class KGViewModel: ObservableObject {
     @Published private(set) var isLoadingSelectedEntityFiles = false
     @Published private(set) var selectedEntityCanLoadMoreChunks = false
     @Published private(set) var selectedEntityCanLoadMoreFiles = false
+    @Published private(set) var selectedEntitySidebarLoadFailed = false
     @Published private(set) var degradationState: DegradationState = .healthy
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
@@ -238,6 +239,7 @@ final class KGViewModel: ObservableObject {
             selectedEntityFileCursor = nil
             selectedEntityCanLoadMoreChunks = false
             selectedEntityCanLoadMoreFiles = false
+            selectedEntitySidebarLoadFailed = false
             isLoadingSelectedEntityChunks = true
             isLoadingSelectedEntityFiles = true
             let chunkPageSize = selectedEntityChunkPageSize
@@ -264,6 +266,7 @@ final class KGViewModel: ObservableObject {
                         self.selectedEntityFileCursor = rows.filePage.nextCursor
                         self.selectedEntityCanLoadMoreChunks = rows.chunkPage.nextCursor != nil
                         self.selectedEntityCanLoadMoreFiles = rows.filePage.nextCursor != nil
+                        self.selectedEntitySidebarLoadFailed = false
                     case .failure:
                         self.selectedEntityChunkTotal = 0
                         self.selectedEntityFileTotal = 0
@@ -273,6 +276,7 @@ final class KGViewModel: ObservableObject {
                         self.selectedEntityFileCursor = nil
                         self.selectedEntityCanLoadMoreChunks = false
                         self.selectedEntityCanLoadMoreFiles = false
+                        self.selectedEntitySidebarLoadFailed = true
                     }
                 }
             }
@@ -286,6 +290,7 @@ final class KGViewModel: ObservableObject {
             selectedEntityFileCursor = nil
             selectedEntityCanLoadMoreChunks = false
             selectedEntityCanLoadMoreFiles = false
+            selectedEntitySidebarLoadFailed = false
             isLoadingSelectedEntityChunks = false
             isLoadingSelectedEntityFiles = false
             selectedConversation = nil

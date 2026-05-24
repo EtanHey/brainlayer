@@ -822,6 +822,23 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
     }
 
+    func testInitialSidebarFetchFailureIsExplicitlyFlagged() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        db.close()
+
+        vm.selectNode(id: "e1")
+        await waitForSelectedEntityChunkLoadingToFinish(vm)
+
+        XCTAssertTrue(vm.selectedEntitySidebarLoadFailed)
+        XCTAssertEqual(vm.selectedEntityChunkTotal, 0)
+        XCTAssertEqual(vm.selectedEntityFileTotal, 0)
+        XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
+        XCTAssertTrue(vm.selectedEntityFiles.isEmpty)
+    }
+
     private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
         guard let handle = db.dbHandle else {
             XCTFail("Expected database handle")
