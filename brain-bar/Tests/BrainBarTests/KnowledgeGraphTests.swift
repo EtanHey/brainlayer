@@ -8,6 +8,22 @@ import XCTest
 import SQLite3
 @testable import BrainBar
 
+private final class DashboardChangeNotificationProbe {
+    var count = 0
+}
+
+private func dashboardChangeNotificationProbeCallback(
+    center: CFNotificationCenter?,
+    observer: UnsafeMutableRawPointer?,
+    name: CFNotificationName?,
+    object: UnsafeRawPointer?,
+    userInfo: CFDictionary?
+) {
+    guard let observer else { return }
+    let probe = Unmanaged<DashboardChangeNotificationProbe>.fromOpaque(observer).takeUnretainedValue()
+    probe.count += 1
+}
+
 // MARK: - Database KG Query Tests
 
 final class KGDatabaseTests: XCTestCase {
@@ -411,6 +427,42 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNotNil(snapshot.chunkPage.nextCursor)
         XCTAssertEqual(snapshot.filePage.rows.map(\.sourceFile), ["/tmp/b.md"])
         XCTAssertNotNil(snapshot.filePage.nextCursor)
+    }
+
+    func testFetchEntitySidebarSnapshotDoesNotPostDashboardChangeNotification() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try insertLinkedChunk(
+            id: "c-1",
+            entityId: "e1",
+            content: "Snapshot notification chunk",
+            sourceFile: "/tmp/a.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.5
+        )
+
+        let probe = DashboardChangeNotificationProbe()
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterAddObserver(
+            center,
+            Unmanaged.passUnretained(probe).toOpaque(),
+            dashboardChangeNotificationProbeCallback,
+            BrainDatabase.dashboardDidChangeNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        defer {
+            CFNotificationCenterRemoveObserver(
+                center,
+                Unmanaged.passUnretained(probe).toOpaque(),
+                CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
+                nil
+            )
+        }
+
+        _ = try db.fetchEntitySidebarSnapshot(entityId: "e1", chunkLimit: 3, fileLimit: 1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(probe.count, 0)
     }
 
     private func insertLinkedChunk(
