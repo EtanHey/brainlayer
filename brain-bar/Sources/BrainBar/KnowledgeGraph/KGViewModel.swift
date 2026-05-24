@@ -435,12 +435,7 @@ final class KGViewModel: ObservableObject {
         nodes.first { $0.id == id }
     }
 
-    private struct SidebarRows: Sendable {
-        let chunkTotal: Int
-        let fileTotal: Int
-        let chunkPage: BrainDatabase.ChunkPage
-        let filePage: BrainDatabase.SourceFilePage
-    }
+    private typealias SidebarRows = BrainDatabase.EntitySidebarSnapshot
 
     private nonisolated static func fetchInitialSidebarRows(
         database: BrainDatabase,
@@ -451,11 +446,10 @@ final class KGViewModel: ObservableObject {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let rows = try SidebarRows(
-                        chunkTotal: database.fetchEntityChunkCount(entityId: entityId),
-                        fileTotal: database.fetchEntitySourceFileCount(entityId: entityId),
-                        chunkPage: database.fetchEntityChunksPage(entityId: entityId, after: nil, limit: chunkLimit),
-                        filePage: database.fetchEntitySourceFiles(entityId: entityId, limit: fileLimit, after: nil)
+                    let rows = try database.fetchEntitySidebarSnapshot(
+                        entityId: entityId,
+                        chunkLimit: chunkLimit,
+                        fileLimit: fileLimit
                     )
                     continuation.resume(returning: .success(rows))
                 } catch {

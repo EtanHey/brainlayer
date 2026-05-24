@@ -390,6 +390,29 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNil(secondPage.nextCursor)
     }
 
+    func testFetchEntitySidebarSnapshotReturnsTotalsAndFirstPagesTogether() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<5 {
+            try insertLinkedChunk(
+                id: "c-\(i)",
+                entityId: "e1",
+                content: "Snapshot chunk \(i)",
+                sourceFile: i < 3 ? "/tmp/a.md" : "/tmp/b.md",
+                createdAt: String(format: "2026-05-24T12:%02d:00Z", i),
+                relevance: Double(i) / 10.0
+            )
+        }
+
+        let snapshot = try db.fetchEntitySidebarSnapshot(entityId: "e1", chunkLimit: 3, fileLimit: 1)
+
+        XCTAssertEqual(snapshot.chunkTotal, 5)
+        XCTAssertEqual(snapshot.fileTotal, 2)
+        XCTAssertEqual(snapshot.chunkPage.rows.map(\.chunkID), ["c-4", "c-3", "c-2"])
+        XCTAssertNotNil(snapshot.chunkPage.nextCursor)
+        XCTAssertEqual(snapshot.filePage.rows.map(\.sourceFile), ["/tmp/b.md"])
+        XCTAssertNotNil(snapshot.filePage.nextCursor)
+    }
+
     private func insertLinkedChunk(
         id: String,
         entityId: String,
