@@ -107,6 +107,42 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(relations.first?.relationType, "builds")
     }
 
+    func testFetchKGRelationsSurfacesExpirationMetadataWithoutFilteringExpiredRelations() throws {
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
+        try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertRelation(sourceId: "person-etan", targetId: "project-brainlayer", relationType: "builds")
+
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+
+        XCTAssertEqual(
+            sqlite3_exec(
+                handle,
+                """
+                UPDATE kg_relations
+                SET expired_at = '2026-05-24T00:00:00Z',
+                    valid_until = '2026-05-24T00:00:00Z'
+                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        let relations = try db.fetchKGRelations()
+
+        XCTAssertEqual(relations.count, 2, "Expired relations remain first-class graph context")
+        let expired = try XCTUnwrap(relations.first { $0.targetId == "company-domica" })
+        XCTAssertNotNil(expired.expiredAt)
+        XCTAssertNotNil(expired.validUntil)
+    }
+
     func testFetchKGRelationsMultiple() throws {
         try db.insertEntity(id: "a", type: "person", name: "A")
         try db.insertEntity(id: "b", type: "project", name: "B")
@@ -145,6 +181,41 @@ final class KGDatabaseTests: XCTestCase {
     func testFetchKGRelationsEmptyDB() throws {
         let relations = try db.fetchKGRelations()
         XCTAssertTrue(relations.isEmpty)
+    }
+
+    func testLookupEntityPayloadIncludesRelationExpirationMetadata() throws {
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
+        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+
+        XCTAssertEqual(
+            sqlite3_exec(
+                handle,
+                """
+                UPDATE kg_relations
+                SET expired_at = '2026-05-24T00:00:00Z',
+                    valid_until = '2026-05-24T00:00:00Z'
+                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                """,
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+
+        let payload = try XCTUnwrap(db.lookupEntity(query: "Etan"))
+        let card = EntityCard(lookupPayload: payload)
+        let relation = try XCTUnwrap(card.relations.first)
+
+        XCTAssertEqual(relation.targetName, "Domica")
+        XCTAssertNotNil(relation.expiredAt)
+        XCTAssertNotNil(relation.validUntil)
     }
 
     // MARK: - linkEntityChunk + fetchEntityChunks

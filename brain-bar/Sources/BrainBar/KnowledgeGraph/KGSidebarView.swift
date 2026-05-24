@@ -105,22 +105,29 @@ struct KGSidebarView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(Array(relations.enumerated()), id: \.offset) { _, relation in
+                    let presentation = KGRelationPresentation(relation: relation)
                     HStack(alignment: .top, spacing: 10) {
                         Text(relation.direction == "incoming" ? "←" : "→")
                             .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
                             .frame(width: 14)
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(relation.targetName)
-                                .font(.system(size: 13, weight: .semibold))
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(relation.targetName)
+                                    .font(.system(size: 13, weight: .semibold))
+                                if let expiration = presentation.expirationPill {
+                                    ExpirationPill(date: expiration.date, label: expiration.label)
+                                }
+                            }
                             Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
                         }
 
                         Spacer()
                     }
+                    .foregroundStyle(presentation.isDimmed ? .tertiary : .primary)
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)

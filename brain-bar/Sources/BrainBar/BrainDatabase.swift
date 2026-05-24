@@ -400,6 +400,7 @@ final class BrainDatabase: @unchecked Sendable {
                 UNIQUE(source_id, target_id, relation_type)
             )
         """)
+        try ensureKGRelationColumns()
 
         try execute("""
             CREATE TABLE IF NOT EXISTS kg_entity_chunks (
@@ -476,6 +477,7 @@ final class BrainDatabase: @unchecked Sendable {
         try ensureChunkColumns()
         try ensurePendingStoreQueueIndex()
         try ensureKGEntityColumns()
+        try ensureKGRelationColumns()
         try ensureKGEntityAliasTable()
         try rebuildTrigramFTSTableIfNeeded()
     }
@@ -2113,6 +2115,12 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("importance") {
             try execute("ALTER TABLE kg_entities ADD COLUMN importance REAL DEFAULT 0.5")
         }
+        if !existingColumns.contains("valid_until") {
+            try execute("ALTER TABLE kg_entities ADD COLUMN valid_until TEXT")
+        }
+        if !existingColumns.contains("expired_at") {
+            try execute("ALTER TABLE kg_entities ADD COLUMN expired_at TEXT")
+        }
     }
 
     private func ensureKGEntityTable() throws {
@@ -2127,6 +2135,37 @@ final class BrainDatabase: @unchecked Sendable {
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 UNIQUE(entity_type, name)
+            )
+        """)
+    }
+
+    private func ensureKGRelationColumns() throws {
+        guard let db else { throw DBError.notOpen }
+        try ensureKGRelationTable()
+        let existingColumns = try tableColumns(name: "kg_relations", on: db)
+        if !existingColumns.contains("valid_from") {
+            try execute("ALTER TABLE kg_relations ADD COLUMN valid_from TEXT")
+        }
+        if !existingColumns.contains("valid_until") {
+            try execute("ALTER TABLE kg_relations ADD COLUMN valid_until TEXT")
+        }
+        if !existingColumns.contains("expired_at") {
+            try execute("ALTER TABLE kg_relations ADD COLUMN expired_at TEXT")
+        }
+        try execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_validity ON kg_relations(valid_from, valid_until)")
+        try execute("CREATE INDEX IF NOT EXISTS idx_kg_relations_expired ON kg_relations(expired_at)")
+    }
+
+    private func ensureKGRelationTable() throws {
+        try execute("""
+            CREATE TABLE IF NOT EXISTS kg_relations (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                properties TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                UNIQUE(source_id, target_id, relation_type)
             )
         """)
     }
@@ -3199,15 +3238,17 @@ final class BrainDatabase: @unchecked Sendable {
         // Get typed relations for found entity (excludes co_occurs_with noise)
         if let entityId, result != nil {
             let relSQL = """
-                SELECT r.relation_type, e.name, 'outgoing' AS direction
-                FROM kg_relations_typed r
+                SELECT r.relation_type, e.name, 'outgoing' AS direction, r.valid_until, r.expired_at
+                FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.target_id
                 WHERE r.source_id = ?
+                  AND r.relation_type != 'co_occurs_with'
                 UNION ALL
-                SELECT r.relation_type, e.name, 'incoming' AS direction
-                FROM kg_relations_typed r
+                SELECT r.relation_type, e.name, 'incoming' AS direction, r.valid_until, r.expired_at
+                FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.source_id
                 WHERE r.target_id = ?
+                  AND r.relation_type != 'co_occurs_with'
                 ORDER BY 1
                 LIMIT 20
             """
@@ -3223,7 +3264,9 @@ final class BrainDatabase: @unchecked Sendable {
                     relations.append([
                         "relation_type": columnText(relStmt, 0) as Any,
                         "target_name": targetName as Any,
-                        "direction": direction as Any
+                        "direction": direction as Any,
+                        "valid_until": columnText(relStmt, 3) as Any,
+                        "expired_at": columnText(relStmt, 4) as Any
                     ])
                 }
                 result?["relations"] = relations
@@ -3312,6 +3355,24 @@ final class BrainDatabase: @unchecked Sendable {
         let sourceId: String
         let targetId: String
         let relationType: String
+        let validUntil: Date?
+        let expiredAt: Date?
+
+        init(
+            id: String,
+            sourceId: String,
+            targetId: String,
+            relationType: String,
+            validUntil: Date? = nil,
+            expiredAt: Date? = nil
+        ) {
+            self.id = id
+            self.sourceId = sourceId
+            self.targetId = targetId
+            self.relationType = relationType
+            self.validUntil = validUntil
+            self.expiredAt = expiredAt
+        }
     }
 
     struct KGChunkRow: Equatable, Sendable {
@@ -3375,7 +3436,7 @@ final class BrainDatabase: @unchecked Sendable {
         // Exclude co_occurs_with — these are auto-generated from text proximity
         // and produce noisy, often incorrect edges in the graph view.
         let sql = """
-            SELECT id, source_id, target_id, relation_type
+            SELECT id, source_id, target_id, relation_type, valid_until, expired_at
             FROM kg_relations
             WHERE relation_type != 'co_occurs_with'
             ORDER BY id
@@ -3394,7 +3455,9 @@ final class BrainDatabase: @unchecked Sendable {
                 id: columnText(stmt, 0) ?? "",
                 sourceId: columnText(stmt, 1) ?? "",
                 targetId: columnText(stmt, 2) ?? "",
-                relationType: columnText(stmt, 3) ?? ""
+                relationType: columnText(stmt, 3) ?? "",
+                validUntil: KGTemporalDate.parse(columnText(stmt, 4)),
+                expiredAt: KGTemporalDate.parse(columnText(stmt, 5))
             ))
         }
         return rows
