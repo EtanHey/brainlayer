@@ -3385,6 +3385,36 @@ final class BrainDatabase: @unchecked Sendable {
         let relevance: Double
     }
 
+    struct ChunkCursor: Equatable, Sendable {
+        let relevance: Double
+        let createdAt: String
+        let chunkID: String
+    }
+
+    struct ChunkPage: Equatable, Sendable {
+        let rows: [KGChunkRow]
+        let nextCursor: ChunkCursor?
+    }
+
+    struct SourceFileCursor: Equatable, Sendable {
+        let topRelevance: Double
+        let chunkCount: Int
+        let sourceFile: String
+    }
+
+    struct SourceFileRow: Equatable, Sendable, Identifiable {
+        let sourceFile: String
+        let chunkCount: Int
+        let topRelevance: Double
+
+        var id: String { sourceFile }
+    }
+
+    struct SourceFilePage: Equatable, Sendable {
+        let rows: [SourceFileRow]
+        let nextCursor: SourceFileCursor?
+    }
+
     struct EnrichmentStatsSummary: Equatable, Sendable {
         let totalChunks: Int
         let enriched: Int
@@ -3491,14 +3521,54 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func fetchEntityChunks(entityId: String, limit: Int = 20) throws -> [KGChunkRow] {
+        try fetchEntityChunksPage(entityId: entityId, after: nil, limit: limit).rows
+    }
+
+    func fetchEntityChunkCount(entityId: String) throws -> Int {
+        let sql = """
+            SELECT COUNT(*)
+            FROM kg_entity_chunks
+            WHERE entity_id = ?
+        """
+        return try fetchCount(sql: sql, entityId: entityId)
+    }
+
+    func fetchEntitySourceFileCount(entityId: String) throws -> Int {
         guard let db else { throw DBError.notOpen }
         let sql = """
-            SELECT c.id, COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
-                   c.importance, ec.relevance
+            SELECT COUNT(DISTINCT c.source_file)
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
             WHERE ec.entity_id = ?
-            ORDER BY ec.relevance DESC
+        """
+        return try fetchCount(sql: sql, entityId: entityId, db: db)
+    }
+
+    func fetchEntityChunksPage(entityId: String, after: ChunkCursor?, limit: Int) throws -> ChunkPage {
+        guard let db else { throw DBError.notOpen }
+        let pageLimit = max(0, limit)
+        guard pageLimit > 0 else { return ChunkPage(rows: [], nextCursor: nil) }
+
+        let cursorPredicate: String
+        if after == nil {
+            cursorPredicate = ""
+        } else {
+            cursorPredicate = """
+                AND (
+                    ec.relevance < ?
+                    OR (ec.relevance = ? AND COALESCE(c.created_at, '') < ?)
+                    OR (ec.relevance = ? AND COALESCE(c.created_at, '') = ? AND c.id < ?)
+                )
+            """
+        }
+        let sql = """
+            SELECT c.id, COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
+                   c.importance, ec.relevance, COALESCE(c.created_at, '') AS created_at
+            FROM kg_entity_chunks ec
+            JOIN chunks c ON c.id = ec.chunk_id
+            WHERE ec.entity_id = ?
+            \(cursorPredicate)
+            ORDER BY ec.relevance DESC, COALESCE(c.created_at, '') DESC, c.id DESC
             LIMIT ?
         """
         var stmt: OpaquePointer?
@@ -3507,9 +3577,25 @@ final class BrainDatabase: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bindText(entityId, to: stmt, index: 1)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var bindIndex: Int32 = 2
+        if let after {
+            sqlite3_bind_double(stmt, bindIndex, after.relevance)
+            bindIndex += 1
+            sqlite3_bind_double(stmt, bindIndex, after.relevance)
+            bindIndex += 1
+            bindText(after.createdAt, to: stmt, index: bindIndex)
+            bindIndex += 1
+            sqlite3_bind_double(stmt, bindIndex, after.relevance)
+            bindIndex += 1
+            bindText(after.createdAt, to: stmt, index: bindIndex)
+            bindIndex += 1
+            bindText(after.chunkID, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(pageLimit + 1))
 
         var rows: [KGChunkRow] = []
+        var cursors: [ChunkCursor] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             rows.append(KGChunkRow(
                 chunkID: columnText(stmt, 0) ?? "",
@@ -3517,8 +3603,105 @@ final class BrainDatabase: @unchecked Sendable {
                 importance: Int(sqlite3_column_int(stmt, 2)),
                 relevance: sqlite3_column_double(stmt, 3)
             ))
+            cursors.append(ChunkCursor(
+                relevance: sqlite3_column_double(stmt, 3),
+                createdAt: columnText(stmt, 4) ?? "",
+                chunkID: columnText(stmt, 0) ?? ""
+            ))
         }
-        return rows
+
+        let hasMore = rows.count > pageLimit
+        if hasMore {
+            rows.removeLast()
+            cursors.removeLast()
+        }
+        return ChunkPage(rows: rows, nextCursor: hasMore ? cursors.last : nil)
+    }
+
+    func fetchEntitySourceFiles(entityId: String, limit: Int, after: SourceFileCursor?) throws -> SourceFilePage {
+        guard let db else { throw DBError.notOpen }
+        let pageLimit = max(0, limit)
+        guard pageLimit > 0 else { return SourceFilePage(rows: [], nextCursor: nil) }
+
+        let cursorPredicate: String
+        if after == nil {
+            cursorPredicate = ""
+        } else {
+            cursorPredicate = """
+                WHERE (
+                    top_relevance < ?
+                    OR (top_relevance = ? AND chunk_count < ?)
+                    OR (top_relevance = ? AND chunk_count = ? AND source_file > ?)
+                )
+            """
+        }
+        let sql = """
+            SELECT source_file, chunk_count, top_relevance
+            FROM (
+                SELECT c.source_file AS source_file,
+                       COUNT(*) AS chunk_count,
+                       MAX(ec.relevance) AS top_relevance
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON c.id = ec.chunk_id
+                WHERE ec.entity_id = ?
+                GROUP BY c.source_file
+            )
+            \(cursorPredicate)
+            ORDER BY top_relevance DESC, chunk_count DESC, source_file ASC
+            LIMIT ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(entityId, to: stmt, index: 1)
+        var bindIndex: Int32 = 2
+        if let after {
+            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
+            bindIndex += 1
+            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
+            bindIndex += 1
+            sqlite3_bind_int(stmt, bindIndex, Int32(after.chunkCount))
+            bindIndex += 1
+            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
+            bindIndex += 1
+            sqlite3_bind_int(stmt, bindIndex, Int32(after.chunkCount))
+            bindIndex += 1
+            bindText(after.sourceFile, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(pageLimit + 1))
+
+        var rows: [SourceFileRow] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(SourceFileRow(
+                sourceFile: columnText(stmt, 0) ?? "",
+                chunkCount: Int(sqlite3_column_int(stmt, 1)),
+                topRelevance: sqlite3_column_double(stmt, 2)
+            ))
+        }
+
+        let hasMore = rows.count > pageLimit
+        if hasMore {
+            rows.removeLast()
+        }
+        let cursor = rows.last.map {
+            SourceFileCursor(topRelevance: $0.topRelevance, chunkCount: $0.chunkCount, sourceFile: $0.sourceFile)
+        }
+        return SourceFilePage(rows: rows, nextCursor: hasMore ? cursor : nil)
+    }
+
+    private func fetchCount(sql: String, entityId: String, db providedDB: OpaquePointer? = nil) throws -> Int {
+        guard let db = providedDB ?? self.db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        bindText(entityId, to: stmt, index: 1)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int(stmt, 0))
     }
 
     func getChunk(id: String) throws -> [String: Any]? {

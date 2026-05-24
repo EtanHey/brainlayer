@@ -15,6 +15,9 @@ final class KGViewModel: ObservableObject {
     @Published var selectedNodeId: String?
     @Published var selectedEntity: EntityCard?
     @Published var selectedEntityChunks: [BrainDatabase.KGChunkRow] = []
+    @Published var selectedEntityChunkTotal: Int = 0
+    @Published var selectedEntityFileTotal: Int = 0
+    @Published var selectedEntityFiles: [BrainDatabase.SourceFileRow] = []
     @Published var selectedConversation: BrainDatabase.ExpandedConversation?
     @Published private(set) var degradationState: DegradationState = .healthy
 
@@ -24,6 +27,13 @@ final class KGViewModel: ObservableObject {
     private let database: BrainDatabase?
     private let graphReader: KnowledgeGraphReading
     private var layoutCanvasSize: CGSize?
+    private var selectedEntityChunkCursor: BrainDatabase.ChunkCursor?
+    private var selectedEntityFileCursor: BrainDatabase.SourceFileCursor?
+    private var isLoadingSelectedEntityChunks = false
+    private var isLoadingSelectedEntityFiles = false
+    private var selectedEntityLoadTask: Task<Void, Never>?
+    private let selectedEntityChunkPageSize = 15
+    private let selectedEntityFilePageSize = 15
 
     // Force simulation parameters
     private let repulsionStrength: CGFloat = 5000
@@ -208,17 +218,110 @@ final class KGViewModel: ObservableObject {
     // MARK: - Selection
 
     func selectNode(id: String?) {
+        selectedEntityLoadTask?.cancel()
         selectedNodeId = id
         if let id {
             guard let database else { return }
             if let lookup = try? database.lookupEntity(query: nodeById(id)?.name ?? "") {
                 selectedEntity = EntityCard(lookupPayload: lookup)
             }
-            selectedEntityChunks = (try? database.fetchEntityChunks(entityId: id)) ?? []
+            selectedEntityChunks = []
+            selectedEntityFiles = []
+            selectedEntityChunkTotal = 0
+            selectedEntityFileTotal = 0
+            selectedEntityChunkCursor = nil
+            selectedEntityFileCursor = nil
+            isLoadingSelectedEntityChunks = true
+            isLoadingSelectedEntityFiles = true
+            let chunkPageSize = selectedEntityChunkPageSize
+            let filePageSize = selectedEntityFilePageSize
+            selectedEntityLoadTask = Task { [weak self, database] in
+                let result = await Self.fetchInitialSidebarRows(
+                    database: database,
+                    entityId: id,
+                    chunkLimit: chunkPageSize,
+                    fileLimit: filePageSize
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.selectedNodeId == id else { return }
+                    self.isLoadingSelectedEntityChunks = false
+                    self.isLoadingSelectedEntityFiles = false
+                    switch result {
+                    case .success(let rows):
+                        self.selectedEntityChunkTotal = rows.chunkTotal
+                        self.selectedEntityFileTotal = rows.fileTotal
+                        self.selectedEntityChunks = rows.chunkPage.rows
+                        self.selectedEntityFiles = rows.filePage.rows
+                        self.selectedEntityChunkCursor = rows.chunkPage.nextCursor
+                        self.selectedEntityFileCursor = rows.filePage.nextCursor
+                    case .failure:
+                        self.selectedEntityChunkTotal = 0
+                        self.selectedEntityFileTotal = 0
+                        self.selectedEntityChunks = []
+                        self.selectedEntityFiles = []
+                        self.selectedEntityChunkCursor = nil
+                        self.selectedEntityFileCursor = nil
+                    }
+                }
+            }
         } else {
             selectedEntity = nil
             selectedEntityChunks = []
+            selectedEntityFiles = []
+            selectedEntityChunkTotal = 0
+            selectedEntityFileTotal = 0
+            selectedEntityChunkCursor = nil
+            selectedEntityFileCursor = nil
+            isLoadingSelectedEntityChunks = false
+            isLoadingSelectedEntityFiles = false
             selectedConversation = nil
+        }
+    }
+
+    func loadMoreChunks() {
+        guard let database, let entityId = selectedNodeId, let cursor = selectedEntityChunkCursor else { return }
+        guard !isLoadingSelectedEntityChunks else { return }
+        isLoadingSelectedEntityChunks = true
+        let pageSize = selectedEntityChunkPageSize
+        Task { [weak self, database] in
+            let result = await Self.fetchChunkPage(
+                database: database,
+                entityId: entityId,
+                cursor: cursor,
+                limit: pageSize
+            )
+            await MainActor.run {
+                guard let self, self.selectedNodeId == entityId else { return }
+                self.isLoadingSelectedEntityChunks = false
+                if case .success(let page) = result {
+                    self.selectedEntityChunks.append(contentsOf: page.rows)
+                    self.selectedEntityChunkCursor = page.nextCursor
+                }
+            }
+        }
+    }
+
+    func loadMoreFiles() {
+        guard let database, let entityId = selectedNodeId, let cursor = selectedEntityFileCursor else { return }
+        guard !isLoadingSelectedEntityFiles else { return }
+        isLoadingSelectedEntityFiles = true
+        let pageSize = selectedEntityFilePageSize
+        Task { [weak self, database] in
+            let result = await Self.fetchFilePage(
+                database: database,
+                entityId: entityId,
+                cursor: cursor,
+                limit: pageSize
+            )
+            await MainActor.run {
+                guard let self, self.selectedNodeId == entityId else { return }
+                self.isLoadingSelectedEntityFiles = false
+                if case .success(let page) = result {
+                    self.selectedEntityFiles.append(contentsOf: page.rows)
+                    self.selectedEntityFileCursor = page.nextCursor
+                }
+            }
         }
     }
 
@@ -307,5 +410,73 @@ final class KGViewModel: ObservableObject {
 
     private func nodeById(_ id: String) -> KGNode? {
         nodes.first { $0.id == id }
+    }
+
+    private struct SidebarRows: Sendable {
+        let chunkTotal: Int
+        let fileTotal: Int
+        let chunkPage: BrainDatabase.ChunkPage
+        let filePage: BrainDatabase.SourceFilePage
+    }
+
+    private nonisolated static func fetchInitialSidebarRows(
+        database: BrainDatabase,
+        entityId: String,
+        chunkLimit: Int,
+        fileLimit: Int
+    ) async -> Result<SidebarRows, Error> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let rows = try SidebarRows(
+                        chunkTotal: database.fetchEntityChunkCount(entityId: entityId),
+                        fileTotal: database.fetchEntitySourceFileCount(entityId: entityId),
+                        chunkPage: database.fetchEntityChunksPage(entityId: entityId, after: nil, limit: chunkLimit),
+                        filePage: database.fetchEntitySourceFiles(entityId: entityId, limit: fileLimit, after: nil)
+                    )
+                    continuation.resume(returning: .success(rows))
+                } catch {
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
+    }
+
+    private nonisolated static func fetchChunkPage(
+        database: BrainDatabase,
+        entityId: String,
+        cursor: BrainDatabase.ChunkCursor,
+        limit: Int
+    ) async -> Result<BrainDatabase.ChunkPage, Error> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: .success(
+                        try database.fetchEntityChunksPage(entityId: entityId, after: cursor, limit: limit)
+                    ))
+                } catch {
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
+    }
+
+    private nonisolated static func fetchFilePage(
+        database: BrainDatabase,
+        entityId: String,
+        cursor: BrainDatabase.SourceFileCursor,
+        limit: Int
+    ) async -> Result<BrainDatabase.SourceFilePage, Error> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: .success(
+                        try database.fetchEntitySourceFiles(entityId: entityId, limit: limit, after: cursor)
+                    ))
+                } catch {
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
     }
 }

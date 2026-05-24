@@ -59,7 +59,12 @@ struct KGCanvasView: View {
                     KGSidebarView(
                         entity: viewModel.selectedEntity,
                         chunks: viewModel.selectedEntityChunks,
+                        chunkTotal: viewModel.selectedEntityChunkTotal,
+                        files: viewModel.selectedEntityFiles,
+                        fileTotal: viewModel.selectedEntityFileTotal,
                         onOpenConversation: { viewModel.openConversation(chunkID: $0) },
+                        onLoadMoreChunks: { viewModel.loadMoreChunks() },
+                        onLoadMoreFiles: { viewModel.loadMoreFiles() },
                         onClose: { viewModel.selectNode(id: nil) }
                     )
                 }

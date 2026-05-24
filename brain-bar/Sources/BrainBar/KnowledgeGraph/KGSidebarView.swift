@@ -3,7 +3,12 @@ import SwiftUI
 struct KGSidebarView: View {
     let entity: EntityCard?
     let chunks: [BrainDatabase.KGChunkRow]
+    let chunkTotal: Int
+    let files: [BrainDatabase.SourceFileRow]
+    let fileTotal: Int
     let onOpenConversation: (String) -> Void
+    let onLoadMoreChunks: () -> Void
+    let onLoadMoreFiles: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -17,6 +22,7 @@ struct KGSidebarView: View {
                         metadataSection(entity.metadata)
                     }
                     chunksSection()
+                    filesSection()
                 } else {
                     emptyState
                 }
@@ -53,7 +59,10 @@ struct KGSidebarView: View {
                     HStack(spacing: 8) {
                         labelChip(entity.entityType.isEmpty ? "entity" : entity.entityType.capitalized, tint: .blue)
                         labelChip("\(entity.relations.count) links", tint: .primary)
-                        labelChip("\(chunks.count) chunks", tint: .green)
+                        labelChip("\(chunkTotal) chunks", tint: .green)
+                        if fileTotal > 0 {
+                            labelChip("\(fileTotal) files", tint: .amber)
+                        }
                     }
                 }
 
@@ -168,26 +177,70 @@ struct KGSidebarView: View {
     }
 
     private func chunksSection() -> some View {
-        let previewIndices = Array(0..<min(chunks.count, 8))
         return VStack(alignment: .leading, spacing: 12) {
             Text("Linked chunks")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(previewIndices), id: \.self) { index in
-                let chunk = chunks[index]
-                Button {
-                    onOpenConversation(chunk.chunkID)
-                } label: {
-                    chunkCard(chunk)
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(chunks, id: \.chunkID) { chunk in
+                    Button {
+                        onOpenConversation(chunk.chunkID)
+                    } label: {
+                        chunkCard(chunk)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.045))
+                    )
                 }
-                .buttonStyle(.plain)
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.primary.opacity(0.045))
-                )
+
+                if chunks.count < chunkTotal {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .onAppear(perform: onLoadMoreChunks)
+                }
+            }
+        }
+        .padding(16)
+        .background(sectionBackground)
+    }
+
+    private func filesSection() -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Files")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if files.isEmpty {
+                Text("No source files are linked yet.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(files) { file in
+                        fileRow(file)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.primary.opacity(0.045))
+                            )
+                    }
+
+                    if files.count < fileTotal {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .onAppear(perform: onLoadMoreFiles)
+                    }
+                }
             }
         }
         .padding(16)
@@ -235,6 +288,10 @@ struct KGSidebarView: View {
         "↳ \(Int((chunk.relevance * 100).rounded()))%"
     }
 
+    private func relevanceText(for file: BrainDatabase.SourceFileRow) -> String {
+        "\(Int((file.topRelevance * 100).rounded()))%"
+    }
+
     private func chunkCard(_ chunk: BrainDatabase.KGChunkRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(chunk.snippet)
@@ -252,6 +309,32 @@ struct KGSidebarView: View {
                     .foregroundStyle(Color.accentColor)
             }
         }
+    }
+
+    private func fileRow(_ file: BrainDatabase.SourceFileRow) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(sourceFileBasename(file.sourceFile))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(file.sourceFile)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 6) {
+                labelChip("\(file.chunkCount) chunks", tint: .primary)
+                labelChip(relevanceText(for: file), tint: .green)
+            }
+        }
+    }
+
+    private func sourceFileBasename(_ path: String) -> String {
+        let basename = URL(fileURLWithPath: path).lastPathComponent
+        return basename.isEmpty ? path : basename
     }
 }
 
