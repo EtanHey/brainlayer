@@ -99,6 +99,19 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts.map(\.sessionID), ["sess-a", "sess-b", "sess-a"])
     }
 
+    func testBurstAggregationSplitsSameSessionWhenTopicChanges() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:58:00Z", query: "db migration", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 2)
+        XCTAssertEqual(snapshot.bursts.map(\.topicOrSource), ["auth refactor", "db migration"])
+    }
+
     func testBurstAggregationSplitsSameSessionWhenEventsAreMoreThanSixtyMinutesApart() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [
@@ -123,6 +136,21 @@ final class InjectionPresentationTests: XCTestCase {
 
         XCTAssertEqual(snapshot.summary.queryCount, 1)
         XCTAssertEqual(snapshot.burstSections.map(\.bucket), [.lastSixtyMinutes, .oneToTwoHoursAgo])
+    }
+
+    func testBurstAggregationExcludesFutureDatedEvents() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T10:01:00Z", query: "future skew", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.filteredEvents.map(\.id), [1, 2])
+        XCTAssertEqual(snapshot.windowEvents.map(\.id), [2])
+        XCTAssertEqual(snapshot.bursts.map { $0.events.map(\.id) }, [[2]])
+        XCTAssertEqual(snapshot.burstSections.map(\.bucket), [.lastSixtyMinutes])
     }
 
     private func makeEvent(

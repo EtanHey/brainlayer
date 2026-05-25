@@ -184,9 +184,15 @@ struct InjectionFeedView: View {
                     Text("retrieved chunks")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text(isExpanded ? "Collapse" : "Expand")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.blue)
+                    Button {
+                        toggleBurst(burst.id)
+                    } label: {
+                        Text(isExpanded ? "Collapse" : "Expand")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isExpanded ? "Collapse burst" : "Expand burst")
                 }
             }
 
@@ -202,10 +208,6 @@ struct InjectionFeedView: View {
         }
         .padding(18)
         .background(cardBackground)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            toggleBurst(burst.id)
-        }
     }
 
     private func collapsedChunkPreview(for burst: InjectionPresentation.Burst) -> some View {
