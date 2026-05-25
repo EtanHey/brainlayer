@@ -411,6 +411,46 @@ def test_canonical_dev_cleanup_preserves_checked_out_sanitized_branch_collision(
     assert bundle.exists()
 
 
+def test_canonical_dev_cleanup_reads_gnu_stat_mtime(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    _git(repo, "branch", "feat/old-dev")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-old-dev.app")
+    fake_stat_dir = tmp_path / "fake-gnu-stat"
+    fake_stat_dir.mkdir()
+    (fake_stat_dir / "stat").write_text(
+        """#!/usr/bin/env bash
+if [[ "$1" == "-c" && "$2" == "%Y" ]]; then
+  printf '0\n'
+  exit 0
+fi
+if [[ "$1" == "-f" ]]; then
+  printf '  File: "%s"\n' "$3"
+  exit 0
+fi
+exit 1
+"""
+    )
+    os.chmod(fake_stat_dir / "stat", 0o755)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={
+            "BRAINBAR_DEV_STALE_DAYS": "1",
+            "PATH": f"{fake_stat_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "would clean stale DEV bundle: BrainBar-DEV-feat-old-dev.app" in result.stdout
+    assert bundle.exists()
+
+
 def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
     parent_repo = tmp_path / "parent"
     _init_repo(parent_repo)

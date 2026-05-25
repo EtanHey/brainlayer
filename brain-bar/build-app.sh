@@ -156,7 +156,7 @@ safe_branch_ref_exists() {
 
 bundle_mtime_epoch() {
     local bundle="$1"
-    stat -f %m "$bundle" 2>/dev/null || stat -c %Y "$bundle"
+    stat -c %Y "$bundle" 2>/dev/null || stat -f %m "$bundle"
 }
 
 dev_bundle_age_days() {
