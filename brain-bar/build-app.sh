@@ -89,6 +89,106 @@ sanitize_branch_name() {
     printf '%s' "$1" | sed 's#[[:space:]/]#-#g; s/[^A-Za-z0-9._-]/-/g'
 }
 
+dev_bundle_apps_dir() {
+    local app_parent
+    app_parent="$(dirname "$APP_DIR")"
+    printf '%s\n' "$app_parent"
+}
+
+branch_is_checked_out_anywhere() {
+    local branch="$1"
+    git -C "$CURRENT_REPO_ROOT" worktree list --porcelain |
+        awk -v branch_ref="refs/heads/$branch" '
+            $1 == "branch" && $2 == branch_ref { found = 1 }
+            END { exit found ? 0 : 1 }
+        '
+}
+
+dev_bundle_age_days() {
+    local bundle="$1"
+    echo $(( ($(date +%s) - $(stat -f %m "$bundle")) / 86400 ))
+}
+
+read_bundle_git_commit() {
+    local bundle="$1"
+    "$PLIST_BUDDY" -c "Print :GitCommit" "$bundle/Contents/Info.plist" 2>/dev/null || true
+}
+
+resolve_dev_bundle_branch() {
+    local safe_branch="$1"
+    local ref
+    while IFS= read -r ref; do
+        local branch="$ref"
+        branch="${branch#origin/}"
+        if [ "$(sanitize_branch_name "$branch")" = "$safe_branch" ]; then
+            printf '%s\n' "$branch"
+            return 0
+        fi
+    done < <(git -C "$CURRENT_REPO_ROOT" for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null)
+
+    printf '%s\n' "$safe_branch"
+}
+
+cleanup_stale_dev_bundles() {
+    local apps_dir
+    apps_dir="$(dev_bundle_apps_dir)"
+    local stale_days="${BRAINBAR_DEV_STALE_DAYS:-14}"
+    local bundle
+    local found=0
+
+    for bundle in "$apps_dir"/BrainBar-DEV-*.app; do
+        [ -d "$bundle" ] || continue
+        found=1
+
+        local name
+        name="$(basename "$bundle")"
+        local safe_branch
+        safe_branch="${name#BrainBar-DEV-}"
+        safe_branch="${safe_branch%.app}"
+        local branch
+        branch="$(resolve_dev_bundle_branch "$safe_branch")"
+        local sha
+        sha="$(read_bundle_git_commit "$bundle")"
+        local is_stale=0
+        local reason=""
+
+        if [ -n "$sha" ] && git -C "$CURRENT_REPO_ROOT" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+            is_stale=1
+            reason="bundle SHA $sha is in origin/main"
+        elif ! git -C "$CURRENT_REPO_ROOT" rev-parse --verify "origin/$branch" >/dev/null 2>&1 &&
+             ! git -C "$CURRENT_REPO_ROOT" rev-parse --verify "$branch" >/dev/null 2>&1; then
+            is_stale=1
+            reason="branch '$branch' not found locally or upstream"
+        elif branch_is_checked_out_anywhere "$branch"; then
+            reason="branch '$branch' is checked out in a worktree"
+        else
+            local age_days
+            age_days="$(dev_bundle_age_days "$bundle")"
+            if [ "$age_days" -gt "$stale_days" ]; then
+                is_stale=1
+                reason="bundle age $age_days days exceeds threshold $stale_days"
+            else
+                reason="bundle age $age_days days is within threshold $stale_days"
+            fi
+        fi
+
+        if [ "$DRY_RUN" -eq 1 ]; then
+            if [ "$is_stale" -eq 1 ]; then
+                echo "[build-app] Dry run: would clean stale DEV bundle: $name ($reason)"
+            else
+                echo "[build-app] Keeping DEV bundle: $name ($reason)"
+            fi
+        elif [ "$is_stale" -eq 1 ]; then
+            echo "[build-app] Cleaning stale DEV bundle: $name ($reason)"
+            rm -rf "$bundle"
+        fi
+    done
+
+    if [ "$DRY_RUN" -eq 1 ] && [ "$found" -eq 0 ]; then
+        echo "[build-app] Dry run: no DEV bundles found under $apps_dir"
+    fi
+}
+
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ] && [ "$FORCE_WORKTREE_BUILD" -ne 1 ]; then
     echo "[build-app] ERROR: refusing non-canonical build from $CURRENT_REPO_ROOT" >&2
     echo "[build-app] Re-run with --force-worktree-build to install a DEV bundle instead of ~/Applications/BrainBar.app" >&2
@@ -109,6 +209,10 @@ if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
     echo "[build-app] Re-run with --force-dirty once these changes are explicitly reviewed:" >&2
     printf '%s\n' "$DIRTY_STATUS" >&2
     exit 1
+fi
+
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    cleanup_stale_dev_bundles
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
