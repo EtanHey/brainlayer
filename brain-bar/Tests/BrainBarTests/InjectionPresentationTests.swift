@@ -125,6 +125,20 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts.map { $0.events.map(\.id) }, [[1], [2]])
     }
 
+    func testBurstAggregationChainsConsecutiveEventsUnderSixtyMinutesApart() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T10:00:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:01:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+            makeEvent(id: 3, sessionID: "sess-a", timestamp: "2026-04-18T08:02:00Z", query: "auth refactor", chunkIDs: ["chunk-3"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 1)
+        XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2, 3])
+    }
+
     func testRibbonBucketBoundaryTreatsExactlySixtyMinutesAsOlderBucket() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [
@@ -147,10 +161,22 @@ final class InjectionPresentationTests: XCTestCase {
 
         let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
 
-        XCTAssertEqual(snapshot.filteredEvents.map(\.id), [1, 2])
+        XCTAssertEqual(snapshot.filteredEvents.map(\.id), [2])
         XCTAssertEqual(snapshot.windowEvents.map(\.id), [2])
         XCTAssertEqual(snapshot.bursts.map { $0.events.map(\.id) }, [[2]])
         XCTAssertEqual(snapshot.burstSections.map(\.bucket), [.lastSixtyMinutes])
+    }
+
+    func testFilterCountExcludesFutureDatedMatches() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T10:01:00Z", query: "future skew", chunkIDs: ["chunk-1"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "future", now: now)
+
+        XCTAssertTrue(snapshot.filteredEvents.isEmpty)
+        XCTAssertTrue(snapshot.bursts.isEmpty)
     }
 
     private func makeEvent(

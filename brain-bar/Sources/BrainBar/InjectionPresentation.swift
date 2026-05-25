@@ -104,10 +104,10 @@ struct InjectionPresentation {
             parseDate(event.timestamp).map { ParsedEvent(event: event, date: $0) }
         }
         .sorted { $0.date > $1.date }
+        let presentEvents = parsedEvents.filter { $0.date <= now }
 
         let windowStart = now.addingTimeInterval(-Double(windowMinutes) * 60.0)
-        let windowEvents = parsedEvents.filter { $0.date > windowStart && $0.date <= now }
-        let burstEvents = parsedEvents.filter { $0.date <= now }
+        let windowEvents = presentEvents.filter { $0.date > windowStart }
 
         let summary = Summary(
             queryCount: windowEvents.count,
@@ -115,10 +115,10 @@ struct InjectionPresentation {
             tokenCount: windowEvents.reduce(0) { $0 + $1.event.tokenCount },
             activeSessionCount: Set(windowEvents.map(\.event.sessionID)).count
         )
-        let bursts = makeBursts(from: burstEvents, burstGapMinutes: burstGapMinutes)
+        let bursts = makeBursts(from: presentEvents, burstGapMinutes: burstGapMinutes)
 
         return Snapshot(
-            filteredEvents: filteredEvents,
+            filteredEvents: presentEvents.map(\.event),
             windowEvents: windowEvents.map(\.event),
             summary: summary,
             bursts: bursts,
@@ -187,6 +187,7 @@ struct InjectionPresentation {
         var currentEvents = [first]
         var newest = first.date
         var oldest = first.date
+        var previousDate = first.date
 
         func flush() {
             bursts.append(
@@ -202,12 +203,13 @@ struct InjectionPresentation {
 
         for parsed in events.dropFirst() {
             let topicOrSource = topicOrSource(for: parsed.event)
-            let gap = newest.timeIntervalSince(parsed.date)
+            let gap = previousDate.timeIntervalSince(parsed.date)
             if parsed.event.sessionID == currentSessionID,
                topicOrSource == currentTopicOrSource,
                gap < maxGap {
                 currentEvents.append(parsed)
                 oldest = parsed.date
+                previousDate = parsed.date
             } else {
                 flush()
                 currentSessionID = parsed.event.sessionID
@@ -215,6 +217,7 @@ struct InjectionPresentation {
                 currentEvents = [parsed]
                 newest = parsed.date
                 oldest = parsed.date
+                previousDate = parsed.date
             }
         }
 
