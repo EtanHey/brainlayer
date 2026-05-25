@@ -116,15 +116,31 @@ resolve_dev_bundle_branch() {
     local safe_branch="$1"
     local ref
     while IFS= read -r ref; do
-        local branch="$ref"
-        branch="${branch#origin/}"
+        local branch
+        case "$ref" in
+            refs/heads/*)
+                branch="${ref#refs/heads/}"
+                ;;
+            refs/remotes/origin/*)
+                branch="${ref#refs/remotes/origin/}"
+                ;;
+            *)
+                continue
+                ;;
+        esac
         if [ "$(sanitize_branch_name "$branch")" = "$safe_branch" ]; then
             printf '%s\n' "$branch"
             return 0
         fi
-    done < <(git -C "$CURRENT_REPO_ROOT" for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null)
+    done < <(git -C "$CURRENT_REPO_ROOT" for-each-ref --format='%(refname)' refs/heads refs/remotes/origin 2>/dev/null)
 
     printf '%s\n' "$safe_branch"
+}
+
+branch_ref_exists() {
+    local branch="$1"
+    git -C "$CURRENT_REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch" ||
+        git -C "$CURRENT_REPO_ROOT" show-ref --verify --quiet "refs/remotes/origin/$branch"
 }
 
 cleanup_stale_dev_bundles() {
@@ -150,15 +166,14 @@ cleanup_stale_dev_bundles() {
         local is_stale=0
         local reason=""
 
-        if [ -n "$sha" ] && git -C "$CURRENT_REPO_ROOT" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+        if branch_is_checked_out_anywhere "$branch"; then
+            reason="branch '$branch' is checked out in a worktree"
+        elif [ -n "$sha" ] && git -C "$CURRENT_REPO_ROOT" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
             is_stale=1
             reason="bundle SHA $sha is in origin/main"
-        elif ! git -C "$CURRENT_REPO_ROOT" rev-parse --verify "origin/$branch" >/dev/null 2>&1 &&
-             ! git -C "$CURRENT_REPO_ROOT" rev-parse --verify "$branch" >/dev/null 2>&1; then
+        elif ! branch_ref_exists "$branch"; then
             is_stale=1
             reason="branch '$branch' not found locally or upstream"
-        elif branch_is_checked_out_anywhere "$branch"; then
-            reason="branch '$branch' is checked out in a worktree"
         else
             local age_days
             age_days="$(dev_bundle_age_days "$bundle")"
