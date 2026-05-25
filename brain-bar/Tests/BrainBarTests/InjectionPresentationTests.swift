@@ -140,6 +140,22 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2, 3])
     }
 
+    func testBurstSectionsSplitSpanningBurstAtRibbonBucketBoundaries() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:01:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+            makeEvent(id: 3, sessionID: "sess-a", timestamp: "2026-04-18T08:02:00Z", query: "auth refactor", chunkIDs: ["chunk-3"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 1)
+        XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2, 3])
+        XCTAssertEqual(snapshot.burstSections.map(\.bucket), [.lastSixtyMinutes, .oneToTwoHoursAgo])
+        XCTAssertEqual(snapshot.burstSections.map { $0.bursts.flatMap { $0.events.map(\.id) } }, [[1, 2], [3]])
+    }
+
     func testRibbonBucketBoundaryTreatsExactlySixtyMinutesAsOlderBucket() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [
