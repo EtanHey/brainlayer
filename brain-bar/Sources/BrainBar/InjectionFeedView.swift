@@ -374,7 +374,7 @@ struct InjectionFeedView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     railMetric(label: "Average", value: averageTokenText(snapshot: snapshot))
                     railMetric(label: "Peak event", value: peakTokenText(snapshot: snapshot))
-                    railMetric(label: "Burst count", value: "\(snapshot.bursts.count)")
+                    railMetric(label: "Burst count", value: "\(snapshot.summary.burstCount)")
                 }
             }
 

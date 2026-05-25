@@ -16,6 +16,7 @@ struct InjectionPresentation {
         let chunkCount: Int
         let tokenCount: Int
         let activeSessionCount: Int
+        let burstCount: Int
     }
 
     struct Burst: Equatable, Identifiable {
@@ -108,12 +109,14 @@ struct InjectionPresentation {
 
         let windowStart = now.addingTimeInterval(-Double(windowMinutes) * 60.0)
         let windowEvents = presentEvents.filter { $0.date > windowStart }
+        let windowBursts = makeBursts(from: windowEvents, burstGapMinutes: burstGapMinutes)
 
         let summary = Summary(
             queryCount: windowEvents.count,
             chunkCount: windowEvents.reduce(0) { $0 + $1.event.chunkCount },
             tokenCount: windowEvents.reduce(0) { $0 + $1.event.tokenCount },
-            activeSessionCount: Set(windowEvents.map(\.event.sessionID)).count
+            activeSessionCount: Set(windowEvents.map(\.event.sessionID)).count,
+            burstCount: windowBursts.count
         )
         let bursts = makeBursts(from: presentEvents, burstGapMinutes: burstGapMinutes)
 
