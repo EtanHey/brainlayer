@@ -197,6 +197,33 @@ class TestFlushPendingStores:
         assert flushed == 1
         assert mock_store_memory.call_args.kwargs["chunk_id"] == "manual-promised1234"
 
+    def test_flush_preserves_legacy_pending_supersedes(self, tmp_path):
+        """Legacy pending-stores flush must apply queued supersedes metadata."""
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "chunk_id": "manual-new1234",
+                    "content": "replacement item",
+                    "memory_type": "note",
+                    "supersedes": "manual-old1234",
+                }
+            )
+            + "\n"
+        )
+
+        mock_store = MagicMock()
+        with patch(
+            "brainlayer.mcp.store_handler._get_pending_store_path",
+            return_value=pending_path,
+        ):
+            with patch("brainlayer.store.store_memory") as mock_store_memory:
+                mock_store_memory.return_value = {"id": "manual-new1234", "related": []}
+                flushed = _flush_pending_stores(mock_store, MagicMock())
+
+        assert flushed == 1
+        mock_store.supersede_chunk.assert_called_once_with("manual-old1234", "manual-new1234")
+
     def test_flush_keeps_failed_items(self, tmp_path):
         """Items that fail to flush are kept in the queue."""
         pending_path = tmp_path / "pending-stores.jsonl"
