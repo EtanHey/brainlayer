@@ -61,7 +61,7 @@ UI_PLIST_DST="$HOME/Library/LaunchAgents/$UI_PLIST_FILENAME"
 DAEMON_PLIST_DST="$HOME/Library/LaunchAgents/$DAEMON_PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
-PLIST_BUDDY="/usr/libexec/PlistBuddy"
+PLIST_BUDDY="${BRAINBAR_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
 BRAINLAYER_LOG_DIR="$HOME/Library/Logs/brainlayer"
 

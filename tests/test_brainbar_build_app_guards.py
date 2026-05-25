@@ -172,6 +172,21 @@ fi
 exit 0
 """
     )
+    (tool_dir / "plistbuddy").write_text(
+        """#!/usr/bin/env bash
+if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
+  awk '
+    found { gsub(/^[[:space:]]*<string>|<\\/string>[[:space:]]*$/, ""); print; exit }
+    /<key>GitCommit<\\/key>/ { found=1 }
+  ' "$3"
+  exit 0
+fi
+if [[ "$2" == Print* ]]; then
+  exit 1
+fi
+exit 0
+"""
+    )
     (tool_dir / "launchctl").write_text(
         """#!/usr/bin/env bash
 if [[ "$1" == "kickstart" && -n "${BRAINBAR_SOCKET_PATH:-}" && ! -S "$BRAINBAR_SOCKET_PATH" ]]; then
@@ -199,7 +214,7 @@ exit 0
     )
     (tool_dir / "pgrep").write_text("#!/usr/bin/env bash\nexit 1\n")
     (tool_dir / "killall").write_text("#!/usr/bin/env bash\nexit 0\n")
-    for tool in ("swift", "codesign", "launchctl", "pgrep", "killall"):
+    for tool in ("swift", "codesign", "plistbuddy", "launchctl", "pgrep", "killall"):
         os.chmod(tool_dir / tool, 0o755)
     return tool_dir, bin_dir
 
@@ -258,6 +273,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
             "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
             "BRAINBAR_DEV_STALE_DAYS": "1",
             "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+            "BRAINBAR_PLIST_BUDDY": str(tool_dir / "plistbuddy"),
             "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}.sock",
             "BRAINBAR_SOCKET_WAIT_ATTEMPTS": "1",
             "PATH": f"{tool_dir}{os.pathsep}{os.environ['PATH']}",
