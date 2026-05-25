@@ -242,6 +242,7 @@ final class BrainDatabase: @unchecked Sendable {
     private let path: String
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
+    private var explicitTransactionIsOpen = false
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -1594,30 +1595,54 @@ final class BrainDatabase: @unchecked Sendable {
         return tags
     }
 
-    private func withImmediateTransaction<T>(_ body: () throws -> T) throws -> T {
+    private func withImmediateTransaction<T>(
+        shouldCancel: () -> Bool = { false },
+        _ body: () throws -> T
+    ) throws -> T {
         transactionLock.lock()
         defer { transactionLock.unlock() }
+        guard !explicitTransactionIsOpen else {
+            throw DBError.exec(SQLITE_MISUSE, "nested transactions are not supported")
+        }
+        if shouldCancel() {
+            throw CancellationError()
+        }
         try execute("BEGIN IMMEDIATE", retries: 3)
+        explicitTransactionIsOpen = true
         do {
             let result = try body()
             try execute("COMMIT", retries: 3)
+            explicitTransactionIsOpen = false
             return result
         } catch {
             try? execute("ROLLBACK")
+            explicitTransactionIsOpen = false
             throw error
         }
     }
 
-    private func withReadTransaction<T>(_ body: () throws -> T) throws -> T {
+    private func withReadTransaction<T>(
+        shouldCancel: () -> Bool = { false },
+        _ body: () throws -> T
+    ) throws -> T {
         transactionLock.lock()
         defer { transactionLock.unlock() }
+        guard !explicitTransactionIsOpen else {
+            throw DBError.exec(SQLITE_MISUSE, "nested transactions are not supported")
+        }
+        if shouldCancel() {
+            throw CancellationError()
+        }
         try execute("BEGIN", retries: 3)
+        explicitTransactionIsOpen = true
         do {
             let result = try body()
             try execute("COMMIT", retries: 3)
+            explicitTransactionIsOpen = false
             return result
         } catch {
             try? execute("ROLLBACK")
+            explicitTransactionIsOpen = false
             throw error
         }
     }
@@ -1631,6 +1656,17 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func execute(_ sql: String, retries: Int = 0, retryDelayMillis: UInt32 = 250) throws {
+        if Self.isMutationStatement(sql) {
+            transactionLock.lock()
+            defer { transactionLock.unlock() }
+            try executeUnlocked(sql, retries: retries, retryDelayMillis: retryDelayMillis)
+            return
+        }
+
+        try executeUnlocked(sql, retries: retries, retryDelayMillis: retryDelayMillis)
+    }
+
+    private func executeUnlocked(_ sql: String, retries: Int = 0, retryDelayMillis: UInt32 = 250) throws {
         guard let db else { throw DBError.notOpen }
         var attempts = 0
         while true {
@@ -1658,6 +1694,24 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func runWriteStatement(
+        on handle: OpaquePointer?,
+        sql: String,
+        retries: Int = 0,
+        retryDelayMillis: UInt32 = 250,
+        bind: (OpaquePointer) -> Void
+    ) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        try runWriteStatementLocked(
+            on: handle,
+            sql: sql,
+            retries: retries,
+            retryDelayMillis: retryDelayMillis,
+            bind: bind
+        )
+    }
+
+    private func runWriteStatementLocked(
         on handle: OpaquePointer?,
         sql: String,
         retries: Int = 0,
@@ -3719,8 +3773,13 @@ final class BrainDatabase: @unchecked Sendable {
         return SourceFilePage(rows: rows, nextCursor: hasMore ? cursor : nil)
     }
 
-    func fetchEntitySidebarSnapshot(entityId: String, chunkLimit: Int, fileLimit: Int) throws -> EntitySidebarSnapshot {
-        try withReadTransaction {
+    func fetchEntitySidebarSnapshot(
+        entityId: String,
+        chunkLimit: Int,
+        fileLimit: Int,
+        shouldCancel: () -> Bool = { false }
+    ) throws -> EntitySidebarSnapshot {
+        try withReadTransaction(shouldCancel: shouldCancel) {
             try EntitySidebarSnapshot(
                 chunkTotal: fetchEntityChunkCount(entityId: entityId),
                 fileTotal: fetchEntitySourceFileCount(entityId: entityId),

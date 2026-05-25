@@ -243,6 +243,7 @@ final class KGViewModel: ObservableObject {
         }
 
         selectedEntity = (try? database.lookupEntity(query: node.name)).map(EntityCard.init(lookupPayload:))
+        selectedConversation = nil
         resetSelectedEntitySidebarState(isLoading: true, loadFailed: false)
         let chunkPageSize = selectedEntityChunkPageSize
         let filePageSize = selectedEntityFilePageSize
@@ -445,19 +446,25 @@ final class KGViewModel: ObservableObject {
         chunkLimit: Int,
         fileLimit: Int
     ) async -> Result<SidebarRows, Error> {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let rows = try database.fetchEntitySidebarSnapshot(
-                        entityId: entityId,
-                        chunkLimit: chunkLimit,
-                        fileLimit: fileLimit
-                    )
-                    continuation.resume(returning: .success(rows))
-                } catch {
-                    continuation.resume(returning: .failure(error))
-                }
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rows = try database.fetchEntitySidebarSnapshot(
+                entityId: entityId,
+                chunkLimit: chunkLimit,
+                fileLimit: fileLimit,
+                shouldCancel: { Task.isCancelled }
+            )
+            try Task.checkCancellation()
+            return rows
+        }
+        return await withTaskCancellationHandler {
+            do {
+                return .success(try await task.value)
+            } catch {
+                return .failure(error)
             }
+        } onCancel: {
+            task.cancel()
         }
     }
 

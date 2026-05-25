@@ -835,6 +835,25 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertNil(vm.selectedEntity)
     }
 
+    func testSelectNodeClearsOpenConversationOverlay() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "builds")
+        try db.insertChunk(
+            id: "c1", content: "Alice built BrainLayer",
+            sessionId: "s1", project: "test", contentType: "ai_code", importance: 7
+        )
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.openConversation(chunkID: "c1")
+        XCTAssertNotNil(vm.selectedConversation)
+
+        vm.selectNode(id: "e2")
+
+        XCTAssertNil(vm.selectedConversation)
+    }
+
     func testForceTickMovesNodes() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
@@ -1043,6 +1062,19 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityFileTotal, 0)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
         XCTAssertTrue(vm.selectedEntityFiles.isEmpty)
+    }
+
+    func testFetchEntitySidebarSnapshotHonorsCancellationBeforeDatabaseWork() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+
+        XCTAssertThrowsError(try db.fetchEntitySidebarSnapshot(
+            entityId: "e1",
+            chunkLimit: 15,
+            fileLimit: 15,
+            shouldCancel: { true }
+        )) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
     }
 
     private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
