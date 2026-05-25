@@ -128,9 +128,13 @@ final class QuickCaptureTests: XCTestCase {
             importance: 7
         )
 
+        let chunk = try db.getChunk(id: "exact-id-lookup-1")
+        XCTAssertEqual(chunk?["source_file"] as? String, "brainbar")
+
         let results = try QuickCaptureController.search(db: db, query: "exact-id-lookup-1", limit: 5)
 
         XCTAssertEqual(results.results.first?["chunk_id"] as? String, "exact-id-lookup-1")
+        XCTAssertEqual(results.results.first?["source_file"] as? String, "brainbar")
     }
 
     func testSearchKeepsExactChunkIDFallbackWhenCandidatesFillLimit() throws {

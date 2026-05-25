@@ -136,6 +136,18 @@ final class FormattersTests: XCTestCase {
         XCTAssertFalse(out.contains(#"C:\Users"#))
     }
 
+    func testFormatKGSearchUsesUntitledForWhitespaceSnippet() {
+        let out = Formatters.formatKGSearch(
+            entityName: "BrainLayer",
+            results: [["snippet": "   "]],
+            facts: [],
+            query: "brainlayer",
+            useColor: false
+        )
+
+        XCTAssertTrue(out.contains("### 1. Untitled result"))
+    }
+
     // MARK: - Entity Simple
 
     func testFormatEntitySimple() {
