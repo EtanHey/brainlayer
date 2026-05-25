@@ -1,9 +1,11 @@
 import SwiftUI
 
 struct InjectionFeedView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: InjectionStore
     @Binding var filterText: String
     @State private var expandedEventIDs: Set<Int64> = []
+    @State private var expandedBurstIDs: Set<String> = []
     @State private var selectedConversation: BrainDatabase.ExpandedConversation?
 
     private let accentPalette: [Color] = [
@@ -24,7 +26,7 @@ struct InjectionFeedView: View {
                     header(snapshot: snapshot)
                     overviewStrip(snapshot: snapshot)
 
-                    if snapshot.filteredEvents.isEmpty {
+                    if snapshot.bursts.isEmpty {
                         emptyState
                     } else if wideLayout {
                         HStack(alignment: .top, spacing: 16) {
@@ -139,22 +141,36 @@ struct InjectionFeedView: View {
     }
 
     private func feedColumn(snapshot: InjectionPresentation.Snapshot) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(snapshot.bursts) { burst in
-                burstCard(burst)
+        LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+            ForEach(snapshot.burstSections) { section in
+                Section {
+                    ForEach(section.bursts) { burst in
+                        burstCard(burst)
+                    }
+                } header: {
+                    ribbonHeader(section.bucket)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func burstCard(_ burst: InjectionPresentation.Burst) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let isExpanded = expandedBurstIDs.contains(burst.id)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(InjectionPresentation.burstRangeText(start: burst.startDate, end: burst.endDate))
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("↻")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(.blue)
+                        Text(burst.summaryTitle)
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .lineLimit(2)
+                    }
                     HStack(spacing: 8) {
-                        chip(text: burst.sessionID, tint: .blue)
+                        chip(text: "Session: \(shortSessionID(burst.sessionID))", tint: .blue)
+                        chip(text: relativeText(for: burst.endDate), tint: .neutral)
                         chip(text: "\(burst.queryCount) queries", tint: .neutral)
                         chip(text: "\(burst.tokenCount) tok", tint: .green)
                     }
@@ -168,17 +184,68 @@ struct InjectionFeedView: View {
                     Text("retrieved chunks")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
+                    Text(isExpanded ? "Collapse" : "Expand")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.blue)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(burst.events) { event in
-                    eventRow(event)
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(burst.events) { event in
+                        eventRow(event)
+                    }
                 }
+            } else {
+                collapsedChunkPreview(for: burst)
             }
         }
         .padding(18)
         .background(cardBackground)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            toggleBurst(burst.id)
+        }
+    }
+
+    private func collapsedChunkPreview(for burst: InjectionPresentation.Burst) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(burst.chunkPreviewIDs.enumerated()), id: \.offset) { _, chunkID in
+                Text(chunkPreviewText(chunkID))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            let remaining = burst.remainingChunkCount(after: burst.chunkPreviewIDs.count)
+            if remaining > 0 {
+                Text("+\(remaining) more")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.045))
+        )
+    }
+
+    private func ribbonHeader(_ bucket: InjectionPresentation.RibbonBucket) -> some View {
+        HStack(spacing: 10) {
+            Text(bucket.title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
     }
 
     private func eventRow(_ event: InjectionEvent) -> some View {
@@ -453,6 +520,48 @@ struct InjectionFeedView: View {
         } else {
             expandedEventIDs.insert(eventID)
         }
+    }
+
+    private func toggleBurst(_ burstID: String) {
+        let update = {
+            if expandedBurstIDs.contains(burstID) {
+                expandedBurstIDs.remove(burstID)
+            } else {
+                expandedBurstIDs.insert(burstID)
+            }
+        }
+
+        if reduceMotion {
+            update()
+        } else {
+            withAnimation(.easeInOut(duration: 0.16), update)
+        }
+    }
+
+    private func shortSessionID(_ sessionID: String) -> String {
+        guard sessionID.count > 12 else { return sessionID }
+        let prefix = sessionID.prefix(10)
+        return "\(prefix)…"
+    }
+
+    private func relativeText(for date: Date) -> String {
+        let seconds = max(Date().timeIntervalSince(date), 0)
+        if seconds < 60 {
+            return "just now"
+        }
+        if seconds < 60 * 60 {
+            return "\(Int(seconds / 60))m ago"
+        }
+        if seconds < 24 * 60 * 60 {
+            return "\(Int(seconds / 3600))h ago"
+        }
+        return "\(Int(seconds / 86_400))d ago"
+    }
+
+    private func chunkPreviewText(_ chunkID: String) -> String {
+        let limit = 80
+        guard chunkID.count > limit else { return chunkID }
+        return "\(chunkID.prefix(limit - 1))…"
     }
 
     private func makePresentation(now: Date = Date()) -> InjectionPresentation.Snapshot {
