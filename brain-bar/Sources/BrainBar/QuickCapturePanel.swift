@@ -110,6 +110,8 @@ final class QuickCaptureViewModel: ObservableObject {
     private var copyResetTask: Task<Void, Never>?
     private var feedbackResetTask: Task<Void, Never>?
     private let searchDebounceDelay: Duration
+    private var lastSearchKeystrokeAt: TimeInterval?
+    private var lastSearchQueryID: String?
     var _pendingSearchTask: Task<Void, Never>?
     /// Exposed for test awaiting — set when an async store is in flight.
     var _pendingStoreTask: Task<Void, Never>?
@@ -272,6 +274,10 @@ final class QuickCaptureViewModel: ObservableObject {
             _pendingSearchTask?.cancel()
             return
         }
+        if SearchProfileLogger.isEnabled {
+            lastSearchKeystrokeAt = SearchProfileLogger.now()
+            lastSearchQueryID = SearchProfileLogger.newQueryID()
+        }
         scheduleDebouncedSearch()
     }
 
@@ -372,19 +378,42 @@ final class QuickCaptureViewModel: ObservableObject {
 
     private func scheduleDebouncedSearch() {
         let query = inputText
+        let profileKeystrokeAt = lastSearchKeystrokeAt
+        let profileQueryID = lastSearchQueryID
         _pendingSearchTask?.cancel()
         _pendingSearchTask = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: searchDebounceDelay)
             guard !Task.isCancelled, query == inputText else { return }
-            submitSearch(query: query, cancelPending: false)
+            let submitStartedAt = SearchProfileLogger.now()
+            if let profileKeystrokeAt {
+                SearchProfileLogger.log(
+                    scope: "search.brainbar",
+                    step: "keystroke_submit",
+                    queryID: profileQueryID,
+                    durMS: SearchProfileLogger.durationMS(since: profileKeystrokeAt)
+                )
+            }
+            submitSearch(
+                query: query,
+                cancelPending: false,
+                profileQueryID: profileQueryID,
+                profileSubmitStartedAt: submitStartedAt
+            )
         }
     }
 
-    private func submitSearch(query: String? = nil, cancelPending: Bool = true) {
+    private func submitSearch(
+        query: String? = nil,
+        cancelPending: Bool = true,
+        profileQueryID: String? = nil,
+        profileSubmitStartedAt: TimeInterval? = nil
+    ) {
         if cancelPending {
             _pendingSearchTask?.cancel()
         }
+        let profileQueryID = profileQueryID ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
+        let submitStartedAt = profileSubmitStartedAt ?? SearchProfileLogger.now()
         let query = query ?? inputText
         do {
             let searchResult = try search(query, 8)
@@ -392,11 +421,25 @@ final class QuickCaptureViewModel: ObservableObject {
             selectedResultIndex = results.isEmpty ? nil : 0
             copiedResultID = nil
             feedback = .idle
+            SearchProfileLogger.log(
+                scope: "search.brainbar",
+                step: "render_done",
+                queryID: profileQueryID,
+                durMS: SearchProfileLogger.durationMS(since: submitStartedAt),
+                fields: ["result_count": results.count]
+            )
         } catch {
             results = []
             selectedResultIndex = nil
             copiedResultID = nil
             feedback = .error(error.localizedDescription)
+            SearchProfileLogger.log(
+                scope: "search.brainbar",
+                step: "render_done",
+                queryID: profileQueryID,
+                durMS: SearchProfileLogger.durationMS(since: submitStartedAt),
+                fields: ["error": String(describing: error)]
+            )
         }
     }
 

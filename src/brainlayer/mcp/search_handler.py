@@ -11,7 +11,7 @@ from typing import Any
 import apsw
 from mcp.types import TextContent
 
-from .. import telemetry
+from .. import search_profile, telemetry
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
@@ -485,8 +485,13 @@ async def _brain_search(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    profile_query_id: str | None = None,
+    profile_scope: str = "search.mcp",
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
+    if search_profile.enabled() and profile_query_id is None:
+        profile_query_id = search_profile.new_query_id()
+    profile_started = search_profile.now()
 
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
@@ -522,6 +527,8 @@ async def _brain_search(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            profile_query_id=profile_query_id,
+            profile_scope=profile_scope,
         )
 
     if chunk_id is not None:
@@ -804,7 +811,7 @@ async def _brain_search(
                 query,
             )
 
-    return await _search(
+    result = await _search(
         query=query,
         project=project,
         content_type=content_type,
@@ -822,7 +829,11 @@ async def _brain_search(
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
+        profile_query_id=profile_query_id,
+        profile_scope=profile_scope,
     )
+    search_profile.emit(profile_scope, "brain_search", profile_query_id, search_profile.dur_ms(profile_started))
+    return result
 
 
 def _escape_like_pattern(value: str) -> str:
@@ -1141,6 +1152,8 @@ async def _search(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    profile_query_id: str | None = None,
+    profile_scope: str = "search.mcp",
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -1165,7 +1178,9 @@ async def _search(
         normalized_project = _normalize_project_name(project)
         loop = asyncio.get_running_loop()
         model = _get_embedding_model()
+        embed_started = search_profile.now()
         query_embedding = await loop.run_in_executor(None, model.embed_query, query)
+        search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
 
         if source == "all":
             source_filter = None
@@ -1182,6 +1197,7 @@ async def _search(
         # Retry hybrid_search on BusyError — WAL reads shouldn't block but
         # they can during checkpoint or when enrichment holds exclusive lock.
         results = None
+        hybrid_started = search_profile.now()
         for attempt in range(_RETRY_MAX_ATTEMPTS):
             try:
                 results = store.hybrid_search(
@@ -1203,6 +1219,8 @@ async def _search(
                     correction_category=correction_category,
                     include_checkpoints=include_checkpoints,
                     include_audit=include_audit,
+                    profile_query_id=profile_query_id,
+                    profile_scope=profile_scope,
                 )
                 break
             except Exception as e:
@@ -1215,6 +1233,7 @@ async def _search(
                     await asyncio.sleep(delay)
                     continue
                 raise  # Non-lock error or retries exhausted
+        search_profile.emit(profile_scope, "hybrid_search", profile_query_id, search_profile.dur_ms(hybrid_started))
 
         if not results["documents"][0]:
             empty = {"query": query, "total": 0, "results": []}
