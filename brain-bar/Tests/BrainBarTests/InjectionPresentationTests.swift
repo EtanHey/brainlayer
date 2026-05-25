@@ -24,6 +24,7 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.summary.chunkCount, 7)
         XCTAssertEqual(snapshot.summary.tokenCount, 231)
         XCTAssertEqual(snapshot.summary.activeSessionCount, 2)
+        XCTAssertEqual(snapshot.summary.burstCount, 3)
         XCTAssertEqual(snapshot.bursts.count, 3)
         XCTAssertEqual(snapshot.bursts[0].sessionID, "sess-a")
         XCTAssertEqual(snapshot.bursts[0].events.map { $0.id }, [1, 2])
@@ -177,6 +178,19 @@ final class InjectionPresentationTests: XCTestCase {
 
         XCTAssertTrue(snapshot.filteredEvents.isEmpty)
         XCTAssertTrue(snapshot.bursts.isEmpty)
+    }
+
+    func testSummaryBurstCountUsesLastHourWindowOnly() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-b", timestamp: "2026-04-18T07:59:00Z", query: "older migration", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 2)
+        XCTAssertEqual(snapshot.summary.burstCount, 1)
     }
 
     private func makeEvent(
