@@ -55,7 +55,15 @@ final class StatusPopoverView: NSViewController {
     private let activityLabel = NSTextField(labelWithString: "Enrichment Throughput")
     private let activityDetailLabel = NSTextField(labelWithString: "")
     private let enrichmentLabel = NSTextField(labelWithString: "")
-    private let sparklineImageView = NSImageView(frame: .zero)
+    private let sparklineChartView = NSHostingView(
+        rootView: SparklineChart(
+            presentation: SparklineChartPresentation(
+                label: "Recent activity sparkline",
+                values: []
+            ),
+            accentColor: .systemBlue
+        )
+    )
     private let daemonLabel = NSTextField(labelWithString: "")
     private let hotkeyLabel = NSTextField(labelWithString: "")
     private let headerPanel = SurfacePanelView(cornerRadius: 14)
@@ -199,10 +207,9 @@ final class StatusPopoverView: NSViewController {
         hotkeyLabel.maximumNumberOfLines = 2
         hotkeyLabel.lineBreakMode = .byWordWrapping
 
-        sparklineImageView.imageScaling = .scaleAxesIndependently
-        sparklineImageView.wantsLayer = true
-        sparklineImageView.layer?.cornerRadius = 4
-        sparklineImageView.layer?.backgroundColor = NSColor.clear.cgColor
+        sparklineChartView.wantsLayer = true
+        sparklineChartView.layer?.cornerRadius = 4
+        sparklineChartView.layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     private func makeDashboardContent() -> NSView {
@@ -251,7 +258,7 @@ final class StatusPopoverView: NSViewController {
         activityHeader.orientation = .horizontal
         activityHeader.alignment = .centerY
 
-        let activityStack = NSStackView(views: [activityHeader, sparklineImageView])
+        let activityStack = NSStackView(views: [activityHeader, sparklineChartView])
         activityStack.orientation = .vertical
         activityStack.spacing = 10
         let activityCard = activityPanel.wrap(
@@ -259,7 +266,7 @@ final class StatusPopoverView: NSViewController {
             edgeInsets: NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         )
 
-        sparklineImageView.translatesAutoresizingMaskIntoConstraints = false
+        sparklineChartView.translatesAutoresizingMaskIntoConstraints = false
         hotkeyLabel.isHidden = hotkeyStatus == nil
 
         for row in [headerCard, activityCard] as [NSView] {
@@ -274,7 +281,7 @@ final class StatusPopoverView: NSViewController {
         content.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 14, right: 14)
 
         NSLayoutConstraint.activate([
-            sparklineImageView.heightAnchor.constraint(equalToConstant: 188),
+            sparklineChartView.heightAnchor.constraint(equalToConstant: 188),
         ])
 
         dashboardContent = content
@@ -360,10 +367,12 @@ final class StatusPopoverView: NSViewController {
 
         enrichmentLabel.stringValue = "\(Int(collector.stats.enrichmentPercent.rounded()))% enriched"
         activityDetailLabel.stringValue = enrichmentActivitySummary(collector.stats)
-        sparklineImageView.image = SparklineRenderer.render(
-            state: collector.state,
-            values: summary.enrichment.values,
-            size: NSSize(width: 500, height: 188)
+        sparklineChartView.rootView = SparklineChart(
+            presentation: SparklineChartPresentation(
+                label: "Recent activity sparkline",
+                values: summary.enrichment.values
+            ),
+            accentColor: collector.state.color
         )
 
         if let daemon = collector.daemon {

@@ -357,8 +357,12 @@ final class KGViewModel: ObservableObject {
 
     // MARK: - Force-Directed Layout
 
-    func tick() -> CGFloat {
+    func tick(reduceMotionEnabled: Bool = false) -> CGFloat {
         guard nodes.count > 1 else { return 0 }
+        if reduceMotionEnabled {
+            freezeLayout()
+            return 0
+        }
 
         var forces = Array(repeating: CGVector.zero, count: nodes.count)
         let center = canvasCenter
@@ -418,6 +422,12 @@ final class KGViewModel: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func freezeLayout() {
+        for index in nodes.indices {
+            nodes[index].velocity = .zero
+        }
+    }
 
     private func nodeById(_ id: String) -> KGNode? {
         nodes.first { $0.id == id }

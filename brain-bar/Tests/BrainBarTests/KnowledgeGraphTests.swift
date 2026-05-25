@@ -871,6 +871,24 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertTrue(moved, "Force tick should move at least one node")
     }
 
+    func testReduceMotionTickFreezesLayoutAndReportsZeroEnergy() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.nodes[0].velocity = CGVector(dx: 10, dy: 3)
+        vm.nodes[1].velocity = CGVector(dx: -4, dy: -7)
+
+        let positionsBefore = vm.nodes.map(\.position)
+        let energy = vm.tick(reduceMotionEnabled: true)
+
+        XCTAssertEqual(energy, 0, "Reduce Motion should make force layout report settled energy")
+        XCTAssertEqual(vm.nodes.map(\.position), positionsBefore, "Reduce Motion should freeze node positions")
+        XCTAssertTrue(vm.nodes.allSatisfy { $0.velocity == .zero }, "Reduce Motion should zero any residual velocity")
+    }
+
     func testNodeHitTestFindsCorrectNode() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")

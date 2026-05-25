@@ -63,6 +63,18 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
     }
 
+    func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [0, 2, 5, 3]
+        )
+
+        XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
+        XCTAssertEqual(presentation.points.map(\.value), [0, 2, 5, 3])
+        XCTAssertEqual(presentation.accessibilityLabel, "Recent activity sparkline")
+        XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending up")
+    }
+
     func testDashboardStatsCountsRecentISO8601Timestamps() throws {
         try db.insertChunk(
             id: "dash-iso",
