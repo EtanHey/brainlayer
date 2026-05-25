@@ -3797,7 +3797,10 @@ final class BrainDatabase: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
         bindText(entityId, to: stmt, index: 1)
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        let stepRC = sqlite3_step(stmt)
+        guard stepRC == SQLITE_ROW else {
+            throw DBError.step(stepRC)
+        }
         return Int(sqlite3_column_int(stmt, 0))
     }
 
