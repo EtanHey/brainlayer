@@ -172,6 +172,31 @@ class TestFlushPendingStores:
         assert flushed == 1
         assert not pending_path.exists()  # File deleted after full flush
 
+    def test_flush_preserves_legacy_pending_chunk_id(self, tmp_path):
+        """Legacy pending-stores flush must persist the caller-visible queued ID."""
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "chunk_id": "manual-promised1234",
+                    "content": "queued item",
+                    "memory_type": "note",
+                }
+            )
+            + "\n"
+        )
+
+        with patch(
+            "brainlayer.mcp.store_handler._get_pending_store_path",
+            return_value=pending_path,
+        ):
+            with patch("brainlayer.store.store_memory") as mock_store_memory:
+                mock_store_memory.return_value = {"id": "manual-promised1234", "related": []}
+                flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flushed == 1
+        assert mock_store_memory.call_args.kwargs["chunk_id"] == "manual-promised1234"
+
     def test_flush_keeps_failed_items(self, tmp_path):
         """Items that fail to flush are kept in the queue."""
         pending_path = tmp_path / "pending-stores.jsonl"
