@@ -225,6 +225,7 @@ struct KGSidebarView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
+                            .id(Self.chunkLoadMoreTriggerID(visibleCount: chunks.count))
                             .onAppear(perform: onLoadMoreChunks)
                     } else if isLoadingChunks {
                         ProgressView()
@@ -280,6 +281,7 @@ struct KGSidebarView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
+                            .id(Self.fileLoadMoreTriggerID(visibleCount: files.count))
                             .onAppear(perform: onLoadMoreFiles)
                     } else if isLoadingFiles {
                         ProgressView()
@@ -387,6 +389,14 @@ struct KGSidebarView: View {
     private func sourceFileBasename(_ path: String) -> String {
         let basename = URL(fileURLWithPath: path).lastPathComponent
         return basename.isEmpty ? path : basename
+    }
+
+    nonisolated static func chunkLoadMoreTriggerID(visibleCount: Int) -> String {
+        "chunk-load-more-\(visibleCount)"
+    }
+
+    nonisolated static func fileLoadMoreTriggerID(visibleCount: Int) -> String {
+        "file-load-more-\(visibleCount)"
     }
 }
 

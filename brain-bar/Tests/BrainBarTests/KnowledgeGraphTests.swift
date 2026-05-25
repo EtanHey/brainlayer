@@ -24,6 +24,21 @@ private func dashboardChangeNotificationProbeCallback(
     probe.count += 1
 }
 
+// MARK: - Sidebar UI Logic Tests
+
+final class KGSidebarViewTests: XCTestCase {
+    func testLoadMoreFooterIdentityChangesAfterRowsAppend() {
+        XCTAssertNotEqual(
+            KGSidebarView.chunkLoadMoreTriggerID(visibleCount: 15),
+            KGSidebarView.chunkLoadMoreTriggerID(visibleCount: 30)
+        )
+        XCTAssertNotEqual(
+            KGSidebarView.fileLoadMoreTriggerID(visibleCount: 15),
+            KGSidebarView.fileLoadMoreTriggerID(visibleCount: 30)
+        )
+    }
+}
+
 // MARK: - Database KG Query Tests
 
 final class KGDatabaseTests: XCTestCase {
