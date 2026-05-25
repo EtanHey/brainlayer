@@ -492,7 +492,63 @@ async def _brain_search(
     if search_profile.enabled() and profile_query_id is None:
         profile_query_id = search_profile.new_query_id()
     profile_started = search_profile.now()
+    try:
+        return await _brain_search_dispatch(
+            query=query,
+            project=project,
+            file_path=file_path,
+            chunk_id=chunk_id,
+            content_type=content_type,
+            source=source,
+            tag=tag,
+            intent=intent,
+            importance_min=importance_min,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            entity_id=entity_id,
+            num_results=num_results,
+            before=before,
+            after=after,
+            max_results=max_results,
+            detail=detail,
+            source_filter=source_filter,
+            correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+            profile_query_id=profile_query_id,
+            profile_scope=profile_scope,
+        )
+    finally:
+        search_profile.emit(profile_scope, "brain_search", profile_query_id, search_profile.dur_ms(profile_started))
 
+
+async def _brain_search_dispatch(
+    query: str,
+    project: str | None = None,
+    file_path: str | None = None,
+    chunk_id: str | None = None,
+    content_type: str | None = None,
+    source: str | None = None,
+    tag: str | None = None,
+    intent: str | None = None,
+    importance_min: float | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sentiment: str | None = None,
+    entity_id: str | None = None,
+    num_results: int = 5,
+    before: int = 3,
+    after: int = 3,
+    max_results: int = 10,
+    detail: str = "compact",
+    source_filter: str | None = None,
+    correction_category: str | None = None,
+    include_checkpoints: bool = False,
+    include_audit: bool = False,
+    profile_query_id: str | None = None,
+    profile_scope: str = "search.mcp",
+):
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
     if num_results < _MIN_PUBLIC_NUM_RESULTS or num_results > _MAX_PUBLIC_NUM_RESULTS:
@@ -614,6 +670,8 @@ async def _brain_search(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            profile_query_id=profile_query_id,
+            profile_scope=profile_scope,
         )
 
     if _query_signals_current_context(query):
@@ -832,7 +890,6 @@ async def _brain_search(
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
     )
-    search_profile.emit(profile_scope, "brain_search", profile_query_id, search_profile.dur_ms(profile_started))
     return result
 
 

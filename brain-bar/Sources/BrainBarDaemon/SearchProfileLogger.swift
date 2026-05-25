@@ -37,7 +37,8 @@ enum SearchProfileLogger {
         if let durMS {
             event["dur_ms"] = durMS
         }
-        for (key, value) in fields {
+        let reservedKeys: Set<String> = ["ts", "scope", "step", "query_id", "dur_ms"]
+        for (key, value) in fields where !reservedKeys.contains(key) {
             event[key] = value
         }
 
