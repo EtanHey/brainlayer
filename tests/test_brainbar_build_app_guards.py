@@ -73,6 +73,7 @@ def _run_build_script(
     *,
     canonical_root: Path,
     home: Path,
+    dry_run: bool = True,
     extra_args: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -82,7 +83,9 @@ def _run_build_script(
     env["BRAINBAR_CANONICAL_REPO_ROOT"] = str(canonical_root)
     if extra_env:
         env.update(extra_env)
-    cmd = ["bash", str(script), "--dry-run"]
+    cmd = ["bash", str(script)]
+    if dry_run:
+        cmd.append("--dry-run")
     if extra_args:
         cmd.extend(extra_args)
     return subprocess.run(
@@ -92,6 +95,113 @@ def _run_build_script(
         text=True,
         env=env,
     )
+
+
+def _create_fake_bundle(apps_dir: Path, name: str, git_commit: str | None = None) -> Path:
+    bundle = apps_dir / name
+    contents = bundle / "Contents"
+    contents.mkdir(parents=True, exist_ok=True)
+    git_commit_xml = ""
+    if git_commit is not None:
+        git_commit_xml = f"""
+    <key>GitCommit</key>
+    <string>{git_commit}</string>"""
+    (contents / "Info.plist").write_text(
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>{git_commit_xml}
+</dict>
+</plist>
+"""
+    )
+    return bundle
+
+
+def _prepare_bundle_inputs(repo: Path) -> None:
+    bundle_dir = repo / "brain-bar" / "bundle"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "Info.plist").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+"""
+    )
+    for label in ("com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon"):
+        (bundle_dir / f"{label}.plist").write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
+"""
+        )
+    _git(repo, "add", "brain-bar/bundle")
+    _commit(repo, "test: add bundle inputs")
+
+
+def _prepare_fake_build_tools(tmp_path: Path) -> tuple[Path, Path]:
+    tool_dir = tmp_path / "fake-tools"
+    bin_dir = tmp_path / "fake-swift-bin"
+    tool_dir.mkdir()
+    bin_dir.mkdir()
+    (bin_dir / "BrainBar").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (bin_dir / "BrainBarDaemon").write_text("#!/usr/bin/env bash\nexit 0\n")
+    os.chmod(bin_dir / "BrainBar", 0o755)
+    os.chmod(bin_dir / "BrainBarDaemon", 0o755)
+    (tool_dir / "swift").write_text(
+        """#!/usr/bin/env bash
+if [[ "$*" == *"--show-bin-path"* ]]; then
+  printf '%s\n' "$BRAINBAR_FAKE_BIN_DIR"
+fi
+exit 0
+"""
+    )
+    (tool_dir / "codesign").write_text(
+        """#!/usr/bin/env bash
+if [[ "$*" == *"-dv"* ]]; then
+  printf 'Authority=%s\n' "$BRAINBAR_CODESIGN_IDENTITY"
+fi
+exit 0
+"""
+    )
+    (tool_dir / "launchctl").write_text(
+        """#!/usr/bin/env bash
+if [[ "$1" == "kickstart" && -n "${BRAINBAR_SOCKET_PATH:-}" && ! -S "$BRAINBAR_SOCKET_PATH" ]]; then
+  python3 - "$BRAINBAR_SOCKET_PATH" <<'PY' >/dev/null 2>&1 &
+import os
+import socket
+import sys
+
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(1)
+conn, _ = server.accept()
+conn.close()
+server.close()
+PY
+  disown
+fi
+exit 0
+"""
+    )
+    (tool_dir / "pgrep").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (tool_dir / "killall").write_text("#!/usr/bin/env bash\nexit 0\n")
+    for tool in ("swift", "codesign", "launchctl", "pgrep", "killall"):
+        os.chmod(tool_dir / tool, 0o755)
+    return tool_dir, bin_dir
 
 
 def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> None:
@@ -110,6 +220,85 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
     assert "UI LaunchAgent: canonical install" in result.stdout
     assert "Daemon LaunchAgent: canonical install" in result.stdout
+
+
+def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    remote = tmp_path / "origin.git"
+    _git(remote.parent, "init", "--bare", remote.name)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", "main")
+    main_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    _git(repo, "branch", "feat/active-dev")
+    worktree = tmp_path / "active-worktree"
+    _git(repo, "worktree", "add", str(worktree), "feat/active-dev")
+
+    merged_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-merged.app", main_sha)
+    missing_branch_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-missing.app")
+    active_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-active-dev.app")
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_env={
+            "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
+            "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+            "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}.sock",
+            "BRAINBAR_SOCKET_WAIT_ATTEMPTS": "1",
+            "PATH": f"{tool_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Cleaning stale DEV bundle: BrainBar-DEV-feat-merged.app" in result.stdout
+    assert "Cleaning stale DEV bundle: BrainBar-DEV-feat-missing.app" in result.stdout
+    assert not merged_bundle.exists()
+    assert not missing_branch_bundle.exists()
+    assert active_bundle.exists()
+
+
+def test_canonical_dry_run_lists_dev_bundle_cleanup_without_removing(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    remote = tmp_path / "origin.git"
+    _git(remote.parent, "init", "--bare", remote.name)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", "main")
+    main_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    _git(repo, "branch", "feat/active-dev")
+    worktree = tmp_path / "active-worktree"
+    _git(repo, "worktree", "add", str(worktree), "feat/active-dev")
+
+    bundles = [
+        _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-merged.app", main_sha),
+        _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-missing.app"),
+        _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-active-dev.app"),
+    ]
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for bundle in bundles:
+        assert bundle.name in result.stdout
+        assert bundle.exists()
+    assert "would clean stale DEV bundle" in result.stdout
+    assert "Keeping DEV bundle: BrainBar-DEV-feat-active-dev.app" in result.stdout
 
 
 def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
