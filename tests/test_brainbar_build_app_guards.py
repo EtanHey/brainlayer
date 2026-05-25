@@ -301,6 +301,34 @@ def test_canonical_dry_run_lists_dev_bundle_cleanup_without_removing(tmp_path: P
     assert "Keeping DEV bundle: BrainBar-DEV-feat-active-dev.app" in result.stdout
 
 
+def test_canonical_dev_cleanup_scans_home_applications_when_app_dir_is_overridden(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    custom_app_dir = tmp_path / "custom" / "BrainBar-Custom.app"
+    remote = tmp_path / "origin.git"
+    _git(remote.parent, "init", "--bare", remote.name)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", "main")
+    main_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-merged.app", main_sha)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={"BRAINBAR_APP_DIR": str(custom_app_dir)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert str(custom_app_dir) in result.stdout
+    assert bundle.name in result.stdout
+    assert "would clean stale DEV bundle" in result.stdout
+    assert bundle.exists()
+
+
 def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
     parent_repo = tmp_path / "parent"
     _init_repo(parent_repo)
