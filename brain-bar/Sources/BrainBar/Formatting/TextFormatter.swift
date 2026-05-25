@@ -79,8 +79,9 @@ enum TextFormatter {
 
         var lines = ["## Recalled context for \"\(truncatedQuery)\""]
         for (index, result) in results.enumerated() {
+            let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
             lines.append("")
-            lines.append("### Chunk \(index + 1) - \(sourceBasename(result.sourceFile).isEmpty ? "unknown" : sourceBasename(result.sourceFile))")
+            lines.append("### Chunk \(index + 1) - \(source.isEmpty ? "unknown" : source)")
             let content = result.snippet.isEmpty ? result.displayText : result.snippet
             let fullText = content.replacingOccurrences(of: "\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if fullText.count <= 1500 {
@@ -212,7 +213,7 @@ enum TextFormatter {
 
     private static func relationLine(_ relation: EntityCard.Relation) -> String {
         var line = "- \(relation.relationType): \(relation.targetName)"
-        if let expired = formattedDate(relation.expiredAt ?? relation.validUntil) {
+        if let expired = formattedDate(relation.expiredAt) {
             line += " (expired \(expired))"
         }
         return line
