@@ -90,9 +90,7 @@ sanitize_branch_name() {
 }
 
 dev_bundle_apps_dir() {
-    local app_parent
-    app_parent="$(dirname "$APP_DIR")"
-    printf '%s\n' "$app_parent"
+    printf '%s\n' "$HOME/Applications"
 }
 
 branch_is_checked_out_anywhere() {
