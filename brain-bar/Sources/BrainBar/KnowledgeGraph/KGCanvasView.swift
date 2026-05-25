@@ -19,6 +19,7 @@ enum KGCanvasMetrics {
 struct KGCanvasView: View {
     @ObservedObject var viewModel: KGViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var offset: CGSize = .zero
     @State private var lastDragOffset: CGSize = .zero
@@ -90,8 +91,16 @@ struct KGCanvasView: View {
                 defer { hasStartedGraphPolling = false }
                 if await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
                     hasLoadedGraph = true
+                    if reduceMotion {
+                        _ = viewModel.tick(reduceMotionEnabled: true)
+                    }
                 }) {
                     hasLoadedGraph = true
+                }
+            }
+            .onChange(of: reduceMotion) { _, enabled in
+                if enabled {
+                    _ = viewModel.tick(reduceMotionEnabled: true)
                 }
             }
         }

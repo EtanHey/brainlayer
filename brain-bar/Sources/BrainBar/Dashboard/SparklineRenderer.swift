@@ -1,6 +1,108 @@
 import AppKit
-import CoreGraphics
+import Charts
 import Foundation
+import SwiftUI
+
+struct SparklineChartPoint: Identifiable, Equatable, Sendable {
+    let bucket: Int
+    let value: Int
+
+    var id: Int { bucket }
+}
+
+struct SparklineChartPresentation: Equatable, Sendable {
+    let label: String
+    let values: [Int]
+    let latestBucketName: String
+
+    init(
+        label: String,
+        values: [Int],
+        latestBucketName: String = "latest bucket count"
+    ) {
+        self.label = label
+        self.values = values
+        self.latestBucketName = latestBucketName
+    }
+
+    var points: [SparklineChartPoint] {
+        values.enumerated().map { index, value in
+            SparklineChartPoint(bucket: index, value: value)
+        }
+    }
+
+    var accessibilityLabel: String {
+        label
+    }
+
+    var accessibilityValue: String {
+        "\(latestBucketName) \(values.last ?? 0), \(trendDescription)"
+    }
+
+    var maxValue: Int {
+        max(values.max() ?? 0, 1)
+    }
+
+    private var trendDescription: String {
+        guard let first = values.first, let last = values.last else {
+            return "no trend"
+        }
+        if last > first {
+            return "trending up"
+        }
+        if last < first {
+            return "trending down"
+        }
+        return "steady"
+    }
+}
+
+struct SparklineChart: View {
+    let presentation: SparklineChartPresentation
+    let accentColor: NSColor
+    let compact: Bool
+
+    init(
+        presentation: SparklineChartPresentation,
+        accentColor: NSColor,
+        compact: Bool = false
+    ) {
+        self.presentation = presentation
+        self.accentColor = accentColor
+        self.compact = compact
+    }
+
+    var body: some View {
+        Chart(presentation.points) { point in
+            if !compact {
+                AreaMark(
+                    x: .value("Bucket", point.bucket),
+                    y: .value("Count", point.value)
+                )
+                .foregroundStyle(Color(nsColor: accentColor).opacity(0.10))
+            }
+
+            LineMark(
+                x: .value("Bucket", point.bucket),
+                y: .value("Count", point.value)
+            )
+            .interpolationMethod(.catmullRom)
+            .foregroundStyle(Color(nsColor: accentColor).opacity(0.85))
+            .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartYScale(domain: 0...presentation.maxValue)
+        .chartPlotStyle { plotArea in
+            plotArea
+                .background(Color.clear)
+                .padding(compact ? 2 : 10)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(presentation.accessibilityLabel))
+        .accessibilityValue(Text(presentation.accessibilityValue))
+    }
+}
 
 enum SparklineRenderer {
     static func endpoint(
@@ -32,107 +134,31 @@ enum SparklineRenderer {
         )
     }
 
+    @MainActor
     static func render(
         state: PipelineState,
         values: [Int],
         size: NSSize = NSSize(width: 44, height: 18),
         accentColor: NSColor? = nil
     ) -> NSImage {
-        let width = max(Int(size.width.rounded(.up)), 1)
-        let height = max(Int(size.height.rounded(.up)), 1)
-        let isCompact = height <= 20 || width <= 52
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let lineColor = accentColor ?? state.color
-
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return NSImage(size: size)
-        }
-
-        let rect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
-        context.setFillColor(NSColor.clear.cgColor)
-        context.fill(rect)
-
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-
-        guard values.count > 1 else {
-            return image(from: context, size: size)
-        }
-
-        let maxValue = max(values.max() ?? 0, 1)
-        let horizontalInset: CGFloat = isCompact ? 2 : 10
-        let verticalInset: CGFloat = isCompact ? 2 : 10
-        let chartRect = CGRect(
-            x: horizontalInset,
-            y: verticalInset,
-            width: max(CGFloat(width) - (horizontalInset * 2), 1),
-            height: max(CGFloat(height) - (verticalInset * 2), 1)
+        let width = max(size.width.rounded(.up), 1)
+        let height = max(size.height.rounded(.up), 1)
+        let chart = SparklineChart(
+            presentation: SparklineChartPresentation(
+                label: "Recent activity sparkline",
+                values: values
+            ),
+            accentColor: accentColor ?? state.color,
+            compact: height <= 20 || width <= 52
         )
-        let step = chartRect.width / CGFloat(max(values.count - 1, 1))
-        let path = CGMutablePath()
-        var points: [CGPoint] = []
+        .frame(width: width, height: height)
 
-        if !isCompact {
-            context.setStrokeColor(NSColor.separatorColor.withAlphaComponent(0.55).cgColor)
-            context.setLineWidth(1)
-            for fraction in [0.25, 0.5, 0.75] {
-                let y = chartRect.minY + chartRect.height * CGFloat(fraction)
-                context.move(to: CGPoint(x: chartRect.minX, y: y))
-                context.addLine(to: CGPoint(x: chartRect.maxX, y: y))
-            }
-            context.strokePath()
+        let renderer = ImageRenderer(content: chart)
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        if let image = renderer.nsImage {
+            image.isTemplate = false
+            return image
         }
-
-        for (index, value) in values.enumerated() {
-            let x = chartRect.minX + CGFloat(index) * step
-            let normalized = CGFloat(value) / CGFloat(maxValue)
-            let y = chartRect.minY + normalized * chartRect.height
-            let point = CGPoint(x: x, y: y)
-            points.append(point)
-            if index == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-
-        if !isCompact, let first = points.first, let last = points.last {
-            let fill = CGMutablePath()
-            fill.move(to: CGPoint(x: first.x, y: chartRect.minY))
-            for point in points {
-                fill.addLine(to: point)
-            }
-            fill.addLine(to: CGPoint(x: last.x, y: chartRect.minY))
-            fill.closeSubpath()
-            context.addPath(fill)
-            context.setFillColor(lineColor.withAlphaComponent(0.10).cgColor)
-            context.fillPath()
-        }
-
-        context.addPath(path)
-        context.setStrokeColor(lineColor.withAlphaComponent(0.85).cgColor)
-        context.setLineWidth(isCompact ? 1.6 : 2)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        context.strokePath()
-
-        return image(from: context, size: size)
-    }
-
-    private static func image(from context: CGContext, size: NSSize) -> NSImage {
-        guard let cgImage = context.makeImage() else {
-            return NSImage(size: size)
-        }
-        let image = NSImage(cgImage: cgImage, size: size)
-        image.isTemplate = false
-        return image
+        return NSImage(size: NSSize(width: width, height: height))
     }
 }

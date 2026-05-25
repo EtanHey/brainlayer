@@ -1065,6 +1065,7 @@ private struct BrainBarHeroSparkline: View {
     let accentColor: NSColor
     let pulseRevision: Int
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var ringScale: CGFloat = 0.8
     @State private var ringOpacity = 0.0
 
@@ -1074,24 +1075,22 @@ private struct BrainBarHeroSparkline: View {
                 width: max(proxy.size.width.rounded(.up), 1),
                 height: max(proxy.size.height.rounded(.up), 1)
             )
-            let image = SparklineRenderer.render(
-                state: .idle,
-                values: values,
-                size: renderSize,
-                accentColor: accentColor
-            )
             let endpoint = SparklineRenderer.endpoint(
                 values: values,
                 size: renderSize
             )
 
             ZStack(alignment: .topLeading) {
-                Image(nsImage: image)
-                    .interpolation(.high)
-                    .resizable()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+                SparklineChart(
+                    presentation: SparklineChartPresentation(
+                        label: "Recent activity sparkline",
+                        values: values
+                    ),
+                    accentColor: accentColor
+                )
+                .frame(width: proxy.size.width, height: proxy.size.height)
 
-                if let endpoint {
+                if let endpoint, !reduceMotion {
                     let point = CGPoint(
                         x: endpoint.x,
                         y: proxy.size.height - endpoint.y
@@ -1121,6 +1120,11 @@ private struct BrainBarHeroSparkline: View {
     }
 
     private func triggerPulse() {
+        guard !reduceMotion else {
+            ringScale = 1
+            ringOpacity = 0
+            return
+        }
         ringScale = 0.8
         ringOpacity = 0.7
         withAnimation(.easeOut(duration: 0.75)) {
