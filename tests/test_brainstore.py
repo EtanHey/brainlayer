@@ -344,6 +344,53 @@ class TestStoreMemory:
         assert row == (2,)
         assert link == (first["id"],)
 
+    def test_supplied_chunk_id_retry_is_idempotent(self, store, mock_embed):
+        """Retrying a queued write with the promised chunk ID should not violate the primary key."""
+        from brainlayer.store import store_memory
+
+        chunk_id = "manual-queuedretry01"
+        content = "Queued brain_store retry must reuse the promised chunk id"
+
+        first = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["first"],
+            importance=4,
+            chunk_id=chunk_id,
+        )
+        second = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content=content,
+            memory_type="learning",
+            project="brainlayer",
+            tags=["second"],
+            importance=9,
+            chunk_id=chunk_id,
+        )
+
+        row = (
+            store.conn.cursor()
+            .execute("SELECT seen_count, importance, tags FROM chunks WHERE id = ?", (chunk_id,))
+            .fetchone()
+        )
+        audit = (
+            store.conn.cursor()
+            .execute(
+                "SELECT chunk_id_dropped, chunk_id_kept, mechanism FROM dedupe_audit WHERE chunk_id_kept = ?",
+                (chunk_id,),
+            )
+            .fetchone()
+        )
+
+        assert first["id"] == chunk_id
+        assert second["id"] == chunk_id
+        assert row == (2, 9.0, '["first", "second"]')
+        assert audit == (chunk_id, chunk_id, "sha256_same_id")
+
     def test_changed_duplicate_embedding_runs_after_write_transaction(self, store):
         """Merged-content embedding should not hold the write transaction open."""
         from brainlayer.store import store_memory
