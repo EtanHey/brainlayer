@@ -1,0 +1,127 @@
+"""Regression tests for MCP text output v2 labeled-field markdown."""
+
+import asyncio
+
+from brainlayer.mcp._format import (
+    format_entity_simple,
+    format_kg_search,
+    format_recalled_context,
+    format_search_results,
+)
+
+
+def test_brain_search_output_is_labeled_markdown_not_score_table():
+    output = format_search_results(
+        "auth refactor",
+        [
+            {
+                "chunk_id": "manual-abc123",
+                "score": 0.91,
+                "source_file": "/tmp/ADR-014.md",
+                "date": "2026-04-12T10:00:00Z",
+                "summary": "Decision: use refresh tokens with 7-day rotation",
+                "snippet": "Refresh-token rotation keeps sessions recoverable while limiting replay risk.",
+            }
+        ],
+        47,
+    )
+
+    assert output == (
+        '## Search results for "auth refactor" - 1 of 47 shown\n\n'
+        "### 1. Decision: use refresh tokens with 7-day rotation\n"
+        "- Source: ADR-014.md\n"
+        "- Date: 2026-04-12\n"
+        "- Preview: Refresh-token rotation keeps sessions recoverable while limiting replay risk."
+    )
+    assert "score" not in output
+    assert "manual-abc123" not in output
+    assert not output.strip().startswith("{")
+
+
+def test_kg_augmented_brain_search_output_is_labeled_markdown_not_score_table():
+    output = format_kg_search(
+        "BrainLayer",
+        [
+            {
+                "chunk_id": "kg-abc123",
+                "score": 0.93,
+                "source_file": "/repo/docs/mcp.md",
+                "date": "2026-05-24T11:45:00Z",
+                "snippet": "BrainLayer serves readable MCP output.",
+            }
+        ],
+        [{"source": "BrainLayer", "relation": "uses", "target": "MCP"}],
+        "brainlayer mcp",
+    )
+
+    assert output.startswith('## Search results for "brainlayer mcp" - 1 of 1 shown')
+    assert "### KG Facts for BrainLayer" in output
+    assert "- BrainLayer uses MCP" in output
+    assert "### 1. BrainLayer serves readable MCP output." in output
+    assert "- Source: mcp.md" in output
+    assert "- Date: 2026-05-24" in output
+    assert "score" not in output
+    assert "kg-abc123" not in output
+    assert "┌" not in output
+
+
+def test_brain_entity_output_has_kg_facts_and_expired_annotation():
+    output = format_entity_simple(
+        {
+            "name": "JWT middleware",
+            "id": "entity-jwt",
+            "entity_type": "technology",
+            "description": "Authentication middleware used by API services.",
+            "relations": [
+                {"relation_type": "used_by", "target_name": "api-gateway"},
+                {"relation_type": "used_by", "target_name": "admin-service"},
+                {
+                    "relation_type": "depends_on",
+                    "target_name": "legacy-auth-lib",
+                    "expired_at": "2026-05-01T00:00:00Z",
+                },
+            ],
+            "chunks": [{"content": "Mentioned in the auth refactor plan as a dependency to remove."}],
+        }
+    )
+
+    assert "## Entity: JWT middleware" in output
+    assert "### KG Facts" in output
+    assert "- used_by: api-gateway" in output
+    assert "- depends_on: legacy-auth-lib (expired 2026-05-01)" in output
+    assert "### Recent context" in output
+    assert "### Likely follow-ups" in output
+    assert "score" not in output
+
+
+def test_brain_recall_context_output_is_labeled_chunk_markdown():
+    output = format_recalled_context(
+        "how did we handle session expiry",
+        [
+            {
+                "chunk_id": "chunk-auth-1",
+                "source_file": "design-doc/auth-v2.md",
+                "content": "We chose sliding-window refresh tokens with a 60-second grace period.",
+                "date": "2026-04-12T10:00:00Z",
+            }
+        ],
+    )
+
+    assert output == (
+        '## Recalled context for "how did we handle session expiry"\n\n'
+        "### Chunk 1 - auth-v2.md\n"
+        "We chose sliding-window refresh tokens with a 60-second grace period."
+    )
+    assert "score" not in output
+    assert "chunk-auth-1" not in output
+    assert "[{" not in output
+
+
+def test_brain_recall_tool_declares_anthropic_max_result_size():
+    from brainlayer.mcp import list_tools
+
+    tools = asyncio.run(list_tools())
+    recall = next(tool for tool in tools if tool.name == "brain_recall")
+    annotation_dump = recall.annotations.model_dump(by_alias=True)
+
+    assert annotation_dump["anthropic/maxResultSizeChars"] >= 100_000

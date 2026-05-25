@@ -396,6 +396,7 @@ class TestCompactFormatSize:
         assert "score" in compact
         assert "project" in compact
         assert "chunk_id" in compact
+        assert "source_file" in compact
 
         # importance is now included in compact format for relevance visibility
         assert "importance" in compact
@@ -407,7 +408,6 @@ class TestCompactFormatSize:
         for dropped in (
             "content_type",
             "intent",
-            "source_file",
             "session_summary",
             "session_outcome",
             "session_quality",

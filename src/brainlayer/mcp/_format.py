@@ -4,6 +4,8 @@ Uses Unicode box-drawing characters for clean, professional display.
 No ANSI color codes (MCP tool output doesn't support them in Claude Code).
 """
 
+import os
+
 
 def _truncate(text: str, max_len: int = 80) -> str:
     """Truncate text with ellipsis."""
@@ -27,43 +29,77 @@ def _pad(text: str, width: int, align: str = "left") -> str:
     return text.ljust(width)
 
 
+def _basename(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    return os.path.basename(str(value).strip()) or str(value).strip() or "unknown"
+
+
+def _date_only(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    return str(value)[:10]
+
+
+def _relation_target(rel: dict) -> str:
+    target = rel.get("target")
+    if isinstance(target, dict):
+        return target.get("name", "")
+    return rel.get("target_name") or rel.get("name") or target or ""
+
+
+def _expired_date(rel: dict) -> str | None:
+    raw = rel.get("expired_at") or rel.get("expiredAt")
+    return str(raw)[:10] if raw else None
+
+
 def format_search_results(query: str, results: list[dict], total: int) -> str:
-    """Format search results as a clean table.
+    """Format search results as labeled-field markdown.
 
     Each result dict should have: chunk_id, score, project, date, snippet, summary, importance.
     """
     if total == 0:
-        return f'\u250c\u2500 brain_search: "{_truncate(query, 50)}"\n\u2502 No results found.\n\u2514\u2500'
+        return f'## Search results for "{_truncate(query, 50)}" - 0 of 0 shown\n\nNo results found.'
 
     lines = []
-    lines.append(
-        f'\u250c\u2500 brain_search: "{_truncate(query, 50)}" \u2500 {total} result{"s" if total != 1 else ""}'
-    )
-    lines.append("\u2502")
+    lines.append(f'## Search results for "{_truncate(query, 50)}" - {len(results)} of {total} shown')
 
     for i, r in enumerate(results):
-        score = r.get("score", 0)
-        chunk_id = (r.get("chunk_id") or "")[:12]
-        project = _truncate(r.get("project") or "", 16)
-        date = (r.get("date") or "")[:10]
-        importance = r.get("importance")
         summary = r.get("summary") or ""
-        snippet = r.get("snippet") or ""
+        snippet = r.get("snippet") or r.get("content") or ""
+        title = _truncate(summary or snippet or "Untitled result", 100)
+        source = _basename(r.get("source_file") or r.get("project"))
+        date = _date_only(r.get("date") or r.get("created_at"))
+        preview = _truncate(snippet or summary, 200)
 
-        # Use summary if available, fall back to snippet
-        display_text = _truncate(summary or snippet, 72)
+        lines.append("")
+        lines.append(f"### {i + 1}. {title}")
+        lines.append(f"- Source: {source}")
+        lines.append(f"- Date: {date}")
+        lines.append(f"- Preview: {preview}")
 
-        imp_str = f"{int(importance):2d}" if importance is not None else " \u2500"
-        score_str = f"{score:.2f}" if score else "0.00"
+    return "\n".join(lines)
 
-        lines.append(f"\u251c\u2500 [{i + 1}] {chunk_id}  score:{score_str}  imp:{imp_str}  {date}")
-        lines.append(f"\u2502  {_pad(project, 16)} \u2502 {display_text}")
-        if r.get("tags") and isinstance(r["tags"], list):
-            tag_str = ", ".join(str(t) for t in r["tags"][:4])
-            lines.append(f"\u2502  tags: {tag_str}")
-        lines.append("\u2502")
 
-    lines.append("\u2514\u2500")
+def format_recalled_context(query: str, chunks: list[dict]) -> str:
+    """Format recalled chunk context as labeled markdown."""
+    lines = [f'## Recalled context for "{_truncate(query, 80)}"']
+    if not chunks:
+        lines.extend(["", "No context available."])
+        return "\n".join(lines)
+
+    for index, chunk in enumerate(chunks, start=1):
+        source = _basename(chunk.get("source_file"))
+        content = (chunk.get("content") or chunk.get("snippet") or chunk.get("summary") or "").strip()
+        lines.append("")
+        lines.append(f"### Chunk {index} - {source}")
+        if len(content) <= 1500:
+            lines.append(content)
+        else:
+            lines.append(content[:1500] + "...")
+            if chunk.get("chunk_id"):
+                lines.append("")
+                lines.append(f"Reference: {chunk['chunk_id']}")
     return "\n".join(lines)
 
 
@@ -84,70 +120,39 @@ def format_entity_card(entity: dict) -> str:
     entity dict may have: entity_id, name, profile, relations, memories, etc.
     """
     name = entity.get("name", "Unknown")
-    eid = entity.get("entity_id") or entity.get("id", "")
-    entity_type = entity.get("entity_type") or (entity.get("profile", {}).get("entity_type", ""))
+    lines = [f"## Entity: {name}"]
+    if entity.get("description"):
+        lines.extend(["", _truncate(entity.get("description"), 200)])
 
-    lines = []
-    lines.append(f"\u250c\u2500 Entity: {name}")
-    lines.append(f"\u2502 id: {eid}  type: {entity_type or 'unknown'}")
-
-    # Profile / metadata
-    profile = entity.get("profile", {})
-    if profile:
-        # Show select profile fields
-        for key in ("role", "company", "location", "email", "phone"):
-            if profile.get(key):
-                lines.append(f"\u2502 {key}: {profile[key]}")
-
-    # Hard constraints
-    constraints = entity.get("hard_constraints", {})
-    if constraints:
-        lines.append("\u251c\u2500 Constraints")
-        for k, v in list(constraints.items())[:5]:
-            lines.append(f"\u2502   {k}: {v}")
-
-    # Preferences
-    prefs = entity.get("preferences", {})
-    if prefs:
-        lines.append("\u251c\u2500 Preferences")
-        for k, v in list(prefs.items())[:5]:
-            lines.append(f"\u2502   {k}: {v}")
-
-    # Contact info
-    contact = entity.get("contact_info", {})
-    if contact:
-        lines.append("\u251c\u2500 Contact")
-        for k, v in list(contact.items())[:5]:
-            lines.append(f"\u2502   {k}: {v}")
-
-    # Relations
+    lines.extend(["", "### KG Facts"])
     relations = entity.get("relations", [])
     if relations:
-        lines.append(f"\u251c\u2500 Relations ({len(relations)})")
         for rel in relations[:8]:
             if isinstance(rel, dict):
                 rtype = rel.get("relation_type", "")
-                target = (
-                    rel.get("target", {}).get("name", "")
-                    if isinstance(rel.get("target"), dict)
-                    else str(rel.get("target", ""))
-                )
-                lines.append(f"\u2502   \u2192 {rtype}: {target}")
+                line = f"- {rtype}: {_relation_target(rel)}"
+                if expired := _expired_date(rel):
+                    line += f" (expired {expired})"
+                lines.append(line)
             else:
-                lines.append(f"\u2502   \u2192 {rel}")
+                lines.append(f"- {rel}")
+    else:
+        lines.append("- None")
 
-    # Memories
+    lines.extend(["", "### Recent context"])
     memories = entity.get("memories", [])
-    mem_count = entity.get("memory_count", len(memories))
     if memories:
-        lines.append(f"\u251c\u2500 Memories ({mem_count})")
         for mem in memories[:5]:
-            mtype = mem.get("type") or ""
-            mdate = (mem.get("date") or "")[:10]
             mcontent = _truncate(mem.get("content") or mem.get("summary") or "", 60)
-            lines.append(f"\u2502   [{mtype:8s}] {mdate} {mcontent}")
+            lines.append(f"- {mcontent}")
+    else:
+        lines.append("- None")
 
-    lines.append("\u2514\u2500")
+    lines.extend(["", "### Likely follow-ups"])
+    followups = [_relation_target(rel) for rel in relations if isinstance(rel, dict) and _relation_target(rel)]
+    lines.extend(f"- {target}" for target in followups[:5])
+    if not followups:
+        lines.append("- None")
     return "\n".join(lines)
 
 
@@ -157,12 +162,7 @@ def format_entity_simple(entity: dict) -> str:
         return ""
 
     name = entity.get("name", "Unknown")
-    eid = entity.get("id", "")
-    etype = entity.get("entity_type", "")
-
-    lines = []
-    lines.append(f"\u250c\u2500 Entity: {name}")
-    lines.append(f"\u2502 id: {eid}  type: {etype or 'unknown'}")
+    lines = [f"## Entity: {name}"]
 
     # Description from metadata or entity
     desc = entity.get("description") or ""
@@ -171,56 +171,37 @@ def format_entity_simple(entity: dict) -> str:
         if isinstance(metadata, dict):
             desc = metadata.get("description", "")
     if desc:
-        lines.append(f"\u2502 {_truncate(desc, 100)}")
+        lines.extend(["", _truncate(desc, 200)])
 
     # Relations from entity_lookup result (filter co_occurs_with)
+    lines.extend(["", "### KG Facts"])
     relations = entity.get("relations", [])
     semantic_rels = [r for r in relations if isinstance(r, dict) and r.get("relation_type") != "co_occurs_with"]
     if semantic_rels:
-        lines.append(f"\u251c\u2500 Relations ({len(semantic_rels)})")
         for rel in semantic_rels[:10]:
             rtype = rel.get("relation_type", "related_to")
-            target = rel.get("target_name", rel.get("name", ""))
-            desc_r = rel.get("description", "")
-            line = f"\u2502   \u2192 {rtype}: {target}"
-            if desc_r:
-                line += f" \u2014 {_truncate(desc_r, 60)}"
+            line = f"- {rtype}: {_relation_target(rel)}"
+            if expired := _expired_date(rel):
+                line += f" (expired {expired})"
             lines.append(line)
-    elif relations:
-        co_count = len([r for r in relations if isinstance(r, dict) and r.get("relation_type") == "co_occurs_with"])
-        if co_count:
-            lines.append(f"\u251c\u2500 Relations: {co_count} co-occurrence edges (filtered)")
-
-    parent = entity.get("parent")
-    if isinstance(parent, dict):
-        lines.append("\u251c\u2500 Parent")
-        lines.append(f"\u2502   {parent.get('name', '')} ({parent.get('entity_type', 'unknown')})")
-
-    children = entity.get("children", [])
-    if children:
-        lines.append(f"\u251c\u2500 Children ({len(children)})")
-        for child in children[:10]:
-            lines.append(f"\u2502   {child.get('name', '')} ({child.get('entity_type', 'unknown')})")
+    else:
+        lines.append("- None")
 
     # Chunks / memories
+    lines.extend(["", "### Recent context"])
     chunks = entity.get("chunks", [])
     if chunks:
-        lines.append(f"\u251c\u2500 Associated memories ({len(chunks)})")
         for c in chunks[:5]:
-            snippet = _truncate(c.get("content", ""), 60)
-            lines.append(f"\u2502   {snippet}")
+            snippet = _truncate(c.get("content", ""), 150)
+            lines.append(f"- {snippet}")
+    else:
+        lines.append("- None")
 
-    # Metadata
-    metadata = entity.get("metadata", {})
-    if metadata and isinstance(metadata, dict):
-        interesting = {k: v for k, v in metadata.items() if v and k not in ("id", "name", "entity_type")}
-        if interesting:
-            lines.append("\u251c\u2500 Metadata")
-            for k, v in list(interesting.items())[:5]:
-                val = _truncate(str(v), 50) if isinstance(v, str) else str(v)
-                lines.append(f"\u2502   {k}: {val}")
-
-    lines.append("\u2514\u2500")
+    lines.extend(["", "### Likely follow-ups"])
+    followups = [_relation_target(rel) for rel in semantic_rels if _relation_target(rel)]
+    lines.extend(f"- {target}" for target in followups[:5])
+    if not followups:
+        lines.append("- None")
     return "\n".join(lines)
 
 
@@ -284,33 +265,30 @@ def format_digest_result(result: dict) -> str:
 
 def format_kg_search(entity_name: str, results: list[dict], facts: list[dict], query: str) -> str:
     """Format entity-aware KG hybrid search results."""
-    lines = []
     total = len(results)
-    lines.append(
-        f'\u250c\u2500 Entity search: "{entity_name}" (query: "{_truncate(query, 40)}") \u2500 {total} result{"s" if total != 1 else ""}'
-    )
+    lines = [f'## Search results for "{_truncate(query, 50)}" - {total} of {total} shown']
 
     if facts:
-        lines.append(f"\u251c\u2500 Knowledge Graph ({len(facts)} fact{'s' if len(facts) != 1 else ''})")
+        lines.append("")
+        lines.append(f"### KG Facts for {entity_name}")
         for f in facts[:8]:
             src = f.get("source", "")
             rel = f.get("relation", "")
             tgt = f.get("target", "")
             desc = f.get("description", "")
-            lines.append(f"\u2502   {src} \u2500[{rel}]\u2192 {tgt}")
+            lines.append(f"- {src} {rel} {tgt}".strip())
             if desc:
-                lines.append(f"\u2502     {_truncate(desc, 80)}")
-        lines.append("\u2502")
+                lines.append(f"  - {_truncate(desc, 120)}")
 
-    if results:
-        lines.append(f"\u251c\u2500 Memories ({total})")
-        for i, r in enumerate(results):
-            score = r.get("score", 0)
-            chunk_id = (r.get("chunk_id") or "")[:12]
-            snippet = _truncate(r.get("snippet") or r.get("content", ""), 60)
-            score_str = f"{score:.2f}" if score else "0.00"
-            lines.append(f"\u2502 [{i + 1}] {chunk_id}  score:{score_str}")
-            lines.append(f"\u2502     {snippet}")
-
-    lines.append("\u2514\u2500")
+    for i, r in enumerate(results):
+        snippet = r.get("snippet") or r.get("content", "")
+        summary = r.get("summary") or snippet
+        title = _truncate(summary.splitlines()[0] if summary else "Untitled result", 100)
+        source = _basename(r.get("source_file") or r.get("project") or "unknown") or "unknown"
+        date = _date_only(r.get("date") or r.get("created_at") or "unknown") or "unknown"
+        lines.append("")
+        lines.append(f"### {i + 1}. {title}")
+        lines.append(f"- Source: {source}")
+        lines.append(f"- Date: {date}")
+        lines.append(f"- Preview: {_truncate(snippet or summary, 200)}")
     return "\n".join(lines)

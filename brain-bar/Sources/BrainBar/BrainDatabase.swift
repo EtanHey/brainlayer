@@ -718,7 +718,7 @@ final class BrainDatabase: @unchecked Sendable {
         // Normal search uses FTS5 BM25 rank for relevance ordering.
         let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
         let sql = """
-            SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
+            SELECT c.rowid, c.id, c.content, c.source_file, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id, c.source, f.rank
             FROM \(tableName) f
             JOIN chunks c ON c.id = f.chunk_id
@@ -768,7 +768,7 @@ final class BrainDatabase: @unchecked Sendable {
             let rowID = sqlite3_column_int64(stmt, 0)
             maxRowID = max(maxRowID, rowID)
             // FTS5 rank is negative (lower = better match). Negate for a positive score.
-            let rawRank = sqlite3_column_double(stmt, 11)
+            let rawRank = sqlite3_column_double(stmt, 12)
             let score = max(0, -rawRank)
             results.append(searchRow(from: stmt, score: score))
         }
@@ -1992,7 +1992,7 @@ final class BrainDatabase: @unchecked Sendable {
         if importanceMin != nil { conditions.append("c.importance >= ?") }
 
         let sql = """
-            SELECT c.rowid, c.id, c.content, c.project, c.content_type, c.importance,
+            SELECT c.rowid, c.id, c.content, c.source_file, c.project, c.content_type, c.importance,
                    c.created_at, c.summary, c.tags, c.conversation_id, c.source
             FROM chunks c
             WHERE \(conditions.joined(separator: " AND "))
@@ -2047,15 +2047,16 @@ final class BrainDatabase: @unchecked Sendable {
             "rowid": Int(rowID),
             "chunk_id": columnText(stmt, 1) as Any,
             "content": columnText(stmt, 2) as Any,
-            "project": columnText(stmt, 3) as Any,
-            "content_type": columnText(stmt, 4) as Any,
-            "importance": sqlite3_column_double(stmt, 5),
-            "created_at": columnText(stmt, 6) as Any,
-            "summary": columnText(stmt, 7) as Any,
-            "preview_text": Self.previewText(summary: columnText(stmt, 7), content: columnText(stmt, 2)),
-            "tags": columnText(stmt, 8) as Any,
-            "session_id": columnText(stmt, 9) as Any,
-            "source": columnText(stmt, 10) as Any,
+            "source_file": columnText(stmt, 3) as Any,
+            "project": columnText(stmt, 4) as Any,
+            "content_type": columnText(stmt, 5) as Any,
+            "importance": sqlite3_column_double(stmt, 6),
+            "created_at": columnText(stmt, 7) as Any,
+            "summary": columnText(stmt, 8) as Any,
+            "preview_text": Self.previewText(summary: columnText(stmt, 8), content: columnText(stmt, 2)),
+            "tags": columnText(stmt, 9) as Any,
+            "session_id": columnText(stmt, 10) as Any,
+            "source": columnText(stmt, 11) as Any,
             "score": score
         ]
     }

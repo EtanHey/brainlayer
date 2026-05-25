@@ -11,6 +11,7 @@ struct SearchResult: Equatable, Identifiable {
     let tags: [String]
     let contentType: String
     let sessionID: String
+    let sourceFile: String
 
     var id: String { chunkID }
     var displayText: String {
@@ -78,7 +79,8 @@ struct SearchResult: Equatable, Identifiable {
         importance: Int? = nil,
         tags: [String] = [],
         contentType: String = "",
-        sessionID: String = ""
+        sessionID: String = "",
+        sourceFile: String = ""
     ) {
         self.chunkID = chunkID
         self.score = score
@@ -90,6 +92,7 @@ struct SearchResult: Equatable, Identifiable {
         self.tags = tags
         self.contentType = contentType
         self.sessionID = sessionID
+        self.sourceFile = sourceFile
     }
 
     init(payload: [String: Any]) {
@@ -117,6 +120,7 @@ struct SearchResult: Equatable, Identifiable {
         tags = SearchResult.decodeTags(payload["tags"])
         contentType = payload["content_type"] as? String ?? ""
         sessionID = payload["session_id"] as? String ?? ""
+        sourceFile = payload["source_file"] as? String ?? ""
     }
 
     init(rowID: String, title: String, metadata: String, tags: [String] = []) {
@@ -130,6 +134,7 @@ struct SearchResult: Equatable, Identifiable {
         self.tags = tags
         contentType = ""
         sessionID = ""
+        sourceFile = ""
     }
 
     private static func decodeTags(_ raw: Any?) -> [String] {

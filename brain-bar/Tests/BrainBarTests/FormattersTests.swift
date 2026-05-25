@@ -12,11 +12,10 @@ final class FormattersTests: XCTestCase {
 
     func testFormatSearchResultsEmpty() {
         let out = Formatters.formatSearchResults(query: "hello", results: [], total: 0)
-        XCTAssertTrue(out.contains("brain_search"))
+        XCTAssertTrue(out.contains("## Search results"))
         XCTAssertTrue(out.contains("hello"))
         XCTAssertTrue(out.contains("No results found"))
-        XCTAssertTrue(out.hasPrefix("\u{250c}"))  // ┌
-        XCTAssertTrue(out.contains("\u{2514}"))    // └
+        XCTAssertFalse(out.contains("score"))
     }
 
     func testFormatSearchResultsSingleResult() {
@@ -30,13 +29,13 @@ final class FormattersTests: XCTestCase {
             "tags": "[\"swift\", \"macos\"]"
         ]
         let out = Formatters.formatSearchResults(query: "brainbar", results: [result], total: 1, useColor: false)
-        XCTAssertTrue(out.contains("1 result"))
-        XCTAssertTrue(out.contains("rt-abc123de"))  // truncated to 12 chars
-        XCTAssertTrue(out.contains("0.87"))
-        XCTAssertTrue(out.contains("brainlayer"))
+        XCTAssertTrue(out.contains("1 of 1 shown"))
+        XCTAssertFalse(out.contains("rt-abc123de"))
+        XCTAssertFalse(out.contains("0.87"))
+        XCTAssertTrue(out.contains("Source: brainlayer"))
         XCTAssertTrue(out.contains("2026-03-29"))
         XCTAssertTrue(out.contains("BrainBar is a native macOS daemon"))
-        XCTAssertTrue(out.contains("imp:"))
+        XCTAssertFalse(out.contains("imp:"))
     }
 
     func testFormatSearchResultsMultiple() {
@@ -45,9 +44,9 @@ final class FormattersTests: XCTestCase {
             ["chunk_id": "b2", "score": 0.5, "project": "proj2", "created_at": "2026-03-02", "summary": "Second result", "importance": 3],
         ]
         let out = Formatters.formatSearchResults(query: "test", results: results, total: 2, useColor: false)
-        XCTAssertTrue(out.contains("2 results"))
-        XCTAssertTrue(out.contains("[1]"))
-        XCTAssertTrue(out.contains("[2]"))
+        XCTAssertTrue(out.contains("2 of 2 shown"))
+        XCTAssertTrue(out.contains("### 1."))
+        XCTAssertTrue(out.contains("### 2."))
     }
 
     func testFormatSearchResultsWithTags() {
@@ -61,9 +60,8 @@ final class FormattersTests: XCTestCase {
             "tags": "[\"alpha\", \"beta\", \"gamma\"]"
         ]
         let out = Formatters.formatSearchResults(query: "tags", results: [result], total: 1, useColor: false)
-        XCTAssertTrue(out.contains("tags:"))
-        XCTAssertTrue(out.contains("alpha"))
-        XCTAssertTrue(out.contains("beta"))
+        XCTAssertTrue(out.contains("Tagged result"))
+        XCTAssertFalse(out.contains("tags:"))
     }
 
     // MARK: - Store Result
@@ -104,24 +102,20 @@ final class FormattersTests: XCTestCase {
             ]
         ]
         let out = Formatters.formatEntityCard(entity: entity, useColor: false)
-        XCTAssertTrue(out.contains("Entity: Etan Heyman"))
-        XCTAssertTrue(out.contains("person-001"))
-        XCTAssertTrue(out.contains("person"))
-        XCTAssertTrue(out.contains("role: Developer"))
-        XCTAssertTrue(out.contains("location: Tel Aviv"))
-        XCTAssertTrue(out.contains("Relations"))
+        XCTAssertTrue(out.contains("## Entity: Etan Heyman"))
+        XCTAssertTrue(out.contains("### KG Facts"))
         XCTAssertTrue(out.contains("works_on"))
         XCTAssertTrue(out.contains("BrainLayer"))
-        XCTAssertTrue(out.contains("Memories"))
+        XCTAssertTrue(out.contains("### Recent context"))
         XCTAssertTrue(out.contains("Chose Swift"))
     }
 
     func testFormatEntityCardMinimal() {
         let entity: [String: Any] = ["name": "Unknown Entity"]
         let out = Formatters.formatEntityCard(entity: entity, useColor: false)
-        XCTAssertTrue(out.contains("Entity: Unknown Entity"))
-        XCTAssertTrue(out.hasPrefix("\u{250c}"))
-        XCTAssertTrue(out.contains("\u{2514}"))
+        XCTAssertTrue(out.contains("## Entity: Unknown Entity"))
+        XCTAssertTrue(out.contains("### KG Facts"))
+        XCTAssertTrue(out.contains("- None"))
     }
 
     // MARK: - Entity Simple
@@ -139,12 +133,11 @@ final class FormattersTests: XCTestCase {
             ]
         ]
         let out = Formatters.formatEntitySimple(entity: entity, useColor: false)
-        XCTAssertTrue(out.contains("Entity: BrainLayer"))
-        XCTAssertTrue(out.contains("proj-bl"))
-        XCTAssertTrue(out.contains("project"))
+        XCTAssertTrue(out.contains("## Entity: BrainLayer"))
+        XCTAssertTrue(out.contains("### KG Facts"))
         XCTAssertTrue(out.contains("used_by"))
         XCTAssertTrue(out.contains("Claude Code"))
-        XCTAssertTrue(out.contains("Associated memories"))
+        XCTAssertTrue(out.contains("### Recent context"))
     }
 
     func testFormatEntitySimpleEmpty() {
@@ -219,13 +212,14 @@ final class FormattersTests: XCTestCase {
             query: "what is brainbar",
             useColor: false
         )
-        XCTAssertTrue(out.contains("Entity search: \"BrainBar\""))
-        XCTAssertTrue(out.contains("Knowledge Graph"))
+        XCTAssertTrue(out.contains("## Search results for \"what is brainbar\""))
+        XCTAssertTrue(out.contains("### KG Facts for BrainBar"))
         XCTAssertTrue(out.contains("BrainBar"))
         XCTAssertTrue(out.contains("part_of"))
         XCTAssertTrue(out.contains("BrainLayer"))
-        XCTAssertTrue(out.contains("Memories"))
-        XCTAssertTrue(out.contains("0.95"))
+        XCTAssertFalse(out.contains("Memories"))
+        XCTAssertFalse(out.contains("0.95"))
+        XCTAssertFalse(out.contains("kg-1"))
     }
 
     func testFormatKGSearchNoFacts() {
@@ -233,8 +227,8 @@ final class FormattersTests: XCTestCase {
             ["chunk_id": "kg-2", "score": 0.6, "content": "Some content"]
         ]
         let out = Formatters.formatKGSearch(entityName: "Test", results: results, facts: [], query: "test", useColor: false)
-        XCTAssertFalse(out.contains("Knowledge Graph"))
-        XCTAssertTrue(out.contains("Memories"))
+        XCTAssertFalse(out.contains("KG Facts"))
+        XCTAssertFalse(out.contains("Memories"))
     }
 
     // MARK: - ANSI Color Tests
@@ -245,14 +239,7 @@ final class FormattersTests: XCTestCase {
             "created_at": "2026-01-01", "summary": "Color test", "importance": 7
         ]
         let out = Formatters.formatSearchResults(query: "color", results: [result], total: 1, useColor: true)
-        // Orange for values
-        XCTAssertTrue(out.contains("\u{1b}[38;2;232;121;36m"))
-        // Blue for keys
-        XCTAssertTrue(out.contains("\u{1b}[38;2;88;166;255m"))
-        // Green for numbers
-        XCTAssertTrue(out.contains("\u{1b}[38;2;63;185;80m"))
-        // Reset
-        XCTAssertTrue(out.contains("\u{1b}[0m"))
+        XCTAssertFalse(out.contains("\u{1b}["), "MCP markdown output should remain plain text even when useColor is true.")
     }
 
     func testANSIColorsAbsentWhenDisabled() {
@@ -279,20 +266,19 @@ final class FormattersTests: XCTestCase {
         XCTAssertTrue(out.contains("\u{1b}[38;2;63;185;80m"))  // green for numbers
     }
 
-    // MARK: - Box Drawing Characters
+    // MARK: - Markdown Layout
 
-    func testAllFormattersUseBoxDrawing() {
+    func testSearchAndEntityFormattersUseMarkdownHeaders() {
         let searchOut = Formatters.formatSearchResults(query: "q", results: [
             ["chunk_id": "x", "score": 0.1, "project": "p", "created_at": "d", "summary": "s", "importance": 1]
         ], total: 1, useColor: false)
-        XCTAssertTrue(searchOut.contains("\u{250c}"))  // ┌
-        XCTAssertTrue(searchOut.contains("\u{2514}"))  // └
-        XCTAssertTrue(searchOut.contains("\u{2502}"))  // │
-        XCTAssertTrue(searchOut.contains("\u{251c}"))  // ├
+        XCTAssertTrue(searchOut.contains("## Search results"))
+        XCTAssertTrue(searchOut.contains("### 1."))
+        XCTAssertFalse(searchOut.contains("score:"))
 
         let entityOut = Formatters.formatEntityCard(entity: ["name": "X"], useColor: false)
-        XCTAssertTrue(entityOut.contains("\u{250c}"))
-        XCTAssertTrue(entityOut.contains("\u{2514}"))
+        XCTAssertTrue(entityOut.contains("## Entity: X"))
+        XCTAssertTrue(entityOut.contains("### KG Facts"))
     }
 
     // MARK: - Layout: No trailing empty │ lines
@@ -304,10 +290,7 @@ final class FormattersTests: XCTestCase {
         ]
         let out = Formatters.formatSearchResults(query: "q", results: [result], total: 1, useColor: false)
         let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        // The line before └─ should NOT be a bare │
-        let closerIdx = lines.lastIndex(where: { $0.hasPrefix("\u{2514}") })!
-        let beforeCloser = lines[closerIdx - 1]
-        XCTAssertNotEqual(beforeCloser, "\u{2502}", "Should not have a trailing empty │ line before └─")
+        XCTAssertFalse(lines.last == "", "Markdown search output should not have a trailing empty line")
     }
 
     func testSearchResultsMultipleNoTrailingGap() {
@@ -317,23 +300,20 @@ final class FormattersTests: XCTestCase {
         ]
         let out = Formatters.formatSearchResults(query: "q", results: results, total: 2, useColor: false)
         let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let closerIdx = lines.lastIndex(where: { $0.hasPrefix("\u{2514}") })!
-        let beforeCloser = lines[closerIdx - 1]
-        XCTAssertNotEqual(beforeCloser, "\u{2502}", "Last result should not have trailing │ gap")
+        XCTAssertFalse(lines.last == "", "Markdown search output should not have a trailing empty line")
     }
 
     // MARK: - Content truncation: 150 chars
 
     func testSearchResultsSummaryTruncatesAt150() {
-        let longSummary = String(repeating: "x", count: 200)
+        let longSummary = String(repeating: "x", count: 300)
         let result: [String: Any] = [
             "chunk_id": "t1", "score": 0.5, "project": "test",
             "created_at": "2026-01-01", "summary": longSummary, "importance": 5
         ]
         let out = Formatters.formatSearchResults(query: "q", results: [result], total: 1, useColor: false)
-        // Exact truncation: 149 chars + ellipsis = 150 total
-        let expected = String(repeating: "x", count: 149) + "\u{2026}"
-        XCTAssertTrue(out.contains(expected), "Summary should truncate to 149 chars + ellipsis (150 total)")
+        let expected = String(repeating: "x", count: 99) + "\u{2026}"
+        XCTAssertTrue(out.contains(expected), "Summary title should truncate to 99 chars + ellipsis (100 total)")
         XCTAssertFalse(out.contains(longSummary), "200-char summary should be truncated")
     }
 }

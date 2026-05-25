@@ -452,7 +452,7 @@ final class MCPRouter: @unchecked Sendable {
             }
             let results = try db.recallSession(sessionId: sessionId, limit: 20)
             let typedResults = results.map(SearchResult.init(payload:))
-            return ToolOutput(text: TextFormatter.formatSearchResults(query: "session:\(sessionId)", results: typedResults, total: typedResults.count))
+            return ToolOutput(text: TextFormatter.formatRecalledContext(query: "session:\(sessionId)", results: typedResults))
         }
         let stats = try db.recallStats()
         return ToolOutput(text: TextFormatter.formatStats(StatsResult(payload: stats)))
@@ -915,6 +915,12 @@ final class MCPRouter: @unchecked Sendable {
         idempotent: true
     )
 
+    nonisolated(unsafe) static let recallAnnotations: [String: Any] = {
+        var annotations = MCPRouter.readOnlyAnnotations
+        annotations["anthropic/maxResultSizeChars"] = 100_000
+        return annotations
+    }()
+
     nonisolated(unsafe) static let writeAnnotations = toolAnnotations(
         readOnly: false,
         destructive: false,
@@ -965,7 +971,7 @@ final class MCPRouter: @unchecked Sendable {
         [
             "name": "brain_recall",
             "description": "Get current working context, browse sessions, or inspect session details.",
-            "annotations": MCPRouter.readOnlyAnnotations,
+            "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [

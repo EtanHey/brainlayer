@@ -80,6 +80,34 @@ enum Formatters {
         return []
     }
 
+    private static func basename(_ raw: Any?) -> String {
+        guard let text = raw as? String else { return "unknown" }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "unknown" }
+        return URL(fileURLWithPath: trimmed).lastPathComponent
+    }
+
+    private static func dateOnly(_ raw: Any?) -> String {
+        guard let text = raw as? String, !text.isEmpty else { return "unknown" }
+        return String(text.prefix(10))
+    }
+
+    private static func relationTarget(_ rel: [String: Any]) -> String {
+        if let target = rel["target"] as? [String: Any] {
+            return target["name"] as? String ?? ""
+        }
+        return (rel["target_name"] as? String)
+            ?? (rel["name"] as? String)
+            ?? (rel["target"] as? String)
+            ?? ""
+    }
+
+    private static func expiredDate(_ rel: [String: Any]) -> String? {
+        let raw = (rel["expired_at"] as? String) ?? (rel["expiredAt"] as? String)
+        guard let raw, !raw.isEmpty else { return nil }
+        return String(raw.prefix(10))
+    }
+
     // MARK: - Search Results
 
     static func formatSearchResults(
@@ -91,51 +119,25 @@ enum Formatters {
         let q = truncate(query, maxLen: 50)
 
         if total == 0 {
-            return "\u{250c}\u{2500} \(key("brain_search:", useColor)) \"\(val(q, useColor))\"\n\u{2502} No results found.\n\u{2514}\u{2500}"
+            return "## Search results for \"\(q)\" - 0 of 0 shown\n\nNo results found."
         }
 
         var lines: [String] = []
-        let countStr = num(total, useColor)
-        let suffix = total != 1 ? "s" : ""
-        lines.append("\u{250c}\u{2500} \(key("brain_search:", useColor)) \"\(val(q, useColor))\" \u{2500} \(countStr) result\(suffix)")
-        lines.append("\u{2502}")
+        lines.append("## Search results for \"\(q)\" - \(results.count) of \(total) shown")
 
         for (i, r) in results.enumerated() {
-            let score = r["score"] as? Double ?? 0
-            let chunkId = String((r["chunk_id"] as? String ?? "").prefix(12))
-            let project = truncate(r["project"] as? String, maxLen: 16)
-            let date = String((r["created_at"] as? String ?? "").prefix(10))
-            let importance = r["importance"]
             let summary = r["summary"] as? String ?? ""
-            let content = r["content"] as? String ?? ""
-            let displayText = truncate(summary.isEmpty ? content : summary, maxLen: 150)
-
-            let impStr: String
-            if let imp = importance as? Double {
-                impStr = String(format: "%2d", Int(imp))
-            } else if let imp = importance as? Int {
-                impStr = String(format: "%2d", imp)
-            } else {
-                impStr = " \u{2500}"
-            }
-
-            let scoreStr = score > 0 ? String(format: "%.2f", score) : "0.00"
-
-            lines.append("\u{251c}\u{2500} [\(num(i + 1, useColor))] \(chunkId)  \(key("score:", useColor))\(val(scoreStr, useColor))  \(key("imp:", useColor))\(val(impStr, useColor))  \(date)")
-            lines.append("\u{2502}  \(pad(project, width: 16)) \u{2502} \(displayText)")
-
-            let tags = parseTags(r["tags"])
-            if !tags.isEmpty {
-                let tagStr = tags.prefix(4).joined(separator: ", ")
-                lines.append("\u{2502}  \(key("tags:", useColor)) \(tagStr)")
-            }
-            // Separator between results, but not after the last one
-            if i < results.count - 1 {
-                lines.append("\u{2502}")
-            }
+            let snippet = (r["snippet"] as? String) ?? (r["content"] as? String) ?? ""
+            let title = truncate(summary.isEmpty ? snippet : summary, maxLen: 100)
+            let source = basename(r["source_file"] ?? r["project"])
+            let date = dateOnly(r["date"] ?? r["created_at"])
+            let preview = truncate(snippet.isEmpty ? summary : snippet, maxLen: 200)
+            lines.append("")
+            lines.append("### \(i + 1). \(title.isEmpty ? "Untitled result" : title)")
+            lines.append("- Source: \(source)")
+            lines.append("- Date: \(date)")
+            lines.append("- Preview: \(preview)")
         }
-
-        lines.append("\u{2514}\u{2500}")
         return lines.joined(separator: "\n")
     }
 
@@ -161,79 +163,53 @@ enum Formatters {
 
     static func formatEntityCard(entity: [String: Any], useColor: Bool = true) -> String {
         let name = entity["name"] as? String ?? "Unknown"
-        let eid = (entity["entity_id"] as? String) ?? (entity["id"] as? String) ?? ""
-        let entityType = (entity["entity_type"] as? String)
-            ?? ((entity["profile"] as? [String: Any])?["entity_type"] as? String)
-            ?? ""
 
-        var lines: [String] = []
-        lines.append("\u{250c}\u{2500} \(key("Entity:", useColor)) \(val(name, useColor))")
-        lines.append("\u{2502} \(key("id:", useColor)) \(eid)  \(key("type:", useColor)) \(entityType.isEmpty ? "unknown" : entityType)")
-
-        // Profile
-        if let profile = entity["profile"] as? [String: Any] {
-            for k in ["role", "company", "location", "email", "phone"] {
-                if let v = profile[k] as? String {
-                    lines.append("\u{2502} \(key("\(k):", useColor)) \(v)")
-                }
-            }
+        var lines: [String] = ["## Entity: \(name)"]
+        if let description = entity["description"] as? String, !description.isEmpty {
+            lines.append("")
+            lines.append(truncate(description, maxLen: 200))
         }
 
-        // Constraints
-        if let constraints = entity["hard_constraints"] as? [String: Any], !constraints.isEmpty {
-            lines.append("\u{251c}\u{2500} Constraints")
-            for (k, v) in Array(constraints.prefix(5)) {
-                lines.append("\u{2502}   \(k): \(v)")
-            }
-        }
-
-        // Preferences
-        if let prefs = entity["preferences"] as? [String: Any], !prefs.isEmpty {
-            lines.append("\u{251c}\u{2500} Preferences")
-            for (k, v) in Array(prefs.prefix(5)) {
-                lines.append("\u{2502}   \(k): \(v)")
-            }
-        }
-
-        // Contact
-        if let contact = entity["contact_info"] as? [String: Any], !contact.isEmpty {
-            lines.append("\u{251c}\u{2500} Contact")
-            for (k, v) in Array(contact.prefix(5)) {
-                lines.append("\u{2502}   \(k): \(v)")
-            }
-        }
-
-        // Relations
+        lines.append("")
+        lines.append("### KG Facts")
         if let relations = entity["relations"] as? [[String: Any]], !relations.isEmpty {
-            lines.append("\u{251c}\u{2500} Relations (\(num(relations.count, useColor)))")
             for rel in relations.prefix(8) {
                 let rtype = rel["relation_type"] as? String ?? ""
-                let target: String
-                if let t = rel["target"] as? [String: Any] {
-                    target = t["name"] as? String ?? ""
-                } else {
-                    target = rel["target"] as? String ?? ""
+                var line = "- \(rtype): \(relationTarget(rel))"
+                if let expired = expiredDate(rel) {
+                    line += " (expired \(expired))"
                 }
-                lines.append("\u{2502}   \u{2192} \(rtype): \(target)")
+                lines.append(line)
             }
+        } else {
+            lines.append("- None")
         }
 
-        // Memories
+        lines.append("")
+        lines.append("### Recent context")
         if let memories = entity["memories"] as? [[String: Any]], !memories.isEmpty {
-            let memCount = entity["memory_count"] as? Int ?? memories.count
-            lines.append("\u{251c}\u{2500} Memories (\(num(memCount, useColor)))")
             for mem in memories.prefix(5) {
-                let mtype = pad(mem["type"] as? String, width: 8)
-                let mdate = String((mem["date"] as? String ?? "").prefix(10))
                 let mcontent = truncate(
                     (mem["content"] as? String) ?? (mem["summary"] as? String),
-                    maxLen: 60
+                    maxLen: 150
                 )
-                lines.append("\u{2502}   [\(mtype)] \(mdate) \(mcontent)")
+                lines.append("- \(mcontent)")
             }
+        } else {
+            lines.append("- None")
         }
 
-        lines.append("\u{2514}\u{2500}")
+        lines.append("")
+        lines.append("### Likely follow-ups")
+        let relations = entity["relations"] as? [[String: Any]] ?? []
+        let followUps = relations.map { relationTarget($0) }.filter { !$0.isEmpty }
+        if followUps.isEmpty {
+            lines.append("- None")
+        } else {
+            for target in followUps.prefix(5) {
+                lines.append("- \(target)")
+            }
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -243,47 +219,48 @@ enum Formatters {
         if entity.isEmpty { return "" }
 
         let name = entity["name"] as? String ?? "Unknown"
-        let eid = entity["id"] as? String ?? ""
-        let etype = entity["entity_type"] as? String ?? ""
 
-        var lines: [String] = []
-        lines.append("\u{250c}\u{2500} \(key("Entity:", useColor)) \(val(name, useColor))")
-        lines.append("\u{2502} \(key("id:", useColor)) \(eid)  \(key("type:", useColor)) \(etype.isEmpty ? "unknown" : etype)")
+        var lines: [String] = ["## Entity: \(name)"]
 
         // Relations
+        lines.append("")
+        lines.append("### KG Facts")
         if let relations = entity["relations"] as? [[String: Any]], !relations.isEmpty {
-            lines.append("\u{251c}\u{2500} Relations (\(num(relations.count, useColor)))")
             for rel in relations.prefix(8) {
                 let rtype = rel["relation_type"] as? String ?? "related_to"
-                let target = (rel["target_name"] as? String) ?? (rel["name"] as? String) ?? ""
-                lines.append("\u{2502}   \u{2192} \(rtype): \(target)")
+                var line = "- \(rtype): \(relationTarget(rel))"
+                if let expired = expiredDate(rel) {
+                    line += " (expired \(expired))"
+                }
+                lines.append(line)
             }
+        } else {
+            lines.append("- None")
         }
 
         // Chunks
+        lines.append("")
+        lines.append("### Recent context")
         if let chunks = entity["chunks"] as? [[String: Any]], !chunks.isEmpty {
-            lines.append("\u{251c}\u{2500} Associated memories (\(num(chunks.count, useColor)))")
             for c in chunks.prefix(5) {
-                let snippet = truncate(c["content"] as? String, maxLen: 60)
-                lines.append("\u{2502}   \(snippet)")
+                let snippet = truncate(c["content"] as? String, maxLen: 150)
+                lines.append("- \(snippet)")
             }
+        } else {
+            lines.append("- None")
         }
 
-        // Metadata
-        if let metadata = entity["metadata"] as? [String: Any] {
-            let interesting = metadata.filter { k, v in
-                !["id", "name", "entity_type"].contains(k) && !(v is NSNull)
-            }
-            if !interesting.isEmpty {
-                lines.append("\u{251c}\u{2500} Metadata")
-                for (k, v) in Array(interesting.prefix(5)) {
-                    let valStr = v is String ? truncate(v as? String, maxLen: 50) : "\(v)"
-                    lines.append("\u{2502}   \(k): \(valStr)")
-                }
+        lines.append("")
+        lines.append("### Likely follow-ups")
+        let relations = entity["relations"] as? [[String: Any]] ?? []
+        let followUps = relations.map { relationTarget($0) }.filter { !$0.isEmpty }
+        if followUps.isEmpty {
+            lines.append("- None")
+        } else {
+            for target in followUps.prefix(5) {
+                lines.append("- \(target)")
             }
         }
-
-        lines.append("\u{2514}\u{2500}")
         return lines.joined(separator: "\n")
     }
 
@@ -365,39 +342,33 @@ enum Formatters {
         useColor: Bool = true
     ) -> String {
         let total = results.count
-        let q = truncate(query, maxLen: 40)
-
-        var lines: [String] = []
-        let suffix = total != 1 ? "s" : ""
-        lines.append("\u{250c}\u{2500} \(key("Entity search:", useColor)) \"\(val(entityName, useColor))\" (\(key("query:", useColor)) \"\(q)\") \u{2500} \(num(total, useColor)) result\(suffix)")
+        let q = truncate(query, maxLen: 50)
+        var lines = ["## Search results for \"\(q)\" - \(total) of \(total) shown"]
 
         if !facts.isEmpty {
-            lines.append("\u{251c}\u{2500} Knowledge Graph (\(num(facts.count, useColor)) fact\(facts.count != 1 ? "s" : ""))")
+            lines.append("")
+            lines.append("### KG Facts for \(entityName)")
             for f in facts.prefix(5) {
                 let src = f["source"] as? String ?? ""
                 let rel = f["relation"] as? String ?? ""
                 let tgt = f["target"] as? String ?? ""
-                lines.append("\u{2502}   \(src) \u{2500}[\(rel)]\u{2192} \(tgt)")
-            }
-            lines.append("\u{2502}")
-        }
-
-        if !results.isEmpty {
-            lines.append("\u{251c}\u{2500} Memories (\(num(total, useColor)))")
-            for (i, r) in results.enumerated() {
-                let score = r["score"] as? Double ?? 0
-                let chunkId = String((r["chunk_id"] as? String ?? "").prefix(12))
-                let snippet = truncate(
-                    (r["snippet"] as? String) ?? (r["content"] as? String),
-                    maxLen: 60
-                )
-                let scoreStr = score > 0 ? String(format: "%.2f", score) : "0.00"
-                lines.append("\u{2502} [\(num(i + 1, useColor))] \(chunkId)  \(key("score:", useColor))\(val(scoreStr, useColor))")
-                lines.append("\u{2502}     \(snippet)")
+                lines.append("- \(src) \(rel) \(tgt)".trimmingCharacters(in: .whitespacesAndNewlines))
             }
         }
 
-        lines.append("\u{2514}\u{2500}")
+        for (i, r) in results.enumerated() {
+            let snippet = (r["snippet"] as? String) ?? (r["content"] as? String) ?? ""
+            let summary = (r["summary"] as? String) ?? snippet
+            let titleSource = summary.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "Untitled result"
+            let source = basename(r["source_file"] ?? r["project"])
+            let date = dateOnly(r["date"] ?? r["created_at"])
+            lines.append("")
+            lines.append("### \(i + 1). \(truncate(titleSource.isEmpty ? "Untitled result" : titleSource, maxLen: 100))")
+            lines.append("- Source: \(source)")
+            lines.append("- Date: \(date)")
+            lines.append("- Preview: \(truncate(snippet.isEmpty ? summary : snippet, maxLen: 200))")
+        }
+
         return lines.joined(separator: "\n")
     }
 }

@@ -13,7 +13,8 @@ final class TextFormatterParityTests: XCTestCase {
                 summary: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
                 snippet: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
                 importance: 8,
-                tags: ["swift", "macos", "mcp"]
+                tags: ["swift", "macos", "mcp"],
+                sourceFile: "/Users/etanheyman/Gits/brainlayer/brain-bar/Sources/BrainBar/MCPRouter.swift"
             )
         ]
 
@@ -26,22 +27,25 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertEqual(
             output,
             """
-            ┌─ brain_search: "brainbar native swift renderer parity should trun…" ─ 1 result
-            │
-            ├─ [1] rt-abc123def  score:0.87  imp: 8  2026-03-29
-            │  brainlayer       │ BrainBar is a native macOS daemon for BrainLayer MCP routing.
-            │  tags: swift, macos, mcp
-            │
-            └─
+            ## Search results for "brainbar native swift renderer parity should trun…" - 1 of 1 shown
+
+            ### 1. BrainBar is a native macOS daemon for BrainLayer MCP routing.
+            - Source: MCPRouter.swift
+            - Date: 2026-03-29
+            - Preview: BrainBar is a native macOS daemon for BrainLayer MCP routing.
             """
         )
+        XCTAssertFalse(output.contains("score:"))
+        XCTAssertFalse(output.contains("rt-abc123def"))
     }
 
-    func testEntityCardMatchesPythonStructure() {
+    func testEntityCardUsesLabeledKGFactsStructure() {
+        let expiredAt = ISO8601DateFormatter().date(from: "2026-05-01T00:00:00Z")
         let entity = EntityCard(
             id: "person-001",
             name: "Etan Heyman",
             entityType: "person",
+            description: "Owner of the BrainLayer ecosystem.",
             profile: [
                 "role": "Developer",
                 "company": "BrainLayer",
@@ -51,7 +55,8 @@ final class TextFormatterParityTests: XCTestCase {
             preferences: ["editor": "Neovim"],
             contactInfo: ["email": "etan@example.com"],
             relations: [
-                EntityCard.Relation(relationType: "works_on", targetName: "BrainLayer")
+                EntityCard.Relation(relationType: "works_on", targetName: "BrainLayer"),
+                EntityCard.Relation(relationType: "depends_on", targetName: "legacy-auth-lib", expiredAt: expiredAt)
             ],
             memories: [
                 EntityCard.Memory(type: "decision", date: "2026-03-29", content: "Chose Swift renderers for BrainBar parity.")
@@ -64,24 +69,49 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertEqual(
             output,
             """
-            ┌─ Entity: Etan Heyman
-            │ id: person-001  type: person
-            │ role: Developer
-            │ company: BrainLayer
-            │ location: Tel Aviv
-            ├─ Constraints
-            │   timezone: Asia/Jerusalem
-            ├─ Preferences
-            │   editor: Neovim
-            ├─ Contact
-            │   email: etan@example.com
-            ├─ Relations (1)
-            │   → works_on: BrainLayer
-            ├─ Memories (1)
-            │   [decision] 2026-03-29 Chose Swift renderers for BrainBar parity.
-            └─
+            ## Entity: Etan Heyman
+
+            Owner of the BrainLayer ecosystem.
+
+            ### KG Facts
+            - works_on: BrainLayer
+            - depends_on: legacy-auth-lib (expired 2026-05-01)
+
+            ### Recent context
+            - Chose Swift renderers for BrainBar parity.
+
+            ### Likely follow-ups
+            - BrainLayer
+            - legacy-auth-lib
             """
         )
+    }
+
+    func testRecallContextUsesLabeledChunkMarkdown() {
+        let results = [
+            SearchResult(
+                chunkID: "chunk-auth-1",
+                project: "brainlayer",
+                date: "2026-04-12T10:00:00Z",
+                summary: "",
+                snippet: "We chose sliding-window refresh tokens with a short grace window for concurrent tabs.",
+                sourceFile: "design-doc/auth-v2.md"
+            )
+        ]
+
+        let output = TextFormatter.formatRecalledContext(query: "how did we handle session expiry", results: results)
+
+        XCTAssertEqual(
+            output,
+            """
+            ## Recalled context for "how did we handle session expiry"
+
+            ### Chunk 1 - auth-v2.md
+            We chose sliding-window refresh tokens with a short grace window for concurrent tabs.
+            """
+        )
+        XCTAssertFalse(output.contains("score"))
+        XCTAssertFalse(output.contains("[{"))
     }
 
     func testDigestStatsAndKGFormattersMatchPythonStructure() {
@@ -141,14 +171,15 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertEqual(
             TextFormatter.formatKGSearch(kg),
             """
-            ┌─ Entity search: "BrainBar" (query: "what is brainbar") ─ 1 result
-            ├─ Knowledge Graph (1 fact)
-            │   BrainBar ─[part_of]→ BrainLayer
-            │
-            ├─ Memories (1)
-            │ [1] kg-123456789  score:0.95
-            │     BrainBar serves MCP over a Unix socket.
-            └─
+            ## Search results for "what is brainbar" - 1 of 1 shown
+
+            ### KG Facts for BrainBar
+            - BrainBar part_of BrainLayer
+
+            ### 1. BrainBar serves MCP over a Unix socket.
+            - Source: unknown
+            - Date: unknown
+            - Preview: BrainBar serves MCP over a Unix socket.
             """
         )
     }

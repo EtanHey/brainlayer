@@ -12,158 +12,85 @@ enum TextFormatter {
 
         if total == 0 {
             return [
-                "┌─ brain_search: \"\(truncatedQuery)\"",
-                "│ No results found.",
-                "└─",
+                "## Search results for \"\(truncatedQuery)\" - 0 of 0 shown",
+                "",
+                "No results found.",
             ].joined(separator: "\n")
         }
 
-        var lines = ["┌─ brain_search: \"\(truncatedQuery)\" ─ \(total) result\(total == 1 ? "" : "s")"]
-        lines.append("│")
+        var lines = ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
 
         for (index, result) in results.enumerated() {
-            let displayText = truncate(result.summary.isEmpty ? result.snippet : result.summary, maxLen: 150)
-            let datePart = String(result.date.prefix(10))
-            let importancePart: String
-            if let importance = result.importance {
-                importancePart = String(format: "%2d", importance)
-            } else {
-                importancePart = " ─"
-            }
-            lines.append("├─ [\(index + 1)] \(String(result.chunkID.prefix(12)))  score:\(scoreString(result.score))  imp:\(importancePart)  \(datePart)")
-            lines.append("│  \(pad(truncate(result.project, maxLen: 16), width: 16)) │ \(displayText)")
-
-            if !result.tags.isEmpty {
-                lines.append("│  tags: \(result.tags.prefix(4).joined(separator: ", "))")
-            }
-
-            if index < results.count - 1 {
-                lines.append("│")
-            }
+            let title = titleLine(for: result)
+            let preview = truncate(result.displayText, maxLen: 200)
+            let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
+            let datePart = formattedDate(result.date)
+            lines.append("")
+            lines.append("### \(index + 1). \(title)")
+            lines.append("- Source: \(source.isEmpty ? "unknown" : source)")
+            lines.append("- Date: \(datePart.isEmpty ? "unknown" : datePart)")
+            lines.append("- Preview: \(preview)")
         }
-
-        if !results.isEmpty {
-            lines.append("│")
-        }
-        lines.append("└─")
         return lines.joined(separator: "\n")
     }
 
     static func formatKGFacts(entity: String, facts: [BrainDatabase.KGFact]) -> String {
         guard !facts.isEmpty else { return "" }
         var lines: [String] = []
-        lines.append("### ◆ \(entity)")
-        lines.append("connections: \(facts.count)")
+        lines.append("## Entity: \(entity)")
         lines.append("")
-
-        // Split into outgoing and incoming, group by relation type
-        let outgoing = facts.filter { $0.direction == "outgoing" }
-        let incoming = facts.filter { $0.direction == "incoming" }
-
-        if !outgoing.isEmpty {
-            let grouped = Dictionary(grouping: outgoing) { $0.relationType }
-            for (relType, group) in grouped.sorted(by: { $0.key < $1.key }) {
-                let entities = group.map(\.relatedEntity).joined(separator: ", ")
-                lines.append("→ \(relType.uppercased()): \(entities)")
-            }
-        }
-
-        if !incoming.isEmpty {
-            let grouped = Dictionary(grouping: incoming) { $0.relationType }
-            for (relType, group) in grouped.sorted(by: { $0.key < $1.key }) {
-                let entities = group.map(\.relatedEntity).joined(separator: ", ")
-                lines.append("← \(relType.uppercased()): \(entities)")
-            }
+        lines.append("### KG Facts")
+        for fact in facts.prefix(20) {
+            lines.append("- \(fact.relationType): \(fact.relatedEntity)")
         }
 
         return lines.joined(separator: "\n")
     }
 
     static func formatEntityCard(_ entity: EntityCard) -> String {
-        var lines = [
-            "┌─ Entity: \(entity.name)",
-            "│ id: \(entity.id)  type: \(entity.entityType.isEmpty ? "unknown" : entity.entityType)"
-        ]
+        var lines = ["## Entity: \(entity.name)"]
 
         if !entity.description.isEmpty {
-            lines.append("│ \(truncate(entity.description, maxLen: 100))")
+            lines.append("")
+            lines.append(truncate(entity.description, maxLen: 200))
         }
 
-        for key in ["role", "company", "location", "email", "phone"] {
-            if let value = entity.profile[key], !value.isEmpty {
-                lines.append("│ \(key): \(value)")
-            }
-        }
-
-        if !entity.hardConstraints.isEmpty {
-            lines.append("├─ Constraints")
-            for (key, value) in entity.hardConstraints.sorted(by: { $0.key < $1.key }).prefix(5) {
-                lines.append("│   \(key): \(value)")
-            }
-        }
-
-        if !entity.preferences.isEmpty {
-            lines.append("├─ Preferences")
-            for (key, value) in entity.preferences.sorted(by: { $0.key < $1.key }).prefix(5) {
-                lines.append("│   \(key): \(value)")
-            }
-        }
-
-        if !entity.contactInfo.isEmpty {
-            lines.append("├─ Contact")
-            for (key, value) in entity.contactInfo.sorted(by: { $0.key < $1.key }).prefix(5) {
-                lines.append("│   \(key): \(value)")
-            }
-        }
-
-        if !entity.relations.isEmpty {
-            lines.append("├─ Relations (\(entity.relations.count))")
-            for relation in entity.relations.prefix(8) {
-                let arrow = relation.direction == "incoming" ? "←" : "→"
-                lines.append("│   \(arrow) \(relation.relationType): \(relation.targetName)")
-            }
-        }
-
-        if !entity.memories.isEmpty {
-            lines.append("├─ Memories (\(entity.memoryCount))")
-            for memory in entity.memories.prefix(5) {
-                lines.append("│   [\(pad(memory.type, width: 8))] \(String(memory.date.prefix(10))) \(truncate(memory.content, maxLen: 60))")
-            }
-        }
-
-        lines.append("└─")
+        appendEntitySections(entity, to: &lines)
         return lines.joined(separator: "\n")
     }
 
     static func formatEntitySimple(_ entity: EntityCard) -> String {
-        var lines = [
-            "┌─ Entity: \(entity.name)",
-            "│ id: \(entity.id)  type: \(entity.entityType.isEmpty ? "unknown" : entity.entityType)"
-        ]
+        var lines = ["## Entity: \(entity.name)"]
 
-        if !entity.relations.isEmpty {
-            lines.append("├─ Relations (\(entity.relations.count))")
-            for relation in entity.relations.prefix(8) {
-                let arrow = relation.direction == "incoming" ? "←" : "→"
-                lines.append("│   \(arrow) \(relation.relationType): \(relation.targetName)")
-            }
+        if !entity.description.isEmpty {
+            lines.append("")
+            lines.append(truncate(entity.description, maxLen: 200))
         }
 
-        if !entity.chunks.isEmpty {
-            lines.append("├─ Associated memories (\(entity.chunks.count))")
-            for chunk in entity.chunks.prefix(5) {
-                lines.append("│   \(truncate(chunk, maxLen: 60))")
-            }
+        appendEntitySections(entity, to: &lines)
+        return lines.joined(separator: "\n")
+    }
+
+    static func formatRecalledContext(query: String, results: [SearchResult]) -> String {
+        let truncatedQuery = truncate(query, maxLen: 80)
+        if results.isEmpty {
+            return "## Recalled context for \"\(truncatedQuery)\"\n\nNo context available."
         }
 
-        if !entity.metadata.isEmpty {
-            lines.append("├─ Metadata")
-            for (key, value) in entity.metadata.sorted(by: { $0.key < $1.key }).prefix(5) {
-                lines.append("│   \(key): \(truncate(value, maxLen: 50))")
+        var lines = ["## Recalled context for \"\(truncatedQuery)\""]
+        for (index, result) in results.enumerated() {
+            lines.append("")
+            lines.append("### Chunk \(index + 1) - \(sourceBasename(result.sourceFile).isEmpty ? "unknown" : sourceBasename(result.sourceFile))")
+            let content = result.snippet.isEmpty ? result.displayText : result.snippet
+            let fullText = content.replacingOccurrences(of: "\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if fullText.count <= 1500 {
+                lines.append(fullText)
+            } else {
+                lines.append(String(fullText.prefix(1500)) + "...")
+                lines.append("")
+                lines.append("Reference: \(result.chunkID)")
             }
         }
-
-        lines.append("└─")
         return lines.joined(separator: "\n")
     }
 
@@ -206,27 +133,26 @@ enum TextFormatter {
     }
 
     static func formatKGSearch(_ result: KGSearchResult) -> String {
-        var lines = [
-            "┌─ Entity search: \"\(result.entityName)\" (query: \"\(truncate(result.query, maxLen: 40))\") ─ \(result.results.count) result\(result.results.count == 1 ? "" : "s")"
-        ]
+        var lines = ["## Search results for \"\(truncate(result.query, maxLen: 50))\" - \(result.results.count) of \(result.results.count) shown"]
 
         if !result.facts.isEmpty {
-            lines.append("├─ Knowledge Graph (\(result.facts.count) fact\(result.facts.count == 1 ? "" : "s"))")
+            lines.append("")
+            lines.append("### KG Facts for \(result.entityName)")
             for fact in result.facts.prefix(5) {
-                lines.append("│   \(fact.source) ─[\(fact.relation)]→ \(fact.target)")
-            }
-            lines.append("│")
-        }
-
-        if !result.results.isEmpty {
-            lines.append("├─ Memories (\(result.results.count))")
-            for (index, memory) in result.results.enumerated() {
-                lines.append("│ [\(index + 1)] \(String(memory.chunkID.prefix(12)))  score:\(scoreString(memory.score))")
-                lines.append("│     \(truncate(memory.snippet, maxLen: 60))")
+                lines.append("- \(fact.source) \(fact.relation) \(fact.target)")
             }
         }
 
-        lines.append("└─")
+        for (index, memory) in result.results.enumerated() {
+            let title = truncate(memory.snippet.isEmpty ? "Untitled result" : memory.snippet, maxLen: 100)
+            let preview = truncate(memory.snippet, maxLen: 200)
+            lines.append("")
+            lines.append("### \(index + 1). \(title)")
+            lines.append("- Source: unknown")
+            lines.append("- Date: unknown")
+            lines.append("- Preview: \(preview)")
+        }
+
         return lines.joined(separator: "\n")
     }
 
@@ -253,6 +179,77 @@ enum TextFormatter {
 
     private static func scoreString(_ score: Double) -> String {
         score == 0 ? "0.00" : String(format: "%.2f", score)
+    }
+
+    private static func titleLine(for result: SearchResult) -> String {
+        let preferred = result.summary.isEmpty ? result.displayText : result.summary
+        let title = preferred
+            .split(separator: "\n", maxSplits: 1)
+            .first
+            .map(String.init) ?? preferred
+        return truncate(title.isEmpty ? "Untitled result" : title, maxLen: 100)
+    }
+
+    private static func sourceBasename(_ source: String) -> String {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return URL(fileURLWithPath: trimmed).lastPathComponent
+    }
+
+    private static func formattedDate(_ raw: String) -> String {
+        String(raw.prefix(10))
+    }
+
+    private static func formattedDate(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func relationLine(_ relation: EntityCard.Relation) -> String {
+        var line = "- \(relation.relationType): \(relation.targetName)"
+        if let expired = formattedDate(relation.expiredAt ?? relation.validUntil) {
+            line += " (expired \(expired))"
+        }
+        return line
+    }
+
+    private static func appendEntitySections(_ entity: EntityCard, to lines: inout [String]) {
+        lines.append("")
+        lines.append("### KG Facts")
+        if entity.relations.isEmpty {
+            lines.append("- None")
+        } else {
+            for relation in entity.relations.prefix(20) {
+                lines.append(relationLine(relation))
+            }
+        }
+
+        lines.append("")
+        lines.append("### Recent context")
+        let memoryLines = entity.memories.map(\.content) + entity.chunks
+        if memoryLines.isEmpty {
+            lines.append("- None")
+        } else {
+            for memory in memoryLines.prefix(5) {
+                lines.append("- \(truncate(memory, maxLen: 150))")
+            }
+        }
+
+        lines.append("")
+        lines.append("### Likely follow-ups")
+        let followUps = entity.relations.map(\.targetName).filter { !$0.isEmpty }
+        if followUps.isEmpty {
+            lines.append("- None")
+        } else {
+            for target in followUps.prefix(5) {
+                lines.append("- \(target)")
+            }
+        }
     }
 
     private static func formatNumber(_ number: Int) -> String {

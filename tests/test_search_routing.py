@@ -97,7 +97,7 @@ class TestCompactFormat:
     def test_compact_result_has_required_fields(self):
         """Compact format should include: chunk_id, snippet, score, project, date, summary."""
         compact_item = _build_compact_item(self._sample_item())
-        required_keys = {"score", "snippet", "project", "chunk_id"}
+        required_keys = {"score", "snippet", "project", "chunk_id", "source_file"}
         assert required_keys.issubset(compact_item.keys())
         # Optional fields should be present when source item has them
         assert "date" in compact_item
@@ -109,7 +109,6 @@ class TestCompactFormat:
         dropped_keys = {
             "content_type",
             "intent",
-            "source_file",
             "session_summary",
             "session_outcome",
             "session_quality",

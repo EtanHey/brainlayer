@@ -75,7 +75,7 @@ final class QuickCaptureTests: XCTestCase {
         let results = try QuickCaptureController.search(db: db, query: "BrainBar quick capture", limit: 5)
 
         XCTAssertFalse(results.formatted.isEmpty, "Should return formatted text")
-        XCTAssertTrue(results.formatted.contains("\u{250c}"), "Should have box-drawing header")
+        XCTAssertTrue(results.formatted.contains("## Search results"), "Should have markdown header")
         XCTAssertGreaterThan(results.count, 0, "Should find at least one result")
     }
 
@@ -189,7 +189,7 @@ final class QuickCaptureTests: XCTestCase {
 
         XCTAssertEqual(results.results.first?["chunk_id"] as? String, "tagged-result-1")
         XCTAssertEqual(results.results.first?["tags"] as? String, "[\"phase-2-4\", \"search-perf\"]")
-        XCTAssertTrue(results.formatted.contains("phase-2-4"))
+        XCTAssertFalse(results.formatted.contains("phase-2-4"))
     }
 
     func testSearchEmptyQueryReturnsEmpty() throws {
