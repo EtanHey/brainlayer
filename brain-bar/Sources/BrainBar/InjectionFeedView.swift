@@ -1,9 +1,68 @@
+import Combine
 import SwiftUI
+
+struct InjectionFeedPresentationState: Equatable {
+    let events: [InjectionEvent]
+    let degradationState: DegradationState
+
+    static let empty = InjectionFeedPresentationState(
+        events: [],
+        degradationState: .healthy
+    )
+}
+
+@MainActor
+final class InjectionFeedPresentationModel: ObservableObject {
+    @Published private(set) var state: InjectionFeedPresentationState = .empty
+
+    var events: [InjectionEvent] { state.events }
+    var degradationState: DegradationState { state.degradationState }
+
+    private let throttleInterval: RunLoop.SchedulerTimeType.Stride
+    private var cancellables: Set<AnyCancellable> = []
+    private weak var boundStore: InjectionStore?
+
+    init(throttleInterval: RunLoop.SchedulerTimeType.Stride = .milliseconds(500)) {
+        self.throttleInterval = throttleInterval
+    }
+
+    func bind(to store: InjectionStore) {
+        guard boundStore !== store else { return }
+
+        boundStore = store
+        cancellables.removeAll()
+        let currentState = InjectionFeedPresentationState(
+            events: store.events,
+            degradationState: store.degradationState
+        )
+        if state != currentState {
+            state = currentState
+        }
+
+        Publishers.CombineLatest(store.$events, store.$degradationState)
+            .map { events, degradationState in
+                InjectionFeedPresentationState(
+                    events: events,
+                    degradationState: degradationState
+                )
+            }
+            .dropFirst()
+            .removeDuplicates()
+            .throttle(for: throttleInterval, scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] state in
+                Task { @MainActor [weak self] in
+                    self?.state = state
+                }
+            }
+            .store(in: &cancellables)
+    }
+}
 
 struct InjectionFeedView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var store: InjectionStore
+    let store: InjectionStore
     @Binding var filterText: String
+    @StateObject private var presentationModel = InjectionFeedPresentationModel()
     @State private var expandedEventIDs: Set<Int64> = []
     @State private var expandedBurstIDs: Set<String> = []
     @State private var selectedConversation: BrainDatabase.ExpandedConversation?
@@ -52,6 +111,16 @@ struct InjectionFeedView: View {
                     onClose: { selectedConversation = nil }
                 )
             }
+        }
+        .overlay(alignment: .topTrailing) {
+            if presentationModel.degradationState.isDegraded {
+                DegradationBadge(reason: presentationModel.degradationState.reason)
+                    .padding(.top, 20)
+                    .padding(.trailing, 20)
+            }
+        }
+        .onAppear {
+            presentationModel.bind(to: store)
         }
     }
 
@@ -568,7 +637,7 @@ struct InjectionFeedView: View {
 
     private func makePresentation(now: Date = Date()) -> InjectionPresentation.Snapshot {
         InjectionPresentation.snapshot(
-            events: store.events,
+            events: presentationModel.events,
             filterText: filterText,
             now: now,
             bucketCount: 24

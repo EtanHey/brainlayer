@@ -1,9 +1,11 @@
 import XCTest
+import Combine
 @testable import BrainBar
 
 final class InjectionStoreTests: XCTestCase {
     private var tempDBPath: String!
     private var db: BrainDatabase!
+    private var cancellables: Set<AnyCancellable> = []
 
     override func setUp() {
         super.setUp()
@@ -12,6 +14,7 @@ final class InjectionStoreTests: XCTestCase {
     }
 
     override func tearDown() {
+        cancellables.removeAll()
         db.close()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
@@ -127,6 +130,62 @@ final class InjectionStoreTests: XCTestCase {
         XCTAssertEqual(store.degradationState, .healthy)
         XCTAssertEqual(store.events.map(\.query), ["recovered query"])
     }
+
+    @MainActor
+    func testInjectionFeedPresentationModelThrottlesRapidEventBursts() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 2, 3],
+            eventResults: [
+                .success([makeEvent(id: 1, query: "burst one")]),
+                .success([makeEvent(id: 2, query: "burst two")]),
+                .success([makeEvent(id: 3, query: "burst three")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+        let model = InjectionFeedPresentationModel(throttleInterval: .milliseconds(100))
+        var publishedStates: [InjectionFeedPresentationState] = []
+
+        model.$state
+            .dropFirst()
+            .sink { state in
+                publishedStates.append(state)
+            }
+            .store(in: &cancellables)
+
+        model.bind(to: store)
+        store.refreshForTesting(force: true)
+        store.refreshForTesting(force: true)
+        store.refreshForTesting(force: true)
+
+        try await Task.sleep(for: .milliseconds(180))
+
+        XCTAssertLessThanOrEqual(
+            publishedStates.count,
+            2,
+            "A rapid store burst should be coalesced before invalidating SwiftUI."
+        )
+        XCTAssertEqual(model.events.map(\.id), [3])
+        XCTAssertEqual(model.state.events.map(\.id), [3])
+        XCTAssertEqual(model.state.degradationState, .healthy)
+    }
+
+    @MainActor
+    func testInjectionFeedPresentationModelSeedsCurrentStoreStateImmediately() throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1],
+            eventResults: [
+                .success([makeEvent(id: 42, query: "already loaded")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+        store.refreshForTesting(force: true)
+
+        let model = InjectionFeedPresentationModel(throttleInterval: .milliseconds(500))
+        model.bind(to: store)
+
+        XCTAssertEqual(model.state.events.map(\.id), [42])
+        XCTAssertEqual(model.state.degradationState, .healthy)
+    }
 }
 
 private enum ScriptedInjectionError: Error {
@@ -173,4 +232,15 @@ private final class ScriptedInjectionEventReader: InjectionEventReading {
     }
 
     func close() {}
+}
+
+private func makeEvent(id: Int64, query: String) -> InjectionEvent {
+    InjectionEvent(
+        id: id,
+        sessionID: "session-\(id)",
+        timestamp: "2026-05-25T19:00:00Z",
+        query: query,
+        chunkIDs: ["chunk-\(id)"],
+        tokenCount: 7
+    )
 }
