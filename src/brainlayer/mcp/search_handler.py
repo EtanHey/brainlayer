@@ -1179,7 +1179,17 @@ async def _search(
         loop = asyncio.get_running_loop()
         model = _get_embedding_model()
         embed_started = search_profile.now()
-        query_embedding = await loop.run_in_executor(None, model.embed_query, query)
+        try:
+            query_embedding = await loop.run_in_executor(None, model.embed_query, query)
+        except Exception as exc:
+            search_profile.emit(
+                profile_scope,
+                "embed",
+                profile_query_id,
+                search_profile.dur_ms(embed_started),
+                error=exc.__class__.__name__,
+            )
+            raise
         search_profile.emit(profile_scope, "embed", profile_query_id, search_profile.dur_ms(embed_started))
 
         if source == "all":
@@ -1198,42 +1208,58 @@ async def _search(
         # they can during checkpoint or when enrichment holds exclusive lock.
         results = None
         hybrid_started = search_profile.now()
-        for attempt in range(_RETRY_MAX_ATTEMPTS):
-            try:
-                results = store.hybrid_search(
-                    query_embedding=query_embedding,
-                    query_text=query,
-                    fts_query_override=fts_query_override,
-                    n_results=num_results,
-                    project_filter=normalized_project,
-                    content_type_filter=content_type,
-                    source_filter=source_filter,
-                    tag_filter=tag,
-                    intent_filter=intent,
-                    importance_min=importance_min,
-                    date_from=date_from,
-                    date_to=date_to,
-                    sentiment_filter=sentiment,
-                    entity_id=entity_id,
-                    source_filter_like=source_filter_like,
-                    correction_category=correction_category,
-                    include_checkpoints=include_checkpoints,
-                    include_audit=include_audit,
-                    profile_query_id=profile_query_id,
-                    profile_scope=profile_scope,
-                )
-                break
-            except Exception as e:
-                is_lock = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
-                if is_lock and attempt < _RETRY_MAX_ATTEMPTS - 1:
-                    delay = _retry_delay * (2**attempt)
-                    logger.warning(
-                        "Search BusyError (attempt %d/%d), retrying in %.2fs", attempt + 1, _RETRY_MAX_ATTEMPTS, delay
+        hybrid_error: str | None = None
+        try:
+            for attempt in range(_RETRY_MAX_ATTEMPTS):
+                try:
+                    results = store.hybrid_search(
+                        query_embedding=query_embedding,
+                        query_text=query,
+                        fts_query_override=fts_query_override,
+                        n_results=num_results,
+                        project_filter=normalized_project,
+                        content_type_filter=content_type,
+                        source_filter=source_filter,
+                        tag_filter=tag,
+                        intent_filter=intent,
+                        importance_min=importance_min,
+                        date_from=date_from,
+                        date_to=date_to,
+                        sentiment_filter=sentiment,
+                        entity_id=entity_id,
+                        source_filter_like=source_filter_like,
+                        correction_category=correction_category,
+                        include_checkpoints=include_checkpoints,
+                        include_audit=include_audit,
+                        profile_query_id=profile_query_id,
+                        profile_scope=profile_scope,
                     )
-                    await asyncio.sleep(delay)
-                    continue
-                raise  # Non-lock error or retries exhausted
-        search_profile.emit(profile_scope, "hybrid_search", profile_query_id, search_profile.dur_ms(hybrid_started))
+                    break
+                except Exception as e:
+                    is_lock = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
+                    if is_lock and attempt < _RETRY_MAX_ATTEMPTS - 1:
+                        delay = _retry_delay * (2**attempt)
+                        logger.warning(
+                            "Search BusyError (attempt %d/%d), retrying in %.2fs",
+                            attempt + 1,
+                            _RETRY_MAX_ATTEMPTS,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise  # Non-lock error or retries exhausted
+        except Exception as exc:
+            hybrid_error = exc.__class__.__name__
+            raise
+        finally:
+            fields = {"error": hybrid_error} if hybrid_error else {}
+            search_profile.emit(
+                profile_scope,
+                "hybrid_search",
+                profile_query_id,
+                search_profile.dur_ms(hybrid_started),
+                **fields,
+            )
 
         if not results["documents"][0]:
             empty = {"query": query, "total": 0, "results": []}
