@@ -234,12 +234,17 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
     _git(repo, "push", "-u", "origin", "main")
     main_sha = _git_stdout(repo, "rev-parse", "HEAD")
     _git(repo, "branch", "feat/active-dev")
+    _git(repo, "branch", "feat/old-dev")
+    _git(repo, "tag", "feat-missing")
     worktree = tmp_path / "active-worktree"
     _git(repo, "worktree", "add", str(worktree), "feat/active-dev")
 
     merged_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-merged.app", main_sha)
     missing_branch_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-missing.app")
-    active_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-active-dev.app")
+    active_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-active-dev.app", main_sha)
+    old_age_bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-old-dev.app")
+    old_mtime = 0
+    os.utime(old_age_bundle, (old_mtime, old_mtime))
     _prepare_bundle_inputs(repo)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
 
@@ -251,6 +256,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
         dry_run=False,
         extra_env={
             "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
+            "BRAINBAR_DEV_STALE_DAYS": "1",
             "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
             "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}.sock",
             "BRAINBAR_SOCKET_WAIT_ATTEMPTS": "1",
@@ -261,8 +267,10 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "Cleaning stale DEV bundle: BrainBar-DEV-feat-merged.app" in result.stdout
     assert "Cleaning stale DEV bundle: BrainBar-DEV-feat-missing.app" in result.stdout
+    assert "Cleaning stale DEV bundle: BrainBar-DEV-feat-old-dev.app" in result.stdout
     assert not merged_bundle.exists()
     assert not missing_branch_bundle.exists()
+    assert not old_age_bundle.exists()
     assert active_bundle.exists()
 
 
@@ -295,9 +303,9 @@ def test_canonical_dry_run_lists_dev_bundle_cleanup_without_removing(tmp_path: P
 
     assert result.returncode == 0, result.stderr
     for bundle in bundles:
-        assert bundle.name in result.stdout
         assert bundle.exists()
-    assert "would clean stale DEV bundle" in result.stdout
+    assert "would clean stale DEV bundle: BrainBar-DEV-feat-merged.app" in result.stdout
+    assert "would clean stale DEV bundle: BrainBar-DEV-feat-missing.app" in result.stdout
     assert "Keeping DEV bundle: BrainBar-DEV-feat-active-dev.app" in result.stdout
 
 
@@ -326,6 +334,28 @@ def test_canonical_dev_cleanup_scans_home_applications_when_app_dir_is_overridde
     assert str(custom_app_dir) in result.stdout
     assert bundle.name in result.stdout
     assert "would clean stale DEV bundle" in result.stdout
+    assert bundle.exists()
+
+
+def test_canonical_dev_cleanup_preserves_local_branch_named_origin_prefix(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    _git(repo, "branch", "origin/active-dev")
+    worktree = tmp_path / "origin-active-worktree"
+    _git(repo, "worktree", "add", str(worktree), "origin/active-dev")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-origin-active-dev.app")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Keeping DEV bundle: BrainBar-DEV-origin-active-dev.app" in result.stdout
     assert bundle.exists()
 
 
