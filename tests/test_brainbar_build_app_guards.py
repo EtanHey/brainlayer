@@ -190,12 +190,15 @@ exit 0
     (tool_dir / "launchctl").write_text(
         """#!/usr/bin/env bash
 if [[ "$1" == "kickstart" && -n "${BRAINBAR_SOCKET_PATH:-}" && ! -S "$BRAINBAR_SOCKET_PATH" ]]; then
-  python3 - "$BRAINBAR_SOCKET_PATH" <<'PY' >/dev/null 2>&1 &
+  ready_file="${BRAINBAR_SOCKET_PATH}.ready"
+  rm -f "$ready_file"
+  python3 - "$BRAINBAR_SOCKET_PATH" "$ready_file" <<'PY' >/dev/null 2>&1 &
 import os
 import socket
 import sys
 
 path = sys.argv[1]
+ready_file = sys.argv[2]
 try:
     os.unlink(path)
 except FileNotFoundError:
@@ -203,10 +206,17 @@ except FileNotFoundError:
 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(path)
 server.listen(1)
+with open(ready_file, "w"):
+    pass
 conn, _ = server.accept()
 conn.close()
 server.close()
 PY
+  for _ in {1..50}; do
+    [[ -S "$BRAINBAR_SOCKET_PATH" ]] && break
+    sleep 0.02
+  done
+  rm -f "$ready_file"
   disown
 fi
 exit 0
