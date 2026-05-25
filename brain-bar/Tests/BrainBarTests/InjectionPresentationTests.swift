@@ -193,6 +193,25 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.summary.burstCount, 1)
     }
 
+    func testBurstIDStaysStableWhenNewerEventAppendsToSameBurst() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let initialEvents = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:58:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:57:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+        let updatedEvents = [
+            makeEvent(id: 3, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-3"], tokenCount: 10),
+        ] + initialEvents
+
+        let initialSnapshot = InjectionPresentation.snapshot(events: initialEvents, filterText: "", now: now)
+        let updatedSnapshot = InjectionPresentation.snapshot(events: updatedEvents, filterText: "", now: now)
+
+        XCTAssertEqual(initialSnapshot.bursts.count, 1)
+        XCTAssertEqual(updatedSnapshot.bursts.count, 1)
+        XCTAssertEqual(updatedSnapshot.bursts[0].events.map(\.id), [3, 1, 2])
+        XCTAssertEqual(initialSnapshot.bursts[0].id, updatedSnapshot.bursts[0].id)
+    }
+
     private func makeEvent(
         id: Int64,
         sessionID: String,

@@ -27,7 +27,7 @@ struct InjectionPresentation {
         let events: [InjectionEvent]
 
         var id: String {
-            "\(groupKey)|\(endDate.timeIntervalSince1970)"
+            "\(groupKey)|\(events.last?.id ?? 0)"
         }
 
         var groupKey: String { "\(sessionID)\u{001F}\(topicOrSource)" }
