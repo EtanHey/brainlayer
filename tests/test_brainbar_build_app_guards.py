@@ -359,6 +359,58 @@ def test_canonical_dev_cleanup_preserves_local_branch_named_origin_prefix(tmp_pa
     assert bundle.exists()
 
 
+def test_canonical_dev_cleanup_preserves_detached_worktree_bundle(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    detached_sha = _git_stdout(repo, "rev-parse", "--short", "HEAD")
+    worktree = tmp_path / "detached-worktree"
+    _git(repo, "worktree", "add", "--detach", str(worktree), "HEAD")
+    bundle = _create_fake_bundle(apps_dir, f"BrainBar-DEV-detached-{detached_sha}.app")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"Keeping DEV bundle: BrainBar-DEV-detached-{detached_sha}.app" in result.stdout
+    assert bundle.exists()
+
+
+def test_canonical_dev_cleanup_preserves_checked_out_sanitized_branch_collision(
+    tmp_path: Path,
+) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    remote = tmp_path / "origin.git"
+    _git(remote.parent, "init", "--bare", remote.name)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", "main")
+    main_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    _git(repo, "branch", "feat-z-collision")
+    _git(repo, "branch", "feat/z/collision")
+    worktree = tmp_path / "collision-worktree"
+    _git(repo, "worktree", "add", str(worktree), "feat/z/collision")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-z-collision.app", main_sha)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Keeping DEV bundle: BrainBar-DEV-feat-z-collision.app" in result.stdout
+    assert bundle.exists()
+
+
 def test_build_app_helpers_ignore_parent_git_hook_env(tmp_path: Path, monkeypatch) -> None:
     parent_repo = tmp_path / "parent"
     _init_repo(parent_repo)

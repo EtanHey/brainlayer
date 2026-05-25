@@ -93,18 +93,75 @@ dev_bundle_apps_dir() {
     printf '%s\n' "$HOME/Applications"
 }
 
-branch_is_checked_out_anywhere() {
-    local branch="$1"
-    git -C "$CURRENT_REPO_ROOT" worktree list --porcelain |
-        awk -v branch_ref="refs/heads/$branch" '
-            $1 == "branch" && $2 == branch_ref { found = 1 }
-            END { exit found ? 0 : 1 }
-        '
+safe_branch_is_checked_out_anywhere() {
+    local safe_branch="$1"
+    local detached_sha=""
+    case "$safe_branch" in
+        detached-*)
+            detached_sha="${safe_branch#detached-}"
+            ;;
+    esac
+
+    local line
+    local head_sha=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            HEAD\ *)
+                head_sha="${line#HEAD }"
+                ;;
+            branch\ refs/heads/*)
+                local branch
+                branch="${line#branch refs/heads/}"
+                if [ "$(sanitize_branch_name "$branch")" = "$safe_branch" ]; then
+                    return 0
+                fi
+                ;;
+            "")
+                if [ -n "$detached_sha" ] && [ "${head_sha#$detached_sha}" != "$head_sha" ]; then
+                    return 0
+                fi
+                head_sha=""
+                ;;
+        esac
+    done < <(git -C "$CURRENT_REPO_ROOT" worktree list --porcelain)
+
+    if [ -n "$detached_sha" ] && [ "${head_sha#$detached_sha}" != "$head_sha" ]; then
+        return 0
+    fi
+    return 1
+}
+
+safe_branch_ref_exists() {
+    local safe_branch="$1"
+    local ref
+    while IFS= read -r ref; do
+        local branch
+        case "$ref" in
+            refs/heads/*)
+                branch="${ref#refs/heads/}"
+                ;;
+            refs/remotes/origin/*)
+                branch="${ref#refs/remotes/origin/}"
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        if [ "$(sanitize_branch_name "$branch")" = "$safe_branch" ]; then
+            return 0
+        fi
+    done < <(git -C "$CURRENT_REPO_ROOT" for-each-ref --format='%(refname)' refs/heads refs/remotes/origin 2>/dev/null)
+    return 1
+}
+
+bundle_mtime_epoch() {
+    local bundle="$1"
+    stat -f %m "$bundle" 2>/dev/null || stat -c %Y "$bundle"
 }
 
 dev_bundle_age_days() {
     local bundle="$1"
-    echo $(( ($(date +%s) - $(stat -f %m "$bundle")) / 86400 ))
+    echo $(( ($(date +%s) - $(bundle_mtime_epoch "$bundle")) / 86400 ))
 }
 
 read_bundle_git_commit() {
@@ -137,12 +194,6 @@ resolve_dev_bundle_branch() {
     printf '%s\n' "$safe_branch"
 }
 
-branch_ref_exists() {
-    local branch="$1"
-    git -C "$CURRENT_REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch" ||
-        git -C "$CURRENT_REPO_ROOT" show-ref --verify --quiet "refs/remotes/origin/$branch"
-}
-
 cleanup_stale_dev_bundles() {
     local apps_dir
     apps_dir="$(dev_bundle_apps_dir)"
@@ -166,12 +217,12 @@ cleanup_stale_dev_bundles() {
         local is_stale=0
         local reason=""
 
-        if branch_is_checked_out_anywhere "$branch"; then
-            reason="branch '$branch' is checked out in a worktree"
+        if safe_branch_is_checked_out_anywhere "$safe_branch"; then
+            reason="bundle branch token '$safe_branch' is checked out in a worktree"
         elif [ -n "$sha" ] && git -C "$CURRENT_REPO_ROOT" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
             is_stale=1
             reason="bundle SHA $sha is in origin/main"
-        elif ! branch_ref_exists "$branch"; then
+        elif ! safe_branch_ref_exists "$safe_branch"; then
             is_stale=1
             reason="branch '$branch' not found locally or upstream"
         else
@@ -224,7 +275,7 @@ if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then
     exit 1
 fi
 
-if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     cleanup_stale_dev_bundles
 fi
 
@@ -360,6 +411,7 @@ if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
             exit 1
         fi
     fi
+    cleanup_stale_dev_bundles
     rm -f "$SOCKET_PATH"
 else
     echo "[build-app] DEV worktree build: preserving canonical LaunchAgent and socket"
