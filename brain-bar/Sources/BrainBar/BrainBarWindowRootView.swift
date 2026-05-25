@@ -746,21 +746,13 @@ struct BrainBarDashboardLayout {
 }
 
 private struct BrainBarInjectionTab: View {
-    @ObservedObject var store: InjectionStore
+    let store: InjectionStore
     @State private var filterText = ""
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            InjectionFeedView(store: store, filterText: $filterText)
-                .padding(16)
-                .onAppear { store.start() }
-
-            if store.degradationState.isDegraded {
-                DegradationBadge(reason: store.degradationState.reason)
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
-            }
-        }
+        InjectionFeedView(store: store, filterText: $filterText)
+            .padding(16)
+            .onAppear { store.start() }
     }
 }
 

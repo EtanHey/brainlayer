@@ -437,7 +437,7 @@ final class StatusPopoverView: NSViewController {
 // MARK: - SwiftUI Tab Wrappers
 
 struct PopoverInjectionTab: View {
-    @ObservedObject var store: InjectionStore
+    let store: InjectionStore
     @State private var filterText = ""
 
     var body: some View {
