@@ -89,17 +89,16 @@ class TestFormatSearchResults:
         result = format_search_results("test query", [], 0)
         assert "No results found" in result
         assert "test query" in result
-        # Box-drawing chars
-        assert "\u250c" in result  # top-left
-        assert "\u2514" in result  # bottom-left
+        assert result.startswith("## Search results")
+        assert "score" not in result
 
     def test_single_result_structure(self):
         results = [self._make_result()]
         output = format_search_results("test", results, 1)
-        assert "1 result" in output
-        assert "abc123def456" in output[:200]  # chunk_id near top
-        assert "0.85" in output  # score
-        assert "brainlayer" in output  # project
+        assert "1 of 1 shown" in output
+        assert "abc123def456" not in output
+        assert "0.85" not in output
+        assert "Source: brainlayer" in output
         assert "2026-03-29" in output  # date
         assert "Test summary" in output  # summary used over snippet
 
@@ -110,16 +109,16 @@ class TestFormatSearchResults:
             self._make_result(chunk_id="ccc333", score=0.65),
         ]
         output = format_search_results("multi", results, 3)
-        assert "3 results" in output
-        assert "[1]" in output
-        assert "[2]" in output
-        assert "[3]" in output
+        assert "3 of 3 shown" in output
+        assert "### 1." in output
+        assert "### 2." in output
+        assert "### 3." in output
 
     def test_tags_displayed(self):
         results = [self._make_result(tags=["decision", "architecture"])]
         output = format_search_results("tagged", results, 1)
-        assert "decision" in output
-        assert "architecture" in output
+        assert "tags:" not in output
+        assert "Test summary" in output
 
     def test_no_tags_no_tag_line(self):
         results = [self._make_result(tags=None)]
@@ -139,16 +138,16 @@ class TestFormatSearchResults:
     def test_box_drawing_chars(self):
         results = [self._make_result()]
         output = format_search_results("q", results, 1)
-        assert "\u250c" in output  # ┌
-        assert "\u2502" in output  # │
-        assert "\u251c" in output  # ├
-        assert "\u2514" in output  # └
+        assert "## Search results" in output
+        assert "### 1." in output
+        assert "- Source:" in output
+        assert "- Preview:" in output
 
     def test_missing_importance(self):
         results = [self._make_result(importance=None)]
         output = format_search_results("q", results, 1)
-        # Should not crash, should show dash
-        assert "\u2500" in output
+        assert "## Search results" in output
+        assert "importance" not in output
 
     def test_long_query_truncated(self):
         long_query = "a" * 200
@@ -186,9 +185,8 @@ class TestFormatEntityCard:
         entity = {"name": "Etan Heyman", "entity_id": "ent_123", "profile": {}}
         result = format_entity_card(entity)
         assert "Etan Heyman" in result
-        assert "ent_123" in result
-        assert "\u250c" in result
-        assert "\u2514" in result
+        assert "### KG Facts" in result
+        assert "- None" in result
 
     def test_with_relations(self):
         entity = {
@@ -214,8 +212,8 @@ class TestFormatEntityCard:
             "memory_count": 1,
         }
         result = format_entity_card(entity)
-        assert "Memories" in result
-        assert "decision" in result
+        assert "Recent context" in result
+        assert "Chose X over Y" in result
 
     def test_with_profile_fields(self):
         entity = {
@@ -224,8 +222,8 @@ class TestFormatEntityCard:
             "profile": {"role": "Engineer", "company": "Acme"},
         }
         result = format_entity_card(entity)
-        assert "Engineer" in result
-        assert "Acme" in result
+        assert "## Entity: Dev" in result
+        assert "### KG Facts" in result
 
 
 # --- format_entity_simple ---
@@ -240,7 +238,7 @@ class TestFormatEntitySimple:
         entity = {"name": "BrainLayer", "id": "ent_bl", "entity_type": "project"}
         result = format_entity_simple(entity)
         assert "BrainLayer" in result
-        assert "project" in result
+        assert "### KG Facts" in result
 
     def test_with_relations(self):
         entity = {
@@ -358,19 +356,22 @@ class TestFormatKgSearch:
             {"source": "Etan", "relation": "works_on", "target": "BrainLayer"},
         ]
         output = format_kg_search("Etan", results, facts, "Etan work")
+        assert output.startswith('## Search results for "Etan work"')
         assert "Etan" in output
         assert "works_on" in output
         assert "BrainLayer" in output
         assert "Memory about Etan" in output
+        assert "score:" not in output
+        assert "c1" not in output
 
     def test_no_facts(self):
         results = [{"chunk_id": "c1", "score": 0.5, "snippet": "stuff"}]
         output = format_kg_search("X", results, [], "X query")
-        assert "Knowledge Graph" not in output
+        assert "KG Facts" not in output
 
     def test_no_results(self):
         output = format_kg_search("Nobody", [], [], "Nobody query")
-        assert "0 result" in output
+        assert "0 of 0 shown" in output
 
 
 # --- _build_compact_result tags passthrough ---

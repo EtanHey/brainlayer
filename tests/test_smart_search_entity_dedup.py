@@ -84,8 +84,8 @@ class TestCompactSearchDefault:
         assert result["project"] == "test"
         assert result["summary"] == "Auth implementation"
 
-    def test_compact_result_omits_verbose_fields(self):
-        """Compact results should NOT include source_file, importance — only essentials."""
+    def test_compact_result_includes_source_for_labeled_markdown(self):
+        """Compact results include source_file so MCP text can render Source."""
         from brainlayer.mcp._shared import _build_compact_result
 
         result = _build_compact_result(
@@ -101,8 +101,7 @@ class TestCompactSearchDefault:
             }
         )
 
-        # Compact mode should not have verbose fields (importance IS included now)
-        assert "source_file" not in result
+        assert result["source_file"] == "auth.ts"
         assert "importance" in result
         assert "content_type" not in result
         assert "tags" not in result

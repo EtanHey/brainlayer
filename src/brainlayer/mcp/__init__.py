@@ -113,6 +113,14 @@ _READ_ONLY = ToolAnnotations(
     openWorldHint=False,
 )
 
+_RECALL_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+    **{"anthropic/maxResultSizeChars": 100_000},
+)
+
 _WRITE = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -689,7 +697,7 @@ async def list_tools() -> list[Tool]:
             name="brain_recall",
             title="Recall / Search / Entity Lookup",
             description="""Get working context, recent sessions, plan/session links, per-session operations, summaries, stats, or routed search from one entry point. Use when: you need 'what am I working on', recent session history, plan linkage, operation groups for a session, or knowledge-base health stats. Don't use when: you already know you want topical memory search (use brain_search), a direct entity graph lookup (use brain_entity), or to store or digest new content (use brain_store or brain_digest). mode can be explicit or auto-detected from query; session_id is required for operations and summary, plan_name targets plan mode, and hours, days, and limit control context windows. In search mode, file_path, chunk_id, content filters, num_results, and detail='compact'|'full' behave like brain_search. Returns structured context, search results, or stats depending on mode; use brain_search after broad routing when you need tighter topical retrieval.""",
-            annotations=_READ_ONLY,
+            annotations=_RECALL_READ_ONLY,
             inputSchema=_bounded_input_schema(
                 {
                     "type": "object",

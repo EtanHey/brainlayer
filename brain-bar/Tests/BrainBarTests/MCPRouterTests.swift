@@ -242,6 +242,13 @@ final class MCPRouterTests: XCTestCase {
         }
     }
 
+    func testBrainRecallDeclaresLargeResultBudget() throws {
+        let tool = try XCTUnwrap(MCPRouter.toolDefinitions.first { ($0["name"] as? String) == "brain_recall" })
+        let annotations = try XCTUnwrap(tool["annotations"] as? [String: Any])
+
+        XCTAssertGreaterThanOrEqual(annotations["anthropic/maxResultSizeChars"] as? Int ?? 0, 100_000)
+    }
+
     func testEachToolSchemaBoundsStringInputs() throws {
         for tool in MCPRouter.toolDefinitions {
             let name = tool["name"] as? String ?? "unknown"
@@ -436,7 +443,8 @@ final class MCPRouterTests: XCTestCase {
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("fallback-fts"), text)
+        XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
+        XCTAssertFalse(text.contains("fallback-fts"), "Compact labeled markdown should not expose chunk_id by default.")
         XCTAssertNil(result["structuredContent"])
     }
 
@@ -476,8 +484,9 @@ final class MCPRouterTests: XCTestCase {
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("### ◆ Etan"), text)
-        XCTAssertTrue(text.contains("WORKS_ON"), text)
+        XCTAssertTrue(text.contains("## Entity: Etan"), text)
+        XCTAssertTrue(text.contains("### KG Facts"), text)
+        XCTAssertTrue(text.contains("works_on: BrainLayer"), text)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
     }
 
@@ -519,7 +528,8 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("unread-1"), "Unread queue searches must preserve BrainBar subscriber cursor behavior.")
+        XCTAssertTrue(text.contains("Agent message still unread"), "Unread queue searches must preserve BrainBar subscriber cursor behavior.")
+        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default.")
         XCTAssertEqual(helper.requests.count, 0)
     }
 
@@ -740,10 +750,10 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        // Formatted output has ANSI color codes — check for box-drawing prefix and content
-        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
-        XCTAssertTrue(text.contains("f-1"), "Should contain the brainbar project chunk")
-        XCTAssertFalse(text.contains("f-2"), "Should not contain other project chunk")
+        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Socket handling code"), "Should contain the brainbar project chunk content")
+        XCTAssertFalse(text.contains("Socket connection code"), "Should not contain other project chunk")
+        XCTAssertFalse(text.contains("f-1"), "Compact labeled markdown should not expose chunk_id by default")
     }
 
     func testBrainSearchPassesImportanceMinFilter() throws {
@@ -772,9 +782,10 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
-        XCTAssertTrue(text.contains("i-1"), "Should contain the high-importance chunk id")
-        XCTAssertFalse(text.contains("i-2"), "Should not contain low-importance chunk")
+        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Critical security finding"), "Should contain the high-importance chunk content")
+        XCTAssertFalse(text.contains("Security review notes"), "Should not contain low-importance chunk")
+        XCTAssertFalse(text.contains("i-1"), "Compact labeled markdown should not expose chunk_id by default")
     }
 
     func testBrainSearchPassesSourceFilter() throws {
@@ -803,7 +814,7 @@ final class MCPRouterTests: XCTestCase {
         let text = content?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(text.contains("Sagit meeting notes"))
-        XCTAssertEqual(text.components(separatedBy: "Sagit meeting notes").count - 1, 1, "Only one matching source should be returned")
+        XCTAssertTrue(text.contains("1 of 1 shown"), "Only one matching source should be returned")
     }
 
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
@@ -840,9 +851,10 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("### ◆ Sagit Stern"))
-        XCTAssertTrue(text.contains("→ LECTURES_AT: TechGym"))
-        XCTAssertTrue(text.contains("kg-search-ta"))
+        XCTAssertTrue(text.contains("## Entity: Sagit Stern"))
+        XCTAssertTrue(text.contains("lectures_at: TechGym"))
+        XCTAssertTrue(text.contains("Sagit Stern delivered the TechGym lecture"))
+        XCTAssertFalse(text.contains("kg-search-ta"), "Compact labeled markdown should not expose chunk_id by default")
     }
 
     func testBrainEntityUsesPythonSimpleEntityStructure() throws {
@@ -876,11 +888,10 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("Entity: BrainLayer"))
-        XCTAssertTrue(text.contains("Relations (1)"))
-        XCTAssertTrue(text.contains("→ used_by: Claude Code"))
-        XCTAssertTrue(text.contains("Metadata"))
-        XCTAssertTrue(text.contains("language: Swift"))
+        XCTAssertTrue(text.contains("## Entity: BrainLayer"))
+        XCTAssertTrue(text.contains("### KG Facts"))
+        XCTAssertTrue(text.contains("used_by: Claude Code"))
+        XCTAssertTrue(text.contains("### Recent context"))
     }
 
     func testBrainRecallStatsIncludesProjectAndTypeLists() throws {
@@ -985,9 +996,9 @@ final class MCPRouterTests: XCTestCase {
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("\u{250c}"), "Should contain box-drawing header")
-        XCTAssertTrue(text.contains("unread-1"), "Should contain the unread chunk id")
-        // Note: can't check absence of "read-1" since "unread-1" contains it as substring
+        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Agent message still unread"), "Should contain the unread chunk content")
+        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default")
         XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
     }
 

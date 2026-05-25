@@ -24,7 +24,7 @@ _VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
 
-from ._format import format_kg_search, format_search_results, format_stats
+from ._format import format_kg_search, format_recalled_context, format_search_results, format_stats
 from ._shared import (
     _build_compact_result,
     _error_result,
@@ -1377,16 +1377,16 @@ async def _context(
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
         if not result.get("context"):
             return [TextContent(type="text", text="No context available for this chunk.")]
-        output_parts = ["## Conversation Context\n"]
+        chunks = []
         for chunk in result["context"]:
-            marker = " **[TARGET]**" if chunk.get("is_target") else ""
-            ctype = chunk.get("content_type", "unknown")
-            pos = chunk.get("position", "?")
-            output_parts.append(f"\n### Position {pos} ({ctype}){marker}\n")
-            content = chunk.get("content", "")
-            output_parts.append(content[:1500] + ("..." if len(content) > 1500 else ""))
-            output_parts.append("\n---")
-        return [TextContent(type="text", text="\n".join(output_parts))]
+            chunks.append(
+                {
+                    "chunk_id": chunk.get("id") or chunk.get("chunk_id"),
+                    "source_file": chunk.get("source_file"),
+                    "content": chunk.get("content", ""),
+                }
+            )
+        return [TextContent(type="text", text=format_recalled_context(chunk_id, chunks))]
     except Exception as e:
         return _error_result(f"Context error: {str(e)}")
 
