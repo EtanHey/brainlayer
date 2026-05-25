@@ -23,7 +23,8 @@ final class KGViewModel: ObservableObject {
     @Published private(set) var isLoadingSelectedEntityFiles = false
     @Published private(set) var selectedEntityCanLoadMoreChunks = false
     @Published private(set) var selectedEntityCanLoadMoreFiles = false
-    @Published private(set) var selectedEntitySidebarLoadFailed = false
+    @Published private(set) var selectedEntityChunkSidebarLoadFailed = false
+    @Published private(set) var selectedEntityFileSidebarLoadFailed = false
     @Published private(set) var degradationState: DegradationState = .healthy
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
@@ -267,7 +268,8 @@ final class KGViewModel: ObservableObject {
                     self.selectedEntityFileCursor = rows.filePage.nextCursor
                     self.selectedEntityCanLoadMoreChunks = rows.chunkPage.nextCursor != nil
                     self.selectedEntityCanLoadMoreFiles = rows.filePage.nextCursor != nil
-                    self.selectedEntitySidebarLoadFailed = false
+                    self.selectedEntityChunkSidebarLoadFailed = false
+                    self.selectedEntityFileSidebarLoadFailed = false
                 case .failure:
                     self.resetSelectedEntitySidebarState(isLoading: false, loadFailed: true)
                 }
@@ -298,7 +300,7 @@ final class KGViewModel: ObservableObject {
                 } else {
                     self.selectedEntityChunkCursor = nil
                     self.selectedEntityCanLoadMoreChunks = false
-                    self.selectedEntitySidebarLoadFailed = true
+                    self.selectedEntityChunkSidebarLoadFailed = true
                 }
             }
         }
@@ -327,7 +329,7 @@ final class KGViewModel: ObservableObject {
                 } else {
                     self.selectedEntityFileCursor = nil
                     self.selectedEntityCanLoadMoreFiles = false
-                    self.selectedEntitySidebarLoadFailed = true
+                    self.selectedEntityFileSidebarLoadFailed = true
                 }
             }
         }
@@ -429,7 +431,8 @@ final class KGViewModel: ObservableObject {
         selectedEntityFileCursor = nil
         selectedEntityCanLoadMoreChunks = false
         selectedEntityCanLoadMoreFiles = false
-        selectedEntitySidebarLoadFailed = loadFailed
+        selectedEntityChunkSidebarLoadFailed = loadFailed
+        selectedEntityFileSidebarLoadFailed = loadFailed
         isLoadingSelectedEntityChunks = isLoading
         isLoadingSelectedEntityFiles = isLoading
     }
