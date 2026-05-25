@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_RESERVED_FIELDS = {"ts", "scope", "step", "query_id", "dur_ms"}
 
 
 def enabled() -> bool:
@@ -42,5 +43,20 @@ def emit(scope: str, step: str, query_id: str | None = None, dur_ms: float | Non
         event["query_id"] = query_id
     if dur_ms is not None:
         event["dur_ms"] = dur_ms
-    event.update(fields)
-    logger.info(json.dumps(event, sort_keys=True, separators=(",", ":")))
+    for key, value in fields.items():
+        if key not in _RESERVED_FIELDS:
+            event[key] = value
+    try:
+        payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        safe_event = {key: value if _is_json_safe(value) else repr(value) for key, value in event.items()}
+        payload = json.dumps(safe_event, sort_keys=True, separators=(",", ":"))
+    logger.info(payload)
+
+
+def _is_json_safe(value: Any) -> bool:
+    try:
+        json.dumps(value)
+    except TypeError:
+        return False
+    return True
