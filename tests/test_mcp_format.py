@@ -172,8 +172,9 @@ class TestFormatStoreResult:
         assert "superseded" in result
 
     def test_queued(self):
-        result = format_store_result("ignored", queued=True)
+        result = format_store_result("manual-test123", queued=True)
         assert "queued" in result.lower() or "\u23f3" in result
+        assert "manual-test123" in result
         assert "DB busy" in result or "busy" in result.lower()
 
 

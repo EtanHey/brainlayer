@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import threading
+import uuid
 
 import apsw
 from mcp.types import CallToolResult, TextContent
@@ -23,6 +24,10 @@ from ._shared import (
 _RETRY_MAX_ATTEMPTS = 4
 _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
+
+
+def _new_manual_chunk_id() -> str:
+    return f"manual-{uuid.uuid4().hex[:16]}"
 
 
 async def _brain_digest(
@@ -514,8 +519,10 @@ async def _store(
             reject_recursive_mcp_output(content)
             if looks_like_system_prompt(content):
                 raise ValueError("system prompt content is not stored in BrainLayer")
+            queued_chunk_id = _new_manual_chunk_id()
             _queue_store(
                 {
+                    "chunk_id": queued_chunk_id,
                     "content": content,
                     "memory_type": memory_type,
                     "project": _normalize_project_name(project),
@@ -535,8 +542,8 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = {"chunk_id": "queued", "related": []}
-            return ([TextContent(type="text", text=format_store_result("queued", queued=True))], structured)
+            structured = {"chunk_id": queued_chunk_id, "queued": True, "related": []}
+            return ([TextContent(type="text", text=format_store_result(queued_chunk_id, queued=True))], structured)
 
         from ..store import embed_pending_chunks, store_memory
 
@@ -626,8 +633,10 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if "locked" in str(e).lower() or "busy" in str(e).lower():
+            queued_chunk_id = _new_manual_chunk_id()
             _queue_store(
                 {
+                    "chunk_id": queued_chunk_id,
                     "content": content,
                     "memory_type": memory_type,
                     "project": _normalize_project_name(project),
@@ -645,8 +654,8 @@ async def _store(
                     "line_number": line_number,
                 }
             )
-            structured = {"chunk_id": "queued", "related": []}
-            formatted = format_store_result("queued", queued=True)
+            structured = {"chunk_id": queued_chunk_id, "queued": True, "related": []}
+            formatted = format_store_result(queued_chunk_id, queued=True)
             return (
                 [TextContent(type="text", text=formatted)],
                 structured,
