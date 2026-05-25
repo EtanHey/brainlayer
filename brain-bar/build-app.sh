@@ -96,6 +96,7 @@ dev_bundle_apps_dir() {
 
 safe_branch_is_checked_out_anywhere() {
     local safe_branch="$1"
+    local bundle_sha="${2:-}"
     local detached_sha=""
     case "$safe_branch" in
         detached-*)
@@ -105,12 +106,14 @@ safe_branch_is_checked_out_anywhere() {
 
     local line
     local head_sha=""
+    local has_branch=0
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
             HEAD\ *)
                 head_sha="${line#HEAD }"
                 ;;
             branch\ refs/heads/*)
+                has_branch=1
                 local branch
                 branch="${line#branch refs/heads/}"
                 if [ "$(sanitize_branch_name "$branch")" = "$safe_branch" ]; then
@@ -118,15 +121,22 @@ safe_branch_is_checked_out_anywhere() {
                 fi
                 ;;
             "")
-                if [ -n "$detached_sha" ] && [ "${head_sha#$detached_sha}" != "$head_sha" ]; then
+                if [ -n "$detached_sha" ] && [ "${head_sha#"$detached_sha"}" != "$head_sha" ]; then
+                    return 0
+                fi
+                if [ "$has_branch" -eq 0 ] && [ -n "$bundle_sha" ] && [ "$head_sha" = "$bundle_sha" ]; then
                     return 0
                 fi
                 head_sha=""
+                has_branch=0
                 ;;
         esac
     done < <(git -C "$CURRENT_REPO_ROOT" worktree list --porcelain)
 
-    if [ -n "$detached_sha" ] && [ "${head_sha#$detached_sha}" != "$head_sha" ]; then
+    if [ -n "$detached_sha" ] && [ "${head_sha#"$detached_sha"}" != "$head_sha" ]; then
+        return 0
+    fi
+    if [ "$has_branch" -eq 0 ] && [ -n "$bundle_sha" ] && [ "$head_sha" = "$bundle_sha" ]; then
         return 0
     fi
     return 1
@@ -222,8 +232,8 @@ cleanup_stale_dev_bundles() {
         local is_stale=0
         local reason=""
 
-        if safe_branch_is_checked_out_anywhere "$safe_branch"; then
-            reason="bundle branch token '$safe_branch' is checked out in a worktree"
+        if safe_branch_is_checked_out_anywhere "$safe_branch" "$sha"; then
+            reason="bundle branch token '$safe_branch' or SHA is checked out in a worktree"
         elif [ -n "$sha" ] && git -C "$CURRENT_REPO_ROOT" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
             is_stale=1
             reason="bundle SHA $sha is in origin/main"

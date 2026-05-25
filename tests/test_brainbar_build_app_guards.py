@@ -409,6 +409,35 @@ def test_canonical_dev_cleanup_preserves_detached_worktree_bundle(tmp_path: Path
     assert bundle.exists()
 
 
+def test_canonical_dev_cleanup_preserves_branch_bundle_for_detached_worktree_head(
+    tmp_path: Path,
+) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    remote = tmp_path / "origin.git"
+    _git(remote.parent, "init", "--bare", remote.name)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", "main")
+    main_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    _git(repo, "branch", "feat/detached-active")
+    worktree = tmp_path / "detached-active-worktree"
+    _git(repo, "worktree", "add", "--detach", str(worktree), "HEAD")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-detached-active.app", main_sha)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Keeping DEV bundle: BrainBar-DEV-feat-detached-active.app" in result.stdout
+    assert bundle.exists()
+
+
 def test_canonical_dev_cleanup_preserves_checked_out_sanitized_branch_collision(
     tmp_path: Path,
 ) -> None:
