@@ -10,6 +10,8 @@ import SQLite3
 
 private final class DashboardChangeNotificationProbe {
     var count = 0
+
+    deinit {}
 }
 
 private func dashboardChangeNotificationProbeCallback(
@@ -27,6 +29,10 @@ private func dashboardChangeNotificationProbeCallback(
 // MARK: - Sidebar UI Logic Tests
 
 final class KGSidebarViewTests: XCTestCase {
+    func testLinkedChunksEmptyStateCopyIsAvailableToSidebar() {
+        XCTAssertEqual(KGSidebarView.noLinkedChunksMessage, "No linked chunks are stored yet.")
+    }
+
     func testLoadMoreFooterIdentityChangesAfterRowsAppend() {
         XCTAssertNotEqual(
             KGSidebarView.chunkLoadMoreTriggerID(visibleCount: 15),
@@ -980,7 +986,43 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityChunks.count, 15)
         XCTAssertFalse(vm.selectedEntityCanLoadMoreChunks)
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
-        XCTAssertTrue(vm.selectedEntitySidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityChunkSidebarLoadFailed)
+        XCTAssertFalse(vm.selectedEntityFileSidebarLoadFailed)
+    }
+
+    func testLoadMoreFileFailureDoesNotMarkChunksFailed() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "mentions")
+        for i in 0..<25 {
+            try db.insertChunk(
+                id: "file-fail-\(i)",
+                content: "Alice source file memory \(i)",
+                sessionId: "file-fail-\(i)",
+                project: "test",
+                contentType: "ai_code",
+                importance: 5
+            )
+            try updateChunk(id: "file-fail-\(i)", sourceFile: "/tmp/source-\(i).md", createdAt: String(format: "2026-05-24T15:%02d:00Z", i))
+            try db.linkEntityChunk(entityId: "e1", chunkId: "file-fail-\(i)", relevance: Double(i) / 100.0)
+        }
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.selectNode(id: "e1")
+        await waitForSelectedEntityLoad(vm)
+        XCTAssertTrue(vm.selectedEntityCanLoadMoreFiles)
+
+        db.close()
+        vm.loadMoreFiles()
+        await waitForSelectedEntityFileLoadingToFinish(vm)
+
+        XCTAssertEqual(vm.selectedEntityChunks.count, 15)
+        XCTAssertEqual(vm.selectedEntityFiles.count, 15)
+        XCTAssertFalse(vm.selectedEntityCanLoadMoreFiles)
+        XCTAssertFalse(vm.isLoadingSelectedEntityFiles)
+        XCTAssertFalse(vm.selectedEntityChunkSidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityFileSidebarLoadFailed)
     }
 
     func testInitialSidebarFetchFailureIsExplicitlyFlagged() async throws {
@@ -995,7 +1037,8 @@ final class KGViewModelTests: XCTestCase {
         vm.selectNode(id: "e1")
         await waitForSelectedEntityChunkLoadingToFinish(vm)
 
-        XCTAssertTrue(vm.selectedEntitySidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityChunkSidebarLoadFailed)
+        XCTAssertTrue(vm.selectedEntityFileSidebarLoadFailed)
         XCTAssertEqual(vm.selectedEntityChunkTotal, 0)
         XCTAssertEqual(vm.selectedEntityFileTotal, 0)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
@@ -1048,6 +1091,15 @@ final class KGViewModelTests: XCTestCase {
     private func waitForSelectedEntityChunkLoadingToFinish(_ vm: KGViewModel, iterations: Int = 200) async {
         for _ in 0..<iterations {
             if !vm.isLoadingSelectedEntityChunks {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    private func waitForSelectedEntityFileLoadingToFinish(_ vm: KGViewModel, iterations: Int = 200) async {
+        for _ in 0..<iterations {
+            if !vm.isLoadingSelectedEntityFiles {
                 return
             }
             await Task.yield()

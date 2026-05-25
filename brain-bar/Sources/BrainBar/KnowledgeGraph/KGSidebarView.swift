@@ -10,7 +10,8 @@ struct KGSidebarView: View {
     let fileTotal: Int
     let isLoadingFiles: Bool
     let canLoadMoreFiles: Bool
-    let hasLoadError: Bool
+    let hasChunkLoadError: Bool
+    let hasFileLoadError: Bool
     let onOpenConversation: (String) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
@@ -64,17 +65,17 @@ struct KGSidebarView: View {
                     HStack(spacing: 8) {
                         labelChip(entity.entityType.isEmpty ? "entity" : entity.entityType.capitalized, tint: .blue)
                         labelChip("\(entity.relations.count) links", tint: .primary)
-                        if hasLoadError, chunks.isEmpty {
+                        if hasChunkLoadError, chunks.isEmpty {
                             labelChip("chunks unavailable", tint: .green)
-                        } else if hasLoadError, chunks.count < chunkTotal {
+                        } else if hasChunkLoadError, chunks.count < chunkTotal {
                             labelChip("\(chunks.count)/\(chunkTotal) chunks", tint: .green)
                         } else if isLoadingChunks && chunkTotal == 0 && chunks.isEmpty {
                             labelChip("chunks loading", tint: .green)
                         } else {
                             labelChip("\(chunkTotal) chunks", tint: .green)
                         }
-                        if fileTotal > 0, !(hasLoadError && files.isEmpty) {
-                            if hasLoadError, files.count < fileTotal {
+                        if fileTotal > 0, !(hasFileLoadError && files.isEmpty) {
+                            if hasFileLoadError, files.count < fileTotal {
                                 labelChip("\(files.count)/\(fileTotal) files", tint: .amber)
                             } else {
                                 labelChip("\(fileTotal) files", tint: .amber)
@@ -199,8 +200,17 @@ struct KGSidebarView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if hasLoadError, chunks.isEmpty {
+            if hasChunkLoadError, chunks.isEmpty {
                 Text("Linked chunks are unavailable right now.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else if chunks.isEmpty, isLoadingChunks {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            } else if chunks.isEmpty {
+                Text(Self.noLinkedChunksMessage)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
             } else {
@@ -232,7 +242,7 @@ struct KGSidebarView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                    } else if hasLoadError, chunks.count < chunkTotal {
+                    } else if hasChunkLoadError, chunks.count < chunkTotal {
                         Text("More linked chunks are unavailable right now.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -251,7 +261,7 @@ struct KGSidebarView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if hasLoadError, files.isEmpty {
+            if hasFileLoadError, files.isEmpty {
                 Text("Source files are unavailable right now.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -288,7 +298,7 @@ struct KGSidebarView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                    } else if hasLoadError, files.count < fileTotal {
+                    } else if hasFileLoadError, files.count < fileTotal {
                         Text("More source files are unavailable right now.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -398,6 +408,8 @@ struct KGSidebarView: View {
     nonisolated static func fileLoadMoreTriggerID(visibleCount: Int) -> String {
         "file-load-more-\(visibleCount)"
     }
+
+    nonisolated static let noLinkedChunksMessage = "No linked chunks are stored yet."
 }
 
 private extension KGSidebarView {
