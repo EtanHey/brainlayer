@@ -89,7 +89,7 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
         return "\n".join(lines)
 
     for index, chunk in enumerate(chunks, start=1):
-        source = _basename(chunk.get("source_file"))
+        source = _basename(chunk.get("source_file") or chunk.get("project"))
         content = (chunk.get("content") or chunk.get("snippet") or chunk.get("summary") or "").strip()
         lines.append("")
         lines.append(f"### Chunk {index} - {source}")

@@ -94,6 +94,24 @@ def test_brain_entity_output_has_kg_facts_and_expired_annotation():
     assert "score" not in output
 
 
+def test_brain_entity_output_does_not_mark_future_valid_until_expired():
+    output = format_entity_simple(
+        {
+            "name": "JWT middleware",
+            "relations": [
+                {
+                    "relation_type": "depends_on",
+                    "target_name": "auth-service",
+                    "valid_until": "2026-12-31T00:00:00Z",
+                }
+            ],
+        }
+    )
+
+    assert "- depends_on: auth-service" in output
+    assert "expired 2026-12-31" not in output
+
+
 def test_brain_recall_context_output_is_labeled_chunk_markdown():
     output = format_recalled_context(
         "how did we handle session expiry",
@@ -115,6 +133,22 @@ def test_brain_recall_context_output_is_labeled_chunk_markdown():
     assert "score" not in output
     assert "chunk-auth-1" not in output
     assert "[{" not in output
+
+
+def test_brain_recall_context_uses_project_when_source_file_missing():
+    output = format_recalled_context(
+        "session context",
+        [
+            {
+                "chunk_id": "chunk-session-1",
+                "project": "brainlayer",
+                "content": "Session recall row did not carry source_file.",
+            }
+        ],
+    )
+
+    assert "### Chunk 1 - brainlayer" in output
+    assert "unknown" not in output
 
 
 def test_brain_recall_tool_declares_anthropic_max_result_size():

@@ -87,6 +87,27 @@ final class TextFormatterParityTests: XCTestCase {
         )
     }
 
+    func testEntityCardDoesNotMarkFutureValidUntilExpired() {
+        let validUntil = ISO8601DateFormatter().date(from: "2026-12-31T00:00:00Z")
+        let entity = EntityCard(
+            id: "tech-001",
+            name: "JWT middleware",
+            entityType: "technology",
+            relations: [
+                EntityCard.Relation(
+                    relationType: "depends_on",
+                    targetName: "auth-service",
+                    validUntil: validUntil
+                )
+            ]
+        )
+
+        let output = TextFormatter.formatEntityCard(entity)
+
+        XCTAssertTrue(output.contains("- depends_on: auth-service"))
+        XCTAssertFalse(output.contains("expired 2026-12-31"))
+    }
+
     func testRecallContextUsesLabeledChunkMarkdown() {
         let results = [
             SearchResult(
@@ -112,6 +133,21 @@ final class TextFormatterParityTests: XCTestCase {
         )
         XCTAssertFalse(output.contains("score"))
         XCTAssertFalse(output.contains("[{"))
+    }
+
+    func testRecallContextFallsBackToProjectWhenSourceFileIsMissing() {
+        let results = [
+            SearchResult(
+                chunkID: "chunk-session-1",
+                project: "brainlayer",
+                snippet: "Session recall row did not carry source_file."
+            )
+        ]
+
+        let output = TextFormatter.formatRecalledContext(query: "session context", results: results)
+
+        XCTAssertTrue(output.contains("### Chunk 1 - brainlayer"))
+        XCTAssertFalse(output.contains("unknown"))
     }
 
     func testDigestStatsAndKGFormattersMatchPythonStructure() {
