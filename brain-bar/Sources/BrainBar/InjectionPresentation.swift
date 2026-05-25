@@ -107,6 +107,7 @@ struct InjectionPresentation {
 
         let windowStart = now.addingTimeInterval(-Double(windowMinutes) * 60.0)
         let windowEvents = parsedEvents.filter { $0.date > windowStart && $0.date <= now }
+        let burstEvents = parsedEvents.filter { $0.date <= now }
 
         let summary = Summary(
             queryCount: windowEvents.count,
@@ -114,7 +115,7 @@ struct InjectionPresentation {
             tokenCount: windowEvents.reduce(0) { $0 + $1.event.tokenCount },
             activeSessionCount: Set(windowEvents.map(\.event.sessionID)).count
         )
-        let bursts = makeBursts(from: parsedEvents, burstGapMinutes: burstGapMinutes)
+        let bursts = makeBursts(from: burstEvents, burstGapMinutes: burstGapMinutes)
 
         return Snapshot(
             filteredEvents: filteredEvents,
