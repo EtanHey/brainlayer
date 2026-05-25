@@ -470,7 +470,10 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 chunk_id=item.get("chunk_id"),
             )
             if item.get("supersedes"):
-                store.supersede_chunk(item["supersedes"], result["id"])
+                if not store.supersede_chunk(item["supersedes"], result["id"]):
+                    raise RuntimeError(
+                        f"failed to supersede queued chunk {item['supersedes']} with {result['id']}"
+                    )
             flushed += 1
         except Exception as e:
             logger.warning("Failed to flush pending store item: %s", e)
