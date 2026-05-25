@@ -449,7 +449,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
     for line in lines:
         try:
             item = json.loads(line)
-            store_memory(
+            result = store_memory(
                 store=store,
                 embed_fn=embed_fn,
                 content=item["content"],
@@ -469,6 +469,8 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 line_number=item.get("line_number"),
                 chunk_id=item.get("chunk_id"),
             )
+            if item.get("supersedes"):
+                store.supersede_chunk(item["supersedes"], result["id"])
             flushed += 1
         except Exception as e:
             logger.warning("Failed to flush pending store item: %s", e)
@@ -653,6 +655,7 @@ async def _store(
                     "file_path": file_path,
                     "function_name": function_name,
                     "line_number": line_number,
+                    "supersedes": supersedes,
                 }
             )
             structured = {"chunk_id": queued_chunk_id, "queued": True, "related": []}

@@ -38,6 +38,32 @@ async def test_busy_queue_fallback_returns_queued_chunk_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_busy_queue_fallback_preserves_supersedes(tmp_path):
+    """DB-busy fallback queues supersedes so the deferred write keeps lifecycle intent."""
+    from brainlayer.mcp.store_handler import _store
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store"),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("locked")),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        await _store(
+            content="replacement memory",
+            memory_type="note",
+            project="test",
+            supersedes="manual-old1234",
+        )
+
+    queued_files = list(queue_dir.glob("mcp-*.jsonl"))
+    assert len(queued_files) == 1
+    queued_event = json.loads(queued_files[0].read_text())
+    assert queued_event["supersedes"] == "manual-old1234"
+
+
+@pytest.mark.asyncio
 async def test_arbitrated_queue_fallback_returns_queued_chunk_id(tmp_path, monkeypatch):
     """Arbitrated fallback also reports the queued event's real chunk ID."""
     from brainlayer.mcp.store_handler import _store
