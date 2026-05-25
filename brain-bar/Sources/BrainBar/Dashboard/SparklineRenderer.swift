@@ -44,13 +44,18 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     private var trendDescription: String {
-        guard let first = values.first, let last = values.last else {
+        guard let last = values.last else {
             return "no trend"
         }
-        if last > first {
+        guard values.count > 1 else {
+            return "steady"
+        }
+
+        let previous = values[values.count - 2]
+        if last > previous {
             return "trending up"
         }
-        if last < first {
+        if last < previous {
             return "trending down"
         }
         return "steady"
@@ -105,13 +110,19 @@ struct SparklineChart: View {
 }
 
 enum SparklineRenderer {
+    static func isCompact(size: NSSize) -> Bool {
+        let width = max(size.width.rounded(.up), 1)
+        let height = max(size.height.rounded(.up), 1)
+        return height <= 20 || width <= 52
+    }
+
     static func endpoint(
         values: [Int],
         size: NSSize = NSSize(width: 44, height: 18)
     ) -> CGPoint? {
         let width = max(Int(size.width.rounded(.up)), 1)
         let height = max(Int(size.height.rounded(.up)), 1)
-        let isCompact = height <= 20 || width <= 52
+        let isCompact = isCompact(size: size)
 
         guard values.count > 1 else { return nil }
 
@@ -149,7 +160,7 @@ enum SparklineRenderer {
                 values: values
             ),
             accentColor: accentColor ?? state.color,
-            compact: height <= 20 || width <= 52
+            compact: isCompact(size: size)
         )
         .frame(width: width, height: height)
 

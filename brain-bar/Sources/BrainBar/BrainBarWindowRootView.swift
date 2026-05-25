@@ -1086,7 +1086,8 @@ private struct BrainBarHeroSparkline: View {
                         label: "Recent activity sparkline",
                         values: values
                     ),
-                    accentColor: accentColor
+                    accentColor: accentColor,
+                    compact: SparklineRenderer.isCompact(size: renderSize)
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
 

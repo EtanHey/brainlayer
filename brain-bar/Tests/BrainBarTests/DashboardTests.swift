@@ -72,7 +72,13 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
         XCTAssertEqual(presentation.points.map(\.value), [0, 2, 5, 3])
         XCTAssertEqual(presentation.accessibilityLabel, "Recent activity sparkline")
-        XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending up")
+        XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending down")
+    }
+
+    func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {
+        XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 52, height: 116)))
+        XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 300, height: 20)))
+        XCTAssertFalse(SparklineRenderer.isCompact(size: NSSize(width: 53, height: 21)))
     }
 
     func testDashboardStatsCountsRecentISO8601Timestamps() throws {
