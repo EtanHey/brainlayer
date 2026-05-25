@@ -247,7 +247,8 @@ class TestStoreRetryOnLock:
 
         # Should return queued response, not error
         texts, structured = result
-        assert structured["chunk_id"] == "queued"
+        assert structured["chunk_id"].startswith("manual-")
+        assert structured["queued"] is True
         assert any("queued" in t.text.lower() for t in texts)
 
         # Should have written to the unified queue
@@ -255,6 +256,7 @@ class TestStoreRetryOnLock:
         assert len(files) == 1
         item = json.loads(files[0].read_text().strip())
         assert item["kind"] == "store_memory"
+        assert item["chunk_id"] == structured["chunk_id"]
         assert item["content"] == "test memory"
 
     @pytest.mark.asyncio
@@ -282,7 +284,8 @@ class TestStoreRetryOnLock:
         ):
             texts, structured = await _store(content="queued cache invalidation", memory_type="note", project="test")
 
-        assert structured["chunk_id"] == "queued"
+        assert structured["chunk_id"].startswith("manual-")
+        assert structured["queued"] is True
         assert any("queued" in item.text.lower() for item in texts)
         clear_cache.assert_called_once_with()
 
