@@ -22,6 +22,11 @@ def _expected_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
     return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
+def _sibling_pidfile(pidfile_dir: Path, db_path: Path, suffix: str) -> Path:
+    resolved_path = db_path.resolve()
+    return pidfile_dir / f"brainlayer-writer-{suffix}-{resolved_path.name}.pid"
+
+
 def _pidfile_pid(pidfile: Path) -> str:
     return pidfile.read_text(encoding="utf-8").splitlines()[0].strip()
 
@@ -410,6 +415,129 @@ def test_stale_pidfile_cleaned_up(tmp_path, monkeypatch):
         store.close()
 
 
+def test_acquire_sweeps_all_stale_pidfiles_before_live_conflict(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    live_pid = 424242
+    live_pidfile = _expected_pidfile(pidfile_dir, db_path)
+    live_pidfile.write_text(f"{live_pid}\n", encoding="utf-8")
+    stale_pidfiles = [
+        _sibling_pidfile(pidfile_dir, db_path, "stale-one"),
+        _sibling_pidfile(pidfile_dir, db_path, "stale-two"),
+        _sibling_pidfile(pidfile_dir, db_path, "stale-three"),
+    ]
+    for stale_pidfile in stale_pidfiles:
+        stale_pidfile.write_text("999999\n", encoding="utf-8")
+
+    monkeypatch.setattr(VectorStore, "_pid_is_alive", staticmethod(lambda pid: pid == live_pid))
+
+    with pytest.raises(WriterInUseError, match=f"another writer is using {db_path} \\(pid {live_pid}\\)"):
+        VectorStore(db_path)
+
+    assert live_pidfile.exists()
+    assert _pidfile_pid(live_pidfile) == str(live_pid)
+    assert all(not stale_pidfile.exists() for stale_pidfile in stale_pidfiles)
+
+
+def test_reclaim_skips_stale_pidfile_for_different_recorded_db_path(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    other_db_path = tmp_path / "other" / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    other_pidfile = _sibling_pidfile(pidfile_dir, db_path, "other-db")
+    other_pidfile.write_text(f"999999\ndb_path={other_db_path.resolve()}\n", encoding="utf-8")
+
+    store = VectorStore(db_path)
+    try:
+        assert other_pidfile.exists()
+    finally:
+        store.close()
+
+
+def test_reclaim_skips_malformed_recorded_db_path_without_blocking_open(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    malformed_pidfile = _sibling_pidfile(pidfile_dir, db_path, "malformed-db-path")
+    malformed_pidfile.write_text("999999\ndb_path=bad\x00path\n", encoding="utf-8")
+
+    store = VectorStore(db_path)
+    try:
+        assert malformed_pidfile.exists()
+    finally:
+        store.close()
+
+
+def test_reclaim_escapes_db_basename_glob_metacharacters(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer[abc].db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    stale_pidfile = _sibling_pidfile(pidfile_dir, db_path, "stale")
+    stale_pidfile.write_text("999999\n", encoding="utf-8")
+
+    store = VectorStore(db_path)
+    try:
+        assert not stale_pidfile.exists()
+    finally:
+        store.close()
+
+
+def test_reclaim_skips_unreadable_sibling_pidfile_without_blocking_open(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    unreadable_pidfile = _sibling_pidfile(pidfile_dir, db_path, "unreadable")
+    unreadable_pidfile.write_text("999999\n", encoding="utf-8")
+    original_open = os.open
+
+    def unreadable_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and Path(path) == unreadable_pidfile and flags & os.O_ACCMODE == os.O_RDONLY:
+            raise PermissionError(13, "Permission denied", str(path))
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("os.open", unreadable_open)
+
+    store = VectorStore(db_path)
+    try:
+        assert unreadable_pidfile.exists()
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX fifos")
+def test_reclaim_skips_fifo_sibling_pidfile_without_opening(tmp_path, monkeypatch):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
+    pidfile_dir.mkdir()
+    fifo_pidfile = _sibling_pidfile(pidfile_dir, db_path, "fifo")
+    os.mkfifo(fifo_pidfile)
+    original_open = os.open
+
+    def no_fifo_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and Path(path) == fifo_pidfile:
+            raise AssertionError("fifo pidfile candidates must be skipped before open")
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("os.open", no_fifo_open)
+
+    store = VectorStore(db_path)
+    try:
+        assert fifo_pidfile.exists()
+    finally:
+        store.close()
+
+
 def test_stale_pidfile_unlink_missing_race_is_ignored(tmp_path, monkeypatch):
     pidfile = tmp_path / "writer.pid"
     pidfile.write_text("999999", encoding="utf-8")
@@ -440,6 +568,35 @@ def test_pidfile_removed_on_close(tmp_path, monkeypatch):
 
     store.close()
 
+    assert not pidfile.exists()
+
+
+def test_pidfile_removed_by_atexit_without_explicit_close(tmp_path):
+    pidfile_dir = tmp_path / "pidfiles"
+    db_path = tmp_path / "writer.db"
+    pidfile = _expected_pidfile(pidfile_dir, db_path)
+    script = """
+from pathlib import Path
+from brainlayer.vector_store import VectorStore
+
+VectorStore(Path(__import__("os").environ["DB_PATH"]))
+"""
+    env = {
+        **os.environ,
+        "BRAINLAYER_WRITER_PIDFILE_DIR": str(pidfile_dir),
+        "DB_PATH": str(db_path),
+        "PYTHONPATH": f"{Path(__file__).resolve().parents[1] / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
     assert not pidfile.exists()
 
 
