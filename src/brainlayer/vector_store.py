@@ -6,9 +6,11 @@ See search_repo.py, kg_repo.py, session_repo.py for the extracted methods.
 
 import atexit
 import fcntl
+import glob
 import hashlib
 import json
 import os
+import stat
 import struct
 import subprocess
 import threading
@@ -112,6 +114,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     _PIDFILE_REFS: dict[Path, int] = {}
     _PIDFILE_REF_PIDS: dict[Path, int] = {}
     _PIDFILE_REFS_LOCK = threading.Lock()
+    _PIDFILE_ACQUIRE_LOCK = threading.Lock()
 
     def __init__(self, db_path: Path, readonly: bool = False):
         self.db_path = db_path
@@ -150,54 +153,91 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _acquire_writer_pidfile(self) -> None:
         pidfile = self._writer_pidfile_path()
         pidfile.parent.mkdir(parents=True, exist_ok=True)
-        pid = os.getpid()
+        with self._PIDFILE_ACQUIRE_LOCK:
+            self._reclaim_stale_writer_pidfiles(pidfile)
+            pid = os.getpid()
 
-        with self._PIDFILE_REFS_LOCK:
-            if self._PIDFILE_REFS.get(pidfile, 0) > 0:
-                ref_pid = self._PIDFILE_REF_PIDS.get(pidfile)
-                if ref_pid is not None and ref_pid != pid:
-                    self._PIDFILE_REFS.pop(pidfile, None)
-                    self._PIDFILE_REF_PIDS.pop(pidfile, None)
-                else:
-                    owner_pid, owner_start_time = self._read_writer_pidfile_owner(pidfile)
-                    if owner_pid != pid or not self._pidfile_owner_matches(owner_pid, owner_start_time):
-                        raise WriterInUseError(
-                            f"pidfile ref mismatch for {self.db_path}; refusing to clear active refs"
-                        )
-                    self._PIDFILE_REFS[pidfile] += 1
-                    self._PIDFILE_REF_PIDS[pidfile] = pid
+            with self._PIDFILE_REFS_LOCK:
+                if self._PIDFILE_REFS.get(pidfile, 0) > 0:
+                    ref_pid = self._PIDFILE_REF_PIDS.get(pidfile)
+                    if ref_pid is not None and ref_pid != pid:
+                        self._PIDFILE_REFS.pop(pidfile, None)
+                        self._PIDFILE_REF_PIDS.pop(pidfile, None)
+                    else:
+                        owner_pid, owner_start_time = self._read_writer_pidfile_owner(pidfile)
+                        if owner_pid != pid or not self._pidfile_owner_matches(owner_pid, owner_start_time):
+                            raise WriterInUseError(
+                                f"pidfile ref mismatch for {self.db_path}; refusing to clear active refs"
+                            )
+                        self._PIDFILE_REFS[pidfile] += 1
+                        self._PIDFILE_REF_PIDS[pidfile] = pid
+                        self._writer_pidfile_acquired = True
+                        self._writer_pidfile_path_value = pidfile
+                        atexit.register(self._release_writer_pidfile)
+                        return
+
+            max_create_attempts = 4
+            for attempt in range(max_create_attempts):
+                try:
+                    fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX)
+                        os.write(fd, self._writer_pidfile_payload(pid))
+                    finally:
+                        os.close(fd)
+                    with self._PIDFILE_REFS_LOCK:
+                        self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
+                        self._PIDFILE_REF_PIDS[pidfile] = pid
                     self._writer_pidfile_acquired = True
                     self._writer_pidfile_path_value = pidfile
                     atexit.register(self._release_writer_pidfile)
                     return
+                except FileExistsError:
+                    if self._handle_existing_writer_pidfile(pidfile, pid):
+                        return
+                    if attempt == max_create_attempts - 1:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
 
-        max_create_attempts = 4
-        for attempt in range(max_create_attempts):
-            try:
-                fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
-                    os.write(fd, self._writer_pidfile_payload(pid))
-                finally:
-                    os.close(fd)
-                with self._PIDFILE_REFS_LOCK:
-                    self._PIDFILE_REFS[pidfile] = self._PIDFILE_REFS.get(pidfile, 0) + 1
-                    self._PIDFILE_REF_PIDS[pidfile] = pid
-                self._writer_pidfile_acquired = True
-                self._writer_pidfile_path_value = pidfile
-                atexit.register(self._release_writer_pidfile)
+    def _reclaim_stale_writer_pidfiles(self, pidfile: Path) -> None:
+        # Legacy pidfiles do not record the database path. Sweep sibling hashes
+        # for the same DB basename, then use db_path metadata when it exists.
+        pattern = f"brainlayer-writer-*-{glob.escape(self.db_path.resolve().name)}.pid"
+        for candidate in pidfile.parent.glob(pattern):
+            self._reclaim_stale_writer_pidfile(candidate)
+
+    def _reclaim_stale_writer_pidfile(self, pidfile: Path) -> None:
+        with self._PIDFILE_REFS_LOCK:
+            if self._PIDFILE_REFS.get(pidfile, 0) > 0:
                 return
-            except FileExistsError:
-                if self._handle_existing_writer_pidfile(pidfile, pid):
-                    return
-                if attempt == max_create_attempts - 1:
-                    raise
-                time.sleep(0.01 * (attempt + 1))
+        fd = self._open_writer_pidfile_readonly(pidfile)
+        if fd is None:
+            return
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            owner_pid, owner_start_time, owner_db_path = self._read_writer_pidfile_record_fd(fd)
+            if owner_db_path is not None and not self._pidfile_db_path_matches(owner_db_path):
+                return
+            if owner_pid is not None and self._pidfile_owner_matches(owner_pid, owner_start_time):
+                return
+            try:
+                path_stat = pidfile.stat()
+            except FileNotFoundError:
+                return
+            if os.path.samestat(os.fstat(fd), path_stat):
+                try:
+                    pidfile.unlink()
+                except FileNotFoundError:
+                    pass
+        finally:
+            os.close(fd)
 
     def _handle_existing_writer_pidfile(self, pidfile: Path, pid: int) -> bool:
-        try:
-            fd = os.open(pidfile, os.O_RDONLY)
-        except FileNotFoundError:
+        fd = self._open_writer_pidfile_readonly(pidfile)
+        if fd is None:
             return False
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -226,21 +266,38 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             os.close(fd)
 
     @staticmethod
+    def _open_writer_pidfile_readonly(pidfile: Path) -> int | None:
+        try:
+            candidate_stat = pidfile.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(candidate_stat.st_mode):
+            return None
+
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(pidfile, flags)
+        except OSError:
+            return None
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                os.close(fd)
+                return None
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
+
+    @staticmethod
     def _read_writer_pidfile(pidfile: Path) -> int | None:
         return VectorStore._read_writer_pidfile_owner(pidfile)[0]
 
     @staticmethod
     def _read_writer_pidfile_owner(pidfile: Path) -> tuple[int | None, str | None]:
         try:
-            lines = pidfile.read_text(encoding="utf-8").splitlines()
-            if not lines:
-                return None, None
-            pid = int(lines[0].strip())
-            start_time = None
-            for line in lines[1:]:
-                if line.startswith("start_time="):
-                    start_time = line.removeprefix("start_time=").strip() or None
-                    break
+            pid, start_time, _db_path = VectorStore._parse_writer_pidfile_lines(
+                pidfile.read_text(encoding="utf-8").splitlines()
+            )
             return pid, start_time
         except (OSError, ValueError):
             return None, None
@@ -251,27 +308,41 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
     @staticmethod
     def _read_writer_pidfile_owner_fd(fd: int) -> tuple[int | None, str | None]:
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            lines = os.read(fd, 256).decode("utf-8").splitlines()
-            if not lines:
-                return None, None
-            pid = int(lines[0].strip())
-            start_time = None
-            for line in lines[1:]:
-                if line.startswith("start_time="):
-                    start_time = line.removeprefix("start_time=").strip() or None
-                    break
-            return pid, start_time
-        except (OSError, ValueError):
-            return None, None
+        pid, start_time, _db_path = VectorStore._read_writer_pidfile_record_fd(fd)
+        return pid, start_time
 
     @staticmethod
-    def _writer_pidfile_payload(pid: int) -> bytes:
+    def _read_writer_pidfile_record_fd(fd: int) -> tuple[int | None, str | None, str | None]:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            return VectorStore._parse_writer_pidfile_lines(os.read(fd, 512).decode("utf-8").splitlines())
+        except (OSError, ValueError):
+            return None, None, None
+
+    @staticmethod
+    def _parse_writer_pidfile_lines(lines: list[str]) -> tuple[int | None, str | None, str | None]:
+        if not lines:
+            return None, None, None
+        pid = int(lines[0].strip())
+        start_time = None
+        db_path = None
+        for line in lines[1:]:
+            key, separator, value = line.strip().partition("=")
+            if not separator:
+                continue
+            if key == "start_time":
+                start_time = value.strip() or None
+            elif key == "db_path":
+                db_path = value.strip() or None
+        return pid, start_time, db_path
+
+    def _writer_pidfile_payload(self, pid: int) -> bytes:
         start_time = VectorStore._pid_start_time(pid)
+        lines = [str(pid)]
         if start_time:
-            return f"{pid}\nstart_time={start_time}\n".encode("utf-8")
-        return f"{pid}\n".encode("utf-8")
+            lines.append(f"start_time={start_time}")
+        lines.append(f"db_path={self.db_path.resolve()}")
+        return ("\n".join(lines) + "\n").encode("utf-8")
 
     def _pidfile_owner_matches(self, pid: int, start_time: str | None) -> bool:
         if not self._pid_is_alive(pid):
@@ -280,6 +351,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             return True
         current_start_time = self._pid_start_time(pid)
         return current_start_time is None or current_start_time == start_time
+
+    def _pidfile_db_path_matches(self, db_path: str) -> bool:
+        try:
+            return Path(db_path).expanduser().resolve() == self.db_path.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
 
     @staticmethod
     def _pid_start_time(pid: int) -> str | None:
