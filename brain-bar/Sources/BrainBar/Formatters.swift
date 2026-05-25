@@ -391,10 +391,11 @@ enum Formatters {
             let snippet = (r["snippet"] as? String) ?? (r["content"] as? String) ?? ""
             let summary = (r["summary"] as? String) ?? snippet
             let titleSource = summary.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "Untitled result"
+            let title = truncate(titleSource, maxLen: 100)
             let source = basename(r["source_file"] ?? r["project"])
             let date = dateOnly(r["date"] ?? r["created_at"])
             lines.append("")
-            lines.append("### \(i + 1). \(truncate(titleSource.isEmpty ? "Untitled result" : titleSource, maxLen: 100))")
+            lines.append("### \(i + 1). \(title.isEmpty ? "Untitled result" : title)")
             lines.append("- Source: \(source)")
             lines.append("- Date: \(date)")
             lines.append("- Preview: \(truncate(snippet.isEmpty ? summary : snippet, maxLen: 200))")
