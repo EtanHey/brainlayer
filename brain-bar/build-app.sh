@@ -62,6 +62,7 @@ DAEMON_PLIST_DST="$HOME/Library/LaunchAgents/$DAEMON_PLIST_FILENAME"
 LAUNCH_DOMAIN="gui/$(id -u)"
 SOCKET_PATH="${BRAINBAR_SOCKET_PATH:-/tmp/brainbar.sock}"
 PLIST_BUDDY="${BRAINBAR_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
+LSREGISTER="${BRAINBAR_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister}"
 CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
 BRAINLAYER_LOG_DIR="$HOME/Library/Logs/brainlayer"
 
@@ -198,6 +199,10 @@ cleanup_stale_dev_bundles() {
     local apps_dir
     apps_dir="$(dev_bundle_apps_dir)"
     local stale_days="${BRAINBAR_DEV_STALE_DAYS:-14}"
+    if ! [[ "$stale_days" =~ ^[0-9]+$ ]]; then
+        echo "[build-app] WARNING: invalid BRAINBAR_DEV_STALE_DAYS='$stale_days', using 14" >&2
+        stale_days=14
+    fi
     local bundle
     local found=0
 
@@ -470,7 +475,7 @@ if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTIT
 fi
 
 # Register URL scheme with Launch Services (ensures brainbar:// works after rebuild)
-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -R "$APP_DIR"
+"$LSREGISTER" -R "$APP_DIR"
 
 install_launchagent() {
     local source_plist="$1"

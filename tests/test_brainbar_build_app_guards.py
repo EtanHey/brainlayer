@@ -212,9 +212,10 @@ fi
 exit 0
 """
     )
+    (tool_dir / "lsregister").write_text("#!/usr/bin/env bash\nexit 0\n")
     (tool_dir / "pgrep").write_text("#!/usr/bin/env bash\nexit 1\n")
     (tool_dir / "killall").write_text("#!/usr/bin/env bash\nexit 0\n")
-    for tool in ("swift", "codesign", "plistbuddy", "launchctl", "pgrep", "killall"):
+    for tool in ("swift", "codesign", "plistbuddy", "launchctl", "lsregister", "pgrep", "killall"):
         os.chmod(tool_dir / tool, 0o755)
     return tool_dir, bin_dir
 
@@ -273,6 +274,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
             "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
             "BRAINBAR_DEV_STALE_DAYS": "1",
             "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+            "BRAINBAR_LSREGISTER": str(tool_dir / "lsregister"),
             "BRAINBAR_PLIST_BUDDY": str(tool_dir / "plistbuddy"),
             "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}.sock",
             "BRAINBAR_SOCKET_WAIT_ATTEMPTS": "1",
@@ -463,6 +465,30 @@ exit 1
     )
 
     assert result.returncode == 0, result.stderr
+    assert "would clean stale DEV bundle: BrainBar-DEV-feat-old-dev.app" in result.stdout
+    assert bundle.exists()
+
+
+def test_canonical_dev_cleanup_invalid_stale_days_falls_back_to_default(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    apps_dir = home / "Applications"
+    apps_dir.mkdir(parents=True)
+    _git(repo, "branch", "feat/old-dev")
+    bundle = _create_fake_bundle(apps_dir, "BrainBar-DEV-feat-old-dev.app")
+    old_mtime = 0
+    os.utime(bundle, (old_mtime, old_mtime))
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        extra_env={"BRAINBAR_DEV_STALE_DAYS": "not-a-number"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "invalid BRAINBAR_DEV_STALE_DAYS='not-a-number', using 14" in result.stderr
     assert "would clean stale DEV bundle: BrainBar-DEV-feat-old-dev.app" in result.stdout
     assert bundle.exists()
 
