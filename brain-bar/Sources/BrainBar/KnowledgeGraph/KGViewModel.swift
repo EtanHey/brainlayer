@@ -226,74 +226,52 @@ final class KGViewModel: ObservableObject {
         selectedEntityGeneration += 1
         let generation = selectedEntityGeneration
         selectedNodeId = id
-        if let id {
-            guard let database else { return }
-            if let lookup = try? database.lookupEntity(query: nodeById(id)?.name ?? "") {
-                selectedEntity = EntityCard(lookupPayload: lookup)
-            }
-            selectedEntityChunks = []
-            selectedEntityFiles = []
-            selectedEntityChunkTotal = 0
-            selectedEntityFileTotal = 0
-            selectedEntityChunkCursor = nil
-            selectedEntityFileCursor = nil
-            selectedEntityCanLoadMoreChunks = false
-            selectedEntityCanLoadMoreFiles = false
-            selectedEntitySidebarLoadFailed = false
-            isLoadingSelectedEntityChunks = true
-            isLoadingSelectedEntityFiles = true
-            let chunkPageSize = selectedEntityChunkPageSize
-            let filePageSize = selectedEntityFilePageSize
-            selectedEntityLoadTask = Task { [weak self, database] in
-                let result = await Self.fetchInitialSidebarRows(
-                    database: database,
-                    entityId: id,
-                    chunkLimit: chunkPageSize,
-                    fileLimit: filePageSize
-                )
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self, self.selectedNodeId == id, self.selectedEntityGeneration == generation else { return }
-                    self.isLoadingSelectedEntityChunks = false
-                    self.isLoadingSelectedEntityFiles = false
-                    switch result {
-                    case .success(let rows):
-                        self.selectedEntityChunkTotal = rows.chunkTotal
-                        self.selectedEntityFileTotal = rows.fileTotal
-                        self.selectedEntityChunks = rows.chunkPage.rows
-                        self.selectedEntityFiles = rows.filePage.rows
-                        self.selectedEntityChunkCursor = rows.chunkPage.nextCursor
-                        self.selectedEntityFileCursor = rows.filePage.nextCursor
-                        self.selectedEntityCanLoadMoreChunks = rows.chunkPage.nextCursor != nil
-                        self.selectedEntityCanLoadMoreFiles = rows.filePage.nextCursor != nil
-                        self.selectedEntitySidebarLoadFailed = false
-                    case .failure:
-                        self.selectedEntityChunkTotal = 0
-                        self.selectedEntityFileTotal = 0
-                        self.selectedEntityChunks = []
-                        self.selectedEntityFiles = []
-                        self.selectedEntityChunkCursor = nil
-                        self.selectedEntityFileCursor = nil
-                        self.selectedEntityCanLoadMoreChunks = false
-                        self.selectedEntityCanLoadMoreFiles = false
-                        self.selectedEntitySidebarLoadFailed = true
-                    }
+
+        guard let id else {
+            selectedEntity = nil
+            resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
+            selectedConversation = nil
+            return
+        }
+
+        guard let database, let node = nodeById(id) else {
+            selectedEntity = nil
+            resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
+            selectedConversation = nil
+            return
+        }
+
+        selectedEntity = (try? database.lookupEntity(query: node.name)).map(EntityCard.init(lookupPayload:))
+        resetSelectedEntitySidebarState(isLoading: true, loadFailed: false)
+        let chunkPageSize = selectedEntityChunkPageSize
+        let filePageSize = selectedEntityFilePageSize
+        selectedEntityLoadTask = Task { [weak self, database] in
+            let result = await Self.fetchInitialSidebarRows(
+                database: database,
+                entityId: id,
+                chunkLimit: chunkPageSize,
+                fileLimit: filePageSize
+            )
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.selectedNodeId == id, self.selectedEntityGeneration == generation else { return }
+                self.isLoadingSelectedEntityChunks = false
+                self.isLoadingSelectedEntityFiles = false
+                switch result {
+                case .success(let rows):
+                    self.selectedEntityChunkTotal = rows.chunkTotal
+                    self.selectedEntityFileTotal = rows.fileTotal
+                    self.selectedEntityChunks = rows.chunkPage.rows
+                    self.selectedEntityFiles = rows.filePage.rows
+                    self.selectedEntityChunkCursor = rows.chunkPage.nextCursor
+                    self.selectedEntityFileCursor = rows.filePage.nextCursor
+                    self.selectedEntityCanLoadMoreChunks = rows.chunkPage.nextCursor != nil
+                    self.selectedEntityCanLoadMoreFiles = rows.filePage.nextCursor != nil
+                    self.selectedEntitySidebarLoadFailed = false
+                case .failure:
+                    self.resetSelectedEntitySidebarState(isLoading: false, loadFailed: true)
                 }
             }
-        } else {
-            selectedEntity = nil
-            selectedEntityChunks = []
-            selectedEntityFiles = []
-            selectedEntityChunkTotal = 0
-            selectedEntityFileTotal = 0
-            selectedEntityChunkCursor = nil
-            selectedEntityFileCursor = nil
-            selectedEntityCanLoadMoreChunks = false
-            selectedEntityCanLoadMoreFiles = false
-            selectedEntitySidebarLoadFailed = false
-            isLoadingSelectedEntityChunks = false
-            isLoadingSelectedEntityFiles = false
-            selectedConversation = nil
         }
     }
 
@@ -320,6 +298,7 @@ final class KGViewModel: ObservableObject {
                 } else {
                     self.selectedEntityChunkCursor = nil
                     self.selectedEntityCanLoadMoreChunks = false
+                    self.selectedEntitySidebarLoadFailed = true
                 }
             }
         }
@@ -348,6 +327,7 @@ final class KGViewModel: ObservableObject {
                 } else {
                     self.selectedEntityFileCursor = nil
                     self.selectedEntityCanLoadMoreFiles = false
+                    self.selectedEntitySidebarLoadFailed = true
                 }
             }
         }
@@ -438,6 +418,20 @@ final class KGViewModel: ObservableObject {
 
     private func nodeById(_ id: String) -> KGNode? {
         nodes.first { $0.id == id }
+    }
+
+    private func resetSelectedEntitySidebarState(isLoading: Bool, loadFailed: Bool) {
+        selectedEntityChunks = []
+        selectedEntityFiles = []
+        selectedEntityChunkTotal = 0
+        selectedEntityFileTotal = 0
+        selectedEntityChunkCursor = nil
+        selectedEntityFileCursor = nil
+        selectedEntityCanLoadMoreChunks = false
+        selectedEntityCanLoadMoreFiles = false
+        selectedEntitySidebarLoadFailed = loadFailed
+        isLoadingSelectedEntityChunks = isLoading
+        isLoadingSelectedEntityFiles = isLoading
     }
 
     private typealias SidebarRows = BrainDatabase.EntitySidebarSnapshot
