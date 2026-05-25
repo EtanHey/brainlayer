@@ -239,19 +239,64 @@ struct InjectionPresentation {
         }
 
         for burst in bursts {
-            let bucket = ribbonBucket(for: burst.endDate, now: now)
-            if currentBucket == nil || currentBucket == bucket {
-                currentBucket = bucket
-                currentBursts.append(burst)
-            } else {
-                flush()
-                currentBucket = bucket
-                currentBursts = [burst]
+            for sectionBurst in makeSectionBursts(from: burst, now: now) {
+                let bucket = ribbonBucket(for: sectionBurst.endDate, now: now)
+                if currentBucket == nil || currentBucket == bucket {
+                    currentBucket = bucket
+                    currentBursts.append(sectionBurst)
+                } else {
+                    flush()
+                    currentBucket = bucket
+                    currentBursts = [sectionBurst]
+                }
             }
         }
 
         flush()
         return sections
+    }
+
+    private static func makeSectionBursts(from burst: Burst, now: Date) -> [Burst] {
+        let parsedEvents = burst.events.compactMap { event in
+            parseDate(event.timestamp).map { ParsedEvent(event: event, date: $0) }
+        }
+        .sorted { $0.date > $1.date }
+        guard let first = parsedEvents.first else { return [burst] }
+
+        var sectionBursts: [Burst] = []
+        var currentBucket = ribbonBucket(for: first.date, now: now)
+        var currentEvents = [first]
+        var newest = first.date
+        var oldest = first.date
+
+        func flush() {
+            sectionBursts.append(
+                Burst(
+                    sessionID: burst.sessionID,
+                    topicOrSource: burst.topicOrSource,
+                    startDate: oldest,
+                    endDate: newest,
+                    events: currentEvents.map(\.event)
+                )
+            )
+        }
+
+        for parsed in parsedEvents.dropFirst() {
+            let bucket = ribbonBucket(for: parsed.date, now: now)
+            if currentBucket == bucket {
+                currentEvents.append(parsed)
+                oldest = parsed.date
+            } else {
+                flush()
+                currentBucket = bucket
+                currentEvents = [parsed]
+                newest = parsed.date
+                oldest = parsed.date
+            }
+        }
+
+        flush()
+        return sectionBursts
     }
 
     static func ribbonBucket(for date: Date, now: Date, calendar: Calendar = .current) -> RibbonBucket {
