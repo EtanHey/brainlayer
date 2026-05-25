@@ -241,6 +241,7 @@ final class BrainDatabase: @unchecked Sendable {
     private var db: OpaquePointer?
     private let path: String
     private let openConfiguration: OpenConfiguration
+    private let transactionLock = NSRecursiveLock()
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -1594,6 +1595,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func withImmediateTransaction<T>(_ body: () throws -> T) throws -> T {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         try execute("BEGIN IMMEDIATE", retries: 3)
         do {
             let result = try body()
@@ -1606,6 +1609,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func withReadTransaction<T>(_ body: () throws -> T) throws -> T {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         try execute("BEGIN", retries: 3)
         do {
             let result = try body()
@@ -3560,6 +3565,7 @@ final class BrainDatabase: @unchecked Sendable {
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
             WHERE ec.entity_id = ?
+              AND NULLIF(c.source_file, '') IS NOT NULL
         """
         return try fetchCount(sql: sql, entityId: entityId, db: db)
     }
@@ -3664,6 +3670,7 @@ final class BrainDatabase: @unchecked Sendable {
                 FROM kg_entity_chunks ec
                 JOIN chunks c ON c.id = ec.chunk_id
                 WHERE ec.entity_id = ?
+                  AND NULLIF(c.source_file, '') IS NOT NULL
                 GROUP BY c.source_file
             )
             \(cursorPredicate)

@@ -368,6 +368,41 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(try db.fetchEntitySourceFileCount(entityId: "e1"), 2)
     }
 
+    func testFetchEntitySourceFilesAndCountIgnoreEmptyFiles() throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try insertLinkedChunk(
+            id: "file-1",
+            entityId: "e1",
+            content: "Real file chunk",
+            sourceFile: "/tmp/real.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "empty-file",
+            entityId: "e1",
+            content: "Empty source chunk",
+            sourceFile: "/tmp/to-empty.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.8
+        )
+        try insertLinkedChunk(
+            id: "another-empty-file",
+            entityId: "e1",
+            content: "Another empty source chunk",
+            sourceFile: "/tmp/another-empty.md",
+            createdAt: "2026-05-24T12:02:00Z",
+            relevance: 0.7
+        )
+        try setChunkSourceFile(id: "empty-file", sourceFile: "")
+        try setChunkSourceFile(id: "another-empty-file", sourceFile: "")
+
+        let page = try db.fetchEntitySourceFiles(entityId: "e1", limit: 10, after: nil)
+
+        XCTAssertEqual(try db.fetchEntitySourceFileCount(entityId: "e1"), 1)
+        XCTAssertEqual(page.rows.map(\.sourceFile), ["/tmp/real.md"])
+    }
+
     func testFetchEntitySourceFilesPagesAggregatedFiles() throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
         for i in 0..<3 {
@@ -465,6 +500,29 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(probe.count, 0)
     }
 
+    func testConcurrentEntitySidebarSnapshotsSerializeOnOneConnection() async throws {
+        try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        for i in 0..<200 {
+            try insertLinkedChunk(
+                id: "parallel-\(i)",
+                entityId: "e1",
+                content: "Parallel snapshot chunk \(i)",
+                sourceFile: "/tmp/parallel-\(i % 5).md",
+                createdAt: String(format: "2026-05-24T12:%02d:00Z", i % 60),
+                relevance: Double(i) / 1_000.0
+            )
+        }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<50 {
+                group.addTask { [db] in
+                    _ = try db!.fetchEntitySidebarSnapshot(entityId: "e1", chunkLimit: 15, fileLimit: 5)
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
     private func insertLinkedChunk(
         id: String,
         entityId: String,
@@ -498,6 +556,21 @@ final class KGDatabaseTests: XCTestCase {
         sqlite3_bind_text(stmt, 1, sourceFile, -1, transient)
         sqlite3_bind_text(stmt, 2, createdAt, -1, transient)
         sqlite3_bind_text(stmt, 3, id, -1, transient)
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
+    }
+
+    private func setChunkSourceFile(id: String, sourceFile: String) throws {
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        let sql = "UPDATE chunks SET source_file = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, sql, -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, sourceFile, -1, transient)
+        sqlite3_bind_text(stmt, 2, id, -1, transient)
         XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
     }
 }
@@ -710,6 +783,24 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntity?.name, "Alice")
     }
 
+    func testSelectNodeWithMissingNodeDoesNotLookupArbitraryEntity() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.selectNode(id: "a")
+        XCTAssertEqual(vm.selectedEntity?.name, "Alice")
+
+        vm.nodes.removeAll()
+        vm.selectNode(id: "a")
+
+        XCTAssertNil(vm.selectedEntity)
+        XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+        XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
+    }
+
     func testSelectNodeNilDeselects() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
@@ -846,6 +937,8 @@ final class KGViewModelTests: XCTestCase {
 
     func testLoadMoreChunkFailureDisablesAutomaticFooterRetry() async throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "mentions")
         for i in 0..<25 {
             try db.insertChunk(
                 id: "fail-\(i)",
@@ -872,10 +965,13 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntityChunks.count, 15)
         XCTAssertFalse(vm.selectedEntityCanLoadMoreChunks)
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
+        XCTAssertTrue(vm.selectedEntitySidebarLoadFailed)
     }
 
     func testInitialSidebarFetchFailureIsExplicitlyFlagged() async throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
+        try db.insertEntity(id: "e2", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "e1", targetId: "e2", relationType: "mentions")
 
         let vm = KGViewModel(database: db)
         await vm.loadGraph()
