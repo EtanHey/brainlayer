@@ -32,7 +32,8 @@ def _pad(text: str, width: int, align: str = "left") -> str:
 def _basename(value: str | None) -> str:
     if not value:
         return "unknown"
-    return os.path.basename(str(value).strip()) or str(value).strip() or "unknown"
+    normalized = str(value).strip().replace("\\", "/")
+    return os.path.basename(normalized) or normalized or "unknown"
 
 
 def _date_only(value: str | None) -> str:
@@ -51,6 +52,22 @@ def _relation_target(rel: dict) -> str:
 def _expired_date(rel: dict) -> str | None:
     raw = rel.get("expired_at") or rel.get("expiredAt")
     return str(raw)[:10] if raw else None
+
+
+def _append_kv_section(lines: list[str], title: str, values: dict | None, *, skip: set[str] | None = None) -> None:
+    if not isinstance(values, dict):
+        return
+    skip = skip or set()
+    items = []
+    for key, value in sorted(values.items()):
+        if key in skip or value in (None, ""):
+            continue
+        items.append((key, value))
+    if not items:
+        return
+    lines.extend(["", f"### {title}"])
+    for key, value in items[:8]:
+        lines.append(f"- {key}: {value}")
 
 
 def format_search_results(query: str, results: list[dict], total: int) -> str:
@@ -93,6 +110,16 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
         content = (chunk.get("content") or chunk.get("snippet") or chunk.get("summary") or "").strip()
         lines.append("")
         lines.append(f"### Chunk {index} - {source}")
+        meta_lines = []
+        if chunk.get("position") is not None:
+            meta_lines.append(f"- Position: {chunk['position']}")
+        if chunk.get("content_type"):
+            meta_lines.append(f"- Type: {chunk['content_type']}")
+        if chunk.get("is_target"):
+            meta_lines.append("- Target: yes")
+        if meta_lines:
+            lines.extend(meta_lines)
+            lines.append("")
         if len(content) <= 1500:
             lines.append(content)
         else:
@@ -123,6 +150,16 @@ def format_entity_card(entity: dict) -> str:
     lines = [f"## Entity: {name}"]
     if entity.get("description"):
         lines.extend(["", _truncate(entity.get("description"), 200)])
+
+    _append_kv_section(
+        lines,
+        "Profile",
+        entity.get("profile"),
+        skip={"hard_constraints", "preferences", "contact_info", "description"},
+    )
+    _append_kv_section(lines, "Constraints", entity.get("hard_constraints"))
+    _append_kv_section(lines, "Preferences", entity.get("preferences"))
+    _append_kv_section(lines, "Contact", entity.get("contact_info"))
 
     lines.extend(["", "### KG Facts"])
     relations = entity.get("relations", [])

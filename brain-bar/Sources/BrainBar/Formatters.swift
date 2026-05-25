@@ -82,7 +82,7 @@ enum Formatters {
 
     private static func basename(_ raw: Any?) -> String {
         guard let text = raw as? String else { return "unknown" }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\", with: "/")
         guard !trimmed.isEmpty else { return "unknown" }
         return URL(fileURLWithPath: trimmed).lastPathComponent
     }
@@ -106,6 +106,27 @@ enum Formatters {
         let raw = (rel["expired_at"] as? String) ?? (rel["expiredAt"] as? String)
         guard let raw, !raw.isEmpty else { return nil }
         return String(raw.prefix(10))
+    }
+
+    private static func appendKeyValueSection(
+        _ title: String,
+        values: [String: Any]?,
+        to lines: inout [String],
+        skip: Set<String> = []
+    ) {
+        guard let values else { return }
+        let items = values
+            .filter { key, value in
+                !skip.contains(key) && !(value is NSNull) && !String(describing: value).isEmpty
+            }
+            .sorted { $0.key < $1.key }
+        guard !items.isEmpty else { return }
+
+        lines.append("")
+        lines.append("### \(title)")
+        for (key, value) in items.prefix(8) {
+            lines.append("- \(key): \(value)")
+        }
     }
 
     // MARK: - Search Results
@@ -169,6 +190,16 @@ enum Formatters {
             lines.append("")
             lines.append(truncate(description, maxLen: 200))
         }
+
+        appendKeyValueSection(
+            "Profile",
+            values: entity["profile"] as? [String: Any],
+            to: &lines,
+            skip: ["hard_constraints", "preferences", "contact_info", "description"]
+        )
+        appendKeyValueSection("Constraints", values: entity["hard_constraints"] as? [String: Any], to: &lines)
+        appendKeyValueSection("Preferences", values: entity["preferences"] as? [String: Any], to: &lines)
+        appendKeyValueSection("Contact", values: entity["contact_info"] as? [String: Any], to: &lines)
 
         lines.append("")
         lines.append("### KG Facts")

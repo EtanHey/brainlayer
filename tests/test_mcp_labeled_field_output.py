@@ -38,6 +38,23 @@ def test_brain_search_output_is_labeled_markdown_not_score_table():
     assert not output.strip().startswith("{")
 
 
+def test_brain_search_source_basename_handles_windows_paths():
+    output = format_search_results(
+        "path privacy",
+        [
+            {
+                "source_file": r"C:\Users\etan\brainlayer\src\auth.py",
+                "date": "2026-04-12T10:00:00Z",
+                "snippet": "Windows paths should not leak full absolute paths.",
+            }
+        ],
+        1,
+    )
+
+    assert "- Source: auth.py" in output
+    assert r"C:\Users" not in output
+
+
 def test_kg_augmented_brain_search_output_is_labeled_markdown_not_score_table():
     output = format_kg_search(
         "BrainLayer",
@@ -133,6 +150,27 @@ def test_brain_recall_context_output_is_labeled_chunk_markdown():
     assert "score" not in output
     assert "chunk-auth-1" not in output
     assert "[{" not in output
+
+
+def test_brain_recall_context_preserves_position_target_and_type():
+    output = format_recalled_context(
+        "chunk-auth-1",
+        [
+            {
+                "chunk_id": "chunk-auth-1",
+                "source_file": "session.jsonl",
+                "content_type": "assistant_text",
+                "position": 42,
+                "is_target": True,
+                "content": "This is the target chunk.",
+            }
+        ],
+    )
+
+    assert "### Chunk 1 - session.jsonl" in output
+    assert "- Position: 42" in output
+    assert "- Type: assistant_text" in output
+    assert "- Target: yes" in output
 
 
 def test_brain_recall_context_uses_project_when_source_file_missing():

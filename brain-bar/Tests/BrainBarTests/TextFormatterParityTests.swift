@@ -39,6 +39,23 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertFalse(output.contains("rt-abc123def"))
     }
 
+    func testSearchResultSourceBasenameHandlesWindowsPaths() {
+        let results = [
+            SearchResult(
+                chunkID: "rt-windows-path",
+                project: "brainlayer",
+                date: "2026-04-12T10:00:00Z",
+                snippet: "Windows paths should not leak full absolute paths.",
+                sourceFile: #"C:\Users\etan\brainlayer\src\auth.py"#
+            )
+        ]
+
+        let output = TextFormatter.formatSearchResults(query: "path privacy", results: results, total: 1)
+
+        XCTAssertTrue(output.contains("- Source: auth.py"))
+        XCTAssertFalse(output.contains(#"C:\Users"#))
+    }
+
     func testEntityCardUsesLabeledKGFactsStructure() {
         let expiredAt = ISO8601DateFormatter().date(from: "2026-05-01T00:00:00Z")
         let entity = EntityCard(
@@ -72,6 +89,20 @@ final class TextFormatterParityTests: XCTestCase {
             ## Entity: Etan Heyman
 
             Owner of the BrainLayer ecosystem.
+
+            ### Profile
+            - company: BrainLayer
+            - location: Tel Aviv
+            - role: Developer
+
+            ### Constraints
+            - timezone: Asia/Jerusalem
+
+            ### Preferences
+            - editor: Neovim
+
+            ### Contact
+            - email: etan@example.com
 
             ### KG Facts
             - works_on: BrainLayer

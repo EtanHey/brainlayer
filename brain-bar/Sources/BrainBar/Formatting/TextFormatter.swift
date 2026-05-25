@@ -83,7 +83,7 @@ enum TextFormatter {
             lines.append("")
             lines.append("### Chunk \(index + 1) - \(source.isEmpty ? "unknown" : source)")
             let content = result.snippet.isEmpty ? result.displayText : result.snippet
-            let fullText = content.replacingOccurrences(of: "\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fullText = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if fullText.count <= 1500 {
                 lines.append(fullText)
             } else {
@@ -192,7 +192,7 @@ enum TextFormatter {
     }
 
     private static func sourceBasename(_ source: String) -> String {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\", with: "/")
         guard !trimmed.isEmpty else { return "" }
         return URL(fileURLWithPath: trimmed).lastPathComponent
     }
@@ -220,6 +220,11 @@ enum TextFormatter {
     }
 
     private static func appendEntitySections(_ entity: EntityCard, to lines: inout [String]) {
+        appendKeyValueSection("Profile", values: entity.profile, to: &lines)
+        appendKeyValueSection("Constraints", values: entity.hardConstraints, to: &lines)
+        appendKeyValueSection("Preferences", values: entity.preferences, to: &lines)
+        appendKeyValueSection("Contact", values: entity.contactInfo, to: &lines)
+
         lines.append("")
         lines.append("### KG Facts")
         if entity.relations.isEmpty {
@@ -250,6 +255,19 @@ enum TextFormatter {
             for target in followUps.prefix(5) {
                 lines.append("- \(target)")
             }
+        }
+    }
+
+    private static func appendKeyValueSection(_ title: String, values: [String: String], to lines: inout [String]) {
+        let items = values
+            .filter { !$0.value.isEmpty }
+            .sorted { $0.key < $1.key }
+        guard !items.isEmpty else { return }
+
+        lines.append("")
+        lines.append("### \(title)")
+        for (key, value) in items.prefix(8) {
+            lines.append("- \(key): \(value)")
         }
     }
 

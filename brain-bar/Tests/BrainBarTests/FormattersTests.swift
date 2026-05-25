@@ -103,6 +103,9 @@ final class FormattersTests: XCTestCase {
         ]
         let out = Formatters.formatEntityCard(entity: entity, useColor: false)
         XCTAssertTrue(out.contains("## Entity: Etan Heyman"))
+        XCTAssertTrue(out.contains("### Profile"))
+        XCTAssertTrue(out.contains("- role: Developer"))
+        XCTAssertTrue(out.contains("- location: Tel Aviv"))
         XCTAssertTrue(out.contains("### KG Facts"))
         XCTAssertTrue(out.contains("works_on"))
         XCTAssertTrue(out.contains("BrainLayer"))
@@ -116,6 +119,21 @@ final class FormattersTests: XCTestCase {
         XCTAssertTrue(out.contains("## Entity: Unknown Entity"))
         XCTAssertTrue(out.contains("### KG Facts"))
         XCTAssertTrue(out.contains("- None"))
+    }
+
+    func testFormatSearchResultsBasenameHandlesWindowsPaths() {
+        let results: [[String: Any]] = [
+            [
+                "source_file": #"C:\Users\etan\brainlayer\src\auth.py"#,
+                "date": "2026-04-12T10:00:00Z",
+                "snippet": "Windows paths should not leak full absolute paths."
+            ]
+        ]
+
+        let out = Formatters.formatSearchResults(query: "path privacy", results: results, total: 1, useColor: false)
+
+        XCTAssertTrue(out.contains("- Source: auth.py"))
+        XCTAssertFalse(out.contains(#"C:\Users"#))
     }
 
     // MARK: - Entity Simple

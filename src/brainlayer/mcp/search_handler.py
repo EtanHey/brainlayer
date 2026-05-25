@@ -1383,6 +1383,10 @@ async def _context(
                 {
                     "chunk_id": chunk.get("id") or chunk.get("chunk_id"),
                     "source_file": chunk.get("source_file"),
+                    "project": chunk.get("project"),
+                    "content_type": chunk.get("content_type"),
+                    "position": chunk.get("position"),
+                    "is_target": chunk.get("is_target"),
                     "content": chunk.get("content", ""),
                 }
             )

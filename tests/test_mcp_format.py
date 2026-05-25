@@ -220,9 +220,21 @@ class TestFormatEntityCard:
             "name": "Dev",
             "entity_id": "e2",
             "profile": {"role": "Engineer", "company": "Acme"},
+            "hard_constraints": {"not_before": "09:00"},
+            "preferences": {"editor": "Neovim"},
+            "contact_info": {"email": "dev@example.com"},
         }
         result = format_entity_card(entity)
         assert "## Entity: Dev" in result
+        assert "### Profile" in result
+        assert "- role: Engineer" in result
+        assert "- company: Acme" in result
+        assert "### Constraints" in result
+        assert "- not_before: 09:00" in result
+        assert "### Preferences" in result
+        assert "- editor: Neovim" in result
+        assert "### Contact" in result
+        assert "- email: dev@example.com" in result
         assert "### KG Facts" in result
 
 
