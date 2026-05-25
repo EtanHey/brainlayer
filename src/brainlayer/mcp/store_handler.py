@@ -467,6 +467,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 file_path=item.get("file_path"),
                 function_name=item.get("function_name"),
                 line_number=item.get("line_number"),
+                chunk_id=item.get("chunk_id"),
             )
             flushed += 1
         except Exception as e:
