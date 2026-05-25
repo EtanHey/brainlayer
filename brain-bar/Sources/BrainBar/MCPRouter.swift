@@ -236,6 +236,9 @@ final class MCPRouter: @unchecked Sendable {
     // MARK: - Tool Handlers
 
     private func handleBrainSearch(_ args: [String: Any]) throws -> ToolOutput {
+        let profileStartedAt = SearchProfileLogger.now()
+        let profileQueryID = (args["_profile_query_id"] as? String)
+            ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
@@ -262,6 +265,12 @@ final class MCPRouter: @unchecked Sendable {
         guard let db = database else {
             throw ToolError.noDatabase
         }
+        SearchProfileLogger.log(
+            scope: "search.brainbar",
+            step: "router_dispatch",
+            queryID: profileQueryID,
+            durMS: SearchProfileLogger.durationMS(since: profileStartedAt)
+        )
 
         func localKGSection() -> String {
             let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
@@ -309,7 +318,8 @@ final class MCPRouter: @unchecked Sendable {
                     source: source,
                     tag: tag,
                     importanceMin: importanceMin,
-                    detail: args["detail"] as? String
+                    detail: args["detail"] as? String,
+                    profileQueryID: profileQueryID
                 ))
                 textSection = response.text
                 metadata = sanitizedHybridMetadata(response.metadata)
@@ -350,7 +360,8 @@ final class MCPRouter: @unchecked Sendable {
         source: String?,
         tag: String?,
         importanceMin: Double?,
-        detail: String?
+        detail: String?,
+        profileQueryID: String?
     ) -> [String: Any] {
         var arguments: [String: Any] = [
             "query": query,
@@ -366,6 +377,9 @@ final class MCPRouter: @unchecked Sendable {
         }
         if let importanceMin {
             arguments["importance_min"] = importanceMin
+        }
+        if let profileQueryID {
+            arguments["_profile_query_id"] = profileQueryID
         }
         return arguments
     }

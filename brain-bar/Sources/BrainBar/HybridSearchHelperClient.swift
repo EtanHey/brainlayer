@@ -134,16 +134,38 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
     }
 
     func search(arguments: [String: Any]) throws -> HybridSearchResponse {
-        try queue.sync {
-            try startLocked()
-            do {
-                return try send(arguments: arguments)
-            } catch {
-                if Self.shouldRestartHelper(after: error) {
-                    stopLocked()
+        let profileQueryID = (arguments["_profile_query_id"] as? String)
+            ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
+        let profileStartedAt = SearchProfileLogger.now()
+        SearchProfileLogger.log(scope: "search.brainbar", step: "helper_rpc_start", queryID: profileQueryID)
+        do {
+            let response = try queue.sync {
+                try startLocked()
+                do {
+                    return try send(arguments: arguments)
+                } catch {
+                    if Self.shouldRestartHelper(after: error) {
+                        stopLocked()
+                    }
+                    throw error
                 }
-                throw error
             }
+            SearchProfileLogger.log(
+                scope: "search.brainbar",
+                step: "helper_rpc_done",
+                queryID: profileQueryID,
+                durMS: SearchProfileLogger.durationMS(since: profileStartedAt)
+            )
+            return response
+        } catch {
+            SearchProfileLogger.log(
+                scope: "search.brainbar",
+                step: "helper_rpc_done",
+                queryID: profileQueryID,
+                durMS: SearchProfileLogger.durationMS(since: profileStartedAt),
+                fields: ["error": String(describing: error)]
+            )
+            throw error
         }
     }
 

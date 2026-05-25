@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import search_profile
+
 _ACCEPT_TIMEOUT_SECONDS = 0.25
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _WARMUP_RETRY_DELAYS_SECONDS = (0.05, 0.1)
@@ -43,12 +45,21 @@ class HybridSearchHelper:
         self.socket_path = socket_path
         self.db_path = db_path
         self._stopped = False
+        self._warm_called = False
 
     def warm(self) -> None:
+        self._warm_called = True
         os.environ["BRAINLAYER_DB"] = os.fspath(self.db_path)
         from brainlayer.mcp._shared import _get_embedding_model, _get_search_vector_store
 
         store = _get_search_vector_store()
+        search_profile.emit(
+            "search.helper",
+            "startup_warm_state",
+            warm_called=self._warm_called,
+            binary_index_available=bool(getattr(store, "_binary_index_available", False)),
+            binary_knn_mmap_size=self._store_mmap_size(store),
+        )
         model = _get_embedding_model()
         warmup_query = "brainbar hybrid helper warmup"
         query_embedding = model.embed_query(warmup_query)
@@ -161,19 +172,27 @@ class HybridSearchHelper:
     async def _search(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
         from brainlayer.mcp.search_handler import _brain_search
 
+        query_id = str(arguments.get("_profile_query_id") or "") or None
+        if search_profile.enabled() and query_id is None:
+            query_id = search_profile.new_query_id()
         source = arguments.get("source")
         if source is None or source == "":
             source = "all"
 
-        result = await _brain_search(
-            query=str(arguments.get("query") or ""),
-            project=arguments.get("project"),
-            source=source,
-            tag=arguments.get("tag"),
-            importance_min=arguments.get("importance_min"),
-            num_results=int(arguments.get("num_results") or 5),
-            detail=str(arguments.get("detail") or "compact"),
-        )
+        search_kwargs = {
+            "query": str(arguments.get("query") or ""),
+            "project": arguments.get("project"),
+            "source": source,
+            "tag": arguments.get("tag"),
+            "importance_min": arguments.get("importance_min"),
+            "num_results": int(arguments.get("num_results") or 5),
+            "detail": str(arguments.get("detail") or "compact"),
+        }
+        if search_profile.enabled() or query_id is not None:
+            search_kwargs["profile_query_id"] = query_id
+            search_kwargs["profile_scope"] = "search.helper"
+
+        result = await _brain_search(**search_kwargs)
 
         if isinstance(result, tuple):
             content, structured = result
@@ -201,6 +220,20 @@ class HybridSearchHelper:
             if text is not None:
                 return str(text)
         return str(content)
+
+    @staticmethod
+    def _store_mmap_size(store: Any) -> int | None:
+        try:
+            cursor = store._read_cursor()
+            row = cursor.execute("PRAGMA mmap_size").fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import apsw
 import numpy as np
 
+from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .dedupe import resolve_chunk_id
@@ -1239,6 +1240,8 @@ class SearchMixin:
         correction_category: Optional[str] = None,
         filter_meta_noise: bool = True,
         include_audit: bool = False,
+        profile_query_id: str | None = None,
+        profile_scope: str = "search.repo",
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -1290,6 +1293,7 @@ class SearchMixin:
         # when the binary index is unavailable (for example readonly live DBs).
         candidate_fetch_count = max(n_results * 3, _MMR_CANDIDATE_LIMIT)
         if getattr(self, "_binary_index_available", False):
+            binary_started = search_profile.now()
             semantic = self._binary_search(
                 query_embedding=query_embedding,
                 n_results=candidate_fetch_count,
@@ -1311,8 +1315,25 @@ class SearchMixin:
                 correction_category=correction_category,
                 include_audit=include_audit,
             )
+            search_profile.emit(
+                profile_scope,
+                "binary_knn",
+                profile_query_id,
+                search_profile.dur_ms(binary_started),
+                binary_index_available=True,
+                candidate_count=len(semantic.get("ids", [[]])[0]),
+            )
+            rerank_started = search_profile.now()
             semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
+            search_profile.emit(
+                profile_scope,
+                "float_rerank",
+                profile_query_id,
+                search_profile.dur_ms(rerank_started),
+                candidate_count=len(semantic.get("ids", [[]])[0]),
+            )
         else:
+            float_started = search_profile.now()
             semantic = self.search(
                 query_embedding=query_embedding,
                 n_results=candidate_fetch_count,
@@ -1334,6 +1355,14 @@ class SearchMixin:
                 correction_category=correction_category,
                 include_audit=include_audit,
             )
+            search_profile.emit(
+                profile_scope,
+                "float_search",
+                profile_query_id,
+                search_profile.dur_ms(float_started),
+                binary_index_available=False,
+                candidate_count=len(semantic.get("ids", [[]])[0]),
+            )
 
         # Build semantic rank map: chunk_content -> rank
         semantic_ranks = {}
@@ -1349,6 +1378,7 @@ class SearchMixin:
         fts_query = fts_query_override or _escape_fts5_query(query_text)
         fts_results = []
         trigram_fts_results = []
+        fts_started = search_profile.now()
         if fts_query:
             fts_extra = []
             fts_filter_params: list = []
@@ -1434,6 +1464,15 @@ class SearchMixin:
             fts_results = _fetch_fts_rows("chunks_fts")
             if getattr(self, "_trigram_fts_available", False):
                 trigram_fts_results = _fetch_fts_rows("chunks_fts_trigram")
+        search_profile.emit(
+            profile_scope,
+            "fts_merge",
+            profile_query_id,
+            search_profile.dur_ms(fts_started),
+            fts_enabled=bool(fts_query),
+            fts_count=len(fts_results),
+            trigram_count=len(trigram_fts_results),
+        )
 
         # Build FTS rank map
         fts_ranks = {}
