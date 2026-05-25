@@ -6,7 +6,7 @@ final class InjectionPresentationTests: XCTestCase {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [
             makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:58:00Z", query: "latest cc release", chunkIDs: ["chunk-1", "chunk-2"], tokenCount: 48),
-            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:55:00Z", query: "extract transcript", chunkIDs: ["chunk-3"], tokenCount: 52),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:55:00Z", query: "latest cc release", chunkIDs: ["chunk-3"], tokenCount: 52),
             makeEvent(id: 3, sessionID: "sess-a", timestamp: "2026-04-18T09:40:00Z", query: "why is ffmpeg stuck", chunkIDs: ["chunk-4", "chunk-5", "chunk-6"], tokenCount: 91),
             makeEvent(id: 4, sessionID: "sess-b", timestamp: "2026-04-18T09:38:00Z", query: "brainbar graph empty", chunkIDs: ["chunk-7"], tokenCount: 40),
         ]
@@ -61,6 +61,70 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(chunkSnapshot.filteredEvents.map { $0.id }, [2])
     }
 
+    func testBurstAggregationGroupsFiveEventsFromOneSessionAndTopicInsideFiveMinutes() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = (0..<5).map { offset in
+            makeEvent(
+                id: Int64(offset + 1),
+                sessionID: "brain-c7a8",
+                timestamp: isoTimestamp(now.addingTimeInterval(-Double(offset) * 60.0)),
+                query: "auth refactor",
+                chunkIDs: ["chunk-\(offset + 1)"],
+                tokenCount: 10
+            )
+        }
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 1)
+        XCTAssertEqual(snapshot.bursts[0].sessionID, "brain-c7a8")
+        XCTAssertEqual(snapshot.bursts[0].topicOrSource, "auth refactor")
+        XCTAssertEqual(snapshot.bursts[0].summaryTitle, "5 chunks injected from \"auth refactor\"")
+        XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2, 3, 4, 5])
+        XCTAssertEqual(snapshot.bursts[0].chunkPreviewIDs, ["chunk-1", "chunk-2"])
+        XCTAssertEqual(snapshot.bursts[0].remainingChunkCount(after: 2), 3)
+    }
+
+    func testBurstAggregationSplitsDifferentSessions() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-b", timestamp: "2026-04-18T09:58:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+            makeEvent(id: 3, sessionID: "sess-a", timestamp: "2026-04-18T09:57:00Z", query: "auth refactor", chunkIDs: ["chunk-3"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 3)
+        XCTAssertEqual(snapshot.bursts.map(\.sessionID), ["sess-a", "sess-b", "sess-a"])
+    }
+
+    func testBurstAggregationSplitsSameSessionWhenEventsAreMoreThanSixtyMinutesApart() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T08:58:59Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 2)
+        XCTAssertEqual(snapshot.bursts.map { $0.events.map(\.id) }, [[1], [2]])
+    }
+
+    func testRibbonBucketBoundaryTreatsExactlySixtyMinutesAsOlderBucket() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:00:01Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10),
+            makeEvent(id: 2, sessionID: "sess-b", timestamp: "2026-04-18T09:00:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.summary.queryCount, 1)
+        XCTAssertEqual(snapshot.burstSections.map(\.bucket), [.lastSixtyMinutes, .oneToTwoHoursAgo])
+    }
+
     private func makeEvent(
         id: Int64,
         sessionID: String,
@@ -83,5 +147,11 @@ final class InjectionPresentationTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: text)!
+    }
+
+    private func isoTimestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
     }
 }
