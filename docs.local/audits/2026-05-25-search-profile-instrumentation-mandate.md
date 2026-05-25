@@ -15,6 +15,7 @@ Each event is a single JSON object with:
 - `step`: measured step name
 - `query_id`: best-effort correlation ID
 - `dur_ms`: duration for completed timed steps, when applicable
+- `error`: exception class for failed timed steps, when applicable
 
 ## Instrumented Points
 
