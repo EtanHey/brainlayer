@@ -182,6 +182,8 @@ final class StatsCollector: ObservableObject {
                 return
             }
 
+            guard !Task.isCancelled else { return }
+
             await MainActor.run {
                 guard let self else { return }
                 self.pendingStatsRefreshTask = nil
