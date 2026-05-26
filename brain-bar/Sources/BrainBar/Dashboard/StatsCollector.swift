@@ -71,6 +71,7 @@ final class StatsCollector: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
+        resetRefreshTimingState()
         isRunning = true
         installDarwinObserver()
         refresh(force: true)
@@ -94,6 +95,7 @@ final class StatsCollector: ObservableObject {
             removeDarwinObserver()
         }
         isRunning = false
+        resetRefreshTimingState()
         database.close()
     }
 
@@ -167,6 +169,11 @@ final class StatsCollector: ObservableObject {
         }
         agentActivity = agentActivityMonitor.sample()
         lastAgentActivitySampleAt = now
+    }
+
+    private func resetRefreshTimingState() {
+        lastAgentActivitySampleAt = nil
+        lastNonForcedStatsRefreshAt = nil
     }
 
     fileprivate func handleDatabaseMutationNotification() {
