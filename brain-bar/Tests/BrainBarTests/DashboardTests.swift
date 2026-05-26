@@ -102,6 +102,31 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
     }
 
+    func testDashboardStatsReadsPendingStoreQueueDepthAndOldestEntry() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-dashboard-\(UUID().uuidString).jsonl")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        defer {
+            restoreQueuePath()
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        let older = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1_000))
+        let newer = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1_060))
+        let payload = """
+        {"content":"old queued item","tags":["queue"],"importance":5,"source":"mcp","queued_at":"\(older)"}
+        {"content":"new queued item","tags":["queue"],"importance":5,"source":"mcp","queued_at":"\(newer)"}
+
+        """
+        try payload.write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 15, bucketCount: 4)
+
+        XCTAssertEqual(stats.pendingStoreQueueDepth, 2)
+        XCTAssertEqual(stats.pendingStoreOldestQueuedAt, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(stats.pendingStoreFlushRatePerMinute, 0)
+    }
+
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
         let presentation = SparklineChartPresentation(
             label: "Recent activity sparkline",
@@ -392,6 +417,35 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
+    @MainActor
+    func testStatsCollectorComputesPendingStoreFlushRateFromDepthDrops() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-collector-\(UUID().uuidString).jsonl")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        defer {
+            restoreQueuePath()
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        try writeDashboardPendingStoreQueue(count: 3, to: queuePath)
+
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 3)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
+
+        try writeDashboardPendingStoreQueue(count: 1, to: queuePath)
+        collector.refresh(force: true)
+
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
+        XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 2)
+    }
+
     func test_DaemonHealthMonitor_returns_non_nil_when_PID_provided() throws {
         let monitor = DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
 
@@ -603,4 +657,26 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
         }
         return AsyncStream { _ in }
     }
+}
+
+private func setDashboardPendingStoreQueuePath(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
+    setenv("BRAINBAR_PENDING_STORES_PATH", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINBAR_PENDING_STORES_PATH", previous, 1)
+        } else {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+        }
+    }
+}
+
+private func writeDashboardPendingStoreQueue(count: Int, to path: URL) throws {
+    let queuedAt = ISO8601DateFormatter().string(from: Date())
+    let lines = (0..<count).map { index in
+        """
+        {"content":"queued item \(index)","tags":["queue"],"importance":5,"source":"mcp","queued_at":"\(queuedAt)"}
+        """
+    }
+    try lines.joined(separator: "\n").appending("\n").write(to: path, atomically: true, encoding: .utf8)
 }

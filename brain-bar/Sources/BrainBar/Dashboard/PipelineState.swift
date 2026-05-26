@@ -144,6 +144,39 @@ enum DashboardQueueStatus: String, Sendable, Equatable {
     }
 }
 
+enum DashboardStoreQueueHealth: String, Sendable, Equatable {
+    case empty
+    case activeDraining
+    case backlogAccumulating
+    case writerStuck
+
+    var label: String {
+        switch self {
+        case .empty:
+            return "empty"
+        case .activeDraining:
+            return "active draining"
+        case .backlogAccumulating:
+            return "backlog accumulating"
+        case .writerStuck:
+            return "writer stuck - investigate"
+        }
+    }
+
+    var color: NSColor {
+        switch self {
+        case .empty:
+            return .secondaryLabelColor
+        case .activeDraining:
+            return .systemGreen
+        case .backlogAccumulating:
+            return .systemYellow
+        case .writerStuck:
+            return .systemRed
+        }
+    }
+}
+
 struct DashboardFlowLane: Sendable, Equatable {
     let name: String
     let status: DashboardFlowLaneStatus
@@ -159,6 +192,14 @@ struct DashboardFlowLane: Sendable, Equatable {
 struct DashboardQueueSummary: Sendable, Equatable {
     let status: DashboardQueueStatus
     let backlogCount: Int
+    let storeHealth: DashboardStoreQueueHealth
+    let storeHealthText: String
+    let storeDepth: Int
+    let storeOldestAgeSeconds: Int?
+    let storeFlushRatePerMinute: Double
+    let storeDepthText: String
+    let storeOldestAgeText: String
+    let storeFlushRateText: String
     let title: String
     let detail: String
 }
@@ -183,6 +224,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
         let enrichmentsLive = stats.eventIsLive(stats.lastEnrichedAt, now: now)
         let backlogCount = stats.pendingEnrichmentCount
+        let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
+        let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
 
         let ingressStatus: DashboardFlowLaneStatus
         if writesLive {
@@ -287,10 +330,28 @@ struct DashboardFlowSummary: Sendable, Equatable {
             queue: DashboardQueueSummary(
                 status: queueStatus,
                 backlogCount: backlogCount,
-                title: queueTitle(status: queueStatus, backlogCount: backlogCount),
+                storeHealth: storeHealth,
+                storeHealthText: storeHealth.label,
+                storeDepth: stats.pendingStoreQueueDepth,
+                storeOldestAgeSeconds: storeOldestAgeSeconds,
+                storeFlushRatePerMinute: stats.pendingStoreFlushRatePerMinute,
+                storeDepthText: storeDepthText(stats.pendingStoreQueueDepth),
+                storeOldestAgeText: storeOldestAgeText(storeOldestAgeSeconds),
+                storeFlushRateText: DashboardMetricFormatter.speedString(
+                    ratePerMinute: stats.pendingStoreFlushRatePerMinute
+                ),
+                title: queueTitle(
+                    status: queueStatus,
+                    backlogCount: backlogCount,
+                    storeHealth: storeHealth
+                ),
                 detail: queueDetail(
                     status: queueStatus,
                     backlogCount: backlogCount,
+                    storeHealth: storeHealth,
+                    storeDepth: stats.pendingStoreQueueDepth,
+                    storeOldestAgeSeconds: storeOldestAgeSeconds,
+                    storeFlushRatePerMinute: stats.pendingStoreFlushRatePerMinute,
                     stats: stats,
                     windowLabel: windowLabel
                 )
@@ -319,7 +380,39 @@ struct DashboardFlowSummary: Sendable, Equatable {
         )
     }
 
-    private static func queueTitle(status: DashboardQueueStatus, backlogCount: Int) -> String {
+    private static func storeQueueHealth(depth: Int, oldestAgeSeconds: Int?) -> DashboardStoreQueueHealth {
+        guard depth > 0 else { return .empty }
+        let oldest = oldestAgeSeconds ?? 0
+        if depth >= 500 || oldest >= 300 {
+            return .writerStuck
+        }
+        if depth >= 50 || oldest >= 30 {
+            return .backlogAccumulating
+        }
+        return .activeDraining
+    }
+
+    private static func storeDepthText(_ depth: Int) -> String {
+        depth == 1 ? "1 queued" : "\(depth) queued"
+    }
+
+    private static func storeOldestAgeText(_ oldestAgeSeconds: Int?) -> String {
+        guard let seconds = oldestAgeSeconds else { return "oldest unknown" }
+        if seconds < 60 {
+            return "oldest \(seconds)s"
+        }
+        let minutes = Int((Double(seconds) / 60.0).rounded())
+        return "oldest \(minutes)m"
+    }
+
+    private static func queueTitle(
+        status: DashboardQueueStatus,
+        backlogCount: Int,
+        storeHealth: DashboardStoreQueueHealth
+    ) -> String {
+        if storeHealth != .empty {
+            return "Queue \(storeHealth.label)"
+        }
         switch status {
         case .empty:
             return "Queue empty"
@@ -339,9 +432,20 @@ struct DashboardFlowSummary: Sendable, Equatable {
     private static func queueDetail(
         status: DashboardQueueStatus,
         backlogCount: Int,
+        storeHealth: DashboardStoreQueueHealth,
+        storeDepth: Int,
+        storeOldestAgeSeconds: Int?,
+        storeFlushRatePerMinute: Double,
         stats: DashboardStats,
         windowLabel: String
     ) -> String {
+        if storeHealth != .empty {
+            let depth = storeDepthText(storeDepth)
+            let oldest = storeOldestAgeText(storeOldestAgeSeconds)
+            let rate = DashboardMetricFormatter.speedString(ratePerMinute: storeFlushRatePerMinute)
+            return "\(depth), \(oldest), draining \(rate) over 60s."
+        }
+
         switch status {
         case .empty:
             return "No chunks are waiting for enrichment."

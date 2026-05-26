@@ -48,11 +48,11 @@ final class StatusPopoverView: NSViewController {
     private let databaseSizeLabel = NSTextField(labelWithString: "")
     private let chunkMetric = MetricTileView(title: "Chunks", accentColor: .systemBlue)
     private let enrichedMetric = MetricTileView(title: "Enriched", accentColor: .systemGreen)
-    private let pendingMetric = MetricTileView(title: "Backlog", accentColor: .systemOrange)
+    private let pendingMetric = MetricTileView(title: "Queue", accentColor: .systemOrange)
     private let rateMetric = MetricTileView(title: "Speed", accentColor: .systemPink)
     private let indexingIndicator = PipelineIndicatorBadgeView(name: "Indexing")
     private let enrichingIndicator = PipelineIndicatorBadgeView(name: "Enriching")
-    private let activityLabel = NSTextField(labelWithString: "Enrichment Throughput")
+    private let activityLabel = NSTextField(labelWithString: "Queue Health")
     private let activityDetailLabel = NSTextField(labelWithString: "")
     private let enrichmentLabel = NSTextField(labelWithString: "")
     private let sparklineChartView = NSHostingView(
@@ -362,11 +362,11 @@ final class StatusPopoverView: NSViewController {
 
         chunkMetric.value = "\(collector.stats.chunkCount)"
         enrichedMetric.value = "\(collector.stats.enrichedChunkCount)"
-        pendingMetric.value = "\(collector.stats.pendingEnrichmentCount)"
+        pendingMetric.value = "\(collector.stats.pendingStoreQueueDepth)"
         rateMetric.value = DashboardMetricFormatter.speedString(ratePerMinute: collector.stats.enrichmentRatePerMinute)
 
         enrichmentLabel.stringValue = "\(Int(collector.stats.enrichmentPercent.rounded()))% enriched"
-        activityDetailLabel.stringValue = enrichmentActivitySummary(collector.stats)
+        activityDetailLabel.stringValue = queueActivitySummary(summary.queue)
         sparklineChartView.rootView = SparklineChart(
             presentation: SparklineChartPresentation(
                 label: "Recent activity sparkline",
@@ -402,12 +402,8 @@ final class StatusPopoverView: NSViewController {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 
-    private func enrichmentActivitySummary(_ stats: DashboardStats) -> String {
-        let recentCompletions = stats.recentEnrichmentBuckets.reduce(0, +)
-        if recentCompletions == 0 {
-            return "No completions in \(DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes).lowercased())"
-        }
-        return "\(recentCompletions) completions in \(DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes).lowercased())"
+    private func queueActivitySummary(_ queue: DashboardQueueSummary) -> String {
+        "\(queue.storeHealthText): \(queue.storeDepthText), \(queue.storeOldestAgeText), \(queue.storeFlushRateText)"
     }
 
     private func verticalStack(_ views: [NSView]) -> NSStackView {
