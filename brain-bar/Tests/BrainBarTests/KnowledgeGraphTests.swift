@@ -125,6 +125,35 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(entities.last?.importance, 2.0)
     }
 
+    func testFetchKGEntitiesAggregatesAliasGroupChunkCount() throws {
+        try db.insertEntity(id: "person-etan-heyman", type: "person", name: "Etan Heyman")
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "person-etan-heyman", targetId: "project-brainlayer", relationType: "builds")
+        try insertAlias(alias: "Etan", entityId: "person-etan-heyman")
+        try insertLinkedChunk(
+            id: "canonical-chunk",
+            entityId: "person-etan-heyman",
+            content: "Canonical Etan chunk",
+            sourceFile: "/tmp/canonical.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "alias-chunk",
+            entityId: "person-etan",
+            content: "Alias Etan chunk",
+            sourceFile: "/tmp/alias.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.8
+        )
+
+        let entities = try db.fetchKGEntities()
+        let etan = try XCTUnwrap(entities.first { $0.id == "person-etan-heyman" })
+
+        XCTAssertEqual(etan.linkedChunkCount, 2)
+    }
+
     func testFetchKGEntitiesEmptyDB() throws {
         let entities = try db.fetchKGEntities()
         XCTAssertTrue(entities.isEmpty)
@@ -365,6 +394,73 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNil(page.nextCursor)
     }
 
+    func testFetchEntitySidebarCountsAndPagesAggregateAliasGroup() throws {
+        try db.insertEntity(id: "person-etan-heyman", type: "person", name: "Etan Heyman")
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try insertAlias(alias: "Etan", entityId: "person-etan-heyman")
+        try insertLinkedChunk(
+            id: "canonical",
+            entityId: "person-etan-heyman",
+            content: "Canonical chunk",
+            sourceFile: "/tmp/canonical.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "alias",
+            entityId: "person-etan",
+            content: "Alias chunk",
+            sourceFile: "/tmp/alias.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.8
+        )
+
+        let page = try db.fetchEntityChunksPage(entityId: "person-etan-heyman", after: nil, limit: 10)
+        let files = try db.fetchEntitySourceFiles(entityId: "person-etan-heyman", limit: 10, after: nil)
+
+        XCTAssertEqual(try db.fetchEntityChunkCount(entityId: "person-etan-heyman"), 2)
+        XCTAssertEqual(try db.fetchEntitySourceFileCount(entityId: "person-etan-heyman"), 2)
+        XCTAssertEqual(page.rows.map(\.chunkID), ["canonical", "alias"])
+        XCTAssertEqual(files.rows.map(\.sourceFile), ["/tmp/canonical.md", "/tmp/alias.md"])
+    }
+
+    func testAliasAggregationDoesNotMergeAmbiguousAliasSurfaces() throws {
+        try db.insertEntity(id: "person-alex", type: "person", name: "Alex")
+        try db.insertEntity(id: "person-alex-one", type: "person", name: "Alex One")
+        try db.insertEntity(id: "person-alex-two", type: "person", name: "Alex Two")
+        try insertAlias(alias: "Alex", entityId: "person-alex-one")
+        try insertAlias(alias: "Alex", entityId: "person-alex-two")
+        try insertLinkedChunk(
+            id: "alias-only",
+            entityId: "person-alex",
+            content: "Alias row chunk",
+            sourceFile: "/tmp/alex.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "canonical-one",
+            entityId: "person-alex-one",
+            content: "First canonical chunk",
+            sourceFile: "/tmp/one.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.8
+        )
+        try insertLinkedChunk(
+            id: "canonical-two",
+            entityId: "person-alex-two",
+            content: "Second canonical chunk",
+            sourceFile: "/tmp/two.md",
+            createdAt: "2026-05-24T12:02:00Z",
+            relevance: 0.7
+        )
+
+        let page = try db.fetchEntityChunksPage(entityId: "person-alex", after: nil, limit: 10)
+
+        XCTAssertEqual(try db.fetchEntityChunkCount(entityId: "person-alex"), 1)
+        XCTAssertEqual(page.rows.map(\.chunkID), ["alias-only"])
+    }
+
     func testFetchEntitySourceFileCountReturnsDistinctFiles() throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
         for i in 0..<5 {
@@ -564,6 +660,21 @@ final class KGDatabaseTests: XCTestCase {
         try db.linkEntityChunk(entityId: entityId, chunkId: id, relevance: relevance)
     }
 
+    private func insertAlias(alias: String, entityId: String) throws {
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        let sql = "INSERT INTO kg_entity_aliases (alias, entity_id) VALUES (?, ?)"
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(handle, sql, -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, alias, -1, transient)
+        sqlite3_bind_text(stmt, 2, entityId, -1, transient)
+        XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
+    }
+
     private func updateChunk(id: String, sourceFile: String, createdAt: String) throws {
         guard let handle = db.dbHandle else {
             XCTFail("Expected database handle")
@@ -662,6 +773,20 @@ final class KGModelTests: XCTestCase {
         let low = KGNode(id: "lo", name: "Lo", entityType: "person", importance: 1.0)
         let high = KGNode(id: "hi", name: "Hi", entityType: "person", importance: 9.0)
         XCTAssertGreaterThan(high.radius, low.radius)
+    }
+
+    func testKGNodeRadiusScalesWithAliasAggregatedChunkCount() {
+        let sparse = KGNode(id: "sparse", name: "Sparse", entityType: "person", importance: 5.0, linkedChunkCount: 0)
+        let dense = KGNode(id: "dense", name: "Dense", entityType: "person", importance: 5.0, linkedChunkCount: 100)
+
+        XCTAssertGreaterThan(dense.radius, sparse.radius)
+    }
+
+    func testKGNodeRadiusIgnoresNegativeLinkedChunkCount() {
+        let zero = KGNode(id: "zero", name: "Zero", entityType: "person", importance: 5.0, linkedChunkCount: 0)
+        let negative = KGNode(id: "negative", name: "Negative", entityType: "person", importance: 5.0, linkedChunkCount: -10)
+
+        XCTAssertEqual(negative.radius, zero.radius)
     }
 
     func testKGEdgeProperties() {
