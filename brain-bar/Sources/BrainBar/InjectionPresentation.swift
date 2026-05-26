@@ -36,8 +36,12 @@ struct InjectionPresentation {
         var tokenCount: Int { events.reduce(0) { $0 + $1.tokenCount } }
 
         var summaryTitle: String {
+            if let chunkTitle = InjectionPresentation.previewChunks(for: events, limit: 1).first?.displayText,
+               !chunkTitle.isEmpty {
+                return chunkTitle
+            }
             let chunkNoun = chunkCount == 1 ? "chunk" : "chunks"
-            return "\(chunkCount) \(chunkNoun) injected from \"\(topicOrSource)\""
+            return "\(chunkCount) \(chunkNoun) injected"
         }
 
         var chunkPreviewIDs: [String] {
