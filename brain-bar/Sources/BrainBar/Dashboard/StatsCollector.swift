@@ -138,9 +138,6 @@ final class StatsCollector: ObservableObject {
                 )
             }
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
-            if !force {
-                lastNonForcedStatsRefreshAt = snapshotTime
-            }
         }
     }
 
