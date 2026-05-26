@@ -446,6 +446,56 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 2)
     }
 
+    @MainActor
+    func testStatsCollectorDoesNotResampleAgentActivityOnEveryMutationRefresh() throws {
+        let sampleCounter = AgentActivitySampleCounter()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: AgentActivityMonitor(snapshotProvider: {
+                sampleCounter.snapshot()
+            })
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        collector.refresh(force: false)
+        collector.refresh(force: false)
+
+        XCTAssertEqual(sampleCounter.count, 1)
+    }
+
+    @MainActor
+    func testStatsCollectorCoalescesRapidMutationStatsRefreshes() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pending-stores-coalesce-\(UUID().uuidString).jsonl")
+        let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
+        defer {
+            restoreQueuePath()
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        try writeDashboardPendingStoreQueue(count: 3, to: queuePath)
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 3)
+
+        try writeDashboardPendingStoreQueue(count: 2, to: queuePath)
+        collector.refresh(force: false)
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
+
+        try writeDashboardPendingStoreQueue(count: 1, to: queuePath)
+        collector.refresh(force: false)
+
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
+    }
+
     func test_DaemonHealthMonitor_returns_non_nil_when_PID_provided() throws {
         let monitor = DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
 
@@ -656,6 +706,22 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
             requests += 1
         }
         return AsyncStream { _ in }
+    }
+}
+
+private final class AgentActivitySampleCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples = 0
+
+    var count: Int {
+        lock.withLock { samples }
+    }
+
+    func snapshot() -> String {
+        lock.withLock {
+            samples += 1
+        }
+        return ""
     }
 }
 
