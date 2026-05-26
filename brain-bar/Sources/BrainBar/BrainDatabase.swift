@@ -3571,6 +3571,12 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    private struct KGEntityAliasSeed {
+        let id: String
+        let name: String
+        let entityType: String
+    }
+
     struct KGRelationRow: Equatable, Sendable {
         let id: String
         let sourceId: String
@@ -3676,17 +3682,28 @@ final class BrainDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
 
-        var rows: [KGEntityRow] = []
+        var seeds: [KGEntityAliasSeed] = []
+        var descriptions: [String: String?] = [:]
+        var importances: [String: Double] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
             let id = columnText(stmt, 0) ?? ""
-            rows.append(KGEntityRow(
-                id: id,
-                name: columnText(stmt, 1) ?? "",
-                entityType: columnText(stmt, 2) ?? "",
-                description: columnText(stmt, 3),
-                importance: sqlite3_column_double(stmt, 4),
-                linkedChunkCount: try fetchEntityChunkCount(entityId: id)
-            ))
+            let name = columnText(stmt, 1) ?? ""
+            let entityType = columnText(stmt, 2) ?? ""
+            seeds.append(KGEntityAliasSeed(id: id, name: name, entityType: entityType))
+            descriptions[id] = columnText(stmt, 3)
+            importances[id] = sqlite3_column_double(stmt, 4)
+        }
+
+        let linkedChunkCounts = try fetchLinkedChunkCounts(for: seeds)
+        let rows = seeds.map { seed in
+            KGEntityRow(
+                id: seed.id,
+                name: seed.name,
+                entityType: seed.entityType,
+                description: descriptions[seed.id] ?? nil,
+                importance: importances[seed.id] ?? 5.0,
+                linkedChunkCount: linkedChunkCounts[seed.id, default: 0]
+            )
         }
         return rows
     }
@@ -3978,40 +3995,12 @@ final class BrainDatabase: @unchecked Sendable {
         guard sqlite3_step(entityStmt) == SQLITE_ROW else {
             return [entityId]
         }
-        let selectedName = columnText(entityStmt, 0) ?? ""
-        let selectedType = columnText(entityStmt, 1) ?? ""
-
         var orderedIds = [entityId]
         var seen = Set(orderedIds)
         func append(_ id: String) {
             guard !id.isEmpty, !seen.contains(id) else { return }
             seen.insert(id)
             orderedIds.append(id)
-        }
-
-        let canonicalSQL = """
-            SELECT DISTINCT a.entity_id
-            FROM kg_entity_aliases a
-            JOIN kg_entities canonical ON canonical.id = a.entity_id
-            WHERE lower(a.alias) = lower(?)
-              AND canonical.entity_type = ?
-            ORDER BY a.entity_id
-        """
-        var canonicalStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, canonicalSQL, -1, &canonicalStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(canonicalStmt) }
-        bindText(selectedName, to: canonicalStmt, index: 1)
-        bindText(selectedType, to: canonicalStmt, index: 2)
-        var canonicalMatches: [String] = []
-        while sqlite3_step(canonicalStmt) == SQLITE_ROW {
-            if let id = columnText(canonicalStmt, 0), !id.isEmpty {
-                canonicalMatches.append(id)
-            }
-        }
-        if canonicalMatches.count == 1 {
-            append(canonicalMatches[0])
         }
 
         let aliasEntitySQL = """
@@ -4038,6 +4027,85 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func placeholders(count: Int) -> String {
         Array(repeating: "?", count: max(1, count)).joined(separator: ", ")
+    }
+
+    private func fetchLinkedChunkCounts(for entities: [KGEntityAliasSeed]) throws -> [String: Int] {
+        guard let db else { throw DBError.notOpen }
+        guard !entities.isEmpty else { return [:] }
+
+        let visibleIds = entities.map(\.id)
+        var groupMembers = Dictionary(uniqueKeysWithValues: entities.map { ($0.id, [$0.id]) })
+        let canonicalIds = visibleIds
+        let aliasMembers = try aliasEntityIDsByCanonicalID(canonicalIds: canonicalIds, db: db)
+        for entity in entities {
+            if let aliases = aliasMembers[entity.id] {
+                groupMembers[entity.id, default: [entity.id]].append(contentsOf: aliases)
+            }
+        }
+
+        for (groupId, members) in groupMembers {
+            var seen: Set<String> = []
+            groupMembers[groupId] = members.filter { seen.insert($0).inserted }
+        }
+        return try fetchDistinctChunkCounts(groupMembers: groupMembers, db: db)
+    }
+
+    private func aliasEntityIDsByCanonicalID(canonicalIds: [String], db: OpaquePointer) throws -> [String: [String]] {
+        guard !canonicalIds.isEmpty else { return [:] }
+        let sql = """
+            SELECT a.entity_id, aliasEntity.id
+            FROM kg_entity_aliases a
+            JOIN kg_entities canonical ON canonical.id = a.entity_id
+            JOIN kg_entities aliasEntity ON lower(aliasEntity.name) = lower(a.alias)
+            WHERE a.entity_id IN (\(placeholders(count: canonicalIds.count)))
+              AND aliasEntity.entity_type = canonical.entity_type
+            ORDER BY a.entity_id, aliasEntity.id
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        _ = bindEntityIDs(canonicalIds, to: stmt, startingAt: 1)
+        var aliases: [String: [String]] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let canonicalId = columnText(stmt, 0) ?? ""
+            let aliasId = columnText(stmt, 1) ?? ""
+            guard !canonicalId.isEmpty, !aliasId.isEmpty else { continue }
+            aliases[canonicalId, default: []].append(aliasId)
+        }
+        return aliases
+    }
+
+    private func fetchDistinctChunkCounts(groupMembers: [String: [String]], db: OpaquePointer) throws -> [String: Int] {
+        let pairs = groupMembers.flatMap { groupId, entityIds in entityIds.map { (groupId, $0) } }
+        guard !pairs.isEmpty else { return [:] }
+        let values = Array(repeating: "(?, ?)", count: pairs.count).joined(separator: ", ")
+        let sql = """
+            WITH group_members(group_id, entity_id) AS (VALUES \(values))
+            SELECT gm.group_id, COUNT(DISTINCT ec.chunk_id)
+            FROM group_members gm
+            JOIN kg_entity_chunks ec ON ec.entity_id = gm.entity_id
+            JOIN chunks c ON c.id = ec.chunk_id
+            GROUP BY gm.group_id
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+        var bindIndex: Int32 = 1
+        for (groupId, entityId) in pairs {
+            bindText(groupId, to: stmt, index: bindIndex)
+            bindIndex += 1
+            bindText(entityId, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        var counts: [String: Int] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            counts[columnText(stmt, 0) ?? ""] = Int(sqlite3_column_int(stmt, 1))
+        }
+        return counts
     }
 
     @discardableResult

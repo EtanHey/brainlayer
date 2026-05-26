@@ -461,6 +461,33 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertEqual(page.rows.map(\.chunkID), ["alias-only"])
     }
 
+    func testCanonicalEntityDoesNotMergeIntoAnotherEntityUniqueAlias() throws {
+        try db.insertEntity(id: "person-alex", type: "person", name: "Alex")
+        try db.insertEntity(id: "person-alexander", type: "person", name: "Alexander")
+        try insertAlias(alias: "Alex", entityId: "person-alexander")
+        try insertLinkedChunk(
+            id: "alex-canonical",
+            entityId: "person-alex",
+            content: "Real Alex canonical chunk",
+            sourceFile: "/tmp/alex.md",
+            createdAt: "2026-05-24T12:00:00Z",
+            relevance: 0.9
+        )
+        try insertLinkedChunk(
+            id: "alexander-canonical",
+            entityId: "person-alexander",
+            content: "Alexander canonical chunk",
+            sourceFile: "/tmp/alexander.md",
+            createdAt: "2026-05-24T12:01:00Z",
+            relevance: 0.8
+        )
+
+        let page = try db.fetchEntityChunksPage(entityId: "person-alex", after: nil, limit: 10)
+
+        XCTAssertEqual(try db.fetchEntityChunkCount(entityId: "person-alex"), 1)
+        XCTAssertEqual(page.rows.map(\.chunkID), ["alex-canonical"])
+    }
+
     func testFetchEntitySourceFileCountReturnsDistinctFiles() throws {
         try db.insertEntity(id: "e1", type: "person", name: "Alice")
         for i in 0..<5 {
