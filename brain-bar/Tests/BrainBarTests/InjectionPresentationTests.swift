@@ -228,13 +228,47 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(initialSnapshot.bursts[0].id, updatedSnapshot.bursts[0].id)
     }
 
+    func testPreviewChunksDeduplicatesRepeatedChunkIDsAcrossBurstEvents() {
+        let events = [
+            makeEvent(
+                id: 1,
+                sessionID: "sess-a",
+                timestamp: "2026-04-18T09:58:00Z",
+                query: "auth refactor",
+                chunkIDs: ["shared", "unique-a"],
+                tokenCount: 10,
+                chunks: [
+                    makeChunk(id: "shared", content: "Shared hit"),
+                    makeChunk(id: "unique-a", content: "Unique hit A")
+                ]
+            ),
+            makeEvent(
+                id: 2,
+                sessionID: "sess-a",
+                timestamp: "2026-04-18T09:57:00Z",
+                query: "auth refactor",
+                chunkIDs: ["shared", "unique-b"],
+                tokenCount: 10,
+                chunks: [
+                    makeChunk(id: "shared", content: "Shared hit again"),
+                    makeChunk(id: "unique-b", content: "Unique hit B")
+                ]
+            )
+        ]
+
+        let preview = InjectionPresentation.previewChunks(for: events, limit: 3)
+
+        XCTAssertEqual(preview.map(\.id), ["shared", "unique-a", "unique-b"])
+    }
+
     private func makeEvent(
         id: Int64,
         sessionID: String,
         timestamp: String,
         query: String,
         chunkIDs: [String],
-        tokenCount: Int
+        tokenCount: Int,
+        chunks: [InjectionChunk] = []
     ) -> InjectionEvent {
         InjectionEvent(
             id: id,
@@ -242,7 +276,20 @@ final class InjectionPresentationTests: XCTestCase {
             timestamp: timestamp,
             query: query,
             chunkIDs: chunkIDs,
-            tokenCount: tokenCount
+            tokenCount: tokenCount,
+            chunks: chunks
+        )
+    }
+
+    private func makeChunk(id: String, content: String) -> InjectionChunk {
+        InjectionChunk(
+            id: id,
+            content: content,
+            summary: "",
+            source: "mcp",
+            sourceFile: "",
+            tags: [],
+            contentType: "memory"
         )
     }
 
