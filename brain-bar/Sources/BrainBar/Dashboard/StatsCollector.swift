@@ -29,21 +29,29 @@ final class StatsCollector: ObservableObject {
     private let database: BrainDatabase
     private let daemonMonitor: DaemonHealthMonitor
     private let agentActivityMonitor: AgentActivityMonitor
+    private let agentActivitySampleInterval: TimeInterval
+    private let statsRefreshCoalesceInterval: TimeInterval
     private let brainBusEvents: BrainBusEventSource?
     private var brainBusTask: Task<Void, Never>?
     private var isRunning = false
+    private var lastAgentActivitySampleAt: Date?
+    private var lastNonForcedStatsRefreshAt: Date?
     private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
 
     init(
         dbPath: String,
         daemonMonitor: DaemonHealthMonitor,
         agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
+        agentActivitySampleInterval: TimeInterval = 5,
+        statsRefreshCoalesceInterval: TimeInterval = 5,
         brainBusEvents: BrainBusEventSource? = nil,
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.database = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
         self.daemonMonitor = daemonMonitor
         self.agentActivityMonitor = agentActivityMonitor
+        self.agentActivitySampleInterval = agentActivitySampleInterval
+        self.statsRefreshCoalesceInterval = statsRefreshCoalesceInterval
         self.brainBusEvents = brainBusEvents
         self.stats = DashboardStats(
             chunkCount: 0,
@@ -91,11 +99,17 @@ final class StatsCollector: ObservableObject {
 
     func refresh(force: Bool = false) {
         let nextDaemon = daemonMonitor.sample()
-        agentActivity = agentActivityMonitor.sample()
+        let snapshotTime = Date()
+        refreshAgentActivity(force: force, now: snapshotTime)
+
+        if !force, shouldCoalesceStatsRefresh(now: snapshotTime) {
+            daemon = nextDaemon
+            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            return
+        }
 
         do {
             database.reopenIfNeeded()
-            let snapshotTime = Date()
             let nextStats = try database.dashboardStats(
                 activityWindowMinutes: Self.defaultActivityWindowMinutes,
                 bucketCount: Self.defaultBucketCount
@@ -104,6 +118,9 @@ final class StatsCollector: ObservableObject {
             stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
             daemon = nextDaemon
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            if !force {
+                lastNonForcedStatsRefreshAt = snapshotTime
+            }
         } catch {
             daemon = nextDaemon
             if force {
@@ -121,6 +138,9 @@ final class StatsCollector: ObservableObject {
                 )
             }
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            if !force {
+                lastNonForcedStatsRefreshAt = snapshotTime
+            }
         }
     }
 
@@ -139,6 +159,19 @@ final class StatsCollector: ObservableObject {
         return Double(drained)
     }
 
+    private func shouldCoalesceStatsRefresh(now: Date) -> Bool {
+        guard let lastNonForcedStatsRefreshAt else { return false }
+        return now.timeIntervalSince(lastNonForcedStatsRefreshAt) < statsRefreshCoalesceInterval
+    }
+
+    private func refreshAgentActivity(force: Bool, now: Date) {
+        if !force, let lastAgentActivitySampleAt, now.timeIntervalSince(lastAgentActivitySampleAt) < agentActivitySampleInterval {
+            return
+        }
+        agentActivity = agentActivityMonitor.sample()
+        lastAgentActivitySampleAt = now
+    }
+
     fileprivate func handleDatabaseMutationNotification() {
         refresh(force: false)
     }
@@ -147,7 +180,7 @@ final class StatsCollector: ObservableObject {
         switch event.type {
         case .healthTick:
             daemon = daemonMonitor.sample()
-            agentActivity = agentActivityMonitor.sample()
+            refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
             refresh(force: false)
