@@ -1,7 +1,7 @@
 import sqlite3
 
 import pytest
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from brainlayer.brainbar_hybrid_helper import HybridSearchHelper
 
@@ -109,10 +109,28 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
             "tag": "speakers-workshop",
             "importance_min": 8,
             "num_results": 3,
+            "max_results": 10,
             "detail": "compact",
             "allow_helper_route": False,
         }
     ]
+
+
+def test_helper_preserves_brain_search_mcp_error(monkeypatch, tmp_path):
+    async def fake_brain_search(**_kwargs):
+        return CallToolResult(content=[TextContent(type="text", text="Invalid detail='verbose'")], isError=True)
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search", fake_brain_search)
+
+    helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
+    response = helper._handle_request({"method": "brain_search", "arguments": {"query": "x"}})
+
+    assert response == {
+        "ok": True,
+        "text": "Invalid detail='verbose'",
+        "metadata": {},
+        "isError": True,
+    }
 
 
 def test_content_text_extracts_single_dict_text():
