@@ -34,6 +34,22 @@ final class InjectionEventTests: XCTestCase {
         XCTAssertEqual(event.tokenCount, 64)
     }
 
+    func testMalformedChunkIDsJSONFallsBackToEmptyArray() throws {
+        let event = try InjectionEvent(
+            row: [
+                "id": 8,
+                "session_id": "sess-3",
+                "timestamp": "2026-03-31T04:50:00.000Z",
+                "query": "brainbar malformed chunk ids",
+                "chunk_ids": "[\"chunk-a\"",
+                "token_count": 32
+            ]
+        )
+
+        XCTAssertEqual(event.chunkIDs, [])
+        XCTAssertEqual(event.tokenCount, 32)
+    }
+
     func testDisplayTitleUsesChunkSummaryBeforeSourcePrompt() {
         let event = InjectionEvent(
             id: 12,

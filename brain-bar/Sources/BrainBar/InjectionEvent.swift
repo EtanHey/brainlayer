@@ -300,7 +300,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
             self.chunkIDs = rawChunkIDs
         } else if let text = row["chunk_ids"] as? String,
                   let data = text.data(using: .utf8),
-                  let decoded = try JSONSerialization.jsonObject(with: data) as? [String] {
+                  let decoded = try? JSONSerialization.jsonObject(with: data) as? [String] {
             self.chunkIDs = decoded
         } else {
             self.chunkIDs = []
