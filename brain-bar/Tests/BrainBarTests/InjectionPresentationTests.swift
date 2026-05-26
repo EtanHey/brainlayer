@@ -80,10 +80,33 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts.count, 1)
         XCTAssertEqual(snapshot.bursts[0].sessionID, "brain-c7a8")
         XCTAssertEqual(snapshot.bursts[0].topicOrSource, "auth refactor")
-        XCTAssertEqual(snapshot.bursts[0].summaryTitle, "5 chunks injected from \"auth refactor\"")
+        XCTAssertEqual(snapshot.bursts[0].summaryTitle, "5 chunks injected")
         XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2, 3, 4, 5])
         XCTAssertEqual(snapshot.bursts[0].chunkPreviewIDs, ["chunk-1", "chunk-2"])
         XCTAssertEqual(snapshot.bursts[0].remainingChunkCount(after: 2), 3)
+    }
+
+    func testBurstSummaryTitleUsesChunkContentInsteadOfSourcePrompt() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let event = makeEvent(
+            id: 1,
+            sessionID: "sess-a",
+            timestamp: "2026-04-18T09:58:00Z",
+            query: "[orc gen-7 s:1 — researchLead monitor v2 — prompts-deliverable workflow]",
+            chunkIDs: ["chunk-1"],
+            tokenCount: 10,
+            chunks: [
+                makeChunk(id: "chunk-1", content: "Coverage moved to terminal-status semantics after the dashboard fix")
+            ]
+        )
+
+        let snapshot = InjectionPresentation.snapshot(events: [event], filterText: "", now: now)
+
+        XCTAssertEqual(
+            snapshot.bursts[0].summaryTitle,
+            "Coverage moved to terminal-status semantics after the dashboard fix"
+        )
+        XCTAssertEqual(snapshot.bursts[0].topicOrSource, event.query)
     }
 
     func testBurstAggregationSplitsDifferentSessions() {
