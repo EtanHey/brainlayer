@@ -87,6 +87,22 @@ final class KGAtlasPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.visibleEdges.last?.targetId, "leaf-12")
     }
 
+    func testSnapshotKeepsSelectedNodeIncidentEdgeInsideLinkCap() {
+        let graph = makeHubGraph(edgeCount: 60)
+
+        let snapshot = KGAtlasPresentation.snapshot(
+            nodes: graph.nodes,
+            edges: graph.edges,
+            selectedNodeId: "leaf-60",
+            minimumImportance: 0
+        )
+
+        XCTAssertEqual(snapshot.visibleEdges.count, 50)
+        XCTAssertTrue(snapshot.visibleEdges.contains { edge in
+            edge.sourceId == "hub" && edge.targetId == "leaf-60"
+        })
+    }
+
     private func makeHubGraph(edgeCount: Int) -> (nodes: [KGNode], edges: [KGEdge]) {
         let hub = KGNode(
             id: "hub",

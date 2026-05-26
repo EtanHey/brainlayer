@@ -30,7 +30,8 @@ struct KGAtlasPresentation {
         let visibleIDs = Set(visibleNodes.map(\.id))
         let visibleEdges = virtualizedVisibleEdges(
             from: edges.filter { visibleIDs.contains($0.sourceId) && visibleIDs.contains($0.targetId) },
-            maxLinksPerNode: maxLinksPerNode(from: userDefaults)
+            maxLinksPerNode: maxLinksPerNode(from: userDefaults),
+            selectedNodeId: selectedNodeId
         )
 
         let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
@@ -95,12 +96,14 @@ struct KGAtlasPresentation {
 
     private static func virtualizedVisibleEdges(
         from edges: [KGEdge],
-        maxLinksPerNode: Int
+        maxLinksPerNode: Int,
+        selectedNodeId: String?
     ) -> [KGEdge] {
         var linkCountsByNode: [String: Int] = [:]
         var visibleEdges: [KGEdge] = []
+        let orderedEdges = prioritizedEdges(edges, selectedNodeId: selectedNodeId)
 
-        for edge in edges {
+        for edge in orderedEdges {
             let sourceCount = linkCountsByNode[edge.sourceId, default: 0]
             let targetCount = linkCountsByNode[edge.targetId, default: 0]
             guard sourceCount < maxLinksPerNode, targetCount < maxLinksPerNode else {
@@ -113,5 +116,12 @@ struct KGAtlasPresentation {
         }
 
         return visibleEdges
+    }
+
+    private static func prioritizedEdges(_ edges: [KGEdge], selectedNodeId: String?) -> [KGEdge] {
+        guard let selectedNodeId else { return edges }
+        let incidentEdges = edges.filter { $0.sourceId == selectedNodeId || $0.targetId == selectedNodeId }
+        let remainingEdges = edges.filter { $0.sourceId != selectedNodeId && $0.targetId != selectedNodeId }
+        return incidentEdges + remainingEdges
     }
 }

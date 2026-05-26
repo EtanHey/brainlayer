@@ -496,6 +496,46 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
     }
 
+    @MainActor
+    func testStatsCollectorRetriesAfterFailedNonForcedRefresh() throws {
+        let brokenPath = NSTemporaryDirectory() + "brainbar-dashboard-broken-\(UUID().uuidString).db"
+        try FileManager.default.createDirectory(
+            atPath: brokenPath,
+            withIntermediateDirectories: false
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: brokenPath)
+            try? FileManager.default.removeItem(atPath: brokenPath + "-wal")
+            try? FileManager.default.removeItem(atPath: brokenPath + "-shm")
+        }
+
+        let collector = StatsCollector(
+            dbPath: brokenPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: false)
+        XCTAssertEqual(collector.stats.chunkCount, 0)
+
+        try FileManager.default.removeItem(atPath: brokenPath)
+        let repairedDB = BrainDatabase(path: brokenPath)
+        try repairedDB.insertChunk(
+            id: "recovered-dashboard",
+            content: "Recovered dashboard refresh",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        repairedDB.close()
+
+        collector.refresh(force: false)
+
+        XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
     func test_DaemonHealthMonitor_returns_non_nil_when_PID_provided() throws {
         let monitor = DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
 
