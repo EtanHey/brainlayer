@@ -33,6 +33,7 @@ final class StatsCollector: ObservableObject {
     private let statsRefreshCoalesceInterval: TimeInterval
     private let brainBusEvents: BrainBusEventSource?
     private var brainBusTask: Task<Void, Never>?
+    private var pendingStatsRefreshTask: Task<Void, Never>?
     private var isRunning = false
     private var lastAgentActivitySampleAt: Date?
     private var lastNonForcedStatsRefreshAt: Date?
@@ -91,6 +92,8 @@ final class StatsCollector: ObservableObject {
     func stop() {
         brainBusTask?.cancel()
         brainBusTask = nil
+        pendingStatsRefreshTask?.cancel()
+        pendingStatsRefreshTask = nil
         if isRunning {
             removeDarwinObserver()
         }
@@ -104,11 +107,15 @@ final class StatsCollector: ObservableObject {
         let snapshotTime = Date()
         refreshAgentActivity(force: force, now: snapshotTime)
 
-        if !force, shouldCoalesceStatsRefresh(now: snapshotTime) {
+        if !force, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
             daemon = nextDaemon
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            schedulePendingStatsRefresh(after: coalescedDelay)
             return
         }
+
+        pendingStatsRefreshTask?.cancel()
+        pendingStatsRefreshTask = nil
 
         do {
             database.reopenIfNeeded()
@@ -158,9 +165,29 @@ final class StatsCollector: ObservableObject {
         return Double(drained)
     }
 
-    private func shouldCoalesceStatsRefresh(now: Date) -> Bool {
-        guard let lastNonForcedStatsRefreshAt else { return false }
-        return now.timeIntervalSince(lastNonForcedStatsRefreshAt) < statsRefreshCoalesceInterval
+    private func coalescedStatsRefreshDelay(now: Date) -> TimeInterval? {
+        guard let lastNonForcedStatsRefreshAt else { return nil }
+        let elapsed = now.timeIntervalSince(lastNonForcedStatsRefreshAt)
+        guard elapsed < statsRefreshCoalesceInterval else { return nil }
+        return statsRefreshCoalesceInterval - elapsed
+    }
+
+    private func schedulePendingStatsRefresh(after delay: TimeInterval) {
+        guard pendingStatsRefreshTask == nil else { return }
+
+        pendingStatsRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.pendingStatsRefreshTask = nil
+                self.refresh(force: false)
+            }
+        }
     }
 
     private func refreshAgentActivity(force: Bool, now: Date) {

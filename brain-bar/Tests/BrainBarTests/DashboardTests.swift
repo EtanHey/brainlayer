@@ -466,7 +466,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorCoalescesRapidMutationStatsRefreshes() throws {
+    func testStatsCollectorCoalescesRapidMutationStatsRefreshes() async throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-coalesce-\(UUID().uuidString).jsonl")
         let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
@@ -479,7 +479,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            statsRefreshCoalesceInterval: 60
+            statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
 
@@ -494,6 +494,9 @@ final class DashboardTests: XCTestCase {
         collector.refresh(force: false)
 
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
+
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
     }
 
     @MainActor
