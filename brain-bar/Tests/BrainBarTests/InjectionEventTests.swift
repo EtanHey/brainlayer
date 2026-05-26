@@ -211,4 +211,29 @@ final class InjectionEventTests: XCTestCase {
         XCTAssertEqual(event.openingModalTitle(forChunkID: "missing-first"), "Conversation")
         XCTAssertEqual(event.openingModalTitle(forChunkID: "loaded-second"), "Video Knowledge")
     }
+
+    func testCardPrimaryContentDoesNotBorrowSecondChunkWhenLeadMetadataIsMissing() {
+        let event = InjectionEvent(
+            id: 6,
+            sessionID: "s6",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "lead chunk metadata missing",
+            chunkIDs: ["missing-first", "loaded-second"],
+            tokenCount: 10,
+            chunks: [
+                InjectionChunk(
+                    id: "loaded-second",
+                    content: "Second chunk content",
+                    summary: "Second chunk summary",
+                    source: "youtube",
+                    sourceFile: "",
+                    tags: [],
+                    contentType: "media"
+                )
+            ]
+        )
+
+        XCTAssertEqual(event.primaryKind, .other)
+        XCTAssertEqual(event.displayTitle, "lead chunk metadata missing")
+    }
 }
