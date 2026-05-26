@@ -977,6 +977,22 @@ final class DatabaseTests: XCTestCase {
         XCTAssertGreaterThan(total, 0)
     }
 
+    func testRecallStatsCoverageCountsAnyTerminalStatusAsEnriched() throws {
+        try db.insertChunk(id: "rc-success", content: "Recall stats success", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "rc-duplicate", content: "Recall stats duplicate", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "rc-noise", content: "Recall stats noise", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "rc-pending", content: "Recall stats pending", sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        db.exec("UPDATE chunks SET enrich_status = 'success' WHERE id = 'rc-success'")
+        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'rc-duplicate'")
+        db.exec("UPDATE chunks SET enrich_status = 'noise' WHERE id = 'rc-noise'")
+
+        let stats = try db.recallStats()
+
+        XCTAssertEqual(stats["total_chunks"] as? Int, 4)
+        XCTAssertEqual(stats["enriched_chunks"] as? Int, 3)
+        XCTAssertEqual(stats["enrichment_pct"] as? Double, 75.0)
+    }
+
     // MARK: - brain_digest (rule-based entity extraction)
 
     func testDigestExtractsEntities() throws {
