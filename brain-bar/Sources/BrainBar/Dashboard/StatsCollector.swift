@@ -32,7 +32,7 @@ final class StatsCollector: ObservableObject {
     private let brainBusEvents: BrainBusEventSource?
     private var brainBusTask: Task<Void, Never>?
     private var isRunning = false
-    private var lastDataVersion: Int?
+    private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
 
     init(
         dbPath: String,
@@ -95,14 +95,13 @@ final class StatsCollector: ObservableObject {
 
         do {
             database.reopenIfNeeded()
-            let currentDataVersion = try database.dataVersion()
-            if force || currentDataVersion != lastDataVersion {
-                stats = try database.dashboardStats(
-                    activityWindowMinutes: Self.defaultActivityWindowMinutes,
-                    bucketCount: Self.defaultBucketCount
-                )
-                lastDataVersion = currentDataVersion
-            }
+            let snapshotTime = Date()
+            let nextStats = try database.dashboardStats(
+                activityWindowMinutes: Self.defaultActivityWindowMinutes,
+                bucketCount: Self.defaultBucketCount
+            )
+            let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreQueueDepth, now: snapshotTime)
+            stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
             daemon = nextDaemon
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
         } catch {
@@ -123,6 +122,21 @@ final class StatsCollector: ObservableObject {
             }
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
         }
+    }
+
+    private func recordPendingStoreQueueDepth(_ depth: Int, now: Date) -> Double {
+        pendingStoreQueueDepthSamples.append((date: now, depth: depth))
+        let windowStart = now.addingTimeInterval(-60)
+        pendingStoreQueueDepthSamples.removeAll { $0.date < windowStart }
+
+        guard pendingStoreQueueDepthSamples.count > 1 else { return 0 }
+
+        let drained = zip(pendingStoreQueueDepthSamples, pendingStoreQueueDepthSamples.dropFirst())
+            .reduce(0) { total, pair in
+                let decrease = max(0, pair.0.depth - pair.1.depth)
+                return total + decrease
+            }
+        return Double(drained)
     }
 
     fileprivate func handleDatabaseMutationNotification() {

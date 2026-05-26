@@ -81,6 +81,9 @@ final class BrainDatabase: @unchecked Sendable {
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
         let trigramIndexedChunkCount: Int
+        let pendingStoreQueueDepth: Int
+        let pendingStoreOldestQueuedAt: Date?
+        let pendingStoreFlushRatePerMinute: Double
 
         init(
             chunkCount: Int,
@@ -96,7 +99,10 @@ final class BrainDatabase: @unchecked Sendable {
             liveWindowMinutes: Int = 1,
             lastWriteAt: Date? = nil,
             lastEnrichedAt: Date? = nil,
-            trigramIndexedChunkCount: Int = 0
+            trigramIndexedChunkCount: Int = 0,
+            pendingStoreQueueDepth: Int = 0,
+            pendingStoreOldestQueuedAt: Date? = nil,
+            pendingStoreFlushRatePerMinute: Double = 0
         ) {
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
@@ -112,6 +118,9 @@ final class BrainDatabase: @unchecked Sendable {
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
+            self.pendingStoreQueueDepth = pendingStoreQueueDepth
+            self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
+            self.pendingStoreFlushRatePerMinute = pendingStoreFlushRatePerMinute
         }
 
         var recentWriteCount: Int {
@@ -145,6 +154,33 @@ final class BrainDatabase: @unchecked Sendable {
             guard chunkCount > 0 else { return 100 }
             return (Double(trigramIndexedChunkCount) / Double(chunkCount)) * 100
         }
+
+        func withPendingStoreFlushRate(_ rate: Double) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: recentActivityBuckets,
+                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                trigramIndexedChunkCount: trigramIndexedChunkCount,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: rate
+            )
+        }
+    }
+
+    struct PendingStoreQueueSnapshot: Sendable, Equatable {
+        let depth: Int
+        let oldestQueuedAt: Date?
     }
 
     struct SubscriberRecord: Sendable {
@@ -1343,6 +1379,7 @@ final class BrainDatabase: @unchecked Sendable {
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: bucketCount
         )
+        let pendingStoreQueue = pendingStoreQueueSnapshot()
 
         return DashboardStats(
             chunkCount: chunkCount,
@@ -1358,7 +1395,9 @@ final class BrainDatabase: @unchecked Sendable {
             liveWindowMinutes: liveWindowMinutes,
             lastWriteAt: lastEvents.lastWriteAt,
             lastEnrichedAt: lastEvents.lastEnrichedAt,
-            trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0
+            trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0,
+            pendingStoreQueueDepth: pendingStoreQueue.depth,
+            pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt
         )
     }
 
@@ -2705,6 +2744,40 @@ final class BrainDatabase: @unchecked Sendable {
         try? Data(contentsOf: path)
     }
 
+    func pendingStoreQueueSnapshot() -> PendingStoreQueueSnapshot {
+        let path = pendingStorePath()
+        Self.pendingStoreFileLock.lock()
+        defer { Self.pendingStoreFileLock.unlock() }
+
+        do {
+            return try Self.withPendingStoreProcessLock(for: path) {
+                guard FileManager.default.fileExists(atPath: path.path),
+                      let data = readPendingStoreData(at: path) else {
+                    return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+                }
+
+                let lines = Self.pendingStoreLines(from: data)
+                guard !lines.isEmpty else {
+                    return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+                }
+
+                let decoder = JSONDecoder()
+                let oldest = lines.compactMap { line -> Date? in
+                    guard let item = try? decoder.decode(PendingStoreItem.self, from: line),
+                          let queuedAt = item.queuedAt else {
+                        return nil
+                    }
+                    return Self.parsePendingStoreQueuedAt(queuedAt)
+                }.min()
+
+                return PendingStoreQueueSnapshot(depth: lines.count, oldestQueuedAt: oldest)
+            }
+        } catch {
+            NSLog("[BrainBar] Failed to inspect pending stores queue: %@", String(describing: error))
+            return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
+        }
+    }
+
     private static func pendingStoreLines(from data: Data) -> [Data] {
         var lines: [Data] = []
         var start = data.startIndex
@@ -2729,6 +2802,22 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return lines
+    }
+
+    private static func parsePendingStoreQueuedAt(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let date = ISO8601DateFormatter().date(from: trimmed) {
+            return date
+        }
+        if let epoch = TimeInterval(trimmed) {
+            return Date(timeIntervalSince1970: epoch)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: trimmed)
     }
 
     private static func pendingStoreMaxLines() -> Int {

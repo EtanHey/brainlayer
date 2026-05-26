@@ -173,6 +173,78 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.enrichment.lastEventText, "2m ago")
     }
 
+    func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            pendingStoreQueueDepth: 6,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-2),
+            pendingStoreFlushRatePerMinute: 60
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+
+        XCTAssertEqual(summary.queue.storeHealth, .activeDraining)
+        XCTAssertEqual(summary.queue.storeHealthText, "active draining")
+        XCTAssertEqual(summary.queue.storeDepthText, "6 queued")
+        XCTAssertEqual(summary.queue.storeOldestAgeText, "oldest 2s")
+        XCTAssertEqual(summary.queue.storeFlushRateText, "60/min")
+        XCTAssertEqual(summary.queue.title, "Queue active draining")
+    }
+
+    func testDashboardQueueSummaryEscalatesToBacklogAccumulatingByDepthOrAge() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            pendingStoreQueueDepth: 50,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-12),
+            pendingStoreFlushRatePerMinute: 5
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+
+        XCTAssertEqual(summary.queue.storeHealth, .backlogAccumulating)
+        XCTAssertEqual(summary.queue.storeHealthText, "backlog accumulating")
+        XCTAssertEqual(summary.queue.title, "Queue backlog accumulating")
+    }
+
+    func testDashboardQueueSummaryEscalatesToWriterStuckByDepthOrAge() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            pendingStoreQueueDepth: 7,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-300),
+            pendingStoreFlushRatePerMinute: 0
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+
+        XCTAssertEqual(summary.queue.storeHealth, .writerStuck)
+        XCTAssertEqual(summary.queue.storeHealthText, "writer stuck - investigate")
+        XCTAssertEqual(summary.queue.title, "Queue writer stuck - investigate")
+    }
+
     func testIncomingRelationDisplayPutsEntityNameBeforeRelationVerb() {
         let relation = EntityCard.Relation(
             relationType: "coaches",
