@@ -65,8 +65,7 @@ struct InjectionFeedView: View {
     @StateObject private var presentationModel = InjectionFeedPresentationModel()
     @State private var expandedEventIDs: Set<Int64> = []
     @State private var expandedBurstIDs: Set<String> = []
-    @State private var selectedConversation: BrainDatabase.ExpandedConversation?
-    @State private var selectedConversationTitle = "Conversation"
+    @State private var conversationSelection = InjectionConversationSelection()
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
 
     private let accentPalette: [Color] = [
@@ -107,11 +106,11 @@ struct InjectionFeedView: View {
             .background(pageBackground)
         }
         .overlay {
-            if let conversation = selectedConversation {
+            if let conversation = conversationSelection.conversation {
                 ChunkConversationOverlay(
                     conversation: conversation,
-                    title: selectedConversationTitle,
-                    onClose: { selectedConversation = nil }
+                    title: conversationSelection.title,
+                    onClose: { conversationSelection.close() }
                 )
             }
         }
@@ -417,8 +416,12 @@ struct InjectionFeedView: View {
 
                 Button {
                     if let firstChunk = event.chunkIDs.first {
-                        selectedConversationTitle = event.openingModalTitle(forChunkID: firstChunk)
-                        selectedConversation = try? store.expandedConversation(chunkID: firstChunk)
+                        if let conversation = try? store.expandedConversation(chunkID: firstChunk) {
+                            conversationSelection.open(
+                                conversation,
+                                title: event.openingModalTitle(forChunkID: firstChunk)
+                            )
+                        }
                     }
                 } label: {
                     Text("Open")
@@ -475,8 +478,12 @@ struct InjectionFeedView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(event.chunkIDs, id: \.self) { chunkID in
                 Button {
-                    selectedConversationTitle = chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
-                    selectedConversation = try? store.expandedConversation(chunkID: chunkID)
+                    if let conversation = try? store.expandedConversation(chunkID: chunkID) {
+                        conversationSelection.open(
+                            conversation,
+                            title: chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
+                        )
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         Circle()
@@ -744,6 +751,23 @@ struct InjectionFeedView: View {
             return "Retrieved chunk \(chunkID)"
         }
         return "\(chunk.kind.label) · \(chunk.id) · \(chunk.displayText)"
+    }
+}
+
+struct InjectionConversationSelection: Equatable {
+    static let defaultTitle = "Conversation"
+
+    var conversation: BrainDatabase.ExpandedConversation?
+    var title = defaultTitle
+
+    mutating func open(_ conversation: BrainDatabase.ExpandedConversation, title: String) {
+        self.conversation = conversation
+        self.title = title
+    }
+
+    mutating func close() {
+        conversation = nil
+        title = Self.defaultTitle
     }
 }
 
