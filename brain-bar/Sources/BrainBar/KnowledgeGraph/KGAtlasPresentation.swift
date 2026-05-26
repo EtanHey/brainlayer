@@ -27,13 +27,6 @@ struct KGAtlasPresentation {
             node.importance >= minimumImportance || node.id == selectedNodeId
         }
 
-        let visibleIDs = Set(visibleNodes.map(\.id))
-        let visibleEdges = virtualizedVisibleEdges(
-            from: edges.filter { visibleIDs.contains($0.sourceId) && visibleIDs.contains($0.targetId) },
-            maxLinksPerNode: maxLinksPerNode(from: userDefaults),
-            selectedNodeId: selectedNodeId
-        )
-
         let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
         let regions: [Region] = orderedEntityTypes.compactMap { entityType in
             guard let values = grouped[entityType], !values.isEmpty else { return nil }
@@ -48,6 +41,13 @@ struct KGAtlasPresentation {
                 }
             )
         }
+        let renderableNodes = regions.flatMap { $0.nodes }
+        let renderableIDs = Set(renderableNodes.map(\.id))
+        let visibleEdges = virtualizedVisibleEdges(
+            from: edges.filter { renderableIDs.contains($0.sourceId) && renderableIDs.contains($0.targetId) },
+            maxLinksPerNode: maxLinksPerNode(from: userDefaults),
+            selectedNodeId: selectedNodeId
+        )
 
         let selectedRegion = regions.first { region in
             region.nodes.contains { $0.id == selectedNodeId }
@@ -55,7 +55,7 @@ struct KGAtlasPresentation {
 
         return Snapshot(
             regions: regions,
-            visibleNodes: regions.flatMap { $0.nodes },
+            visibleNodes: renderableNodes,
             visibleEdges: visibleEdges,
             selectedRegion: selectedRegion
         )

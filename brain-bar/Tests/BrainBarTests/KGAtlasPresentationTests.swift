@@ -117,6 +117,34 @@ final class KGAtlasPresentationTests: XCTestCase {
         })
     }
 
+    func testSnapshotCapsLinksAfterRemovingHiddenEntityTypes() {
+        testUserDefaults.set(2, forKey: maxLinksKey)
+        let nodes = [
+            KGNode(id: "hub", name: "Hub", entityType: "person", importance: 10, position: .zero),
+            KGNode(id: "hidden-1", name: "Hidden 1", entityType: "library", importance: 5, position: .zero),
+            KGNode(id: "hidden-2", name: "Hidden 2", entityType: "library", importance: 5, position: .zero),
+            KGNode(id: "project-1", name: "Project 1", entityType: "project", importance: 5, position: .zero),
+            KGNode(id: "project-2", name: "Project 2", entityType: "project", importance: 5, position: .zero),
+        ]
+        let edges = [
+            KGEdge(sourceId: "hub", targetId: "hidden-1", relationType: "uses"),
+            KGEdge(sourceId: "hub", targetId: "hidden-2", relationType: "uses"),
+            KGEdge(sourceId: "hub", targetId: "project-1", relationType: "owns"),
+            KGEdge(sourceId: "hub", targetId: "project-2", relationType: "owns"),
+        ]
+
+        let snapshot = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(snapshot.visibleNodes.map(\.id), ["hub", "project-1", "project-2"])
+        XCTAssertEqual(snapshot.visibleEdges.map(\.targetId), ["project-1", "project-2"])
+    }
+
     private func makeHubGraph(edgeCount: Int) -> (nodes: [KGNode], edges: [KGEdge]) {
         let hub = KGNode(
             id: "hub",
