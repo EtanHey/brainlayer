@@ -606,20 +606,24 @@ async def _brain_search(
         profile_query_id = search_profile.new_query_id()
     profile_started = search_profile.now()
     try:
-        if allow_helper_route and _helper_route_enabled() and _should_try_helper_route(
-            query,
-            file_path=file_path,
-            chunk_id=chunk_id,
-            content_type=content_type,
-            intent=intent,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment=sentiment,
-            entity_id=entity_id,
-            source_filter=source_filter,
-            correction_category=correction_category,
-            include_checkpoints=include_checkpoints,
-            include_audit=include_audit,
+        if (
+            allow_helper_route
+            and _helper_route_enabled()
+            and _should_try_helper_route(
+                query,
+                file_path=file_path,
+                chunk_id=chunk_id,
+                content_type=content_type,
+                intent=intent,
+                date_from=date_from,
+                date_to=date_to,
+                sentiment=sentiment,
+                entity_id=entity_id,
+                source_filter=source_filter,
+                correction_category=correction_category,
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+            )
         ):
             for sock_path in _warm_helper_socket_candidates():
                 helper_started = time.perf_counter()
