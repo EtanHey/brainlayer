@@ -88,6 +88,13 @@ final class InjectionEventTests: XCTestCase {
         XCTAssertEqual(InjectionKind.classify(source: "", sourceFile: "", tags: [], content: "[CHECKPOINT] merged PR").label, "Checkpoint")
     }
 
+    func testManualSourceClassifiesAsStoredMemory() {
+        let kind = InjectionKind.classify(source: "manual", sourceFile: "", tags: [], content: "")
+
+        XCTAssertEqual(kind, .storedMemory)
+        XCTAssertTrue(InjectionTypeFilter.stored.contains(kind))
+    }
+
     func testKindPaletteIndexUsesDeclarationOrder() {
         XCTAssertEqual(InjectionKind.memoryCheckpoint.paletteIndex, 0)
         XCTAssertEqual(InjectionKind.other.paletteIndex, InjectionKind.allCases.count - 1)

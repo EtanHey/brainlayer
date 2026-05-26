@@ -143,7 +143,7 @@ enum InjectionKind: String, CaseIterable, Equatable, Sendable {
         if normalizedSource == "realtime_watcher" || normalizedSource == "claude_code" {
             return .realtimeCapture
         }
-        if normalizedSource == "mcp" || normalizedSource == "brain_store" {
+        if normalizedSource == "mcp" || normalizedSource == "brain_store" || normalizedSource == "manual" {
             return .storedMemory
         }
         if normalizedSource == "digest" {
