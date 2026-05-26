@@ -3552,6 +3552,23 @@ final class BrainDatabase: @unchecked Sendable {
         let entityType: String
         let description: String?
         let importance: Double
+        let linkedChunkCount: Int
+
+        init(
+            id: String,
+            name: String,
+            entityType: String,
+            description: String?,
+            importance: Double,
+            linkedChunkCount: Int = 0
+        ) {
+            self.id = id
+            self.name = name
+            self.entityType = entityType
+            self.description = description
+            self.importance = importance
+            self.linkedChunkCount = linkedChunkCount
+        }
     }
 
     struct KGRelationRow: Equatable, Sendable {
@@ -3661,12 +3678,14 @@ final class BrainDatabase: @unchecked Sendable {
 
         var rows: [KGEntityRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = columnText(stmt, 0) ?? ""
             rows.append(KGEntityRow(
-                id: columnText(stmt, 0) ?? "",
+                id: id,
                 name: columnText(stmt, 1) ?? "",
                 entityType: columnText(stmt, 2) ?? "",
                 description: columnText(stmt, 3),
-                importance: sqlite3_column_double(stmt, 4)
+                importance: sqlite3_column_double(stmt, 4),
+                linkedChunkCount: try fetchEntityChunkCount(entityId: id)
             ))
         }
         return rows
@@ -3733,52 +3752,62 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func fetchEntityChunkCount(entityId: String) throws -> Int {
+        let entityIds = try entityAliasGroupIDs(entityId: entityId)
         let sql = """
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT ec.chunk_id)
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
-            WHERE ec.entity_id = ?
+            WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
         """
-        return try fetchCount(sql: sql, entityId: entityId)
+        return try fetchCount(sql: sql, entityIds: entityIds)
     }
 
     func fetchEntitySourceFileCount(entityId: String) throws -> Int {
         guard let db else { throw DBError.notOpen }
+        let entityIds = try entityAliasGroupIDs(entityId: entityId)
         let sql = """
             SELECT COUNT(DISTINCT c.source_file)
             FROM kg_entity_chunks ec
             JOIN chunks c ON c.id = ec.chunk_id
-            WHERE ec.entity_id = ?
+            WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
               AND NULLIF(c.source_file, '') IS NOT NULL
         """
-        return try fetchCount(sql: sql, entityId: entityId, db: db)
+        return try fetchCount(sql: sql, entityIds: entityIds, db: db)
     }
 
     func fetchEntityChunksPage(entityId: String, after: ChunkCursor?, limit: Int) throws -> ChunkPage {
         guard let db else { throw DBError.notOpen }
         let pageLimit = max(0, limit)
         guard pageLimit > 0 else { return ChunkPage(rows: [], nextCursor: nil) }
+        let entityIds = try entityAliasGroupIDs(entityId: entityId)
 
         let cursorPredicate: String
         if after == nil {
             cursorPredicate = ""
         } else {
             cursorPredicate = """
-                AND (
-                    ec.relevance < ?
-                    OR (ec.relevance = ? AND COALESCE(c.created_at, '') < ?)
-                    OR (ec.relevance = ? AND COALESCE(c.created_at, '') = ? AND c.id < ?)
+                WHERE (
+                    relevance < ?
+                    OR (relevance = ? AND created_at < ?)
+                    OR (relevance = ? AND created_at = ? AND chunk_id < ?)
                 )
             """
         }
         let sql = """
-            SELECT c.id, COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
-                   c.importance, ec.relevance, COALESCE(c.created_at, '') AS created_at
-            FROM kg_entity_chunks ec
-            JOIN chunks c ON c.id = ec.chunk_id
-            WHERE ec.entity_id = ?
+            SELECT chunk_id, snippet, importance, relevance, created_at
+            FROM (
+                SELECT c.id AS chunk_id,
+                       COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
+                       c.importance AS importance,
+                       MAX(ec.relevance) AS relevance,
+                       COALESCE(c.created_at, '') AS created_at
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON c.id = ec.chunk_id
+                WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
+                GROUP BY c.id
+            )
             \(cursorPredicate)
-            ORDER BY ec.relevance DESC, COALESCE(c.created_at, '') DESC, c.id DESC
+            ORDER BY relevance DESC, created_at DESC, chunk_id DESC
             LIMIT ?
         """
         var stmt: OpaquePointer?
@@ -3786,8 +3815,7 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        bindText(entityId, to: stmt, index: 1)
-        var bindIndex: Int32 = 2
+        var bindIndex = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
         if let after {
             sqlite3_bind_double(stmt, bindIndex, after.relevance)
             bindIndex += 1
@@ -3832,6 +3860,7 @@ final class BrainDatabase: @unchecked Sendable {
         guard let db else { throw DBError.notOpen }
         let pageLimit = max(0, limit)
         guard pageLimit > 0 else { return SourceFilePage(rows: [], nextCursor: nil) }
+        let entityIds = try entityAliasGroupIDs(entityId: entityId)
 
         let cursorPredicate: String
         if after == nil {
@@ -3849,11 +3878,11 @@ final class BrainDatabase: @unchecked Sendable {
             SELECT source_file, chunk_count, top_relevance
             FROM (
                 SELECT c.source_file AS source_file,
-                       COUNT(*) AS chunk_count,
+                       COUNT(DISTINCT c.id) AS chunk_count,
                        MAX(ec.relevance) AS top_relevance
                 FROM kg_entity_chunks ec
                 JOIN chunks c ON c.id = ec.chunk_id
-                WHERE ec.entity_id = ?
+                WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
                   AND NULLIF(c.source_file, '') IS NOT NULL
                 GROUP BY c.source_file
             )
@@ -3866,8 +3895,7 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        bindText(entityId, to: stmt, index: 1)
-        var bindIndex: Int32 = 2
+        var bindIndex = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
         if let after {
             sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
             bindIndex += 1
@@ -3920,18 +3948,106 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func fetchCount(sql: String, entityId: String, db providedDB: OpaquePointer? = nil) throws -> Int {
+        try fetchCount(sql: sql, entityIds: [entityId], db: providedDB)
+    }
+
+    private func fetchCount(sql: String, entityIds: [String], db providedDB: OpaquePointer? = nil) throws -> Int {
         guard let db = providedDB ?? self.db else { throw DBError.notOpen }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        bindText(entityId, to: stmt, index: 1)
+        _ = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
         let stepRC = sqlite3_step(stmt)
         guard stepRC == SQLITE_ROW else {
             throw DBError.step(stepRC)
         }
         return Int(sqlite3_column_int(stmt, 0))
+    }
+
+    private func entityAliasGroupIDs(entityId: String) throws -> [String] {
+        guard let db else { throw DBError.notOpen }
+        let entitySQL = "SELECT name, entity_type FROM kg_entities WHERE id = ?"
+        var entityStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, entitySQL, -1, &entityStmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(entityStmt) }
+        bindText(entityId, to: entityStmt, index: 1)
+        guard sqlite3_step(entityStmt) == SQLITE_ROW else {
+            return [entityId]
+        }
+        let selectedName = columnText(entityStmt, 0) ?? ""
+        let selectedType = columnText(entityStmt, 1) ?? ""
+
+        var orderedIds = [entityId]
+        var seen = Set(orderedIds)
+        func append(_ id: String) {
+            guard !id.isEmpty, !seen.contains(id) else { return }
+            seen.insert(id)
+            orderedIds.append(id)
+        }
+
+        let canonicalSQL = """
+            SELECT DISTINCT a.entity_id
+            FROM kg_entity_aliases a
+            JOIN kg_entities canonical ON canonical.id = a.entity_id
+            WHERE lower(a.alias) = lower(?)
+              AND canonical.entity_type = ?
+            ORDER BY a.entity_id
+        """
+        var canonicalStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, canonicalSQL, -1, &canonicalStmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(canonicalStmt) }
+        bindText(selectedName, to: canonicalStmt, index: 1)
+        bindText(selectedType, to: canonicalStmt, index: 2)
+        var canonicalMatches: [String] = []
+        while sqlite3_step(canonicalStmt) == SQLITE_ROW {
+            if let id = columnText(canonicalStmt, 0), !id.isEmpty {
+                canonicalMatches.append(id)
+            }
+        }
+        if canonicalMatches.count == 1 {
+            append(canonicalMatches[0])
+        }
+
+        let aliasEntitySQL = """
+            SELECT DISTINCT aliasEntity.id
+            FROM kg_entity_aliases a
+            JOIN kg_entities canonical ON canonical.id = a.entity_id
+            JOIN kg_entities aliasEntity ON lower(aliasEntity.name) = lower(a.alias)
+            WHERE a.entity_id IN (\(placeholders(count: orderedIds.count)))
+              AND aliasEntity.entity_type = canonical.entity_type
+            ORDER BY aliasEntity.id
+        """
+        var aliasStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, aliasEntitySQL, -1, &aliasStmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(aliasStmt) }
+        _ = bindEntityIDs(orderedIds, to: aliasStmt, startingAt: 1)
+        while sqlite3_step(aliasStmt) == SQLITE_ROW {
+            append(columnText(aliasStmt, 0) ?? "")
+        }
+
+        return orderedIds
+    }
+
+    private func placeholders(count: Int) -> String {
+        Array(repeating: "?", count: max(1, count)).joined(separator: ", ")
+    }
+
+    @discardableResult
+    private func bindEntityIDs(_ entityIds: [String], to stmt: OpaquePointer?, startingAt index: Int32) -> Int32 {
+        var bindIndex = index
+        for entityId in entityIds {
+            bindText(entityId, to: stmt, index: bindIndex)
+            bindIndex += 1
+        }
+        return bindIndex
     }
 
     func getChunk(id: String) throws -> [String: Any]? {

@@ -179,6 +179,7 @@ final class KGViewModel: ObservableObject {
                 name: row.name,
                 entityType: row.entityType,
                 importance: row.importance,
+                linkedChunkCount: row.linkedChunkCount,
                 position: existingNode?.position,
                 velocity: existingNode?.velocity ?? .zero
             )

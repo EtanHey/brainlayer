@@ -5,13 +5,17 @@ struct KGNode: Identifiable, Equatable, Sendable {
     let name: String
     let entityType: String
     let importance: Double
+    let linkedChunkCount: Int
 
     var position: CGPoint
     var velocity: CGVector
 
-    /// Radius scales with importance (min 8, max 28)
+    /// Radius scales with importance and linked evidence density.
     var radius: CGFloat {
-        CGFloat(8 + (importance / 10.0) * 20)
+        let clampedImportance = max(0, min(10, importance))
+        let importanceBoost = CGFloat((clampedImportance / 10.0) * 20)
+        let evidenceBoost = min(max(CGFloat(linkedChunkCount), 0) / 10.0, 8)
+        return 8 + importanceBoost + evidenceBoost
     }
 
     var color: Color {
@@ -33,6 +37,7 @@ struct KGNode: Identifiable, Equatable, Sendable {
         name: String,
         entityType: String,
         importance: Double,
+        linkedChunkCount: Int = 0,
         position: CGPoint? = nil,
         velocity: CGVector = .zero
     ) {
@@ -40,6 +45,7 @@ struct KGNode: Identifiable, Equatable, Sendable {
         self.name = name
         self.entityType = entityType
         self.importance = importance
+        self.linkedChunkCount = linkedChunkCount
         self.position = position ?? CGPoint(
             x: CGFloat.random(in: 100...500),
             y: CGFloat.random(in: 100...400)
