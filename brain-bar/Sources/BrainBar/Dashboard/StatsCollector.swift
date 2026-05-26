@@ -35,6 +35,7 @@ final class StatsCollector: ObservableObject {
     private var brainBusTask: Task<Void, Never>?
     private var pendingStatsRefreshTask: Task<Void, Never>?
     private var isRunning = false
+    private var isStopped = false
     private var lastAgentActivitySampleAt: Date?
     private var lastNonForcedStatsRefreshAt: Date?
     private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
@@ -73,6 +74,7 @@ final class StatsCollector: ObservableObject {
     func start() {
         guard !isRunning else { return }
         resetRefreshTimingState()
+        isStopped = false
         isRunning = true
         installDarwinObserver()
         refresh(force: true)
@@ -98,6 +100,7 @@ final class StatsCollector: ObservableObject {
             removeDarwinObserver()
         }
         isRunning = false
+        isStopped = true
         resetRefreshTimingState()
         database.close()
     }
@@ -185,7 +188,7 @@ final class StatsCollector: ObservableObject {
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
-                guard let self else { return }
+                guard let self, !self.isStopped else { return }
                 self.pendingStatsRefreshTask = nil
                 self.refresh(force: false)
             }
