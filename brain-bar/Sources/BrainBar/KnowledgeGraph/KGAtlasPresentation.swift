@@ -20,14 +20,18 @@ struct KGAtlasPresentation {
         nodes: [KGNode],
         edges: [KGEdge],
         selectedNodeId: String?,
-        minimumImportance: Double
+        minimumImportance: Double,
+        userDefaults: UserDefaults = .standard
     ) -> Snapshot {
         let visibleNodes = nodes.filter { node in
             node.importance >= minimumImportance || node.id == selectedNodeId
         }
 
         let visibleIDs = Set(visibleNodes.map(\.id))
-        let visibleEdges = edges.filter { visibleIDs.contains($0.sourceId) && visibleIDs.contains($0.targetId) }
+        let visibleEdges = virtualizedVisibleEdges(
+            from: edges.filter { visibleIDs.contains($0.sourceId) && visibleIDs.contains($0.targetId) },
+            maxLinksPerNode: maxLinksPerNode(from: userDefaults)
+        )
 
         let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
         let regions: [Region] = orderedEntityTypes.compactMap { entityType in
@@ -80,4 +84,34 @@ struct KGAtlasPresentation {
         "topic",
         "decision",
     ]
+
+    private static let maxLinksPerNodeKey = "brainBar.maxLinksPerNode"
+    private static let defaultMaxLinksPerNode = 50
+
+    private static func maxLinksPerNode(from userDefaults: UserDefaults) -> Int {
+        let configuredValue = userDefaults.integer(forKey: maxLinksPerNodeKey)
+        return configuredValue > 0 ? configuredValue : defaultMaxLinksPerNode
+    }
+
+    private static func virtualizedVisibleEdges(
+        from edges: [KGEdge],
+        maxLinksPerNode: Int
+    ) -> [KGEdge] {
+        var linkCountsByNode: [String: Int] = [:]
+        var visibleEdges: [KGEdge] = []
+
+        for edge in edges {
+            let sourceCount = linkCountsByNode[edge.sourceId, default: 0]
+            let targetCount = linkCountsByNode[edge.targetId, default: 0]
+            guard sourceCount < maxLinksPerNode, targetCount < maxLinksPerNode else {
+                continue
+            }
+
+            visibleEdges.append(edge)
+            linkCountsByNode[edge.sourceId] = sourceCount + 1
+            linkCountsByNode[edge.targetId] = targetCount + 1
+        }
+
+        return visibleEdges
+    }
 }
