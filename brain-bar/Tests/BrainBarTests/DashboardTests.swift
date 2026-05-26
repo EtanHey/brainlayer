@@ -138,9 +138,20 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.points.map(\.value), [0, 2, 5, 3])
         XCTAssertEqual(presentation.accessibilityLabel, "Recent activity sparkline")
         XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending down")
-        XCTAssertEqual(presentation.bucketLabel(for: 0), "20-15m ago")
+        XCTAssertEqual(presentation.bucketLabel(for: 0), "20m-15m ago")
         XCTAssertEqual(presentation.bucketLabel(for: 3), "last 5m")
-        XCTAssertEqual(presentation.tooltipText(for: presentation.points[2]), "10-5m ago: 5")
+        XCTAssertEqual(presentation.tooltipText(forBucket: 2), "10m-5m ago: 5")
+    }
+
+    func testSparklineChartPresentationLabelsPartialMinuteBucketsLikeDatabase() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: Array(repeating: 0, count: 12),
+            activityWindowMinutes: 31
+        )
+
+        XCTAssertEqual(presentation.bucketLabel(for: 0), "31m-28m 25s ago")
+        XCTAssertEqual(presentation.bucketLabel(for: 11), "last 2m 35s")
     }
 
     func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {

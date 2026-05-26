@@ -49,18 +49,35 @@ struct SparklineChartPresentation: Equatable, Sendable {
     func bucketLabel(for bucket: Int) -> String {
         guard !values.isEmpty else { return "no bucket" }
         let clampedBucket = min(max(bucket, 0), values.count - 1)
-        let bucketWidth = max(1, Int(ceil(Double(activityWindowMinutes) / Double(values.count))))
-        let newerMinutesAgo = max(values.count - 1 - clampedBucket, 0) * bucketWidth
-        let olderMinutesAgo = min(newerMinutesAgo + bucketWidth, activityWindowMinutes)
+        let totalSeconds = max(activityWindowMinutes * 60, 1)
+        let bucketWidthSeconds = max(1, Double(totalSeconds) / Double(values.count))
+        let bucketStart = Double(clampedBucket) * bucketWidthSeconds
+        let bucketEnd = min(Double(clampedBucket + 1) * bucketWidthSeconds, Double(totalSeconds))
+        let olderSecondsAgo = max(0, Int(round(Double(totalSeconds) - bucketStart)))
+        let newerSecondsAgo = max(0, Int(round(Double(totalSeconds) - bucketEnd)))
 
-        if newerMinutesAgo == 0 {
-            return "last \(olderMinutesAgo)m"
+        if newerSecondsAgo == 0 {
+            return "last \(Self.durationLabel(seconds: olderSecondsAgo))"
         }
-        return "\(olderMinutesAgo)-\(newerMinutesAgo)m ago"
+        return "\(Self.durationLabel(seconds: olderSecondsAgo))-\(Self.durationLabel(seconds: newerSecondsAgo)) ago"
     }
 
-    func tooltipText(for point: SparklineChartPoint) -> String {
-        "\(bucketLabel(for: point.bucket)): \(point.value)"
+    func tooltipText(forBucket bucket: Int) -> String {
+        let clampedBucket = min(max(bucket, 0), max(values.count - 1, 0))
+        let value = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
+        return "\(bucketLabel(for: clampedBucket)): \(value)"
+    }
+
+    private static func durationLabel(seconds: Int) -> String {
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        if remainingSeconds == 0 {
+            return "\(minutes)m"
+        }
+        if minutes == 0 {
+            return "\(remainingSeconds)s"
+        }
+        return "\(minutes)m \(remainingSeconds)s"
     }
 
     private var trendDescription: String {
@@ -86,7 +103,7 @@ struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
     let compact: Bool
-    @State private var hoveredPoint: SparklineChartPoint?
+    @State private var hoveredBucket: Int?
     @State private var hoverLocation: CGPoint?
 
     init(
@@ -136,22 +153,22 @@ struct SparklineChart: View {
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let location):
-                                hoveredPoint = nearestPoint(
+                                hoveredBucket = nearestBucket(
                                     to: location,
                                     plotFrame: plotFrame,
                                     chartProxy: chartProxy
                                 )
                                 hoverLocation = location
                             case .ended:
-                                hoveredPoint = nil
+                                hoveredBucket = nil
                                 hoverLocation = nil
                             }
                         }
 
-                    if let hoveredPoint,
+                    if let hoveredBucket,
                        let hoverLocation,
                        !compact {
-                        sparklineTooltip(for: hoveredPoint)
+                        sparklineTooltip(forBucket: hoveredBucket)
                             .position(tooltipPosition(near: hoverLocation, in: geometry.size))
                             .allowsHitTesting(false)
                     }
@@ -163,11 +180,11 @@ struct SparklineChart: View {
         .accessibilityValue(Text(presentation.accessibilityValue))
     }
 
-    private func nearestPoint(
+    private func nearestBucket(
         to location: CGPoint,
         plotFrame: CGRect,
         chartProxy: ChartProxy
-    ) -> SparklineChartPoint? {
+    ) -> Int? {
         guard !presentation.points.isEmpty,
               plotFrame.contains(location) else {
             return nil
@@ -177,8 +194,7 @@ struct SparklineChart: View {
         guard let bucket: Double = chartProxy.value(atX: plotX, as: Double.self) else {
             return nil
         }
-        let index = min(max(Int(bucket.rounded()), 0), presentation.points.count - 1)
-        return presentation.points[index]
+        return min(max(Int(bucket.rounded()), 0), presentation.points.count - 1)
     }
 
     private func tooltipPosition(near location: CGPoint, in size: CGSize) -> CGPoint {
@@ -188,8 +204,8 @@ struct SparklineChart: View {
     }
 
     @ViewBuilder
-    private func sparklineTooltip(for point: SparklineChartPoint) -> some View {
-        Text(presentation.tooltipText(for: point))
+    private func sparklineTooltip(forBucket bucket: Int) -> some View {
+        Text(presentation.tooltipText(forBucket: bucket))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
