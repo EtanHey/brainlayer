@@ -224,11 +224,11 @@ def store_memory(
                         """
                         INSERT INTO chunks
                         (id, content, metadata, source_file, project, content_type,
-                         value_type, char_count, source, created_at, enriched_at,
+                         value_type, char_count, source, created_at, enriched_at, enrich_status,
                          summary, tags, importance, chunk_origin, seen_count, last_seen_at,
                          dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
                          ingested_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                 CAST(strftime('%s', 'now') AS INTEGER))
                     """,
                         (
@@ -243,6 +243,7 @@ def store_memory(
                             "manual",
                             now,
                             now,
+                            "success",
                             content[:200],
                             tags_json,
                             float(importance) if importance is not None else None,

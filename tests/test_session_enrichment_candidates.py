@@ -57,6 +57,17 @@ def test_get_enrichment_candidates_skips_already_enriched_chunks(tmp_path):
     assert [row["id"] for row in results] == ["c1"]
 
 
+def test_get_enrichment_candidates_skips_terminal_status_chunks(tmp_path):
+    store = VectorStore(tmp_path / "test.db")
+    _insert_chunk(store, "pending", "p" * 80)
+    _insert_chunk(store, "duplicate", "d" * 80)
+    store.conn.cursor().execute("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'duplicate'")
+
+    results = store.get_enrichment_candidates(limit=10)
+
+    assert [row["id"] for row in results] == ["pending"]
+
+
 def test_get_enrichment_candidates_skips_short_chunks(tmp_path):
     store = VectorStore(tmp_path / "test.db")
     _insert_chunk(store, "short", "tiny")

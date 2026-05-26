@@ -53,7 +53,7 @@ class SessionMixin:
 
         cursor = self._read_cursor()
         effective_min = max(min_content_length, source_aware_min_chars(source))
-        where = ["enriched_at IS NULL", "char_count >= ?"]
+        where = ["enriched_at IS NULL", "enrich_status IS NULL", "char_count >= ?"]
         params: list[Any] = [effective_min]
 
         if since_hours is not None:
@@ -128,8 +128,8 @@ class SessionMixin:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
 
-        sets = ["enriched_at = ?"]
-        params: list = [datetime.now(timezone.utc).isoformat()]
+        sets = ["enriched_at = ?", "enrich_status = ?"]
+        params: list = [datetime.now(timezone.utc).isoformat(), "success"]
 
         if summary is not None:
             sets.append("summary = ?")
@@ -255,13 +255,13 @@ class SessionMixin:
         """Get enrichment progress statistics."""
         cursor = self._read_cursor()
         total = list(cursor.execute("SELECT COUNT(*) FROM chunks"))[0][0]
-        enriched = list(
-            cursor.execute(
-                "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
-            )
+        enriched = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'"))[0][0]
+        skipped = list(
+            cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND enrich_status != 'success'")
         )[0][0]
-        skipped = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'"))[0][0]
-        remaining = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL"))[0][0]
+        remaining = list(
+            cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND enrich_status IS NULL")
+        )[0][0]
         enrichable = total - skipped
         by_intent = list(
             cursor.execute("""

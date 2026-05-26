@@ -320,6 +320,7 @@ final class BrainDatabase: @unchecked Sendable {
                     importance REAL DEFAULT 5,
                     intent TEXT,
                     enriched_at TEXT,
+                    enrich_status TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     aggregated_into TEXT,
                     brick_id TEXT,
@@ -340,6 +341,10 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_created_at
             ON chunks(created_at)
+        """)
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_enrich_status
+            ON chunks(enrich_status)
         """)
 
         try ensurePendingStoreQueueIndex()
@@ -477,6 +482,10 @@ final class BrainDatabase: @unchecked Sendable {
         """)
 
         try ensureChunkColumns()
+        try execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_enrich_status
+            ON chunks(enrich_status)
+        """)
         try ensurePendingStoreQueueIndex()
         try ensureKGEntityColumns()
         try ensureKGRelationColumns()
@@ -1323,7 +1332,7 @@ final class BrainDatabase: @unchecked Sendable {
         let lastEvents = try dashboardLastEvents()
         let chunkCount = counts.chunkCount
         let enrichedChunkCount = counts.enrichedChunkCount
-        let pendingEnrichmentCount = max(0, chunkCount - enrichedChunkCount)
+        let pendingEnrichmentCount = counts.pendingEnrichmentCount
         let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
         let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes)
         let recentActivityBuckets = try recentActivityBuckets(
@@ -1395,12 +1404,13 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    private func dashboardCounts() throws -> (chunkCount: Int, enrichedChunkCount: Int) {
+    private func dashboardCounts() throws -> (chunkCount: Int, enrichedChunkCount: Int, pendingEnrichmentCount: Int) {
         guard let db else { throw DBError.notOpen }
         let sql = """
             SELECT
                 COUNT(*) AS chunk_count,
-                SUM(CASE WHEN enriched_at IS NOT NULL AND TRIM(enriched_at) != '' THEN 1 ELSE 0 END) AS enriched_count
+                SUM(CASE WHEN enrich_status = 'success' THEN 1 ELSE 0 END) AS enriched_count,
+                SUM(CASE WHEN enriched_at IS NULL AND enrich_status IS NULL THEN 1 ELSE 0 END) AS pending_enrichment_count
             FROM chunks
         """
         var stmt: OpaquePointer?
@@ -1410,7 +1420,8 @@ final class BrainDatabase: @unchecked Sendable {
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
         return (
             chunkCount: Int(sqlite3_column_int(stmt, 0)),
-            enrichedChunkCount: Int(sqlite3_column_int(stmt, 1))
+            enrichedChunkCount: Int(sqlite3_column_int(stmt, 1)),
+            pendingEnrichmentCount: Int(sqlite3_column_int(stmt, 2))
         )
     }
 
@@ -1420,14 +1431,16 @@ final class BrainDatabase: @unchecked Sendable {
         let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
         let sql = """
             SELECT
-                MAX(last_write_epoch),
-                MAX(last_enriched_epoch)
-            FROM (
-                SELECT
-                    \(createdAtEpochSQL) AS last_write_epoch,
-                    \(enrichedAtEpochSQL) AS last_enriched_epoch
-                FROM chunks
-            )
+                (SELECT MAX(last_write_epoch) FROM (
+                    SELECT \(createdAtEpochSQL) AS last_write_epoch
+                    FROM chunks
+                )),
+                (SELECT MAX(last_enriched_epoch) FROM (
+                    SELECT \(enrichedAtEpochSQL) AS last_enriched_epoch
+                    FROM chunks
+                    WHERE enriched_at IS NOT NULL
+                      AND enrich_status = 'success'
+                ))
         """
         var stmt: OpaquePointer?
         let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
@@ -1502,6 +1515,8 @@ final class BrainDatabase: @unchecked Sendable {
             FROM (
                 SELECT \(enrichedAtEpochSQL) AS enriched_epoch
                 FROM chunks
+                WHERE enriched_at IS NOT NULL
+                  AND enrich_status = 'success'
             )
             WHERE enriched_epoch IS NOT NULL
               AND enriched_epoch >= unixepoch('now', ?)
@@ -1543,6 +1558,8 @@ final class BrainDatabase: @unchecked Sendable {
             FROM (
                 SELECT \(enrichedAtEpochSQL) AS enriched_epoch
                 FROM chunks
+                WHERE enriched_at IS NOT NULL
+                  AND enrich_status = 'success'
             )
             WHERE enriched_epoch IS NOT NULL
               AND enriched_epoch >= unixepoch('now', ?)
@@ -2103,6 +2120,29 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("enriched_at") {
             try execute("ALTER TABLE chunks ADD COLUMN enriched_at TEXT")
         }
+        if !existingColumns.contains("enrich_status") {
+            try execute("ALTER TABLE chunks ADD COLUMN enrich_status TEXT")
+        }
+        try execute("""
+            UPDATE chunks
+            SET enriched_at = NULL
+            WHERE enriched_at IS NOT NULL
+              AND TRIM(enriched_at) = ''
+        """)
+        try execute("""
+            UPDATE chunks
+            SET enrich_status = 'success'
+            WHERE enriched_at IS NOT NULL
+              AND TRIM(enriched_at) != ''
+              AND enriched_at NOT LIKE 'skipped:%'
+              AND enrich_status IS NULL
+        """)
+        try execute("""
+            UPDATE chunks
+            SET enrich_status = NULLIF(TRIM(substr(enriched_at, length('skipped:') + 1)), ''),
+                enriched_at = NULL
+            WHERE enriched_at LIKE 'skipped:%'
+        """)
         if !existingColumns.contains("archived") {
             try execute("ALTER TABLE chunks ADD COLUMN archived INTEGER DEFAULT 0")
         }
@@ -3960,6 +4000,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     func enrichmentStats() throws -> EnrichmentStatsSummary {
         guard let db else { throw DBError.notOpen }
+        let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
 
         func queryInt(_ sql: String) throws -> Int {
             var stmt: OpaquePointer?
@@ -3973,10 +4014,19 @@ final class BrainDatabase: @unchecked Sendable {
 
         return EnrichmentStatsSummary(
             totalChunks: try queryInt("SELECT COUNT(*) FROM chunks"),
-            enriched: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL"),
-            unenrichedEligible: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count >= 50"),
-            skippedTooShort: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count < 50"),
-            enrichedLast24Hours: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at > datetime('now', '-24 hours')")
+            enriched: try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'"),
+            unenrichedEligible: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND enrich_status IS NULL AND char_count >= 50"),
+            skippedTooShort: try queryInt("SELECT COUNT(*) FROM chunks WHERE (enrich_status IS NOT NULL AND enrich_status != 'success') OR (enrich_status IS NULL AND enriched_at IS NULL AND char_count < 50)"),
+            enrichedLast24Hours: try queryInt("""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT \(enrichedAtEpochSQL) AS enriched_epoch, enrich_status
+                    FROM chunks
+                )
+                WHERE enrich_status = 'success'
+                  AND enriched_epoch IS NOT NULL
+                  AND enriched_epoch >= unixepoch('now', '-24 hours')
+            """)
         )
     }
 
@@ -4007,6 +4057,7 @@ final class BrainDatabase: @unchecked Sendable {
         ]
         if chunkIDs == nil {
             conditions.append("enriched_at IS NULL")
+            conditions.append("enrich_status IS NULL")
             conditions.append("char_count >= 50")
         }
         if mode == "realtime", chunkIDs == nil {
@@ -4054,7 +4105,7 @@ final class BrainDatabase: @unchecked Sendable {
             let summary = Self.previewText(summary: nil, content: target.content)
             do {
                 try executeUpdate(
-                    "UPDATE chunks SET summary = ?, enriched_at = ? WHERE id = ?"
+                    "UPDATE chunks SET summary = ?, enriched_at = ?, enrich_status = 'success' WHERE id = ?"
                 ) { stmt in
                     bindText(summary, to: stmt, index: 1)
                     bindText(Self.timestamp(), to: stmt, index: 2)
@@ -4130,7 +4181,7 @@ final class BrainDatabase: @unchecked Sendable {
         let totalChunks = try queryInt("SELECT COUNT(*) FROM chunks")
         let totalEntities = try queryInt("SELECT COUNT(*) FROM kg_entities")
         let totalRelations = try queryInt("SELECT COUNT(*) FROM kg_relations")
-        let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL")
+        let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'")
         let totalProjects = try queryInt("SELECT COUNT(DISTINCT project) FROM chunks")
         let projects = try queryStrings("SELECT DISTINCT project FROM chunks WHERE project IS NOT NULL AND project != '' ORDER BY project ASC LIMIT 12")
         let contentTypes = try queryStrings("SELECT DISTINCT content_type FROM chunks WHERE content_type IS NOT NULL AND content_type != '' ORDER BY content_type ASC")

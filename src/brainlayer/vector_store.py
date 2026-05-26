@@ -558,6 +558,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("importance", "REAL"),
             ("intent", "TEXT"),
             ("enriched_at", "TEXT"),
+            ("enrich_status", "TEXT"),
             ("enrichment_version", "TEXT DEFAULT '1.0'"),
             ("primary_symbols", "TEXT"),
             ("resolved_query", "TEXT"),
@@ -655,6 +656,54 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             self._checkpoint_wal_full(cursor)
             self._invalidate_filtered_count_caches()
 
+        enrich_status_migration_name = "2026_05_26_enrich_status_v1"
+        enrich_status_migration_done = cursor.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (enrich_status_migration_name,),
+        ).fetchone()
+        if enrich_status_migration_done is None:
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET enriched_at = NULL
+                WHERE enriched_at IS NOT NULL
+                  AND TRIM(enriched_at) = ''
+                """
+            )
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET enrich_status = 'success'
+                WHERE enriched_at IS NOT NULL
+                  AND TRIM(enriched_at) != ''
+                  AND enriched_at NOT LIKE 'skipped:%'
+                  AND enrich_status IS NULL
+                """
+            )
+            success_backfilled = self.conn.changes()
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET enrich_status = NULLIF(TRIM(SUBSTR(enriched_at, LENGTH('skipped:') + 1)), ''),
+                    enriched_at = NULL
+                WHERE enriched_at LIKE 'skipped:%'
+                """
+            )
+            skipped_backfilled = self.conn.changes()
+            cursor.execute(
+                "INSERT OR IGNORE INTO schema_migrations (name, applied_at, details) VALUES (?, ?, ?)",
+                (
+                    enrich_status_migration_name,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps(
+                        {
+                            "success_backfilled": success_backfilled,
+                            "skipped_backfilled": skipped_backfilled,
+                        }
+                    ),
+                ),
+            )
+
         cursor.execute("""
             UPDATE chunks
             SET archived = 1
@@ -675,6 +724,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_intent", "intent"),
             ("idx_chunks_importance", "importance"),
             ("idx_chunks_enriched", "enriched_at"),
+            ("idx_chunks_enrich_status", "enrich_status"),
             ("idx_chunks_created", "created_at"),
             ("idx_chunks_sentiment", "sentiment_label"),
             ("idx_chunks_project", "project"),
