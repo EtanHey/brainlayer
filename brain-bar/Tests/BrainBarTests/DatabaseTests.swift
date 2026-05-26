@@ -651,6 +651,39 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(events.first?.tokenCount, 77)
     }
 
+    func testListInjectionEventsLoadsChunkDisplayMetadata() throws {
+        try db.insertChunk(
+            id: "chunk-human",
+            content: "This is the chunk content the card should title itself from.",
+            sessionId: "session-human",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6,
+            tags: "[\"pr-merge\"]"
+        )
+        db.exec("""
+            UPDATE chunks
+            SET summary = 'Human readable chunk summary',
+                source = 'mcp',
+                source_file = 'precompact:abc123'
+            WHERE id = 'chunk-human'
+        """)
+        try db.recordInjectionEvent(
+            sessionID: "session-human",
+            query: "source prompt should be only the trigger",
+            chunkIDs: ["chunk-human"],
+            tokenCount: 33,
+            timestamp: "2026-03-31T04:00:00.000Z"
+        )
+
+        let event = try XCTUnwrap(db.listInjectionEvents(limit: 1).first)
+
+        XCTAssertEqual(event.displayTitle, "Human readable chunk summary")
+        XCTAssertEqual(event.triggeredByText, "Triggered by: source prompt should be only the trigger")
+        XCTAssertEqual(event.chunks.first?.sourceFile, "precompact:abc123")
+        XCTAssertEqual(event.primaryKind.label, "Checkpoint")
+    }
+
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
         try db.recordInjectionEvent(
             sessionID: "session-a",

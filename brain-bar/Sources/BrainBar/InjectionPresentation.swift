@@ -95,12 +95,13 @@ struct InjectionPresentation {
     static func snapshot(
         events: [InjectionEvent],
         filterText: String,
+        typeFilter: InjectionTypeFilter = .all,
         now: Date,
         windowMinutes: Int = 60,
         burstGapMinutes: Int = 60,
         bucketCount: Int = 12
     ) -> Snapshot {
-        let filteredEvents = filter(events: events, needle: filterText)
+        let filteredEvents = filter(events: events, needle: filterText, typeFilter: typeFilter)
         let parsedEvents = filteredEvents.compactMap { event in
             parseDate(event.timestamp).map { ParsedEvent(event: event, date: $0) }
         }
@@ -169,14 +170,23 @@ struct InjectionPresentation {
         let date: Date
     }
 
-    private static func filter(events: [InjectionEvent], needle: String) -> [InjectionEvent] {
+    private static func filter(
+        events: [InjectionEvent],
+        needle: String,
+        typeFilter: InjectionTypeFilter
+    ) -> [InjectionEvent] {
         let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return events }
+        let typedEvents = events.filter { event in
+            event.matches(typeFilter: typeFilter)
+        }
+        guard !trimmed.isEmpty else { return typedEvents }
         let lowered = trimmed.lowercased()
-        return events.filter { event in
+        return typedEvents.filter { event in
             event.sessionID.lowercased().contains(lowered) ||
                 event.query.lowercased().contains(lowered) ||
-                event.chunkIDs.joined(separator: " ").lowercased().contains(lowered)
+                event.chunkIDs.joined(separator: " ").lowercased().contains(lowered) ||
+                event.displayTitle.lowercased().contains(lowered) ||
+                event.chunks.map(\.source).joined(separator: " ").lowercased().contains(lowered)
         }
     }
 
@@ -321,7 +331,7 @@ struct InjectionPresentation {
     }
 
     private static func topicOrSource(for event: InjectionEvent) -> String {
-        let trimmed = event.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = event.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "retrieval" : trimmed
     }
 

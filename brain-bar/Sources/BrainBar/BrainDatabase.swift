@@ -4548,11 +4548,59 @@ final class BrainDatabase: @unchecked Sendable {
                 "chunk_ids": columnText(stmt, 4) as Any,
                 "token_count": Int(sqlite3_column_int(stmt, 5))
             ]
-            if let event = try? InjectionEvent(row: row) {
+            if var event = try? InjectionEvent(row: row) {
+                let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
+                event = InjectionEvent(
+                    id: event.id,
+                    sessionID: event.sessionID,
+                    timestamp: event.timestamp,
+                    query: event.query,
+                    chunkIDs: event.chunkIDs,
+                    tokenCount: event.tokenCount,
+                    chunks: details
+                )
                 events.append(event)
             }
         }
         return events
+    }
+
+    private func injectionChunkDetails(ids: [String]) throws -> [InjectionChunk] {
+        guard let db else { throw DBError.notOpen }
+        let orderedIDs = ids.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !orderedIDs.isEmpty else { return [] }
+
+        let placeholders = Array(repeating: "?", count: orderedIDs.count).joined(separator: ",")
+        let sql = """
+            SELECT id, content, summary, source, source_file, tags, content_type
+            FROM chunks
+            WHERE id IN (\(placeholders))
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        for (offset, id) in orderedIDs.enumerated() {
+            bindText(id, to: stmt, index: Int32(offset + 1))
+        }
+
+        var detailsByID: [String: InjectionChunk] = [:]
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let row: [String: Any] = [
+                "id": columnText(stmt, 0) as Any,
+                "content": columnText(stmt, 1) as Any,
+                "summary": columnText(stmt, 2) as Any,
+                "source": columnText(stmt, 3) as Any,
+                "source_file": columnText(stmt, 4) as Any,
+                "tags": columnText(stmt, 5) as Any,
+                "content_type": columnText(stmt, 6) as Any,
+            ]
+            let detail = InjectionChunk(row: row)
+            detailsByID[detail.id] = detail
+        }
+        return orderedIDs.compactMap { detailsByID[$0] }
     }
 
     // MARK: - brain_digest: rule-based entity extraction

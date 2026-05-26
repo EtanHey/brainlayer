@@ -2,14 +2,17 @@ import SwiftUI
 
 struct ChunkConversationSheet: View {
     let conversation: BrainDatabase.ExpandedConversation
+    let title: String
     let onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     init(
         conversation: BrainDatabase.ExpandedConversation,
+        title: String = "Conversation",
         onClose: (() -> Void)? = nil
     ) {
         self.conversation = conversation
+        self.title = title
         self.onClose = onClose
     }
 
@@ -17,7 +20,7 @@ struct ChunkConversationSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Conversation")
+                    Text(title)
                         .font(.title3.bold())
                     Text(conversation.target.chunkID)
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -93,7 +96,18 @@ struct ChunkConversationSheet: View {
 
 struct ChunkConversationOverlay: View {
     let conversation: BrainDatabase.ExpandedConversation
+    let title: String
     let onClose: () -> Void
+
+    init(
+        conversation: BrainDatabase.ExpandedConversation,
+        title: String = "Conversation",
+        onClose: @escaping () -> Void
+    ) {
+        self.conversation = conversation
+        self.title = title
+        self.onClose = onClose
+    }
 
     var body: some View {
         ZStack {
@@ -102,7 +116,7 @@ struct ChunkConversationOverlay: View {
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onClose)
 
-            ChunkConversationSheet(conversation: conversation, onClose: onClose)
+            ChunkConversationSheet(conversation: conversation, title: title, onClose: onClose)
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .fill(Color(nsColor: .windowBackgroundColor))
