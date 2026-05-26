@@ -13,15 +13,18 @@ struct SparklineChartPoint: Identifiable, Equatable, Sendable {
 struct SparklineChartPresentation: Equatable, Sendable {
     let label: String
     let values: [Int]
+    let activityWindowMinutes: Int
     let latestBucketName: String
 
     init(
         label: String,
         values: [Int],
+        activityWindowMinutes: Int = 30,
         latestBucketName: String = "latest bucket count"
     ) {
         self.label = label
         self.values = values
+        self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
     }
 
@@ -41,6 +44,23 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var maxValue: Int {
         max(values.max() ?? 0, 1)
+    }
+
+    func bucketLabel(for bucket: Int) -> String {
+        guard !values.isEmpty else { return "no bucket" }
+        let clampedBucket = min(max(bucket, 0), values.count - 1)
+        let bucketWidth = max(1, Int(ceil(Double(activityWindowMinutes) / Double(values.count))))
+        let newerMinutesAgo = max(values.count - 1 - clampedBucket, 0) * bucketWidth
+        let olderMinutesAgo = min(newerMinutesAgo + bucketWidth, activityWindowMinutes)
+
+        if newerMinutesAgo == 0 {
+            return "last \(olderMinutesAgo)m"
+        }
+        return "\(olderMinutesAgo)-\(newerMinutesAgo)m ago"
+    }
+
+    func tooltipText(for point: SparklineChartPoint) -> String {
+        "\(bucketLabel(for: point.bucket)): \(point.value)"
     }
 
     private var trendDescription: String {
@@ -66,6 +86,8 @@ struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
     let compact: Bool
+    @State private var hoveredPoint: SparklineChartPoint?
+    @State private var hoverLocation: CGPoint?
 
     init(
         presentation: SparklineChartPresentation,
@@ -103,9 +125,83 @@ struct SparklineChart: View {
                 .background(Color.clear)
                 .padding(compact ? 2 : 10)
         }
+        .chartOverlay { chartProxy in
+            GeometryReader { geometry in
+                if let plotAnchor = chartProxy.plotFrame {
+                    let plotFrame = geometry[plotAnchor]
+
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                hoveredPoint = nearestPoint(
+                                    to: location,
+                                    plotFrame: plotFrame,
+                                    chartProxy: chartProxy
+                                )
+                                hoverLocation = location
+                            case .ended:
+                                hoveredPoint = nil
+                                hoverLocation = nil
+                            }
+                        }
+
+                    if let hoveredPoint,
+                       let hoverLocation,
+                       !compact {
+                        sparklineTooltip(for: hoveredPoint)
+                            .position(tooltipPosition(near: hoverLocation, in: geometry.size))
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(presentation.accessibilityLabel))
         .accessibilityValue(Text(presentation.accessibilityValue))
+    }
+
+    private func nearestPoint(
+        to location: CGPoint,
+        plotFrame: CGRect,
+        chartProxy: ChartProxy
+    ) -> SparklineChartPoint? {
+        guard !presentation.points.isEmpty,
+              plotFrame.contains(location) else {
+            return nil
+        }
+
+        let plotX = location.x - plotFrame.minX
+        guard let bucket: Double = chartProxy.value(atX: plotX, as: Double.self) else {
+            return nil
+        }
+        let index = min(max(Int(bucket.rounded()), 0), presentation.points.count - 1)
+        return presentation.points[index]
+    }
+
+    private func tooltipPosition(near location: CGPoint, in size: CGSize) -> CGPoint {
+        let x = min(max(location.x, 58), max(size.width - 58, 58))
+        let y = max(location.y - 28, 16)
+        return CGPoint(x: x, y: y)
+    }
+
+    @ViewBuilder
+    private func sparklineTooltip(for point: SparklineChartPoint) -> some View {
+        Text(presentation.tooltipText(for: point))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: accentColor).opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
     }
 }
 

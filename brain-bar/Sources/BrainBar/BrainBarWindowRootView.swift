@@ -567,6 +567,7 @@ private struct BrainBarFlowLaneCard: View {
             BrainBarHeroSparkline(
                 values: lane.values,
                 accentColor: lane.accentColor,
+                activityWindowMinutes: lane.activityWindowMinutes,
                 pulseRevision: pulseRevision
             )
             .frame(height: chartHeight)
@@ -1055,6 +1056,7 @@ private struct BrainBarFlowStatusPill: View {
 private struct BrainBarHeroSparkline: View {
     let values: [Int]
     let accentColor: NSColor
+    let activityWindowMinutes: Int
     let pulseRevision: Int
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1076,7 +1078,8 @@ private struct BrainBarHeroSparkline: View {
                 SparklineChart(
                     presentation: SparklineChartPresentation(
                         label: "Recent activity sparkline",
-                        values: values
+                        values: values,
+                        activityWindowMinutes: activityWindowMinutes
                     ),
                     accentColor: accentColor,
                     compact: SparklineRenderer.isCompact(size: renderSize)

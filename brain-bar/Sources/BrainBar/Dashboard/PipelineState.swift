@@ -182,6 +182,7 @@ struct DashboardFlowLane: Sendable, Equatable {
     let status: DashboardFlowLaneStatus
     let statusText: String
     let windowLabel: String
+    let activityWindowMinutes: Int
     let rateText: String
     let volumeText: String
     let lastEventText: String
@@ -311,6 +312,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 status: ingressStatus,
                 statusText: ingressStatus == .live ? "Ingress live now" : (ingressStatus == .recent ? "Recent writes in \(windowLabel.lowercased())" : "No recent writes"),
                 windowLabel: windowLabel,
+                activityWindowMinutes: stats.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
                     totalEvents: stats.recentWriteCount,
                     activityWindowMinutes: stats.activityWindowMinutes
@@ -361,6 +363,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 status: enrichmentStatus,
                 statusText: enrichmentStatusText,
                 windowLabel: windowLabel,
+                activityWindowMinutes: stats.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
                     totalEvents: stats.recentEnrichmentCount,
                     activityWindowMinutes: stats.activityWindowMinutes
