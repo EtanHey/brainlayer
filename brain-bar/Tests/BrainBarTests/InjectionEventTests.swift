@@ -171,4 +171,44 @@ final class InjectionEventTests: XCTestCase {
 
         XCTAssertEqual(snapshot.filteredEvents.map(\.id), [3])
     }
+
+    func testTypeFilterKeepsUnloadedEventsWithChunkIDsVisible() {
+        let event = InjectionEvent(
+            id: 4,
+            sessionID: "s4",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "unloaded chunk metadata",
+            chunkIDs: ["missing-metadata"],
+            tokenCount: 10,
+            chunks: []
+        )
+
+        XCTAssertTrue(event.matches(typeFilter: .memory))
+        XCTAssertTrue(event.matches(typeFilter: .video))
+    }
+
+    func testOpeningModalTitleUsesOpenedChunkOrGenericFallback() {
+        let event = InjectionEvent(
+            id: 5,
+            sessionID: "s5",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "missing first chunk metadata",
+            chunkIDs: ["missing-first", "loaded-second"],
+            tokenCount: 10,
+            chunks: [
+                InjectionChunk(
+                    id: "loaded-second",
+                    content: "Video transcript hit",
+                    summary: "",
+                    source: "youtube",
+                    sourceFile: "",
+                    tags: [],
+                    contentType: "media"
+                )
+            ]
+        )
+
+        XCTAssertEqual(event.openingModalTitle(forChunkID: "missing-first"), "Conversation")
+        XCTAssertEqual(event.openingModalTitle(forChunkID: "loaded-second"), "Video Knowledge")
+    }
 }

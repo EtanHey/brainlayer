@@ -231,7 +231,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     }
 
     func matches(typeFilter: InjectionTypeFilter) -> Bool {
-        allKinds.contains { typeFilter.contains($0) }
+        if chunks.isEmpty, !chunkIDs.isEmpty, typeFilter != .all {
+            return true
+        }
+        return allKinds.contains { typeFilter.contains($0) }
     }
 
     var displayTitle: String {
@@ -247,6 +250,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
 
     var modalTitle: String {
         primaryKind.modalTitle
+    }
+
+    func openingModalTitle(forChunkID chunkID: String) -> String {
+        chunks.first { $0.id == chunkID }?.kind.modalTitle ?? "Conversation"
     }
 
     var summaryLine: String {

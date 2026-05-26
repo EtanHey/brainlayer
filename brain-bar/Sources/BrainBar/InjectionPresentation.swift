@@ -137,6 +137,19 @@ struct InjectionPresentation {
         )
     }
 
+    static func previewChunks(for events: [InjectionEvent], limit: Int) -> [InjectionChunk] {
+        guard limit > 0 else { return [] }
+        var seen = Set<String>()
+        var result: [InjectionChunk] = []
+        for chunk in events.flatMap(\.chunks) where seen.insert(chunk.id).inserted {
+            result.append(chunk)
+            if result.count == limit {
+                return result
+            }
+        }
+        return result
+    }
+
     static func parseDate(_ timestamp: String) -> Date? {
         if let date = fractionalISOFormatter().date(from: timestamp) {
             return date

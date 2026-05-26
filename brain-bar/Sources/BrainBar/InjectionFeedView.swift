@@ -317,7 +317,7 @@ struct InjectionFeedView: View {
 
     private func collapsedChunkPreview(for burst: InjectionPresentation.Burst) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            let previewChunks = Array(burst.events.flatMap(\.chunks).prefix(2))
+            let previewChunks = InjectionPresentation.previewChunks(for: burst.events, limit: 2)
             if previewChunks.isEmpty {
                 ForEach(Array(burst.chunkPreviewIDs.enumerated()), id: \.offset) { _, chunkID in
                     Text(chunkPreviewText(chunkID))
@@ -417,7 +417,7 @@ struct InjectionFeedView: View {
 
                 Button {
                     if let firstChunk = event.chunkIDs.first {
-                        selectedConversationTitle = event.modalTitle
+                        selectedConversationTitle = event.openingModalTitle(forChunkID: firstChunk)
                         selectedConversation = try? store.expandedConversation(chunkID: firstChunk)
                     }
                 } label: {
