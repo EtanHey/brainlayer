@@ -52,7 +52,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
-    func testDashboardStatsIgnoresSkippedEnrichmentStatusStrings() throws {
+    func testDashboardStatsCountsTerminalEnrichmentStatusesAsCovered() throws {
         try db.insertChunk(
             id: "dash-success",
             content: "Successfully enriched chunk",
@@ -62,8 +62,16 @@ final class DashboardTests: XCTestCase {
             importance: 7
         )
         try db.insertChunk(
-            id: "dash-skipped",
-            content: "Legacy skipped duplicate marker",
+            id: "dash-duplicate",
+            content: "Terminal duplicate marker",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "dash-noise",
+            content: "Terminal noise marker",
             sessionId: "dashboard",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -79,13 +87,20 @@ final class DashboardTests: XCTestCase {
             UPDATE chunks
             SET enriched_at = 'skipped:duplicate',
                 enrich_status = 'duplicate'
-            WHERE id = 'dash-skipped'
+            WHERE id = 'dash-duplicate'
+        """)
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = NULL,
+                enrich_status = 'noise'
+            WHERE id = 'dash-noise'
         """)
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.enrichedChunkCount, 1)
+        XCTAssertEqual(stats.enrichedChunkCount, 3)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.enrichmentPercent, 100.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
         let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
         XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
@@ -100,6 +115,56 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.enrichmentPercent, 0.0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets, [0, 0, 0, 0])
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
+    }
+
+    func testEnrichmentStatsCountsAnyTerminalStatusAsCovered() throws {
+        try db.insertChunk(
+            id: "stats-success",
+            content: "Successfully enriched stats chunk",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try db.insertChunk(
+            id: "stats-duplicate",
+            content: "Duplicate terminal stats chunk",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "stats-noise",
+            content: "Noise terminal stats chunk",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "stats-pending",
+            content: "Pending eligible stats chunk with enough text to meet the eligibility threshold",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("UPDATE chunks SET enriched_at = datetime('now'), enrich_status = 'success' WHERE id = 'stats-success'")
+        db.exec("UPDATE chunks SET enriched_at = 'skipped:duplicate', enrich_status = 'duplicate' WHERE id = 'stats-duplicate'")
+        db.exec("UPDATE chunks SET enriched_at = NULL, enrich_status = 'noise' WHERE id = 'stats-noise'")
+
+        let summary = try db.enrichmentStats()
+
+        XCTAssertEqual(summary.totalChunks, 4)
+        XCTAssertEqual(summary.enriched, 3)
+        XCTAssertEqual(summary.unenrichedEligible, 1)
+        XCTAssertEqual(summary.skippedTooShort, 0)
+        XCTAssertEqual(
+            summary.totalChunks,
+            summary.enriched + summary.unenrichedEligible + summary.skippedTooShort
+        )
+        XCTAssertEqual(summary.enrichedPercentText, "75.0%")
     }
 
     func testDashboardStatsReadsPendingStoreQueueDepthAndOldestEntry() throws {

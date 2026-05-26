@@ -1445,10 +1445,11 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func dashboardCounts() throws -> (chunkCount: Int, enrichedChunkCount: Int, pendingEnrichmentCount: Int) {
         guard let db else { throw DBError.notOpen }
+        // Pending enrichment is represented by NULL; any persisted status is terminal coverage.
         let sql = """
             SELECT
                 COUNT(*) AS chunk_count,
-                SUM(CASE WHEN enrich_status = 'success' THEN 1 ELSE 0 END) AS enriched_count,
+                SUM(CASE WHEN enrich_status IS NOT NULL THEN 1 ELSE 0 END) AS enriched_count,
                 SUM(CASE WHEN enriched_at IS NULL AND enrich_status IS NULL THEN 1 ELSE 0 END) AS pending_enrichment_count
             FROM chunks
         """
@@ -4274,6 +4275,7 @@ final class BrainDatabase: @unchecked Sendable {
     func enrichmentStats() throws -> EnrichmentStatsSummary {
         guard let db else { throw DBError.notOpen }
         let enrichedAtEpochSQL = Self.normalizedUnixEpochSQL(for: "enriched_at")
+        let terminalCoveragePredicate = "enrich_status IS NOT NULL"
 
         func queryInt(_ sql: String) throws -> Int {
             var stmt: OpaquePointer?
@@ -4287,9 +4289,9 @@ final class BrainDatabase: @unchecked Sendable {
 
         return EnrichmentStatsSummary(
             totalChunks: try queryInt("SELECT COUNT(*) FROM chunks"),
-            enriched: try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'"),
+            enriched: try queryInt("SELECT COUNT(*) FROM chunks WHERE \(terminalCoveragePredicate)"),
             unenrichedEligible: try queryInt("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND enrich_status IS NULL AND char_count >= 50"),
-            skippedTooShort: try queryInt("SELECT COUNT(*) FROM chunks WHERE (enrich_status IS NOT NULL AND enrich_status != 'success') OR (enrich_status IS NULL AND enriched_at IS NULL AND char_count < 50)"),
+            skippedTooShort: try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL AND char_count < 50"),
             enrichedLast24Hours: try queryInt("""
                 SELECT COUNT(*)
                 FROM (
@@ -4454,7 +4456,8 @@ final class BrainDatabase: @unchecked Sendable {
         let totalChunks = try queryInt("SELECT COUNT(*) FROM chunks")
         let totalEntities = try queryInt("SELECT COUNT(*) FROM kg_entities")
         let totalRelations = try queryInt("SELECT COUNT(*) FROM kg_relations")
-        let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'")
+        // Pending enrichment is represented by NULL; any persisted status is terminal coverage.
+        let enrichedChunks = try queryInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL")
         let totalProjects = try queryInt("SELECT COUNT(DISTINCT project) FROM chunks")
         let projects = try queryStrings("SELECT DISTINCT project FROM chunks WHERE project IS NOT NULL AND project != '' ORDER BY project ASC LIMIT 12")
         let contentTypes = try queryStrings("SELECT DISTINCT content_type FROM chunks WHERE content_type IS NOT NULL AND content_type != '' ORDER BY content_type ASC")
