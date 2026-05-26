@@ -187,6 +187,7 @@ class HybridSearchHelper:
             "importance_min": arguments.get("importance_min"),
             "num_results": int(arguments.get("num_results") or 5),
             "detail": str(arguments.get("detail") or "compact"),
+            "allow_helper_route": False,
         }
         if search_profile.enabled() or query_id is not None:
             search_kwargs["profile_query_id"] = query_id

@@ -110,6 +110,7 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
             "importance_min": 8,
             "num_results": 3,
             "detail": "compact",
+            "allow_helper_route": False,
         }
     ]
 

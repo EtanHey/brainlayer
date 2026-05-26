@@ -1,11 +1,15 @@
 """Search and recall MCP handlers."""
 
 import asyncio
+import glob
 import json
 import os
 import platform
 import re
+import socket
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import apsw
@@ -23,6 +27,8 @@ _retry_delay = 0.1  # base delay in seconds (exposed for test patching)
 _VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
+_HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
+_HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
 
 from ._format import format_kg_search, format_recalled_context, format_search_results, format_stats
 from ._shared import (
@@ -47,6 +53,95 @@ from ._shared import (
 def _get_vector_store():
     """Compatibility hook for tests; search handlers use the readonly store by default."""
     return _get_search_vector_store()
+
+
+def _helper_sentinel_path() -> Path:
+    return Path("~/.local/share/brainlayer/use-helper-socket").expanduser()
+
+
+def _helper_route_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_MCP_USE_HELPER") == "1" or _helper_sentinel_path().exists()
+
+
+def _find_warm_helper_socket() -> str | None:
+    candidates: list[tuple[float, str]] = []
+    for path in glob.glob(_HELPER_SOCKET_GLOB):
+        try:
+            candidates.append((os.path.getmtime(path), path))
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
+def _forward_to_helper(sock_path: str, query: str, **kwargs) -> dict[str, Any]:
+    arguments = {"query": query, **{key: value for key, value in kwargs.items() if value is not None}}
+    request = {"method": "brain_search", "arguments": arguments}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(_HELPER_SOCKET_TIMEOUT_SECONDS)
+        client.connect(sock_path)
+        client.sendall(json.dumps(request).encode("utf-8") + b"\n")
+        buffer = b""
+        while b"\n" not in buffer:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            buffer += chunk
+    if not buffer:
+        raise ValueError("empty helper response")
+    return json.loads(buffer.split(b"\n", 1)[0].decode("utf-8"))
+
+
+def _should_try_helper_route(
+    query: str,
+    *,
+    file_path: str | None,
+    chunk_id: str | None,
+    content_type: str | None,
+    intent: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    sentiment: str | None,
+    entity_id: str | None,
+    source_filter: str | None,
+    correction_category: str | None,
+    include_checkpoints: bool,
+    include_audit: bool,
+) -> bool:
+    if any(
+        value is not None
+        for value in (
+            file_path,
+            chunk_id,
+            content_type,
+            intent,
+            date_from,
+            date_to,
+            sentiment,
+            entity_id,
+            source_filter,
+            correction_category,
+        )
+    ):
+        return False
+    if include_checkpoints or include_audit:
+        return False
+    if _extract_file_path(query):
+        return False
+    return True
+
+
+def _helper_response_to_search_result(response: dict[str, Any], latency_ms: float):
+    if not response.get("ok"):
+        raise RuntimeError(str(response.get("error") or "helper returned ok=false"))
+    metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
+    structured = metadata.get("structuredContent") if isinstance(metadata.get("structuredContent"), dict) else {}
+    structured = dict(structured)
+    structured["via_helper"] = True
+    structured["helper_latency_ms"] = round(latency_ms, 3)
+    text = str(response.get("text") or "")
+    return ([TextContent(type="text", text=text)], structured)
 
 
 _CHUNK_ID_QUERY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+$")
@@ -487,12 +582,51 @@ async def _brain_search(
     include_audit: bool = False,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
+    allow_helper_route: bool = True,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
     if search_profile.enabled() and profile_query_id is None:
         profile_query_id = search_profile.new_query_id()
     profile_started = search_profile.now()
     try:
+        if allow_helper_route and _helper_route_enabled() and _should_try_helper_route(
+            query,
+            file_path=file_path,
+            chunk_id=chunk_id,
+            content_type=content_type,
+            intent=intent,
+            date_from=date_from,
+            date_to=date_to,
+            sentiment=sentiment,
+            entity_id=entity_id,
+            source_filter=source_filter,
+            correction_category=correction_category,
+            include_checkpoints=include_checkpoints,
+            include_audit=include_audit,
+        ):
+            sock_path = _find_warm_helper_socket()
+            if sock_path:
+                helper_started = time.perf_counter()
+                try:
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: _forward_to_helper(
+                            sock_path,
+                            query,
+                            project=project,
+                            source=source,
+                            tag=tag,
+                            importance_min=importance_min,
+                            num_results=num_results,
+                            detail=detail,
+                            _profile_query_id=profile_query_id,
+                        ),
+                    )
+                    latency_ms = (time.perf_counter() - helper_started) * 1000
+                    return _helper_response_to_search_result(response, latency_ms)
+                except Exception as exc:
+                    logger.debug("Warm helper route failed; falling back to cold path: %s", exc)
         return await _brain_search_dispatch(
             query=query,
             project=project,
