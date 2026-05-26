@@ -66,6 +66,8 @@ struct InjectionFeedView: View {
     @State private var expandedEventIDs: Set<Int64> = []
     @State private var expandedBurstIDs: Set<String> = []
     @State private var selectedConversation: BrainDatabase.ExpandedConversation?
+    @State private var selectedConversationTitle = "Conversation"
+    @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
 
     private let accentPalette: [Color] = [
         Color(red: 0.42, green: 0.62, blue: 0.98),
@@ -108,6 +110,7 @@ struct InjectionFeedView: View {
             if let conversation = selectedConversation {
                 ChunkConversationOverlay(
                     conversation: conversation,
+                    title: selectedConversationTitle,
                     onClose: { selectedConversation = nil }
                 )
             }
@@ -147,6 +150,29 @@ struct InjectionFeedView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
+
+                filterChips
+            }
+        }
+    }
+
+    private var filterChips: some View {
+        let activeFilter = InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
+        return HStack(spacing: 6) {
+            ForEach(InjectionTypeFilter.allCases, id: \.rawValue) { filter in
+                Button {
+                    typeFilterRaw = filter.rawValue
+                } label: {
+                    Text(filter.label)
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(activeFilter == filter ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -230,18 +256,28 @@ struct InjectionFeedView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("↻")
+                        let leadEvent = burst.events.first
+                        Text(leadEvent?.primaryKind.glyph ?? "📄")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(.blue)
                         Text(burst.summaryTitle)
                             .font(.system(size: 18, weight: .semibold, design: .rounded))
                             .lineLimit(2)
                     }
+                    if let leadEvent = burst.events.first {
+                        Text(leadEvent.triggeredByText)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     HStack(spacing: 8) {
                         chip(text: "Session: \(shortSessionID(burst.sessionID))", tint: .blue)
                         chip(text: relativeText(for: burst.endDate), tint: .neutral)
                         chip(text: "\(burst.queryCount) queries", tint: .neutral)
                         chip(text: "\(burst.tokenCount) tok", tint: .green)
+                        if let leadEvent = burst.events.first {
+                            chip(text: "\(leadEvent.primaryKind.glyph) \(leadEvent.primaryKind.label)", tint: .neutral)
+                        }
                     }
                 }
 
@@ -281,18 +317,30 @@ struct InjectionFeedView: View {
 
     private func collapsedChunkPreview(for burst: InjectionPresentation.Burst) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            ForEach(Array(burst.chunkPreviewIDs.enumerated()), id: \.offset) { _, chunkID in
-                Text(chunkPreviewText(chunkID))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            let previewChunks = Array(burst.events.flatMap(\.chunks).prefix(2))
+            if previewChunks.isEmpty {
+                ForEach(Array(burst.chunkPreviewIDs.enumerated()), id: \.offset) { _, chunkID in
+                    Text(chunkPreviewText(chunkID))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            } else {
+                ForEach(previewChunks) { chunk in
+                    Text("\(chunk.kind.glyph) \(chunk.displayText)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
 
-            let remaining = burst.remainingChunkCount(after: burst.chunkPreviewIDs.count)
+            let visibleCount = previewChunks.isEmpty ? burst.chunkPreviewIDs.count : previewChunks.count
+            let remaining = burst.remainingChunkCount(after: visibleCount)
             if remaining > 0 {
                 Text("+\(remaining) more")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
         }
@@ -328,13 +376,25 @@ struct InjectionFeedView: View {
                     .frame(width: 48, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(event.query)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(3)
+                    HStack(spacing: 7) {
+                        Text(event.primaryKind.glyph)
+                        Text(event.primaryKind.label)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(event.displayTitle)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(2)
+                    }
+
+                    Text(event.triggeredByText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
 
                     HStack(spacing: 10) {
+                        Text("Session \(shortSessionID(event.sessionID))")
                         Text("\(event.chunkCount) chunks")
                         Text("\(event.tokenCount) tok")
+                        Text("\(event.chunks.reduce(0) { $0 + $1.tags.count }) tags")
                         if !event.chunkIDs.isEmpty {
                             Button(expandedEventIDs.contains(event.id) ? "Hide hits" : "Show hits") {
                                 toggle(event.id)
@@ -357,6 +417,7 @@ struct InjectionFeedView: View {
 
                 Button {
                     if let firstChunk = event.chunkIDs.first {
+                        selectedConversationTitle = event.modalTitle
                         selectedConversation = try? store.expandedConversation(chunkID: firstChunk)
                     }
                 } label: {
@@ -374,12 +435,33 @@ struct InjectionFeedView: View {
     }
 
     private func chunkRibbon(for event: InjectionEvent) -> some View {
-        HStack(spacing: 4) {
-            ForEach(Array(event.chunkIDs.enumerated()), id: \.offset) { _, chunkID in
-                RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .fill(color(for: chunkID))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 8)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                ForEach(Array(Set(event.chunks.map(\.kind))).sorted(by: { $0.label < $1.label }), id: \.rawValue) { kind in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(color(for: kind))
+                            .frame(width: 6, height: 6)
+                        Text(kind.label)
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                }
+                if event.chunks.isEmpty {
+                    Text("Hit bars show retrieved chunk IDs; source metadata was unavailable.")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 4) {
+                ForEach(Array(event.chunkIDs.enumerated()), id: \.offset) { _, chunkID in
+                    let chunk = chunk(for: chunkID, event: event)
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(color(for: chunk?.kind ?? .other))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 8)
+                        .help(hitHelpText(chunkID: chunkID, chunk: chunk))
+                }
             }
         }
         .padding(8)
@@ -393,13 +475,14 @@ struct InjectionFeedView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(event.chunkIDs, id: \.self) { chunkID in
                 Button {
+                    selectedConversationTitle = chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
                     selectedConversation = try? store.expandedConversation(chunkID: chunkID)
                 } label: {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(color(for: chunkID))
+                            .fill(color(for: chunk(for: chunkID, event: event)?.kind ?? .other))
                             .frame(width: 8, height: 8)
-                        Text(chunkID)
+                        Text(chunkListTitle(chunkID: chunkID, event: event))
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                             .lineLimit(1)
                         Spacer()
@@ -524,8 +607,8 @@ struct InjectionFeedView: View {
             )
     }
 
-    private func color(for chunkID: String) -> Color {
-        let index = abs(chunkID.hashValue) % accentPalette.count
+    private func color(for kind: InjectionKind) -> Color {
+        let index = kind.paletteIndex % accentPalette.count
         return accentPalette[index]
     }
 
@@ -639,9 +722,28 @@ struct InjectionFeedView: View {
         InjectionPresentation.snapshot(
             events: presentationModel.events,
             filterText: filterText,
+            typeFilter: InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all,
             now: now,
             bucketCount: 24
         )
+    }
+
+    private func chunk(for chunkID: String, event: InjectionEvent) -> InjectionChunk? {
+        event.chunks.first { $0.id == chunkID }
+    }
+
+    private func chunkListTitle(chunkID: String, event: InjectionEvent) -> String {
+        guard let chunk = chunk(for: chunkID, event: event), !chunk.displayText.isEmpty else {
+            return chunkID
+        }
+        return "\(chunk.kind.glyph) \(chunk.displayText)"
+    }
+
+    private func hitHelpText(chunkID: String, chunk: InjectionChunk?) -> String {
+        guard let chunk else {
+            return "Retrieved chunk \(chunkID)"
+        }
+        return "\(chunk.kind.label) · \(chunk.id) · \(chunk.displayText)"
     }
 }
 
