@@ -753,6 +753,8 @@ private final class AgentActivitySampleCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var samples = 0
 
+    deinit {}
+
     var count: Int {
         lock.withLock { samples }
     }

@@ -3,9 +3,19 @@ import XCTest
 
 final class KGAtlasPresentationTests: XCTestCase {
     private let maxLinksKey = "brainBar.maxLinksPerNode"
+    private var userDefaultsSuiteName: String!
+    private var testUserDefaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        userDefaultsSuiteName = "KGAtlasPresentationTests-\(UUID().uuidString)"
+        testUserDefaults = UserDefaults(suiteName: userDefaultsSuiteName)
+    }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: maxLinksKey)
+        testUserDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
+        testUserDefaults = nil
+        userDefaultsSuiteName = nil
         super.tearDown()
     }
 
@@ -24,7 +34,8 @@ final class KGAtlasPresentationTests: XCTestCase {
             nodes: nodes,
             edges: edges,
             selectedNodeId: nil,
-            minimumImportance: 0
+            minimumImportance: 0,
+            userDefaults: testUserDefaults
         )
 
         XCTAssertEqual(snapshot.regions.map { $0.title }, ["People", "Projects", "Tools"])
@@ -48,7 +59,8 @@ final class KGAtlasPresentationTests: XCTestCase {
             nodes: nodes,
             edges: edges,
             selectedNodeId: "a1",
-            minimumImportance: 5
+            minimumImportance: 5,
+            userDefaults: testUserDefaults
         )
 
         XCTAssertEqual(snapshot.visibleNodes.map { $0.id }, ["p1", "t1", "a1"])
@@ -57,14 +69,14 @@ final class KGAtlasPresentationTests: XCTestCase {
     }
 
     func testSnapshotVirtualizesHubLinksAtDefaultFiftyVisibleRelations() {
-        UserDefaults.standard.removeObject(forKey: maxLinksKey)
         let graph = makeHubGraph(edgeCount: 60)
 
         let snapshot = KGAtlasPresentation.snapshot(
             nodes: graph.nodes,
             edges: graph.edges,
             selectedNodeId: nil,
-            minimumImportance: 0
+            minimumImportance: 0,
+            userDefaults: testUserDefaults
         )
 
         XCTAssertEqual(snapshot.visibleEdges.count, 50)
@@ -73,14 +85,15 @@ final class KGAtlasPresentationTests: XCTestCase {
     }
 
     func testSnapshotUsesConfiguredMaxLinksPerNode() {
-        UserDefaults.standard.set(12, forKey: maxLinksKey)
+        testUserDefaults.set(12, forKey: maxLinksKey)
         let graph = makeHubGraph(edgeCount: 30)
 
         let snapshot = KGAtlasPresentation.snapshot(
             nodes: graph.nodes,
             edges: graph.edges,
             selectedNodeId: nil,
-            minimumImportance: 0
+            minimumImportance: 0,
+            userDefaults: testUserDefaults
         )
 
         XCTAssertEqual(snapshot.visibleEdges.count, 12)
@@ -94,7 +107,8 @@ final class KGAtlasPresentationTests: XCTestCase {
             nodes: graph.nodes,
             edges: graph.edges,
             selectedNodeId: "leaf-60",
-            minimumImportance: 0
+            minimumImportance: 0,
+            userDefaults: testUserDefaults
         )
 
         XCTAssertEqual(snapshot.visibleEdges.count, 50)
