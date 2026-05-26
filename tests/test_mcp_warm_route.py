@@ -143,10 +143,81 @@ async def test_brain_search_uses_helper_path_when_enabled_with_valid_socket(monk
                 "tag": "demo",
                 "importance_min": 8,
                 "num_results": 3,
+                "max_results": 10,
                 "detail": "compact",
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_brain_search_helper_path_forwards_max_results(monkeypatch):
+    calls = []
+
+    def fake_forward(_sock_path, query, **kwargs):
+        calls.append({"query": query, **kwargs})
+        return {
+            "ok": True,
+            "text": "warm helper result",
+            "metadata": {"structuredContent": {"query": query, "total": 0, "results": []}},
+        }
+
+    async def cold_dispatch(**_kwargs):
+        raise AssertionError("cold path should not be called when helper succeeds")
+
+    monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._forward_to_helper", fake_forward)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
+
+    await _brain_search(query="recall previous warm route decisions", project="brainlayer", max_results=17)
+
+    assert calls[0]["max_results"] == 17
+
+
+@pytest.mark.asyncio
+async def test_brain_search_helper_path_resolves_implicit_project_before_forwarding(monkeypatch):
+    calls = []
+
+    def fake_forward(_sock_path, query, **kwargs):
+        calls.append({"query": query, **kwargs})
+        return {
+            "ok": True,
+            "text": "warm helper result",
+            "metadata": {"structuredContent": {"query": query, "total": 0, "results": []}},
+        }
+
+    async def cold_dispatch(**_kwargs):
+        raise AssertionError("cold path should not be called when helper succeeds")
+
+    monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "brainlayer")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._forward_to_helper", fake_forward)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
+
+    await _brain_search(query="warm route implicit scope")
+
+    assert calls[0]["project"] == "brainlayer"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_helper_path_preserves_helper_mcp_error(monkeypatch):
+    async def cold_dispatch(**_kwargs):
+        raise AssertionError("cold path should not be called when helper returns MCP error")
+
+    monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._forward_to_helper",
+        lambda *_args, **_kwargs: {"ok": True, "text": "Invalid detail='verbose'", "isError": True},
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
+
+    result = await _brain_search(query="invalid helper response")
+
+    assert result.isError is True
+    assert result.content[0].text == "Invalid detail='verbose'"
 
 
 @pytest.mark.asyncio

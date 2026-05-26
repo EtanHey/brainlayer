@@ -132,9 +132,23 @@ def _should_try_helper_route(
     return True
 
 
+def _resolve_helper_project(project: str | None, *, entity_id: str | None, source: str | None) -> str | None:
+    if project is not None or entity_id is not None or source in ("youtube", "whatsapp", "telegram", "all"):
+        return project
+    try:
+        from ..scoping import resolve_project_scope
+
+        return resolve_project_scope()
+    except Exception:
+        logger.debug("Project auto-scope failed for warm helper route, proceeding without scope")
+        return project
+
+
 def _helper_response_to_search_result(response: dict[str, Any], latency_ms: float):
     if not response.get("ok"):
         raise RuntimeError(str(response.get("error") or "helper returned ok=false"))
+    if response.get("isError"):
+        return _error_result(str(response.get("text") or "Helper search failed"))
     metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
     structured = metadata.get("structuredContent") if isinstance(metadata.get("structuredContent"), dict) else {}
     structured = dict(structured)
@@ -608,17 +622,19 @@ async def _brain_search(
             if sock_path:
                 helper_started = time.perf_counter()
                 try:
+                    helper_project = _resolve_helper_project(project, entity_id=entity_id, source=source)
                     loop = asyncio.get_running_loop()
                     response = await loop.run_in_executor(
                         None,
                         lambda: _forward_to_helper(
                             sock_path,
                             query,
-                            project=project,
+                            project=helper_project,
                             source=source,
                             tag=tag,
                             importance_min=importance_min,
                             num_results=num_results,
+                            max_results=max_results,
                             detail=detail,
                             _profile_query_id=profile_query_id,
                         ),

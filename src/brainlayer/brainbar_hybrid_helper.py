@@ -163,13 +163,16 @@ class HybridSearchHelper:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
 
-        text, structured = asyncio.run(self._search(arguments))
+        text, structured, is_error = asyncio.run(self._search(arguments))
         metadata: dict[str, Any] = {}
         if structured is not None:
             metadata["structuredContent"] = structured
-        return {"ok": True, "text": text, "metadata": metadata}
+        response: dict[str, Any] = {"ok": True, "text": text, "metadata": metadata}
+        if is_error:
+            response["isError"] = True
+        return response
 
-    async def _search(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    async def _search(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any] | None, bool]:
         from brainlayer.mcp.search_handler import _brain_search
 
         query_id = str(arguments.get("_profile_query_id") or "") or None
@@ -186,6 +189,7 @@ class HybridSearchHelper:
             "tag": arguments.get("tag"),
             "importance_min": arguments.get("importance_min"),
             "num_results": int(arguments.get("num_results") or 5),
+            "max_results": int(arguments.get("max_results") or 10),
             "detail": str(arguments.get("detail") or "compact"),
             "allow_helper_route": False,
         }
@@ -197,10 +201,10 @@ class HybridSearchHelper:
 
         if isinstance(result, tuple):
             content, structured = result
-            return self._content_text(content), structured if isinstance(structured, dict) else None
+            return self._content_text(content), structured if isinstance(structured, dict) else None, False
         if hasattr(result, "content"):
-            return self._content_text(result.content), None
-        return self._content_text(result), None
+            return self._content_text(result.content), None, bool(getattr(result, "isError", False))
+        return self._content_text(result), None, False
 
     @staticmethod
     def _content_text(content: Any) -> str:
