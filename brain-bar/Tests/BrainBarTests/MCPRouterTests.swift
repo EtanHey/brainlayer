@@ -1166,6 +1166,48 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-target"))
     }
 
+    func testBrainEnrichRealtimeSkipsTerminalEnrichStatusChunks() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-terminal-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(
+            id: "enrich-pending",
+            content: "This chunk is long enough to qualify for enrichment and should be processed.",
+            sessionId: "s1",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        try db.insertChunk(
+            id: "enrich-duplicate",
+            content: "This duplicate terminal chunk is long enough but should not be processed again.",
+            sessionId: "s1",
+            project: "test",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 28,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_enrich",
+                "arguments": ["mode": "realtime", "limit": 5] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+        XCTAssertTrue(text.contains("Attempted: 1"))
+        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-pending"))
+        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-duplicate"))
+    }
+
     func testBrainEnrichClampsNegativeLimit() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-enrich-limit-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

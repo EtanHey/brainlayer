@@ -88,21 +88,25 @@ async def _enrich_stats(store) -> CallToolResult:
         total = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
         # Enriched
-        enriched = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL").fetchone()[0]
+        enriched = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'").fetchone()[0]
 
         # Unenriched (eligible — char_count >= 50)
         unenriched = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count >= 50"
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND enrich_status IS NULL AND char_count >= 50"
         ).fetchone()[0]
 
-        # Skipped (too short)
+        # Skipped terminal statuses
         skipped = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND char_count < 50"
+            "SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND enrich_status != 'success'"
         ).fetchone()[0]
 
         # Recent enrichments (last 24h)
         recent = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at > datetime('now', '-24 hours')"
+            """
+            SELECT COUNT(*) FROM chunks
+            WHERE datetime(enriched_at) > datetime('now', '-24 hours')
+              AND enrich_status = 'success'
+            """
         ).fetchone()[0]
 
         result = {

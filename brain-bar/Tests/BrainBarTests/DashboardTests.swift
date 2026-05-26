@@ -37,7 +37,7 @@ final class DashboardTests: XCTestCase {
             contentType: "assistant_text",
             importance: 7
         )
-        db.exec("UPDATE chunks SET enriched_at = datetime('now') WHERE id = 'dash-2'")
+        db.exec("UPDATE chunks SET enriched_at = datetime('now'), enrich_status = 'success' WHERE id = 'dash-2'")
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
@@ -50,6 +50,45 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(stats.recentActivityBuckets.reduce(0, +), 2)
         XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
+    }
+
+    func testDashboardStatsIgnoresSkippedEnrichmentStatusStrings() throws {
+        try db.insertChunk(
+            id: "dash-success",
+            content: "Successfully enriched chunk",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        try db.insertChunk(
+            id: "dash-skipped",
+            content: "Legacy skipped duplicate marker",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = datetime('now', '-5 minutes'),
+                enrich_status = 'success'
+            WHERE id = 'dash-success'
+        """)
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = 'skipped:duplicate',
+                enrich_status = 'duplicate'
+            WHERE id = 'dash-skipped'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.enrichedChunkCount, 1)
+        XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
+        XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
     }
 
     func testDashboardStatsReturnsZeroPercentForEmptyDatabase() throws {
@@ -142,7 +181,8 @@ final class DashboardTests: XCTestCase {
         db.exec("""
             UPDATE chunks
             SET created_at = datetime('now', '-45 minutes'),
-                enriched_at = datetime('now')
+                enriched_at = datetime('now'),
+                enrich_status = 'success'
             WHERE id = 'dash-enrichment-only'
         """)
 
@@ -164,7 +204,8 @@ final class DashboardTests: XCTestCase {
         )
         db.exec("""
             UPDATE chunks
-            SET enriched_at = datetime('now', '-6 minutes')
+            SET enriched_at = datetime('now', '-6 minutes'),
+                enrich_status = 'success'
             WHERE id = 'dash-stale-enrichment'
         """)
 
@@ -185,7 +226,8 @@ final class DashboardTests: XCTestCase {
         )
         db.exec("""
             UPDATE chunks
-            SET enriched_at = datetime('now', '-90 seconds')
+            SET enriched_at = datetime('now', '-90 seconds'),
+                enrich_status = 'success'
             WHERE id = 'dash-minute-stall'
         """)
 
@@ -207,7 +249,8 @@ final class DashboardTests: XCTestCase {
         db.exec("""
             UPDATE chunks
             SET created_at = datetime('now'),
-                enriched_at = datetime('now', '-90 seconds')
+                enriched_at = datetime('now', '-90 seconds'),
+                enrich_status = 'success'
             WHERE id = 'dash-explicit-times'
         """)
 

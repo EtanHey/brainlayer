@@ -1163,7 +1163,7 @@ def enrich_batch(
 
 
 def mark_unenrichable(store: VectorStore) -> int:
-    """Tag chunks that are too short for their source as 'skipped:too_short'.
+    """Tag chunks that are too short for their source as enrich_status='too_short'.
 
     Uses source-aware thresholds: 15 chars for WhatsApp/Telegram, 50 for everything else.
     Returns the number of newly tagged chunks.
@@ -1172,8 +1172,9 @@ def mark_unenrichable(store: VectorStore) -> int:
     # Tag chunks below their source-specific threshold
     # WhatsApp/Telegram: 15 chars. Everything else: 50 chars.
     cursor.execute("""
-        UPDATE chunks SET enriched_at = 'skipped:too_short'
+        UPDATE chunks SET enrich_status = 'too_short', enriched_at = NULL
         WHERE enriched_at IS NULL
+        AND enrich_status IS NULL
         AND (
             (source IN ('whatsapp', 'telegram') AND char_count < 15)
             OR (source NOT IN ('whatsapp', 'telegram') AND char_count < 50)
@@ -1181,7 +1182,7 @@ def mark_unenrichable(store: VectorStore) -> int:
         )
     """)
     # apsw doesn't have rowcount, count via separate query
-    tagged = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at = 'skipped:too_short'"))[0][0]
+    tagged = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'too_short'"))[0][0]
     return tagged
 
 

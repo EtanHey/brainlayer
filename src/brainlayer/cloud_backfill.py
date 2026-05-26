@@ -358,11 +358,13 @@ class ReadOnlyBackfillStore:
     def get_enrichment_stats(self) -> Dict[str, Any]:
         cursor = self._read_cursor()
         total = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        enriched = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NOT NULL AND enriched_at NOT LIKE 'skipped:%'"
+        enriched = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'success'").fetchone()[0]
+        skipped = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND enrich_status != 'success'"
         ).fetchone()[0]
-        skipped = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at LIKE 'skipped:%'").fetchone()[0]
-        remaining = cursor.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0]
+        remaining = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL AND enrich_status IS NULL"
+        ).fetchone()[0]
         enrichable = total - skipped
         by_intent = cursor.execute(
             """

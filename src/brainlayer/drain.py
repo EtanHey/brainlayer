@@ -222,6 +222,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "source": event.get("source") or "manual",
             "created_at": now,
             "enriched_at": now,
+            "enrich_status": "success",
             "summary": content[:200],
             "tags": json.dumps(tags) if tags else None,
             "importance": float(event["importance"]) if event.get("importance") is not None else None,
@@ -388,6 +389,8 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["content_hash"] = event["content_hash"]
     if "enriched_at" in cols:
         updates["enriched_at"] = datetime.now(timezone.utc).isoformat()
+    if "enrich_status" in cols:
+        updates["enrich_status"] = "success"
     if not updates:
         return
     assignments = ", ".join(f"{col} = ?" for col in updates)
