@@ -38,6 +38,45 @@ def test_find_warm_helper_socket_skips_disappearing_socket(monkeypatch):
     assert _find_warm_helper_socket() == "/tmp/brainbar-hybrid-new.sock"
 
 
+@pytest.mark.asyncio
+async def test_brain_search_retries_older_helper_socket_when_newest_is_stale(monkeypatch, tmp_path):
+    suffix = uuid.uuid4().hex[:8]
+    live_sock = Path(f"/tmp/bl-live-{os.getpid()}-{suffix}.sock")
+    stale_sock = Path(f"/tmp/bl-stale-{os.getpid()}-{suffix}.sock")
+    stale_sock.touch()
+    received, thread = _serve_one_json_line(
+        live_sock,
+        {
+            "ok": True,
+            "text": "older live helper result",
+            "metadata": {"structuredContent": {"query": "retry live helper", "total": 0, "results": []}},
+        },
+    )
+
+    def fake_getmtime(path):
+        return {str(stale_sock): 3.0, str(live_sock): 1.0}[path]
+
+    async def cold_dispatch(**_kwargs):
+        raise AssertionError("cold path should not be called when an older helper socket is live")
+
+    monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler.glob.glob",
+        lambda _pattern: [str(live_sock), str(stale_sock)],
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler.os.path.getmtime", fake_getmtime)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
+
+    content, structured = await _brain_search(query="retry live helper", project="brainlayer")
+
+    thread.join(1)
+    stale_sock.unlink(missing_ok=True)
+    live_sock.unlink(missing_ok=True)
+    assert content == [TextContent(type="text", text="older live helper result")]
+    assert structured["via_helper"] is True
+    assert received[0]["arguments"]["query"] == "retry live helper"
+
+
 async def _cold_result(**kwargs):
     return (
         [TextContent(type="text", text=f"cold result for {kwargs['query']}")],
@@ -81,7 +120,7 @@ async def test_brain_search_uses_cold_path_when_helper_route_disabled(monkeypatc
 
     monkeypatch.delenv("BRAINLAYER_MCP_USE_HELPER", raising=False)
     monkeypatch.setattr("brainlayer.mcp.search_handler._helper_sentinel_path", lambda: tmp_path / "missing")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: ["/tmp/helper.sock"])
     monkeypatch.setattr("brainlayer.mcp.search_handler._forward_to_helper", helper_should_not_be_called)
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
@@ -114,7 +153,7 @@ async def test_brain_search_uses_helper_path_when_enabled_with_valid_socket(monk
         raise AssertionError("cold path should not be called when helper succeeds")
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: str(sock_path))
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: [str(sock_path)])
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
     content, structured = await _brain_search(
@@ -166,7 +205,7 @@ async def test_brain_search_helper_path_forwards_max_results(monkeypatch):
         raise AssertionError("cold path should not be called when helper succeeds")
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: ["/tmp/helper.sock"])
     monkeypatch.setattr("brainlayer.mcp.search_handler._forward_to_helper", fake_forward)
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
@@ -192,7 +231,7 @@ async def test_brain_search_helper_path_resolves_implicit_project_before_forward
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
     monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "brainlayer")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: ["/tmp/helper.sock"])
     monkeypatch.setattr("brainlayer.mcp.search_handler._forward_to_helper", fake_forward)
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
@@ -207,7 +246,7 @@ async def test_brain_search_helper_path_preserves_helper_mcp_error(monkeypatch):
         raise AssertionError("cold path should not be called when helper returns MCP error")
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: ["/tmp/helper.sock"])
     monkeypatch.setattr(
         "brainlayer.mcp.search_handler._forward_to_helper",
         lambda *_args, **_kwargs: {"ok": True, "text": "Invalid detail='verbose'", "isError": True},
@@ -239,7 +278,7 @@ async def test_brain_search_uses_helper_path_when_sentinel_file_exists(monkeypat
 
     monkeypatch.delenv("BRAINLAYER_MCP_USE_HELPER", raising=False)
     monkeypatch.setattr("brainlayer.mcp.search_handler._helper_sentinel_path", lambda: sentinel)
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: str(sock_path))
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: [str(sock_path)])
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
     content, structured = await _brain_search(query="sentinel route", project="brainlayer")
@@ -259,7 +298,7 @@ async def test_brain_search_falls_back_when_helper_enabled_but_socket_missing(mo
         return await _cold_result(**kwargs)
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: [])
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
     content, structured = await _brain_search(query="missing helper socket", project="brainlayer")
@@ -278,7 +317,7 @@ async def test_brain_search_falls_back_when_helper_raises(monkeypatch):
         return await _cold_result(**kwargs)
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: "/tmp/helper.sock")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: ["/tmp/helper.sock"])
     monkeypatch.setattr(
         "brainlayer.mcp.search_handler._forward_to_helper",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("helper timed out")),
@@ -308,7 +347,7 @@ async def test_brain_search_helper_path_returns_under_100ms_with_mock_helper(mon
         raise AssertionError("cold path should not be called during latency-budget helper test")
 
     monkeypatch.setenv("BRAINLAYER_MCP_USE_HELPER", "1")
-    monkeypatch.setattr("brainlayer.mcp.search_handler._find_warm_helper_socket", lambda: str(sock_path))
+    monkeypatch.setattr("brainlayer.mcp.search_handler._warm_helper_socket_candidates", lambda: [str(sock_path)])
     monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search_dispatch", cold_dispatch)
 
     started = time.perf_counter()

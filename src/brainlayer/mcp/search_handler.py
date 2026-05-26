@@ -63,16 +63,19 @@ def _helper_route_enabled() -> bool:
     return os.environ.get("BRAINLAYER_MCP_USE_HELPER") == "1" or _helper_sentinel_path().exists()
 
 
-def _find_warm_helper_socket() -> str | None:
+def _warm_helper_socket_candidates() -> list[str]:
     candidates: list[tuple[float, str]] = []
     for path in glob.glob(_HELPER_SOCKET_GLOB):
         try:
             candidates.append((os.path.getmtime(path), path))
         except OSError:
             continue
-    if not candidates:
-        return None
-    return max(candidates)[1]
+    return [path for _mtime, path in sorted(candidates, reverse=True)]
+
+
+def _find_warm_helper_socket() -> str | None:
+    candidates = _warm_helper_socket_candidates()
+    return candidates[0] if candidates else None
 
 
 def _forward_to_helper(sock_path: str, query: str, **kwargs) -> dict[str, Any]:
@@ -618,8 +621,7 @@ async def _brain_search(
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
         ):
-            sock_path = _find_warm_helper_socket()
-            if sock_path:
+            for sock_path in _warm_helper_socket_candidates():
                 helper_started = time.perf_counter()
                 try:
                     helper_project = _resolve_helper_project(project, entity_id=entity_id, source=source)
@@ -642,7 +644,7 @@ async def _brain_search(
                     latency_ms = (time.perf_counter() - helper_started) * 1000
                     return _helper_response_to_search_result(response, latency_ms)
                 except Exception as exc:
-                    logger.debug("Warm helper route failed; falling back to cold path: %s", exc)
+                    logger.debug("Warm helper route failed for %s: %s", sock_path, exc)
         return await _brain_search_dispatch(
             query=query,
             project=project,
