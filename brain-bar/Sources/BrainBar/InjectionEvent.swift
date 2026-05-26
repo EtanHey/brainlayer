@@ -221,8 +221,13 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
 
     var chunkCount: Int { chunkIDs.count }
 
+    var primaryChunk: InjectionChunk? {
+        guard let firstChunkID = chunkIDs.first else { return chunks.first }
+        return chunks.first { $0.id == firstChunkID }
+    }
+
     var primaryKind: InjectionKind {
-        chunks.first?.kind ?? .other
+        primaryChunk?.kind ?? .other
     }
 
     var allKinds: [InjectionKind] {
@@ -238,7 +243,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     }
 
     var displayTitle: String {
-        if let chunk = chunks.first, !chunk.displayText.isEmpty {
+        if let chunk = primaryChunk, !chunk.displayText.isEmpty {
             return chunk.displayText
         }
         return InjectionChunk.elide(query, limit: 80)
