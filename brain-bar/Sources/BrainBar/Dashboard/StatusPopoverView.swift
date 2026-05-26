@@ -370,7 +370,8 @@ final class StatusPopoverView: NSViewController {
         sparklineChartView.rootView = SparklineChart(
             presentation: SparklineChartPresentation(
                 label: "Recent activity sparkline",
-                values: summary.enrichment.values
+                values: summary.enrichment.values,
+                activityWindowMinutes: summary.enrichment.activityWindowMinutes
             ),
             accentColor: collector.state.color
         )

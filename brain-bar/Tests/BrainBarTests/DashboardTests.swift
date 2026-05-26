@@ -130,13 +130,17 @@ final class DashboardTests: XCTestCase {
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
         let presentation = SparklineChartPresentation(
             label: "Recent activity sparkline",
-            values: [0, 2, 5, 3]
+            values: [0, 2, 5, 3],
+            activityWindowMinutes: 20
         )
 
         XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
         XCTAssertEqual(presentation.points.map(\.value), [0, 2, 5, 3])
         XCTAssertEqual(presentation.accessibilityLabel, "Recent activity sparkline")
         XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending down")
+        XCTAssertEqual(presentation.bucketLabel(for: 0), "20-15m ago")
+        XCTAssertEqual(presentation.bucketLabel(for: 3), "last 5m")
+        XCTAssertEqual(presentation.tooltipText(for: presentation.points[2]), "10-5m ago: 5")
     }
 
     func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {
