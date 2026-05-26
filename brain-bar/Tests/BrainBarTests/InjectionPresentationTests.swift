@@ -113,6 +113,36 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts.map(\.topicOrSource), ["auth refactor", "db migration"])
     }
 
+    func testBurstAggregationUsesTriggerQueryWhenChunkSummariesDiffer() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let events = [
+            makeEvent(
+                id: 1,
+                sessionID: "sess-a",
+                timestamp: "2026-04-18T09:59:00Z",
+                query: "auth refactor",
+                chunkIDs: ["chunk-1"],
+                tokenCount: 10,
+                chunks: [makeChunk(id: "chunk-1", content: "Auth service boundaries")]
+            ),
+            makeEvent(
+                id: 2,
+                sessionID: "sess-a",
+                timestamp: "2026-04-18T09:58:00Z",
+                query: "auth refactor",
+                chunkIDs: ["chunk-2"],
+                tokenCount: 10,
+                chunks: [makeChunk(id: "chunk-2", content: "Session token migration")]
+            ),
+        ]
+
+        let snapshot = InjectionPresentation.snapshot(events: events, filterText: "", now: now)
+
+        XCTAssertEqual(snapshot.bursts.count, 1)
+        XCTAssertEqual(snapshot.bursts[0].topicOrSource, "auth refactor")
+        XCTAssertEqual(snapshot.bursts[0].events.map(\.id), [1, 2])
+    }
+
     func testBurstAggregationSplitsSameSessionWhenEventsAreMoreThanSixtyMinutesApart() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [

@@ -344,7 +344,7 @@ struct InjectionPresentation {
     }
 
     private static func topicOrSource(for event: InjectionEvent) -> String {
-        let trimmed = event.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = event.query.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "retrieval" : trimmed
     }
 
