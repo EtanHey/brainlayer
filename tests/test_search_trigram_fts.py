@@ -41,6 +41,39 @@ def test_vector_store_creates_trigram_fts_table(tmp_path):
         store.close()
 
 
+def test_fts_update_triggers_delete_by_mapped_rowid(tmp_path):
+    store = VectorStore(tmp_path / "trigram-rowid.db")
+    try:
+        _insert_chunk(store, chunk_id="chunk-rowid", content="stalker-golem queue note")
+
+        trigger_sql = {
+            row[0]: row[1]
+            for row in store.conn.cursor().execute(
+                """
+                SELECT name, sql FROM sqlite_master
+                WHERE type = 'trigger' AND name IN ('chunks_fts_update', 'chunks_fts_trigram_update')
+                """
+            )
+        }
+        assert "DELETE FROM chunks_fts WHERE chunk_id = old.id" not in trigger_sql["chunks_fts_update"]
+        assert "DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id" not in trigger_sql["chunks_fts_trigram_update"]
+        assert "chunk_fts_rowids" in trigger_sql["chunks_fts_update"]
+        assert "chunk_fts_rowids" in trigger_sql["chunks_fts_trigram_update"]
+
+        store.update_enrichment("chunk-rowid", summary="fresh rowid summary", tags=["rowid"])
+
+        cursor = store.conn.cursor()
+        assert cursor.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'chunk-rowid'").fetchone()[0] == 1
+        assert (
+            cursor.execute("SELECT COUNT(*) FROM chunks_fts_trigram WHERE chunk_id = 'chunk-rowid'").fetchone()[0] == 1
+        )
+        assert cursor.execute("SELECT summary FROM chunks_fts WHERE chunk_id = 'chunk-rowid'").fetchone()[0] == (
+            "fresh rowid summary"
+        )
+    finally:
+        store.close()
+
+
 def test_hybrid_search_uses_trigram_fts_for_identifier_substrings(tmp_path):
     store = VectorStore(tmp_path / "trigram-search.db")
     try:

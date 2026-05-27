@@ -97,8 +97,21 @@ def _columns(conn: apsw.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def _preview_text(values: dict[str, Any]) -> str:
+    summary = str(values.get("summary") or "").strip()
+    content = str(values.get("content") or "").strip()
+    source = summary or content
+    return source.replace("\n", " ").replace("\r", " ").replace("\t", " ")[:220]
+
+
 def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     cols = _columns(conn, "chunks")
+    if "preview_text" in cols and not str(values.get("preview_text") or "").strip():
+        values = {**values, "preview_text": _preview_text(values)}
     if "content" in values:
         fields = compute_dedupe_fields(str(values["content"]), values.get("created_at"))
         values = {
@@ -226,6 +239,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "summary": content[:200],
             "tags": json.dumps(tags) if tags else None,
             "importance": float(event["importance"]) if event.get("importance") is not None else None,
+            "content_hash": _content_hash(content),
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
@@ -296,6 +310,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "conversation_id": event.get("conversation_id"),
             "sender": event.get("sender"),
             "tags": json.dumps(tags) if tags else None,
+            "content_hash": _content_hash(content),
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
@@ -344,6 +359,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "created_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
             "conversation_id": session_id,
             "importance": 5,
+            "content_hash": _content_hash(content),
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
@@ -356,6 +372,14 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         return
     enrichment = event.get("enrichment") or {}
     cols = _columns(conn, "chunks")
+    if "content_hash" in cols and event.get("content_hash"):
+        row = conn.execute("SELECT content_hash, content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        if not row:
+            return
+        current_hash = row[0] or _content_hash(str(row[1] or ""))
+        if current_hash and current_hash != event["content_hash"]:
+            logger.warning("Skipping stale enrichment for chunk_id=%s content_hash mismatch", chunk_id)
+            return
     updates: dict[str, Any] = {}
     mappings = {
         "summary": "summary",
@@ -507,7 +531,9 @@ def drain_once(
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
-        files = sorted(queue_dir.glob("*.jsonl"))[:batch_size]
+        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
+            :batch_size
+        ]
         if not files:
             return 0
         _log(log_path, f"queue_depth={len(files)}")

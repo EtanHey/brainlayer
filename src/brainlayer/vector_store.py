@@ -801,6 +801,22 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
         self._trigram_fts_available = True
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_fts_rowids (
+                chunk_id TEXT PRIMARY KEY,
+                fts_rowid INTEGER,
+                trigram_rowid INTEGER
+            )
+        """)
+        cursor.execute("""
+            INSERT OR IGNORE INTO chunk_fts_rowids(chunk_id, fts_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts WHERE chunk_id IS NOT NULL
+        """)
+        cursor.execute("""
+            INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+            SELECT chunk_id, rowid FROM chunks_fts_trigram WHERE chunk_id IS NOT NULL
+            ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid
+        """)
 
         # FTS5 sync triggers — keep summary/tags/resolved_query in sync
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
@@ -816,6 +832,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.resolved_queries,
                     new.id
                 );
+                INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+                VALUES (new.id, last_insert_rowid())
+                ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
@@ -831,25 +850,37 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.resolved_queries,
                     new.id
                 );
+                INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+                VALUES (new.id, last_insert_rowid())
+                ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_delete")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
-                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                DELETE FROM chunks_fts
+                WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunks_fts_trigram
+                WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_delete")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_delete AFTER DELETE ON chunks BEGIN
-                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
+                DELETE FROM chunks_fts
+                WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunks_fts_trigram
+                WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+                DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_update")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_update
             AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
-                DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                DELETE FROM chunks_fts
+                WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 VALUES (
                     new.content,
@@ -860,13 +891,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.resolved_queries,
                     new.id
                 );
+                INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid)
+                VALUES (new.id, last_insert_rowid())
+                ON CONFLICT(chunk_id) DO UPDATE SET fts_rowid = excluded.fts_rowid;
             END
         """)
         cursor.execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update
             AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
-                DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
+                DELETE FROM chunks_fts_trigram
+                WHERE rowid = (SELECT trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
                 INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
                 VALUES (
                     new.content,
@@ -877,6 +912,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     new.resolved_queries,
                     new.id
                 );
+                INSERT INTO chunk_fts_rowids(chunk_id, trigram_rowid)
+                VALUES (new.id, last_insert_rowid())
+                ON CONFLICT(chunk_id) DO UPDATE SET trigram_rowid = excluded.trigram_rowid;
             END
         """)
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import multiprocessing as mp
 import re
@@ -45,6 +46,7 @@ def _create_minimal_db(path: Path) -> None:
                 summary TEXT,
                 tags TEXT,
                 importance REAL,
+                content_hash TEXT,
                 superseded_by TEXT
             );
             CREATE TABLE kg_entities (
@@ -72,6 +74,56 @@ def _create_minimal_db(path: Path) -> None:
             CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
                 INSERT INTO chunks_fts(content, summary, tags, chunk_id)
                 VALUES (new.content, new.summary, new.tags, new.id);
+            END;
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _create_preview_trigger_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                summary TEXT,
+                tags TEXT,
+                importance REAL,
+                preview_text TEXT,
+                seen_count INTEGER DEFAULT 1,
+                last_seen_at TEXT,
+                dedupe_hash TEXT,
+                simhash TEXT,
+                simhash_band_0 TEXT,
+                simhash_band_1 TEXT,
+                simhash_band_2 TEXT,
+                simhash_band_3 TEXT,
+                archived INTEGER DEFAULT 0,
+                archived_at TEXT,
+                superseded_by TEXT
+            );
+            CREATE TABLE preview_trigger_hits (chunk_id TEXT NOT NULL);
+            CREATE TRIGGER chunks_preview_text_insert
+            AFTER INSERT ON chunks
+            WHEN new.preview_text IS NULL OR trim(new.preview_text) = ''
+            BEGIN
+                INSERT INTO preview_trigger_hits(chunk_id) VALUES (new.id);
+                UPDATE chunks
+                SET preview_text = trim(substr(replace(replace(replace(content, char(10), ' '), char(13), ' '), char(9), ' '), 1, 220))
+                WHERE rowid = new.rowid;
             END;
             """
         )
@@ -134,6 +186,245 @@ def test_drain_default_queue_dir_expands_env_tilde(monkeypatch):
 
     assert "~" not in str(queue_dir)
     assert queue_dir == Path.home() / "brainlayer-arbitration-test"
+
+
+def test_drain_prioritizes_writes_before_enrichment(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    (queue_dir / "enrichment-000.jsonl").write_text(
+        json.dumps({"kind": "enrichment_update", "chunk_id": "missing", "enrichment": {"summary": "later"}}) + "\n",
+        encoding="utf-8",
+    )
+    (queue_dir / "watcher-999.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-priority",
+                "content": "Queued watcher writes must drain before enrichment backlog.",
+                "created_at": "2026-05-27T04:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    assert not (queue_dir / "watcher-999.jsonl").exists()
+    assert (queue_dir / "enrichment-000.jsonl").exists()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT id FROM chunks WHERE id = 'watcher-priority'").fetchone() == ("watcher-priority",)
+
+
+def test_drain_skips_stale_enrichment_for_rewritten_chunk(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    old_hash = hashlib.sha256("old content".encode("utf-8")).hexdigest()
+    new_hash = hashlib.sha256("new content".encode("utf-8")).hexdigest()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks(id, content, metadata, source_file, summary, content_hash)
+            VALUES ('rewritten', 'new content', '{}', 'watcher', 'new summary', ?)
+            """,
+            (new_hash,),
+        )
+    (queue_dir / "enrichment-000.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "rewritten",
+                "content_hash": old_hash,
+                "enrichment": {"summary": "old stale summary", "tags": ["old"]},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT summary, tags, content_hash FROM chunks WHERE id = 'rewritten'").fetchone() == (
+            "new summary",
+            None,
+            new_hash,
+        )
+
+
+def test_drain_sets_preview_text_on_initial_insert(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_preview_trigger_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-preview",
+                "content": "Watcher preview text is written during the insert.",
+                "created_at": "2026-05-27T04:10:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    with sqlite3.connect(db_path) as conn:
+        preview_text, trigger_hits = conn.execute(
+            """
+            SELECT c.preview_text, COUNT(p.chunk_id)
+            FROM chunks c
+            LEFT JOIN preview_trigger_hits p ON p.chunk_id = c.id
+            WHERE c.id = 'watcher-preview'
+            GROUP BY c.id
+            """
+        ).fetchone()
+
+    assert preview_text == "Watcher preview text is written during the insert."
+    assert trigger_hits == 0
+
+
+def test_drain_preview_text_uses_content_when_summary_is_blank(tmp_path, monkeypatch):
+    from brainlayer.drain import _insert_chunk
+
+    db_path = tmp_path / "brainlayer.db"
+    _create_preview_trigger_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    with _connect_apsw(db_path) as conn:
+        _insert_chunk(
+            conn,
+            {
+                "id": "store-preview",
+                "content": "Content should win when summary is whitespace.",
+                "summary": "\n\t  ",
+                "metadata": "{}",
+                "source_file": "test",
+            },
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        preview_text, trigger_hits = conn.execute(
+            """
+            SELECT c.preview_text, COUNT(p.chunk_id)
+            FROM chunks c
+            LEFT JOIN preview_trigger_hits p ON p.chunk_id = c.id
+            WHERE c.id = 'store-preview'
+            GROUP BY c.id
+            """
+        ).fetchone()
+
+    assert preview_text == "Content should win when summary is whitespace."
+    assert trigger_hits == 0
+
+
+def test_drain_seen_merge_does_not_touch_unchanged_tags(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE tag_update_hits (chunk_id TEXT NOT NULL);
+            CREATE TRIGGER chunks_tags_update_seen_test
+            AFTER UPDATE OF tags ON chunks
+            BEGIN
+                INSERT INTO tag_update_hits(chunk_id) VALUES (new.id);
+            END;
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO chunks(id, content, metadata, source_file, content_type, char_count, created_at, tags)
+            VALUES ('watcher-seen', 'Same watcher content', '{}', 'watcher', 'assistant_text', 20,
+                    '2026-05-27T04:00:00Z', NULL)
+            """
+        )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-seen",
+                "content": "Same watcher content",
+                "content_type": "assistant_text",
+                "created_at": "2026-05-27T04:10:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tag_update_hits").fetchone()[0] == 0
+
+
+def test_drain_seen_merge_compares_tags_semantically(tmp_path, monkeypatch):
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE tag_update_hits (chunk_id TEXT NOT NULL);
+            CREATE TRIGGER chunks_tags_update_seen_test
+            AFTER UPDATE OF tags ON chunks
+            BEGIN
+                INSERT INTO tag_update_hits(chunk_id) VALUES (new.id);
+            END;
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO chunks(id, content, metadata, source_file, content_type, char_count, created_at, tags)
+            VALUES ('watcher-tags', 'Same watcher content', '{}', 'watcher', 'assistant_text', 20,
+                    '2026-05-27T04:00:00Z', '["b", "a"]')
+            """
+        )
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    (queue_dir / "watcher.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "watcher_chunk",
+                "chunk_id": "watcher-tags",
+                "content": "Same watcher content",
+                "content_type": "assistant_text",
+                "tags": ["a", "b"],
+                "created_at": "2026-05-27T04:10:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tag_update_hits").fetchone()[0] == 0
 
 
 def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatch):

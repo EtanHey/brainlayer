@@ -373,6 +373,10 @@ def _loads_tags(value: Any) -> set[str]:
     return set()
 
 
+def _tags_json_equivalent(left: Any, right: Any) -> bool:
+    return _loads_tags(left) == _loads_tags(right)
+
+
 def _max_optional_number(left: Any, right: Any) -> Any:
     values = []
     for value in (left, right):
@@ -640,11 +644,13 @@ def merge_existing_chunk_seen(conn: Any, *, chunk_id: str, incoming: dict[str, A
     last_seen_at = _latest_timestamp(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
+    merged_tags_json = json.dumps(merged_tags) if merged_tags else None
     updates: dict[str, Any] = {
-        "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + int(incoming.get("seen_count") or 1),
         "last_seen_at": last_seen_at,
     }
+    if not _tags_json_equivalent(existing_tags, merged_tags_json):
+        updates["tags"] = merged_tags_json
     if merged_importance is not None:
         updates["importance"] = merged_importance
     if merged_half_life is not None:
