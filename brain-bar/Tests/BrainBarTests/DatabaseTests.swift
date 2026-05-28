@@ -809,6 +809,124 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.primaryKind.label, "Checkpoint")
     }
 
+    func testListInjectionEventsRejectsImportedYoutubeSeedChunks() throws {
+        try db.insertChunk(
+            id: "live-hook",
+            content: "Injected project context for brainlayer hook session.",
+            sessionId: "session-live",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'precompact:live-hook',
+                tags = '["hook-injection"]'
+            WHERE id = 'live-hook'
+        """)
+
+        try db.insertChunk(
+            id: "youtube:UIy-WQCZdAM:179",
+            content: "Andrew Huberman and Andy Galpin discuss WHOOP overtraining podcast rules.",
+            sessionId: "seed-video",
+            project: "coach",
+            contentType: "transcript",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'youtube',
+                source_file = 'youtube:UIy-WQCZdAM',
+                tags = '["manual_seed","podcast"]'
+            WHERE id = 'youtube:UIy-WQCZdAM:179'
+        """)
+
+        try db.insertChunk(
+            id: "seed-with-spaces",
+            content: "Imported seed tagged with whitespace should not consume the feed limit.",
+            sessionId: "seed-spaced",
+            project: "coach",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'seed:manual',
+                tags = '[" seed "]'
+            WHERE id = 'seed-with-spaces'
+        """)
+
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "actual live hook",
+            chunkIDs: ["live-hook"],
+            tokenCount: 24,
+            timestamp: "2026-05-29T00:01:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "video seed should not render",
+            chunkIDs: ["youtube:UIy-WQCZdAM:179"],
+            tokenCount: 57,
+            timestamp: "2026-05-29T00:02:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "spaced seed should not consume limit",
+            chunkIDs: ["seed-with-spaces"],
+            tokenCount: 31,
+            timestamp: "2026-05-29T00:03:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "missing and seed should not consume limit",
+            chunkIDs: ["missing-live-candidate", "youtube:UIy-WQCZdAM:179"],
+            tokenCount: 44,
+            timestamp: "2026-05-29T00:04:00.000Z"
+        )
+
+        let events = try db.listInjectionEvents(sessionID: "claude-session-1", limit: 1)
+
+        XCTAssertEqual(events.map(\.query), ["actual live hook"])
+        XCTAssertEqual(events.first?.chunkIDs, ["live-hook"])
+        XCTAssertFalse(events.flatMap(\.chunks).contains { chunk in
+            chunk.source == "youtube" || chunk.sourceFile.hasPrefix("youtube:")
+        })
+    }
+
+    func testListInjectionEventsKeepsUnresolvedIDsWhenLiveChunkExists() throws {
+        try db.insertChunk(
+            id: "live-hook",
+            content: "Injected project context for brainlayer hook session.",
+            sessionId: "session-live",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'precompact:live-hook',
+                tags = '["hook-injection"]'
+            WHERE id = 'live-hook'
+        """)
+
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "live hook with unresolved legacy id",
+            chunkIDs: ["missing-legacy-id", "live-hook"],
+            tokenCount: 24,
+            timestamp: "2026-05-29T00:01:00.000Z"
+        )
+
+        let event = try XCTUnwrap(db.listInjectionEvents(sessionID: "claude-session-1", limit: 1).first)
+
+        XCTAssertEqual(event.chunkIDs, ["missing-legacy-id", "live-hook"])
+        XCTAssertEqual(event.chunks.map(\.id), ["live-hook"])
+    }
+
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
         try db.recordInjectionEvent(
             sessionID: "session-a",

@@ -4663,7 +4663,10 @@ final class BrainDatabase: @unchecked Sendable {
     func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
         guard let db else { throw DBError.notOpen }
         var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
-        if sessionID != nil { sql += " WHERE session_id = ?" }
+        var conditions: [String] = []
+        if sessionID != nil { conditions.append("session_id = ?") }
+        conditions.append(Self.liveInjectionEventSQLPredicate(eventTable: "injection_events"))
+        sql += " WHERE \(conditions.joined(separator: " AND "))"
         sql += " ORDER BY timestamp DESC LIMIT ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -4687,21 +4690,116 @@ final class BrainDatabase: @unchecked Sendable {
                 "chunk_ids": columnText(stmt, 4) as Any,
                 "token_count": Int(sqlite3_column_int(stmt, 5))
             ]
-            if var event = try? InjectionEvent(row: row) {
+            if let event = try? InjectionEvent(row: row) {
                 let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
-                event = InjectionEvent(
-                    id: event.id,
-                    sessionID: event.sessionID,
-                    timestamp: event.timestamp,
-                    query: event.query,
-                    chunkIDs: event.chunkIDs,
-                    tokenCount: event.tokenCount,
-                    chunks: details
-                )
-                events.append(event)
+                guard let scopedEvent = injectionFeedScopedEvent(event, chunks: details) else {
+                    continue
+                }
+                events.append(scopedEvent)
             }
         }
         return events
+    }
+
+    private static func liveInjectionEventSQLPredicate(eventTable: String) -> String {
+        let chunkIDRows = "json_each(\(eventTable).chunk_ids)"
+        return """
+            (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM \(chunkIDRows) AS chunk_id
+                    WHERE TRIM(CAST(chunk_id.value AS TEXT)) != ''
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM \(chunkIDRows) AS chunk_id
+                    JOIN chunks AS feed_chunk
+                        ON feed_chunk.id = CAST(chunk_id.value AS TEXT)
+                    WHERE TRIM(CAST(chunk_id.value AS TEXT)) != ''
+                      AND (
+                        COALESCE(LOWER(TRIM(feed_chunk.source)), '') != 'youtube'
+                        AND COALESCE(LOWER(TRIM(feed_chunk.source_file)), '') NOT LIKE 'youtube:%'
+                        AND COALESCE(LOWER(TRIM(feed_chunk.content_type)), '') NOT IN ('transcript', 'podcast', 'seed')
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(feed_chunk.tags) THEN feed_chunk.tags
+                                    ELSE '[]'
+                                END
+                            ) AS feed_tag
+                            WHERE LOWER(TRIM(CAST(feed_tag.value AS TEXT))) IN (
+                                'manual_seed',
+                                'seed',
+                                'imported',
+                                'podcast',
+                                'youtube'
+                            )
+                        )
+                      )
+                )
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM \(chunkIDRows) AS chunk_id
+                    JOIN chunks AS feed_chunk
+                        ON feed_chunk.id = CAST(chunk_id.value AS TEXT)
+                    WHERE TRIM(CAST(chunk_id.value AS TEXT)) != ''
+                )
+            )
+        """
+    }
+
+    private func injectionFeedScopedEvent(_ event: InjectionEvent, chunks: [InjectionChunk]) -> InjectionEvent? {
+        guard !chunks.isEmpty else {
+            return event
+        }
+
+        // Mixed events are kept, but only the live hook chunks remain visible
+        // in the feed; imported seed chunks stay out of counts, previews, and
+        // expansion targets.
+        let liveChunks = chunks.filter(Self.isLiveInjectionFeedChunk)
+        guard !liveChunks.isEmpty else {
+            return nil
+        }
+
+        let knownChunkIDs = Set(chunks.map(\.id))
+        let liveChunkIDs = event.chunkIDs.filter { chunkID in
+            liveChunks.contains { $0.id == chunkID } || !knownChunkIDs.contains(chunkID)
+        }
+        let scopedChunkIDs = liveChunkIDs.isEmpty ? liveChunks.map(\.id) : liveChunkIDs
+        return InjectionEvent(
+            id: event.id,
+            sessionID: event.sessionID,
+            timestamp: event.timestamp,
+            query: event.query,
+            chunkIDs: scopedChunkIDs,
+            tokenCount: event.tokenCount,
+            chunks: liveChunks
+        )
+    }
+
+    private static func isLiveInjectionFeedChunk(_ chunk: InjectionChunk) -> Bool {
+        let source = chunk.source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sourceFile = chunk.sourceFile.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let contentType = chunk.contentType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let tags = chunk.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        if source == "youtube" || sourceFile.hasPrefix("youtube:") {
+            return false
+        }
+        if contentType == "transcript" || contentType == "podcast" || contentType == "seed" {
+            return false
+        }
+        if tags.contains(where: { tag in
+            tag == "manual_seed" ||
+                tag == "seed" ||
+                tag == "imported" ||
+                tag == "podcast" ||
+                tag == "youtube"
+        }) {
+            return false
+        }
+        return true
     }
 
     private func injectionChunkDetails(ids: [String]) throws -> [InjectionChunk] {

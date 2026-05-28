@@ -631,7 +631,8 @@ final class DashboardTests: XCTestCase {
     func testStatsCollectorRefreshesAfterDatabaseWriteNotification() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
 
