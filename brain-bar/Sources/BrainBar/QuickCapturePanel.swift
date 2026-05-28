@@ -102,6 +102,8 @@ final class QuickCaptureViewModel: ObservableObject {
     /// Click-outside-dismiss flag for the search results overlay. Preserves
     /// `inputText` so the next keystroke can reinstate the overlay.
     @Published private(set) var isSearchOverlayDismissed: Bool = false
+    /// QA #37: the conversation thread opened by drilling into a search hit.
+    @Published var conversationSelection = InjectionConversationSelection()
 
     private let db: BrainDatabase
     private let panelState: QuickCapturePanelState
@@ -325,6 +327,24 @@ final class QuickCaptureViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.copiedResultID = nil
         }
+    }
+
+    /// QA #36/#37: single-click drill-in — open the full conversation thread for
+    /// a search hit, with the hit chunk highlighted. The lookup is a small bounded
+    /// (±3 chunk) query, so it runs inline.
+    func openConversation(id: String) {
+        selectResult(id: id)
+        guard let row = results.first(where: { $0.id == id }) else { return }
+        do {
+            let conversation = try db.expandedConversation(id: id)
+            conversationSelection.open(conversation, title: row.title)
+        } catch {
+            feedback = .error("Couldn't open conversation")
+        }
+    }
+
+    func closeConversation() {
+        conversationSelection.close()
     }
 
     func clearResultsSelection() {
@@ -977,6 +997,9 @@ struct QuickCapturePanelView: View {
                         },
                         onActivate: { id in
                             viewModel.copyResultToClipboard(id: id)
+                        },
+                        onOpenConversation: { id in
+                            viewModel.openConversation(id: id)
                         }
                     )
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -990,6 +1013,16 @@ struct QuickCapturePanelView: View {
             .padding(16)
         }
         .frame(width: 540, height: 360)
+        .overlay {
+            // QA #37: full conversation thread for the clicked search hit.
+            if let conversation = viewModel.conversationSelection.conversation {
+                ChunkConversationOverlay(
+                    conversation: conversation,
+                    title: viewModel.conversationSelection.title,
+                    onClose: { viewModel.closeConversation() }
+                )
+            }
+        }
         .onChange(of: viewModel.confirmationFlashCount) { _, _ in
             flashOpacity = 0.18
             withAnimation(.easeOut(duration: 0.45)) {

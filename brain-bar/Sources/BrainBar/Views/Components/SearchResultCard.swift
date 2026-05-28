@@ -4,6 +4,10 @@ struct SearchResultCard: View {
     let result: SearchResult
     let isSelected: Bool
     let isCopied: Bool
+    /// QA #37: explicit "Open conversation" action. Optional so consumers without
+    /// a conversation source render the card without the footer.
+    var onOpenConversation: (() -> Void)?
+    var onCopy: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -20,6 +24,10 @@ struct SearchResultCard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+            }
+
+            if onOpenConversation != nil || onCopy != nil {
+                actionFooter
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -42,6 +50,40 @@ struct SearchResultCard: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private var actionFooter: some View {
+        HStack(spacing: 8) {
+            if let onOpenConversation {
+                // QA #36/#37: the primary action is opening the conversation.
+                Button(action: onOpenConversation) {
+                    Label("Open conversation", systemImage: "bubble.left.and.bubble.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let onCopy {
+                // Copy is the secondary affordance (also double-click on the card).
+                Button(action: onCopy) {
+                    Label("Copy", systemImage: "doc.on.doc")
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
     }
 
     private var backgroundColor: Color {
