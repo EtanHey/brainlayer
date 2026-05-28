@@ -25,9 +25,11 @@ This PR introduces the Airy Light-Glass redesign for BrainBar, adding canonical 
 ### ✅ Write Safety (IMPROVED)
 
 #### BrainDatabase.swift - Transaction Wrapper
+
 **Location**: `brain-bar/Sources/BrainBar/BrainDatabase.swift` (L887-912)
 
 **Change**: Wrapped chunk storage in `withImmediateTransaction`:
+
 ```swift
 return try withImmediateTransaction(retries: retries) {
     try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
@@ -56,9 +58,11 @@ return try withImmediateTransaction(retries: retries) {
 ### ✅ Concurrency Safety (IMPROVED)
 
 #### vector_store.py - DB Init Thread Lock
+
 **Location**: `src/brainlayer/vector_store.py` (L146-163)
 
 **Change**: Serialize same-process schema initialization per DB path:
+
 ```python
 def _init_db_thread_lock(self) -> threading.Lock:
     """Serialize same-process schema init for a DB path."""
@@ -83,9 +87,11 @@ def _init_db_thread_lock(self) -> threading.Lock:
 ### ✅ Resource Management (IMPROVED)
 
 #### StatsCollector.swift - On-Demand DB Connections
+
 **Location**: `brain-bar/Sources/BrainBar/Dashboard/StatsCollector.swift`
 
 **Change**: Replaced persistent DB reference with on-demand open/close pattern:
+
 ```swift
 // Before: self.database = BrainDatabase(path: dbPath, ...)
 // After:  Opens DB in background task, closes in defer block
@@ -104,6 +110,7 @@ defer { backgroundDatabase.close() }
 ### ✅ MCP Stability (UNCHANGED - Safe Parameter Threading)
 
 #### search_handler.py - Agent ID Plumbing
+
 **Location**: `src/brainlayer/mcp/search_handler.py`
 
 **Change**: Thread `agent_id` parameter through search call chain (14 function signatures updated).
@@ -121,6 +128,7 @@ defer { backgroundDatabase.close() }
 ## Design Token Changes (Low Risk - UI Only)
 
 ### New Files
+
 - `brain-bar/Sources/BrainBar/DesignTokens.swift` (164 lines)
   - Ground-truth colors, glass alphas, blur scales, typography, shadows
   - Six semantic state themes (idle, active, loading, empty, degraded, error)
@@ -129,6 +137,7 @@ defer { backgroundDatabase.close() }
   - Tests state theme mappings
 
 ### Refactored Files (20 Swift UI files)
+
 - Migrated scattered color literals to design tokens
 - Dashboard restructured into glass panels with oversized metrics
 - SparklineRenderer, StatusPopoverView, KnowledgeGraph views updated
@@ -144,11 +153,13 @@ defer { backgroundDatabase.close() }
 ## Test Coverage
 
 ### Declared Passing (from PR description)
+
 - ✅ `swift test` (929 tests)
 - ✅ `pytest` (Python test suite)
 - ✅ pre-push gate (pytest/MCP/eval/Bun/shell)
 
 ### Pending
+
 - ⏳ Visual-fidelity pass by Claude follow-up (as noted in PR)
 
 ---
@@ -156,6 +167,7 @@ defer { backgroundDatabase.close() }
 ## Schema Changes
 
 ### agent_profiles Table (New)
+
 **Location**: `src/brainlayer/vector_store.py` (L552-559)
 
 ```sql
@@ -177,16 +189,19 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
 ## Observations (Non-Blocking)
 
 ### 1. StatsCollector State Complexity
+
 The refactor adds 8 new `@Published` properties and 3 new Task references. While the on-demand DB pattern is good, the increased state surface area could make debugging harder.
 
 **Recommendation**: Consider adding state transition logging if dashboard refresh issues arise.
 
 ### 2. No Regression Tests for Transaction Wrapper
+
 The `failNextStoreAfterInsertForTesting` flag suggests a test was planned but isn't visible in the diff.
 
 **Recommendation**: Verify `BrainBarTests` includes a test that exercises the rollback path.
 
 ### 3. Dashboard Refresh Auto-Loop (New)
+
 `startAutoRefreshLoop()` now polls every 30s by default. This is fine for a foreground UI, but worth monitoring if BrainBar runs headless.
 
 **Recommendation**: Ensure auto-refresh pauses when window is minimized/hidden.

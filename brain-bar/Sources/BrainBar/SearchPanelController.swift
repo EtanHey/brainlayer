@@ -152,7 +152,7 @@ private struct SearchPanelView: View {
                         Capsule()
                             .fill(viewModel.filters.primaryChip == chip ? Color.brainBarAccent.opacity(0.18) : Color.brainBarGlassSecondary)
                     )
-                    .foregroundStyle(viewModel.filters.primaryChip == chip ? Color.brainBarAccent : .primary)
+                    .foregroundStyle(viewModel.filters.primaryChip == chip ? Color.brainBarAccent : Color.brainBarTextPrimary)
                 }
             }
 
