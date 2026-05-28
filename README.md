@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-12%20tools-green.svg)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-13%20tools-green.svg)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-1%2C848%20Python%20%2B%2054%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
@@ -79,7 +79,7 @@ That's it. Your agent now remembers everything.
 
 </details>
 
-## MCP Tools (12)
+## MCP Tools (13)
 
 Every tool includes [ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations) so agents know which calls are safe to run without confirmation.
 
@@ -88,6 +88,7 @@ Every tool includes [ToolAnnotations](https://modelcontextprotocol.io/specificat
 | `brain_search` | read | Semantic + keyword hybrid search across all memories. Lifecycle-aware. |
 | `brain_store` | write | Persist decisions, learnings, mistakes. Auto-importance scoring. Per-agent scoping via `agent_id`. |
 | `brain_recall` | read | Proactive retrieval — session context, summaries, recent work. |
+| `brain_resume` | read | Recover recent PreCompact checkpoints for explicit session restoration. |
 | `brain_tags` | read | Browse tags and discover what's in memory without a query. |
 | `brain_digest` | write | Ingest raw content — entity extraction, relations, action items. |
 | `brain_entity` | read | Look up knowledge graph entities — type, relations, evidence. |
@@ -104,7 +105,7 @@ All 14 legacy `brainlayer_*` tool names still work as aliases.
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>12 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>13 tools"]
     B --> C["Hybrid Search<br/>vector + FTS5"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]

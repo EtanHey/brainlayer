@@ -1,7 +1,7 @@
 [project]
 name = "brainlayer"
 version = "1.0.0"
-description = "Persistent memory MCP server for AI agents — 12 tools, semantic search, knowledge graph, on-device SQLite"
+description = "Persistent memory MCP server for AI agents — 13 tools, semantic search, knowledge graph, on-device SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
 authors = [{name = "Etan Heyman"}]
