@@ -2,6 +2,13 @@ import XCTest
 @testable import BrainBar
 
 final class InjectionPresentationTests: XCTestCase {
+    func testExpandedBurstDetailsIDTargetsRevealedContentForScroll() {
+        XCTAssertEqual(
+            InjectionFeedView.expandedBurstDetailsID(burstID: "burst-42"),
+            "expanded-burst-details-burst-42"
+        )
+    }
+
     func testInjectionEventDeduplicatesChunkIDsForClickableRows() {
         let event = makeEvent(
             id: 1,

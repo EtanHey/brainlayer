@@ -65,6 +65,7 @@ struct InjectionFeedView: View {
     @Binding var filterText: String
     @StateObject private var presentationModel = InjectionFeedPresentationModel()
     @State private var expandedBurstIDs: Set<String> = []
+    @State private var pendingExpandedBurstScrollID: String?
     @State private var copiedContinuationBurstID: String?
     @State private var conversationSelection = InjectionConversationSelection()
     @State private var loadingConversationChunkID: String?
@@ -83,27 +84,43 @@ struct InjectionFeedView: View {
         GeometryReader { proxy in
             let wideLayout = proxy.size.width >= 960
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header(snapshot: snapshot)
-                    overviewStrip(snapshot: snapshot)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header(snapshot: snapshot)
+                        overviewStrip(snapshot: snapshot)
 
-                    if snapshot.bursts.isEmpty {
-                        emptyState
-                    } else if wideLayout {
-                        HStack(alignment: .top, spacing: 16) {
-                            feedColumn(snapshot: snapshot)
-                            sideRail(snapshot: snapshot)
-                                .frame(width: 260)
+                        if snapshot.bursts.isEmpty {
+                            emptyState
+                        } else if wideLayout {
+                            HStack(alignment: .top, spacing: 16) {
+                                feedColumn(snapshot: snapshot)
+                                sideRail(snapshot: snapshot)
+                                    .frame(width: 260)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 16) {
+                                feedColumn(snapshot: snapshot)
+                                sideRail(snapshot: snapshot)
+                            }
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 16) {
-                            feedColumn(snapshot: snapshot)
-                            sideRail(snapshot: snapshot)
+                    }
+                    .padding(20)
+                }
+                .onChange(of: pendingExpandedBurstScrollID) { _, scrollID in
+                    guard let scrollID else { return }
+                    DispatchQueue.main.async {
+                        let scroll = {
+                            scrollProxy.scrollTo(scrollID, anchor: .top)
+                            pendingExpandedBurstScrollID = nil
+                        }
+                        if reduceMotion {
+                            scroll()
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.18), scroll)
                         }
                     }
                 }
-                .padding(20)
             }
             .background(pageBackground)
         }
@@ -334,6 +351,7 @@ struct InjectionFeedView: View {
                         eventRow(event)
                     }
                 }
+                .id(Self.expandedBurstDetailsID(burstID: burst.id))
             } else {
                 collapsedChunkPreview(for: burst)
             }
@@ -734,6 +752,7 @@ struct InjectionFeedView: View {
                 expandedBurstIDs.remove(burstID)
             } else {
                 expandedBurstIDs.insert(burstID)
+                pendingExpandedBurstScrollID = Self.expandedBurstDetailsID(burstID: burstID)
             }
         }
 
@@ -742,6 +761,10 @@ struct InjectionFeedView: View {
         } else {
             withAnimation(.easeInOut(duration: 0.16), update)
         }
+    }
+
+    nonisolated static func expandedBurstDetailsID(burstID: String) -> String {
+        "expanded-burst-details-\(burstID)"
     }
 
     private func shortSessionID(_ sessionID: String) -> String {

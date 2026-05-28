@@ -4,6 +4,7 @@ struct EntityCard: Equatable {
     struct Relation: Equatable {
         let relationType: String
         let targetName: String
+        let targetEntityId: String?
         let direction: String  // "outgoing" or "incoming"
         let validUntil: Date?
         let expiredAt: Date?
@@ -11,12 +12,14 @@ struct EntityCard: Equatable {
         init(
             relationType: String,
             targetName: String,
+            targetEntityId: String? = nil,
             direction: String = "outgoing",
             validUntil: Date? = nil,
             expiredAt: Date? = nil
         ) {
             self.relationType = relationType
             self.targetName = targetName
+            self.targetEntityId = targetEntityId
             self.direction = direction
             self.validUntil = validUntil
             self.expiredAt = expiredAt
@@ -49,6 +52,8 @@ struct EntityCard: Equatable {
     let memoryCount: Int
     let metadata: [String: String]
     let chunks: [String]
+    let importance: Double?
+    let altitudeTierTitle: String?
 
     init(
         id: String,
@@ -63,7 +68,9 @@ struct EntityCard: Equatable {
         memories: [Memory] = [],
         memoryCount: Int? = nil,
         metadata: [String: String] = [:],
-        chunks: [String] = []
+        chunks: [String] = [],
+        importance: Double? = nil,
+        altitudeTierTitle: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -78,9 +85,11 @@ struct EntityCard: Equatable {
         self.memoryCount = memoryCount ?? memories.count
         self.metadata = metadata
         self.chunks = chunks
+        self.importance = importance
+        self.altitudeTierTitle = altitudeTierTitle
     }
 
-    init(lookupPayload: [String: Any]) {
+    init(lookupPayload: [String: Any], importance: Double? = nil, altitudeTierTitle: String? = nil) {
         id = (lookupPayload["entity_id"] as? String) ?? (lookupPayload["id"] as? String) ?? ""
         name = lookupPayload["name"] as? String ?? "Unknown"
         entityType = lookupPayload["entity_type"] as? String ?? ""
@@ -95,6 +104,7 @@ struct EntityCard: Equatable {
                 Relation(
                     relationType: $0["relation_type"] as? String ?? "related_to",
                     targetName: ($0["target_name"] as? String) ?? (($0["name"] as? String) ?? (($0["target"] as? [String: Any])?["name"] as? String ?? "")),
+                    targetEntityId: ($0["target_entity_id"] as? String) ?? ($0["target_id"] as? String),
                     direction: $0["direction"] as? String ?? "outgoing",
                     validUntil: KGTemporalDate.parse($0["valid_until"] ?? $0["validUntil"]),
                     expiredAt: KGTemporalDate.parse($0["expired_at"] ?? $0["expiredAt"])
@@ -106,6 +116,8 @@ struct EntityCard: Equatable {
         chunks = ((lookupPayload["chunks"] as? [[String: Any]]) ?? []).compactMap {
             ($0["content"] as? String) ?? ($0["summary"] as? String)
         }
+        self.importance = importance ?? EntityCard.decodeDouble(lookupPayload["importance"])
+        self.altitudeTierTitle = altitudeTierTitle ?? (lookupPayload["altitude_tier"] as? String)
     }
 
     private static func decodeMetadata(_ raw: Any?) -> [String: String] {
@@ -121,5 +133,18 @@ struct EntityCard: Equatable {
             result[key] = String(describing: value)
         }
         return result
+    }
+
+    private static func decodeDouble(_ raw: Any?) -> Double? {
+        if let value = raw as? Double {
+            return value
+        }
+        if let value = raw as? Int {
+            return Double(value)
+        }
+        if let text = raw as? String {
+            return Double(text)
+        }
+        return nil
     }
 }

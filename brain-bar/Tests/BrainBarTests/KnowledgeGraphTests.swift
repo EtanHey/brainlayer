@@ -280,6 +280,8 @@ final class KGDatabaseTests: XCTestCase {
         let relation = try XCTUnwrap(card.relations.first)
 
         XCTAssertEqual(relation.targetName, "Domica")
+        XCTAssertEqual(relation.targetEntityId, "company-domica")
+        XCTAssertEqual(relation.direction, "outgoing")
         XCTAssertNotNil(relation.expiredAt)
         XCTAssertNotNil(relation.validUntil)
     }
@@ -300,6 +302,8 @@ final class KGDatabaseTests: XCTestCase {
         XCTAssertNil(relations.first?.validUntil)
         XCTAssertNil(relations.first?.expiredAt)
         XCTAssertEqual(card.relations.first?.targetName, "Domica")
+        XCTAssertEqual(card.relations.first?.targetEntityId, "company-domica")
+        XCTAssertEqual(card.relations.first?.direction, "outgoing")
         XCTAssertNil(card.relations.first?.validUntil)
         XCTAssertNil(card.relations.first?.expiredAt)
     }
@@ -1111,6 +1115,51 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.selectedEntity?.name, "Alice")
     }
 
+    func testSelectNodePinsLayoutAndSubsequentTickDoesNotMoveNodes() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.nodes[0].position = CGPoint(x: 120, y: 160)
+        vm.nodes[1].position = CGPoint(x: 420, y: 360)
+        vm.nodes[0].velocity = CGVector(dx: 12, dy: -8)
+        vm.nodes[1].velocity = CGVector(dx: -6, dy: 11)
+
+        vm.selectNode(id: "a")
+        let positionsAfterSelect = vm.nodes.map(\.position)
+        let energy = vm.tick()
+
+        XCTAssertTrue(vm.isLayoutPinned)
+        XCTAssertEqual(energy, 0)
+        XCTAssertEqual(vm.nodes.map(\.position), positionsAfterSelect)
+        XCTAssertTrue(vm.nodes.allSatisfy { $0.velocity == .zero })
+    }
+
+    func testSelectRelatedEntityDrillsIntoTargetNodeAndShowsTierMetadata() async throws {
+        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "person-etan", targetId: "project-brainlayer", relationType: "builds")
+        guard let handle = db.dbHandle else {
+            XCTFail("Expected database handle")
+            return
+        }
+        XCTAssertEqual(sqlite3_exec(handle, "UPDATE kg_entities SET importance = 8.0 WHERE id = 'project-brainlayer'", nil, nil, nil), SQLITE_OK)
+
+        let vm = KGViewModel(database: db)
+        await vm.loadGraph()
+        vm.selectNode(id: "person-etan")
+        let relation = try XCTUnwrap(vm.selectedEntity?.relations.first)
+
+        XCTAssertTrue(vm.selectRelatedEntity(from: relation))
+
+        XCTAssertEqual(vm.selectedNodeId, "project-brainlayer")
+        XCTAssertEqual(vm.selectedEntity?.name, "BrainLayer")
+        XCTAssertEqual(vm.selectedEntity?.importance, 8.0)
+        XCTAssertEqual(vm.selectedEntity?.altitudeTierTitle, "Signal")
+        XCTAssertTrue(vm.isLayoutPinned)
+    }
+
     func testSelectNodeWithMissingNodeDoesNotLookupArbitraryEntity() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
@@ -1125,6 +1174,7 @@ final class KGViewModelTests: XCTestCase {
         vm.selectNode(id: "a")
 
         XCTAssertNil(vm.selectedEntity)
+        XCTAssertFalse(vm.isLayoutPinned)
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
     }
@@ -1140,6 +1190,7 @@ final class KGViewModelTests: XCTestCase {
         vm.selectNode(id: nil)
         XCTAssertNil(vm.selectedNodeId)
         XCTAssertNil(vm.selectedEntity)
+        XCTAssertFalse(vm.isLayoutPinned)
     }
 
     func testSelectNodeClearsOpenConversationOverlay() async throws {
