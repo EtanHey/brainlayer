@@ -267,12 +267,33 @@ final class BrainDatabase: @unchecked Sendable {
         let chunkID: String
         let content: String
         let contentType: String
+        let sender: String
         let importance: Double
         let createdAt: String
         let summary: String
         let isTarget: Bool
 
         var id: String { chunkID }
+
+        init(
+            chunkID: String,
+            content: String,
+            contentType: String,
+            sender: String = "",
+            importance: Double,
+            createdAt: String,
+            summary: String,
+            isTarget: Bool
+        ) {
+            self.chunkID = chunkID
+            self.content = content
+            self.contentType = contentType
+            self.sender = sender
+            self.importance = importance
+            self.createdAt = createdAt
+            self.summary = summary
+            self.isTarget = isTarget
+        }
     }
 
     struct ExpandedConversation: Sendable, Equatable, Identifiable {
@@ -622,16 +643,17 @@ final class BrainDatabase: @unchecked Sendable {
         project: String,
         contentType: String,
         importance: Int,
+        sender: String? = nil,
         tags: String = "[]"
     ) throws {
         guard let db else { throw DBError.notOpen }
         let sql = """
             INSERT OR REPLACE INTO chunks (
                 id, content, metadata, source_file, project, content_type,
-                importance, conversation_id, char_count, tags, summary,
+                importance, conversation_id, sender, char_count, tags, summary,
                 preview_text, brick_id, source_uri, status, ingested_at
             )
-            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, '', ?, ?, 'brainbar', 'active', CAST(strftime('%s', 'now') AS INTEGER))
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'brainbar', 'active', CAST(strftime('%s', 'now') AS INTEGER))
         """
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
             bindText(id, to: stmt, index: 1)
@@ -640,10 +662,15 @@ final class BrainDatabase: @unchecked Sendable {
             bindText(contentType, to: stmt, index: 4)
             sqlite3_bind_int(stmt, 5, Int32(importance))
             bindText(sessionId, to: stmt, index: 6)
-            sqlite3_bind_int(stmt, 7, Int32(content.count))
-            bindText(tags, to: stmt, index: 8)
-            bindText(Self.previewText(summary: "", content: content), to: stmt, index: 9)
-            bindText(id, to: stmt, index: 10)
+            if let sender {
+                bindText(sender, to: stmt, index: 7)
+            } else {
+                sqlite3_bind_null(stmt, 7)
+            }
+            sqlite3_bind_int(stmt, 8, Int32(content.count))
+            bindText(tags, to: stmt, index: 9)
+            bindText(Self.previewText(summary: "", content: content), to: stmt, index: 10)
+            bindText(id, to: stmt, index: 11)
         }
         try refreshSearchStatistics()
     }
@@ -3314,7 +3341,7 @@ final class BrainDatabase: @unchecked Sendable {
         let contentLimit = Int32(Self.maximumConversationContentCharacters)
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, sender, importance, created_at, summary, tags FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
@@ -3332,10 +3359,11 @@ final class BrainDatabase: @unchecked Sendable {
             "session_id": sessionId,
             "project": columnText(stmt, 4) as Any,
             "content_type": columnText(stmt, 5) as Any,
-            "importance": sqlite3_column_double(stmt, 6),
-            "created_at": columnText(stmt, 7) as Any,
-            "summary": columnText(stmt, 8) as Any,
-            "tags": columnText(stmt, 9) as Any
+            "sender": columnText(stmt, 6) as Any,
+            "importance": sqlite3_column_double(stmt, 7),
+            "created_at": columnText(stmt, 8) as Any,
+            "summary": columnText(stmt, 9) as Any,
+            "tags": columnText(stmt, 10) as Any
         ]
 
         // Get surrounding chunks from same session using two separate queries
@@ -3343,7 +3371,7 @@ final class BrainDatabase: @unchecked Sendable {
         var afterContext: [[String: Any]] = []
 
         // Before chunks (reverse order, then flip)
-        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, sender, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
         var beforeStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(beforeStmt) }
@@ -3357,16 +3385,17 @@ final class BrainDatabase: @unchecked Sendable {
                     "chunk_id": columnText(beforeStmt, 0) as Any,
                     "content": columnText(beforeStmt, 1) as Any,
                     "content_type": columnText(beforeStmt, 2) as Any,
-                    "importance": sqlite3_column_double(beforeStmt, 3),
-                    "created_at": columnText(beforeStmt, 4) as Any,
-                    "summary": columnText(beforeStmt, 5) as Any
+                    "sender": columnText(beforeStmt, 3) as Any,
+                    "importance": sqlite3_column_double(beforeStmt, 4),
+                    "created_at": columnText(beforeStmt, 5) as Any,
+                    "summary": columnText(beforeStmt, 6) as Any
                 ])
             }
             beforeContext = beforeChunks.reversed()
         }
 
         // After chunks
-        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, sender, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
         var afterStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(afterStmt) }
@@ -3379,9 +3408,10 @@ final class BrainDatabase: @unchecked Sendable {
                     "chunk_id": columnText(afterStmt, 0) as Any,
                     "content": columnText(afterStmt, 1) as Any,
                     "content_type": columnText(afterStmt, 2) as Any,
-                    "importance": sqlite3_column_double(afterStmt, 3),
-                    "created_at": columnText(afterStmt, 4) as Any,
-                    "summary": columnText(afterStmt, 5) as Any
+                    "sender": columnText(afterStmt, 3) as Any,
+                    "importance": sqlite3_column_double(afterStmt, 4),
+                    "created_at": columnText(afterStmt, 5) as Any,
+                    "summary": columnText(afterStmt, 6) as Any
                 ])
             }
         }
@@ -3404,6 +3434,7 @@ final class BrainDatabase: @unchecked Sendable {
             chunkID: targetPayload["chunk_id"] as? String ?? "",
             content: targetPayload["content"] as? String ?? "",
             contentType: targetPayload["content_type"] as? String ?? "",
+            sender: targetPayload["sender"] as? String ?? "",
             importance: targetPayload["importance"] as? Double ?? 0,
             createdAt: targetPayload["created_at"] as? String ?? "",
             summary: targetPayload["summary"] as? String ?? "",
@@ -3415,6 +3446,7 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: item["chunk_id"] as? String ?? "",
                 content: item["content"] as? String ?? "",
                 contentType: item["content_type"] as? String ?? "",
+                sender: item["sender"] as? String ?? "",
                 importance: item["importance"] as? Double ?? 0,
                 createdAt: item["created_at"] as? String ?? "",
                 summary: item["summary"] as? String ?? "",
@@ -3426,6 +3458,7 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: item["chunk_id"] as? String ?? "",
                 content: item["content"] as? String ?? "",
                 contentType: item["content_type"] as? String ?? "",
+                sender: item["sender"] as? String ?? "",
                 importance: item["importance"] as? Double ?? 0,
                 createdAt: item["created_at"] as? String ?? "",
                 summary: item["summary"] as? String ?? "",
