@@ -4690,21 +4690,12 @@ final class BrainDatabase: @unchecked Sendable {
                 "chunk_ids": columnText(stmt, 4) as Any,
                 "token_count": Int(sqlite3_column_int(stmt, 5))
             ]
-            if var event = try? InjectionEvent(row: row) {
+            if let event = try? InjectionEvent(row: row) {
                 let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
                 guard let scopedEvent = injectionFeedScopedEvent(event, chunks: details) else {
                     continue
                 }
-                event = InjectionEvent(
-                    id: scopedEvent.id,
-                    sessionID: scopedEvent.sessionID,
-                    timestamp: scopedEvent.timestamp,
-                    query: scopedEvent.query,
-                    chunkIDs: scopedEvent.chunkIDs,
-                    tokenCount: scopedEvent.tokenCount,
-                    chunks: scopedEvent.chunks
-                )
-                events.append(event)
+                events.append(scopedEvent)
             }
         }
         return events
@@ -4722,33 +4713,37 @@ final class BrainDatabase: @unchecked Sendable {
                 OR EXISTS (
                     SELECT 1
                     FROM \(chunkIDRows) AS chunk_id
-                    LEFT JOIN chunks AS feed_chunk
+                    JOIN chunks AS feed_chunk
                         ON feed_chunk.id = CAST(chunk_id.value AS TEXT)
                     WHERE TRIM(CAST(chunk_id.value AS TEXT)) != ''
                       AND (
-                        feed_chunk.id IS NULL
-                        OR (
-                            COALESCE(LOWER(TRIM(feed_chunk.source)), '') != 'youtube'
-                            AND COALESCE(LOWER(TRIM(feed_chunk.source_file)), '') NOT LIKE 'youtube:%'
-                            AND COALESCE(LOWER(TRIM(feed_chunk.content_type)), '') NOT IN ('transcript', 'podcast', 'seed')
-                            AND NOT EXISTS (
-                                SELECT 1
-                                FROM json_each(
-                                    CASE
-                                        WHEN json_valid(feed_chunk.tags) THEN feed_chunk.tags
-                                        ELSE '[]'
-                                    END
-                                ) AS feed_tag
-                                WHERE LOWER(TRIM(CAST(feed_tag.value AS TEXT))) IN (
-                                    'manual_seed',
-                                    'seed',
-                                    'imported',
-                                    'podcast',
-                                    'youtube'
-                                )
+                        COALESCE(LOWER(TRIM(feed_chunk.source)), '') != 'youtube'
+                        AND COALESCE(LOWER(TRIM(feed_chunk.source_file)), '') NOT LIKE 'youtube:%'
+                        AND COALESCE(LOWER(TRIM(feed_chunk.content_type)), '') NOT IN ('transcript', 'podcast', 'seed')
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(feed_chunk.tags) THEN feed_chunk.tags
+                                    ELSE '[]'
+                                END
+                            ) AS feed_tag
+                            WHERE LOWER(TRIM(CAST(feed_tag.value AS TEXT))) IN (
+                                'manual_seed',
+                                'seed',
+                                'imported',
+                                'podcast',
+                                'youtube'
                             )
                         )
                       )
+                )
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM \(chunkIDRows) AS chunk_id
+                    JOIN chunks AS feed_chunk
+                        ON feed_chunk.id = CAST(chunk_id.value AS TEXT)
+                    WHERE TRIM(CAST(chunk_id.value AS TEXT)) != ''
                 )
             )
         """

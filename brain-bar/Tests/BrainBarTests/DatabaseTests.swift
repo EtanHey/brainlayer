@@ -879,6 +879,13 @@ final class DatabaseTests: XCTestCase {
             tokenCount: 31,
             timestamp: "2026-05-29T00:03:00.000Z"
         )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "missing and seed should not consume limit",
+            chunkIDs: ["missing-live-candidate", "youtube:UIy-WQCZdAM:179"],
+            tokenCount: 44,
+            timestamp: "2026-05-29T00:04:00.000Z"
+        )
 
         let events = try db.listInjectionEvents(sessionID: "claude-session-1", limit: 1)
 
