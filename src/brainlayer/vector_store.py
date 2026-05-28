@@ -88,6 +88,14 @@ def _read_mmap_bytes() -> int:
     return max(_int_env("BRAINLAYER_READ_MMAP_BYTES", 30_000_000_000), 0)
 
 
+def _is_retryable_init_error(exc: BaseException) -> bool:
+    if isinstance(exc, apsw.BusyError):
+        return True
+    if isinstance(exc, apsw.SchemaChangeError):
+        return "vtable constructor failed" in str(exc).lower()
+    return False
+
+
 def _read_cache_size_kb() -> int:
     return -abs(_int_env("BRAINLAYER_READ_CACHE_KB", 64_000))
 
@@ -467,14 +475,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             try:
                 self._init_db()
                 return
-            except apsw.BusyError as e:
+            except apsw.Error as e:
+                if not _is_retryable_init_error(e):
+                    raise
                 last_err = e
                 delay = min(self._INIT_BASE_DELAY * (2**attempt), self._INIT_MAX_DELAY)
                 import sys
 
                 elapsed = time.monotonic() - start
                 print(
-                    f"  DB init BusyError (attempt {attempt + 1}/{retry_budget}), "
+                    f"  DB init retryable SQLite error (attempt {attempt + 1}/{retry_budget}), "
                     f"elapsed {elapsed:.1f}s, retrying in {delay:.1f}s...",
                     file=sys.stderr,
                 )

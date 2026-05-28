@@ -46,6 +46,28 @@ class TestVectorStoreInitRetry:
         assert call_count == 3  # 2 failures + 1 success
         store.close()
 
+    def test_init_retries_on_fts5_schema_change_error(self, tmp_path):
+        """Concurrent FTS5 init can surface as a schema-change vtable error."""
+        db = tmp_path / "test.db"
+
+        call_count = 0
+        original_init_db = VectorStore._init_db
+
+        def flaky_init_db(self):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise apsw.SchemaChangeError("vtable constructor failed: chunks_fts")
+            original_init_db(self)
+
+        with patch.object(VectorStore, "_init_db", flaky_init_db):
+            with patch.object(VectorStore, "_INIT_BASE_DELAY", 0.01):
+                store = VectorStore(db)
+
+        assert store.conn is not None
+        assert call_count == 2
+        store.close()
+
     def test_init_gives_up_after_max_retries(self, tmp_path):
         """After exhausting retries, BusyError propagates."""
         db = tmp_path / "test.db"
