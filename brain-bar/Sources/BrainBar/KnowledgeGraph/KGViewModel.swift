@@ -137,7 +137,7 @@ final class KGViewModel: ObservableObject {
     ) async -> Bool {
         var loadedOnce = false
         while !Task.isCancelled {
-            let loaded = await loadGraph()
+            let loaded = loadedOnce ? await loadGraph() : await loadGraphIfNeeded()
             guard !Task.isCancelled else {
                 return loadedOnce
             }

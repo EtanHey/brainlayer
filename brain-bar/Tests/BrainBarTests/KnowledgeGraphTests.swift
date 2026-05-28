@@ -979,6 +979,62 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(vm.edges.count, 1)
     }
 
+    func testLoadGraphRepeatedlyReusesCachedGraphBeforeRefreshOnReactivation() async throws {
+        let reader = RecordingKnowledgeGraphReader(
+            entities: [
+                BrainDatabase.KGEntityRow(
+                    id: "a",
+                    name: "Alice",
+                    entityType: "person",
+                    description: nil,
+                    importance: 5,
+                    linkedChunkCount: 0
+                ),
+                BrainDatabase.KGEntityRow(
+                    id: "b",
+                    name: "BrainLayer",
+                    entityType: "project",
+                    description: nil,
+                    importance: 5,
+                    linkedChunkCount: 0
+                ),
+            ],
+            relations: [
+                BrainDatabase.KGRelationRow(
+                    id: "rel-a-b",
+                    sourceId: "a",
+                    targetId: "b",
+                    relationType: "builds",
+                    validUntil: nil,
+                    expiredAt: nil
+                ),
+            ]
+        )
+        let vm = KGViewModel(graphReader: reader)
+        let initialLoad = await vm.loadGraph()
+        XCTAssertTrue(initialLoad)
+
+        var successCallbackCount = 0
+        var sleepCount = 0
+        let loadedOnce = await vm.loadGraphRepeatedly(
+            refreshDelay: .milliseconds(1),
+            retryDelay: .milliseconds(1),
+            sleep: { _ in
+                sleepCount += 1
+                throw CancellationError()
+            },
+            onSuccessfulLoad: {
+                successCallbackCount += 1
+            }
+        )
+
+        XCTAssertTrue(loadedOnce)
+        XCTAssertEqual(successCallbackCount, 1)
+        XCTAssertEqual(sleepCount, 1)
+        XCTAssertEqual(reader.entityFetchCount, 1)
+        XCTAssertEqual(reader.relationFetchCount, 1)
+    }
+
     func testLoadGraphEmptyDB() async throws {
         let vm = KGViewModel(database: db)
         await vm.loadGraph()
