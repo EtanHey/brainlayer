@@ -106,9 +106,13 @@ struct KGSidebarView: View {
                 .foregroundStyle(.secondary)
 
             if entity.description.isEmpty {
-                Text("No entity description is stored yet. Use relations and linked chunks as the primary drilldown.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text(Self.synopsisFallbackText(
+                    name: entity.name,
+                    relationCount: entity.relations.count,
+                    chunkCount: chunkTotal
+                ))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
             } else {
                 Text(entity.description)
                     .font(.system(size: 13, weight: .medium))
@@ -143,13 +147,18 @@ struct KGSidebarView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text(relation.targetName)
                                     .font(.system(size: 13, weight: .semibold))
-                                if let expiration = presentation.expirationPill {
+                                if let expiration = presentation.inlinePill {
                                     ExpirationPill(date: expiration.date, label: expiration.label)
                                 }
                             }
                             Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
+                            if let expiredText = presentation.expiredFooterText {
+                                Text(expiredText)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
 
                         Spacer()
@@ -335,12 +344,15 @@ struct KGSidebarView: View {
 
     private func labelChip(_ text: String, tint: ChipTint) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .font(.system(size: KGBadgeStyle.fontSize, weight: .semibold))
+            .padding(.horizontal, KGBadgeStyle.horizontalPadding)
+            .padding(.vertical, KGBadgeStyle.verticalPadding)
             .background(
+                // QA #16: one shape (capsule), one height, semantic color only —
+                // no square/circle mix. Styling lives in KGBadgeStyle/ChipTint so
+                // it can't drift per-call-site.
                 Capsule()
-                    .fill(tint.color.opacity(tint == .primary ? 0.08 : 0.14))
+                    .fill(tint.color.opacity(tint.fillOpacity))
             )
     }
 
@@ -410,9 +422,49 @@ struct KGSidebarView: View {
     }
 
     nonisolated static let noLinkedChunksMessage = "No linked chunks are stored yet."
+
+    /// Synopsis fallback copy when an entity has no stored description (QA #17).
+    /// When the entity has relations or linked chunks, point at those as the
+    /// drill-down instead of reading as broken.
+    nonisolated static func synopsisFallbackText(
+        name: String,
+        relationCount: Int,
+        chunkCount: Int
+    ) -> String {
+        guard relationCount > 0 || chunkCount > 0 else {
+            return "No synopsis yet. This entity has no relations or linked chunks to summarize."
+        }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subject = trimmedName.isEmpty ? "this entity" : trimmedName
+        var parts: [String] = []
+        if relationCount > 0 {
+            parts.append("\(relationCount) \(relationCount == 1 ? "relation" : "relations")")
+        }
+        if chunkCount > 0 {
+            parts.append("\(chunkCount) linked \(chunkCount == 1 ? "chunk" : "chunks")")
+        }
+        return "Explore \(subject) through its \(joinWithAnd(parts)) below."
+    }
+
+    nonisolated private static func joinWithAnd(_ parts: [String]) -> String {
+        switch parts.count {
+        case 0: return ""
+        case 1: return parts[0]
+        default: return "\(parts.dropLast().joined(separator: ", ")) and \(parts[parts.count - 1])"
+        }
+    }
 }
 
-private extension KGSidebarView {
+extension KGSidebarView {
+    /// Standardized entity-card badge tokens (QA #16). Every chip renders through
+    /// `labelChip` with one shape (capsule), one height, and semantic color only —
+    /// preventing the square/circle mix that read as "horrible".
+    enum KGBadgeStyle {
+        static let fontSize: CGFloat = 10
+        static let horizontalPadding: CGFloat = 9
+        static let verticalPadding: CGFloat = 5
+    }
+
     enum ChipTint {
         case primary
         case blue
@@ -425,6 +477,15 @@ private extension KGSidebarView {
             case .blue: .blue
             case .green: .green
             case .amber: .orange
+            }
+        }
+
+        /// Fill opacity tuned so the neutral chip reads at the same visual weight
+        /// as the saturated ones (pure black/white reads heavier at equal alpha).
+        var fillOpacity: Double {
+            switch self {
+            case .primary: 0.08
+            default: 0.14
             }
         }
     }

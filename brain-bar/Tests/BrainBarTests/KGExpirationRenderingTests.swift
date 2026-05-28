@@ -85,6 +85,47 @@ final class KGExpirationRenderingTests: XCTestCase {
         XCTAssertEqual(KGRelationPresentation(relation: forwardDated, now: now).expirationPill?.label, "until")
     }
 
+    func testExpiredRelationDropsInlinePillAndExposesFooterText() throws {
+        let expiredAt = try XCTUnwrap(KGTemporalDate.parse("2026-05-24T00:00:00Z"))
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
+        let expired = EntityCard.Relation(
+            relationType: "cto_of",
+            targetName: "Domica",
+            expiredAt: expiredAt
+        )
+
+        let presentation = KGRelationPresentation(relation: expired, now: now)
+
+        // QA #18/#19: expired relations are de-emphasized as footer text, not a badge.
+        XCTAssertNil(presentation.inlinePill)
+        XCTAssertEqual(presentation.expiredFooterText, "Expired May 24, 2026")
+    }
+
+    func testForwardDatedRelationKeepsInlinePillAndHasNoFooterText() throws {
+        let validUntil = try XCTUnwrap(KGTemporalDate.parse("2026-06-01T00:00:00Z"))
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
+        let forwardDated = EntityCard.Relation(
+            relationType: "collaborates_with",
+            targetName: "Cursor",
+            validUntil: validUntil
+        )
+
+        let presentation = KGRelationPresentation(relation: forwardDated, now: now)
+
+        XCTAssertEqual(presentation.inlinePill?.label, "until")
+        XCTAssertNil(presentation.expiredFooterText)
+    }
+
+    func testLiveRelationHasNeitherInlinePillNorFooterText() throws {
+        let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
+        let live = EntityCard.Relation(relationType: "builds", targetName: "BrainLayer")
+
+        let presentation = KGRelationPresentation(relation: live, now: now)
+
+        XCTAssertNil(presentation.inlinePill)
+        XCTAssertNil(presentation.expiredFooterText)
+    }
+
     func testRelationPresentationDimsPastValidUntilAsExpiredWhenExpiredAtIsMissing() throws {
         let validUntil = try XCTUnwrap(KGTemporalDate.parse("2026-05-24T00:00:00Z"))
         let now = try XCTUnwrap(KGTemporalDate.parse("2026-05-25T00:00:00Z"))
