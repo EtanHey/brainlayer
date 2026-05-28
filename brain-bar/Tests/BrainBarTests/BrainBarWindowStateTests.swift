@@ -69,7 +69,7 @@ final class BrainBarWindowStateTests: XCTestCase {
         let presentation = BrainBarLivePresentation.derive(stats: stats, now: now)
 
         XCTAssertEqual(presentation.sparklineStyle, .idle)
-        XCTAssertEqual(presentation.badgeText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)")
+        XCTAssertEqual(presentation.badgeText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
         XCTAssertEqual(presentation.statusText, "No enrichments in the last 60s")
     }
 

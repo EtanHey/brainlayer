@@ -88,11 +88,11 @@ enum DashboardMetricFormatter {
             return "Just now"
         }
         if secondsAgo < 3600 {
-            let minutesAgo = Int((secondsAgo / 60).rounded(.up))
+            let minutesAgo = Int((secondsAgo / 60).rounded(.towardZero))
             return "\(minutesAgo)m ago"
         }
 
-        let hoursAgo = Int((secondsAgo / 3600).rounded(.up))
+        let hoursAgo = Int((secondsAgo / 3600).rounded(.towardZero))
         return "\(hoursAgo)h ago"
     }
 

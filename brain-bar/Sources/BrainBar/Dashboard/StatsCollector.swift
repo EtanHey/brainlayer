@@ -213,6 +213,7 @@ final class StatsCollector: ObservableObject {
         let nextDaemon = daemonMonitor.sample()
         let snapshotTime = Date()
         let startUnix = snapshotTime.timeIntervalSince1970
+        cancelInFlightDashboardRefresh()
         isRefreshing = true
         if trigger == .manual {
             isManualRefreshInProgress = true
@@ -349,6 +350,14 @@ final class StatsCollector: ObservableObject {
             enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
             trigger: trigger
         )
+    }
+
+    private func cancelInFlightDashboardRefresh() {
+        guard dashboardRefreshTask != nil else { return }
+        dashboardRefreshTask?.cancel()
+        dashboardRefreshTask = nil
+        dashboardRefreshGeneration += 1
+        isManualRefreshInProgress = false
     }
 
     private func recordPendingStoreQueueDepth(_ depth: Int, now: Date) -> Double {

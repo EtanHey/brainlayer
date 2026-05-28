@@ -101,7 +101,7 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activityWindowMinutes: 60,
                 now: now
             ),
-            "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)"
+            "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)"
         )
     }
 
@@ -170,7 +170,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.ingress.status, .idle)
         XCTAssertEqual(summary.queue.status, .draining)
         XCTAssertEqual(summary.enrichment.status, .recent)
-        XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)")
+        XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {

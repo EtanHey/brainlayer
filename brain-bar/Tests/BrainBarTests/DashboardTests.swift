@@ -245,7 +245,26 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(
             DashboardMetricFormatter.lastEventString(lastEventAt: lastEvent, now: now),
-            "\(Self.absoluteTime(lastEvent)) (3m ago)"
+            "\(Self.absoluteTime(lastEvent)) (2m ago)"
+        )
+    }
+
+    func testDashboardMetricFormatterDoesNotOverstateRelativeBoundaries() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+
+        XCTAssertEqual(
+            DashboardMetricFormatter.relativeEventString(
+                lastEventAt: now.addingTimeInterval(-60.1),
+                now: now
+            ),
+            "1m ago"
+        )
+        XCTAssertEqual(
+            DashboardMetricFormatter.relativeEventString(
+                lastEventAt: now.addingTimeInterval(-3600.1),
+                now: now
+            ),
+            "1h ago"
         )
     }
 
