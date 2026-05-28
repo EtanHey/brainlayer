@@ -2268,6 +2268,9 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("value_type") {
             try execute("ALTER TABLE chunks ADD COLUMN value_type TEXT")
         }
+        if !existingColumns.contains("sender") {
+            try execute("ALTER TABLE chunks ADD COLUMN sender TEXT")
+        }
         if !existingColumns.contains("created_at") {
             try execute("ALTER TABLE chunks ADD COLUMN created_at TEXT")
             try execute("UPDATE chunks SET created_at = datetime('now') WHERE created_at IS NULL")
@@ -3339,9 +3342,11 @@ final class BrainDatabase: @unchecked Sendable {
         let boundedBefore = min(max(before, 0), Self.maximumConversationContextPerSide)
         let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
         let contentLimit = Int32(Self.maximumConversationContentCharacters)
+        let chunkColumns = try tableColumns(name: "chunks", on: db)
+        let senderSelect = chunkColumns.contains("sender") ? "sender" : "NULL AS sender"
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, sender, importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, \(senderSelect), importance, created_at, summary, tags FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
@@ -3371,7 +3376,7 @@ final class BrainDatabase: @unchecked Sendable {
         var afterContext: [[String: Any]] = []
 
         // Before chunks (reverse order, then flip)
-        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, sender, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
         var beforeStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(beforeStmt) }
@@ -3395,7 +3400,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         // After chunks
-        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, sender, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, \(senderSelect), importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
         var afterStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(afterStmt) }
