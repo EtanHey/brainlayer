@@ -27,7 +27,7 @@ struct KGCanvasView: View {
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
-    @State private var minimumImportance: Double = 3
+    @State private var minimumImportance: Double = 6
     @State private var hasLoadedGraph = false
     @State private var simulationController = KGSimulationController()
     @GestureState private var toolbarInteractionActive = false
@@ -444,6 +444,10 @@ struct KGCanvasView: View {
         var labelled = Set<String>()
         if let selectedNodeId = viewModel.selectedNodeId {
             labelled.insert(selectedNodeId)
+        }
+
+        for node in nodes where node.name.localizedCaseInsensitiveCompare("Etan Heyman") == .orderedSame {
+            labelled.insert(node.id)
         }
 
         let maxLabels = scale < 0.7 ? 18 : 36

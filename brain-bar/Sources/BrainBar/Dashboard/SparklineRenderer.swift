@@ -202,8 +202,16 @@ struct SparklineChart: View {
                         if let hoveredBucket,
                            let hoverLocation,
                            !compact {
+                            let tooltipSize = SparklineTooltipPlacement.tooltipSize(in: geometry.size)
                             sparklineTooltip(forBucket: hoveredBucket)
-                                .position(tooltipPosition(near: hoverLocation, in: geometry.size))
+                                .frame(width: tooltipSize.width, alignment: .leading)
+                                .position(
+                                    SparklineTooltipPlacement.position(
+                                        near: hoverLocation,
+                                        in: geometry.size,
+                                        tooltipSize: tooltipSize
+                                    )
+                                )
                                 .allowsHitTesting(false)
                         }
                     }
@@ -255,19 +263,14 @@ struct SparklineChart: View {
         return Array(Set([0, last / 2, last])).sorted()
     }
 
-    private func tooltipPosition(near location: CGPoint, in size: CGSize) -> CGPoint {
-        let x = min(max(location.x, 58), max(size.width - 58, 58))
-        let y = max(location.y - 28, 16)
-        return CGPoint(x: x, y: y)
-    }
-
     @ViewBuilder
     private func sparklineTooltip(forBucket bucket: Int) -> some View {
         Text(presentation.tooltipText(forBucket: bucket))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: true)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
@@ -276,6 +279,43 @@ struct SparklineChart: View {
                     .stroke(Color(nsColor: accentColor).opacity(0.35), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+    }
+}
+
+enum SparklineTooltipPlacement {
+    private static let margin: CGFloat = 8
+    private static let preferredWidth: CGFloat = 260
+    private static let minimumWidth: CGFloat = 112
+    private static let estimatedHeight: CGFloat = 44
+    private static let cursorGap: CGFloat = 12
+
+    static func tooltipSize(in containerSize: CGSize) -> CGSize {
+        let availableWidth = max(containerSize.width - margin * 2, minimumWidth)
+        return CGSize(
+            width: min(preferredWidth, availableWidth),
+            height: estimatedHeight
+        )
+    }
+
+    static func position(
+        near location: CGPoint,
+        in containerSize: CGSize,
+        tooltipSize: CGSize
+    ) -> CGPoint {
+        let halfWidth = tooltipSize.width / 2
+        let halfHeight = tooltipSize.height / 2
+        let minX = margin + halfWidth
+        let maxX = max(containerSize.width - margin - halfWidth, minX)
+        let x = min(max(location.x, minX), maxX)
+
+        let yAbove = location.y - cursorGap - halfHeight
+        let yBelow = location.y + cursorGap + halfHeight
+        let minY = margin + halfHeight
+        let maxY = max(containerSize.height - margin - halfHeight, minY)
+        let preferredY = yAbove >= minY ? yAbove : yBelow
+        let y = min(max(preferredY, minY), maxY)
+
+        return CGPoint(x: x, y: y)
     }
 }
 

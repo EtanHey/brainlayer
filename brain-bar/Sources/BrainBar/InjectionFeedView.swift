@@ -157,7 +157,7 @@ struct InjectionFeedView: View {
 
     private var filterChips: some View {
         let activeFilter = InjectionTypeFilter(rawValue: typeFilterRaw) ?? .all
-        return HStack(spacing: 6) {
+        return WrappingPillLayout(spacing: 6, lineSpacing: 6) {
             ForEach(InjectionTypeFilter.allCases, id: \.rawValue) { filter in
                 Button {
                     typeFilterRaw = filter.rawValue
@@ -174,6 +174,7 @@ struct InjectionFeedView: View {
                 .buttonStyle(.plain)
             }
         }
+        .frame(maxWidth: 280, alignment: .trailing)
     }
 
     private func overviewStrip(snapshot: InjectionPresentation.Snapshot) -> some View {
@@ -269,7 +270,7 @@ struct InjectionFeedView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    HStack(spacing: 8) {
+                    WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                         chip(text: "Session: \(shortSessionID(burst.sessionID))", tint: .blue)
                         chip(text: relativeText(for: burst.endDate), tint: .neutral)
                         chip(text: "\(burst.queryCount) queries", tint: .neutral)
@@ -278,6 +279,7 @@ struct InjectionFeedView: View {
                             chip(text: "\(leadEvent.primaryKind.glyph) \(leadEvent.primaryKind.label)", tint: .neutral)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 Spacer()
@@ -439,7 +441,7 @@ struct InjectionFeedView: View {
 
     private func chunkRibbon(for event: InjectionEvent) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
+            WrappingPillLayout(spacing: 8, lineSpacing: 7) {
                 ForEach(Array(Set(event.chunks.map(\.kind))).sorted(by: { $0.label < $1.label }), id: \.rawValue) { kind in
                     HStack(spacing: 4) {
                         Circle()
@@ -453,8 +455,10 @@ struct InjectionFeedView: View {
                     Text("Hit bars show retrieved chunk IDs; source metadata was unavailable.")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
                 ForEach(Array(event.chunkIDs.enumerated()), id: \.offset) { _, chunkID in
@@ -606,8 +610,12 @@ struct InjectionFeedView: View {
     private func chip(text: String, tint: BurstChipTint) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.72)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
+            .frame(maxWidth: 170, alignment: .leading)
             .background(
                 Capsule()
                     .fill(tint.color.opacity(tint == .neutral ? 0.08 : 0.14))

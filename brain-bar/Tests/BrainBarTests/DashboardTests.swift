@@ -300,6 +300,44 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testSparklineTooltipPlacementClampsHorizontally() {
+        let container = CGSize(width: 160, height: 100)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+
+        let left = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 0, y: 80),
+            in: container,
+            tooltipSize: tooltip
+        )
+        let right = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 220, y: 80),
+            in: container,
+            tooltipSize: tooltip
+        )
+
+        XCTAssertGreaterThanOrEqual(left.x - tooltip.width / 2, 8)
+        XCTAssertLessThanOrEqual(right.x + tooltip.width / 2, container.width - 8)
+    }
+
+    func testSparklineTooltipPlacementFlipsBelowNearTopEdge() {
+        let container = CGSize(width: 260, height: 120)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+
+        let top = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 130, y: 4),
+            in: container,
+            tooltipSize: tooltip
+        )
+        let lower = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 130, y: 90),
+            in: container,
+            tooltipSize: tooltip
+        )
+
+        XCTAssertGreaterThan(top.y, 4)
+        XCTAssertLessThan(lower.y, 90)
+    }
+
     func testDashboardMetricFormatterRequiresAbsoluteLastEventText() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let lastEvent = now.addingTimeInterval(-125)

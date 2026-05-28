@@ -360,21 +360,14 @@ private struct BrainBarDashboardView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     overviewBadgeRow
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        BrainBarHeroBadge(text: flowSummary.windowLabel)
-                        BrainBarHeroBadge(text: flowSummary.queue.status.label)
-                    }
-
-                    HStack(spacing: 8) {
-                        BrainBarHeroBadge(text: "Writes \(flowSummary.ingress.lastEventText)")
-                        BrainBarHeroBadge(text: "Enrichments \(flowSummary.enrichment.lastEventText)")
-                    }
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
+                    overviewBadgeRow
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -388,16 +381,11 @@ private struct BrainBarDashboardView: View {
 
     private var freshnessLine: some View {
         HStack(spacing: 8) {
-            Image(systemName: collector.isRefreshing ? "arrow.triangle.2.circlepath" : "clock")
+            Image(systemName: "clock")
                 .font(.system(size: 11, weight: .semibold))
             Text("Data fetched at: \(dataFetchedText)")
                 .font(.system(size: 11, weight: .semibold))
                 .monospacedDigit()
-            if collector.isRefreshing {
-                Text("Refreshing...")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
             if let heartbeatText {
                 Text("Heartbeat: \(heartbeatText)")
                     .font(.system(size: 11, weight: .medium))
@@ -874,10 +862,13 @@ struct DegradationBadge: View {
                 .font(.system(size: 10, weight: .semibold))
             Text("Degraded")
                 .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+        .frame(maxWidth: 180, alignment: .leading)
         .background(
             Capsule().fill(Color.orange.opacity(0.85))
         )
@@ -964,8 +955,12 @@ private struct BrainBarHeroBadge: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .frame(maxWidth: 190, alignment: .leading)
             .background(.white.opacity(0.18), in: Capsule())
     }
 }
@@ -1010,17 +1005,18 @@ private struct BrainBarAgentPresenceStrip: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     ForEach(activity.presences, id: \.family) { presence in
                         BrainBarAgentPresencePill(presence: presence)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     ForEach(activity.presences, id: \.family) { presence in
                         BrainBarAgentPresencePill(presence: presence)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Text("Agent presence is separate from indexed writes. A live CLI does not imply new chunks landed.")
@@ -1045,6 +1041,9 @@ private struct BrainBarAgentPresencePill: View {
                 .opacity(presence.isActive ? 1 : 0.25)
             Text(presence.family.label)
                 .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .minimumScaleFactor(0.75)
             Text("\(presence.count)")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .padding(.horizontal, 7)
@@ -1124,8 +1123,12 @@ private struct BrainBarFlowStatusPill: View {
     var body: some View {
         Text(text)
             .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .frame(maxWidth: 150, alignment: .leading)
             .background(accentColor.opacity(0.16), in: Capsule())
             .overlay(
                 Capsule()

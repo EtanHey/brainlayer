@@ -32,18 +32,18 @@ enum KGAtlasLayout {
     }
 
     private static func makeRegionCenters(canvasSize: CGSize) -> [String: CGPoint] {
-        let columns: [CGFloat] = [0.22, 0.5, 0.78]
-        let rows: [CGFloat] = [0.24, 0.5, 0.76]
+        let columns: [CGFloat] = [0.26, 0.5, 0.78]
+        let rows: [CGFloat] = [0.30, 0.56, 0.76]
 
         return [
-            "person": CGPoint(x: canvasSize.width * columns[0], y: canvasSize.height * rows[0]),
+            "person": CGPoint(x: canvasSize.width * columns[0], y: canvasSize.height * rows[1]),
             "project": CGPoint(x: canvasSize.width * columns[1], y: canvasSize.height * rows[0]),
             "tool": CGPoint(x: canvasSize.width * columns[2], y: canvasSize.height * rows[0]),
-            "technology": CGPoint(x: canvasSize.width * columns[0], y: canvasSize.height * rows[1]),
+            "technology": CGPoint(x: canvasSize.width * columns[0], y: canvasSize.height * rows[2]),
             "agent": CGPoint(x: canvasSize.width * columns[1], y: canvasSize.height * rows[1]),
             "company": CGPoint(x: canvasSize.width * columns[2], y: canvasSize.height * rows[1]),
-            "topic": CGPoint(x: canvasSize.width * columns[0], y: canvasSize.height * rows[2]),
-            "decision": CGPoint(x: canvasSize.width * columns[1], y: canvasSize.height * rows[2]),
+            "topic": CGPoint(x: canvasSize.width * columns[1], y: canvasSize.height * rows[2]),
+            "decision": CGPoint(x: canvasSize.width * columns[2], y: canvasSize.height * rows[2]),
         ]
     }
 

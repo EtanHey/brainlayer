@@ -203,6 +203,7 @@ final class KGViewModel: ObservableObject {
         nodes = zip(incomingNodes, seededNodes).map { incomingNode, seededNode in
             existingNodes[incomingNode.id] == nil ? seededNode : incomingNode
         }
+        pinOwnerEntityIfPresent()
 
         // Only include edges where both endpoints exist
         edges = relationRows.compactMap { row in
@@ -234,6 +235,7 @@ final class KGViewModel: ObservableObject {
         canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         guard !nodes.isEmpty else { return }
         nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size)
+        pinOwnerEntityIfPresent()
     }
 
     // MARK: - Selection
@@ -433,6 +435,7 @@ final class KGViewModel: ObservableObject {
             let speedSq = (nodes[i].velocity.dx * nodes[i].velocity.dx) + (nodes[i].velocity.dy * nodes[i].velocity.dy)
             totalKineticEnergy += 0.5 * speedSq
         }
+        pinOwnerEntityIfPresent()
 
         return totalKineticEnergy
     }
@@ -443,6 +446,22 @@ final class KGViewModel: ObservableObject {
         for index in nodes.indices {
             nodes[index].velocity = .zero
         }
+    }
+
+    private func pinOwnerEntityIfPresent() {
+        for index in nodes.indices where isOwnerEntity(nodes[index]) {
+            nodes[index].position = ownerAnchor
+            nodes[index].velocity = .zero
+        }
+    }
+
+    private func isOwnerEntity(_ node: KGNode) -> Bool {
+        node.name.localizedCaseInsensitiveCompare("Etan Heyman") == .orderedSame
+    }
+
+    private var ownerAnchor: CGPoint {
+        let size = graphCanvasSize
+        return CGPoint(x: size.width * 0.30, y: size.height * 0.64)
     }
 
     private func nodeById(_ id: String) -> KGNode? {

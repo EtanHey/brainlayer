@@ -914,8 +914,10 @@ final class KGViewModelTests: XCTestCase {
         let nodeB = try XCTUnwrap(vm.nodes.first { $0.id == "b" })
         XCTAssertNotEqual(nodeA.position, defaultPositions["a"])
         XCTAssertNotEqual(nodeB.position, defaultPositions["b"])
-        XCTAssertEqual(nodeA.position, CGPoint(x: 264, y: 192))
-        XCTAssertEqual(nodeB.position, CGPoint(x: 600, y: 192))
+        XCTAssertEqual(nodeA.position.x, 312, accuracy: 0.001)
+        XCTAssertEqual(nodeA.position.y, 448, accuracy: 0.001)
+        XCTAssertEqual(nodeB.position.x, 600, accuracy: 0.001)
+        XCTAssertEqual(nodeB.position.y, 240, accuracy: 0.001)
     }
 
     func testLoadGraphKeepsMainActorAvailableWhileLoading() async throws {
@@ -1033,6 +1035,51 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(sleepCount, 1)
         XCTAssertEqual(reader.entityFetchCount, 1)
         XCTAssertEqual(reader.relationFetchCount, 1)
+    }
+
+    func testOwnerEntityRemainsAnchoredDuringSimulation() async throws {
+        let reader = RecordingKnowledgeGraphReader(
+            entities: [
+                BrainDatabase.KGEntityRow(
+                    id: "owner",
+                    name: "Etan Heyman",
+                    entityType: "person",
+                    description: nil,
+                    importance: 0.5,
+                    linkedChunkCount: 10
+                ),
+                BrainDatabase.KGEntityRow(
+                    id: "project",
+                    name: "brainlayer",
+                    entityType: "project",
+                    description: nil,
+                    importance: 9,
+                    linkedChunkCount: 100
+                ),
+            ],
+            relations: [
+                BrainDatabase.KGRelationRow(
+                    id: "owner-project",
+                    sourceId: "owner",
+                    targetId: "project",
+                    relationType: "builds",
+                    validUntil: nil,
+                    expiredAt: nil
+                ),
+            ]
+        )
+        let vm = KGViewModel(graphReader: reader)
+        vm.updateCanvasSize(CGSize(width: 860, height: 500))
+
+        let loaded = await vm.loadGraph()
+        XCTAssertTrue(loaded)
+        let initialOwner = try XCTUnwrap(vm.nodes.first { $0.id == "owner" })
+        _ = vm.tick()
+        let movedOwner = try XCTUnwrap(vm.nodes.first { $0.id == "owner" })
+
+        XCTAssertEqual(initialOwner.position.x, movedOwner.position.x, accuracy: 0.001)
+        XCTAssertEqual(initialOwner.position.y, movedOwner.position.y, accuracy: 0.001)
+        XCTAssertGreaterThan(movedOwner.position.y, 300)
     }
 
     func testLoadGraphEmptyDB() async throws {

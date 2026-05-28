@@ -24,7 +24,9 @@ struct KGAtlasPresentation {
         userDefaults: UserDefaults = .standard
     ) -> Snapshot {
         let visibleNodes = nodes.filter { node in
-            node.importance >= minimumImportance || node.id == selectedNodeId
+            node.importance >= minimumImportance
+                || node.id == selectedNodeId
+                || pinnedEntityNames.contains(node.name.localizedLowercase)
         }
 
         let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
@@ -85,6 +87,7 @@ struct KGAtlasPresentation {
         "topic",
         "decision",
     ]
+    private static let pinnedEntityNames: Set<String> = ["etan heyman"]
 
     private static let maxLinksPerNodeKey = "brainBar.maxLinksPerNode"
     private static let defaultMaxLinksPerNode = 50
