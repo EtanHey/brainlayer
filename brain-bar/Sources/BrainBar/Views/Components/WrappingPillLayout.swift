@@ -14,8 +14,8 @@ struct WrappingPillLayout: Layout {
         subviews: Subviews,
         cache: inout Void
     ) -> CGSize {
-        let maxWidth = proposal.width ?? subviews.reduce(CGFloat.zero) { width, subview in
-            width + subview.sizeThatFits(.unspecified).width + spacing
+        let maxWidth = proposal.width ?? subviews.enumerated().reduce(CGFloat.zero) { width, pair in
+            width + pair.element.sizeThatFits(.unspecified).width + (pair.offset > 0 ? spacing : 0)
         }
         let rows = makeRows(subviews: subviews, maxWidth: max(maxWidth, 1))
         let height = rows.reduce(CGFloat.zero) { total, row in

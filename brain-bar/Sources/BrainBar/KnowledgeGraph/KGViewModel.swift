@@ -26,6 +26,7 @@ final class KGViewModel: ObservableObject {
     @Published private(set) var selectedEntityChunkSidebarLoadFailed = false
     @Published private(set) var selectedEntityFileSidebarLoadFailed = false
     @Published private(set) var degradationState: DegradationState = .healthy
+    @Published var layoutMode: KGAtlasMode = .tieredAltitude
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
@@ -199,7 +200,11 @@ final class KGViewModel: ObservableObject {
                 velocity: existingNode?.velocity ?? .zero
             )
         }
-        let seededNodes = KGAtlasLayout.seededNodes(incomingNodes, canvasSize: graphCanvasSize)
+        let seededNodes = KGAtlasLayout.seededNodes(
+            incomingNodes,
+            canvasSize: graphCanvasSize,
+            mode: layoutMode
+        )
         nodes = zip(incomingNodes, seededNodes).map { incomingNode, seededNode in
             existingNodes[incomingNode.id] == nil ? seededNode : incomingNode
         }
@@ -234,7 +239,14 @@ final class KGViewModel: ObservableObject {
         layoutCanvasSize = size
         canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         guard !nodes.isEmpty else { return }
-        nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size)
+        nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size, mode: layoutMode)
+        pinOwnerEntityIfPresent()
+    }
+
+    func setLayoutMode(_ mode: KGAtlasMode) {
+        guard layoutMode != mode else { return }
+        layoutMode = mode
+        nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: graphCanvasSize, mode: mode)
         pinOwnerEntityIfPresent()
     }
 
@@ -424,6 +436,13 @@ final class KGViewModel: ObservableObject {
             forces[i].dy += (center.y - nodes[i].position.y) * centeringStrength
         }
 
+        if layoutMode == .tieredAltitude {
+            for i in 0..<nodes.count {
+                let targetY = tierTargetY(for: nodes[i])
+                forces[i].dy += (targetY - nodes[i].position.y) * 0.035
+            }
+        }
+
         // Apply forces with damping
         var totalKineticEnergy: CGFloat = 0
         for i in 0..<nodes.count {
@@ -461,7 +480,23 @@ final class KGViewModel: ObservableObject {
 
     private var ownerAnchor: CGPoint {
         let size = graphCanvasSize
-        return CGPoint(x: size.width * 0.30, y: size.height * 0.64)
+        switch layoutMode {
+        case .importance:
+            return CGPoint(x: size.width * 0.30, y: size.height * 0.64)
+        case .tieredAltitude:
+            return CGPoint(x: size.width * 0.30, y: size.height * 0.26)
+        }
+    }
+
+    private func tierTargetY(for node: KGNode) -> CGFloat {
+        let size = graphCanvasSize
+        return switch KGAltitudeTier.tier(for: node) {
+        case .summit: size.height * 0.26
+        case .orbit: size.height * 0.40
+        case .signal: size.height * 0.55
+        case .field: size.height * 0.70
+        case .ground: size.height * 0.84
+        }
     }
 
     private func nodeById(_ id: String) -> KGNode? {

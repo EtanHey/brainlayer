@@ -859,6 +859,12 @@ final class KGViewModelTests: XCTestCase {
         super.tearDown()
     }
 
+    func testGraphDefaultsToTieredAltitudeOptionB() {
+        let vm = KGViewModel(database: db)
+
+        XCTAssertEqual(vm.layoutMode, .tieredAltitude)
+    }
+
     func testLoadGraphPopulatesNodesAndEdges() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
@@ -904,6 +910,7 @@ final class KGViewModelTests: XCTestCase {
         try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
 
         let vm = KGViewModel(database: db)
+        vm.setLayoutMode(.importance)
         await vm.loadGraph()
         let defaultPositions = Dictionary(uniqueKeysWithValues: vm.nodes.map { ($0.id, $0.position) })
 
@@ -1069,6 +1076,7 @@ final class KGViewModelTests: XCTestCase {
             ]
         )
         let vm = KGViewModel(graphReader: reader)
+        vm.setLayoutMode(.importance)
         vm.updateCanvasSize(CGSize(width: 860, height: 500))
 
         let loaded = await vm.loadGraph()
@@ -1488,6 +1496,7 @@ final class KGCanvasSimulationTests: XCTestCase {
 
     func testStableGraphStopsWithinTwoSecondsWorthOfFrames() async {
         let vm = KGViewModel(database: db)
+        vm.setLayoutMode(.importance)
         vm.canvasCenter = CGPoint(x: 300, y: 250)
         vm.nodes = makeStableFixture(center: vm.canvasCenter)
         vm.edges = []

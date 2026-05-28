@@ -141,6 +141,7 @@ def test_helper_preserves_agent_id_for_brain_search(monkeypatch, tmp_path):
     )
 
     assert response["ok"] is True
+    assert len(calls) == 1
     assert calls[0]["agent_id"] == "codex-test-agent"
 
 

@@ -57,4 +57,26 @@ final class KGAtlasLayoutTests: XCTestCase {
         XCTAssertGreaterThan(owner.position.y, 240)
         XCTAssertLessThan(owner.position.x, 300)
     }
+
+    func testTieredAltitudeLayoutPlacesNodesInDescendingRows() {
+        let seeded = KGAtlasLayout.seededNodes(
+            [
+                KGNode(id: "owner", name: "Etan Heyman", entityType: "person", importance: 10, position: .zero),
+                KGNode(id: "claude", name: "Claude Code", entityType: "agent", importance: 6, position: .zero),
+                KGNode(id: "brainlayer", name: "brainlayer", entityType: "project", importance: 8, position: .zero),
+                KGNode(id: "scratch", name: "Scratch", entityType: "topic", importance: 1, position: .zero),
+            ],
+            canvasSize: CGSize(width: 1_000, height: 800),
+            mode: .tieredAltitude
+        )
+
+        let owner = seeded.first { $0.id == "owner" }!
+        let claude = seeded.first { $0.id == "claude" }!
+        let brainlayer = seeded.first { $0.id == "brainlayer" }!
+        let scratch = seeded.first { $0.id == "scratch" }!
+
+        XCTAssertLessThan(owner.position.y, brainlayer.position.y)
+        XCTAssertLessThan(claude.position.y, brainlayer.position.y)
+        XCTAssertLessThan(brainlayer.position.y, scratch.position.y)
+    }
 }

@@ -14,6 +14,7 @@ struct KGAtlasPresentation {
         let visibleNodes: [KGNode]
         let visibleEdges: [KGEdge]
         let selectedRegion: Region?
+        let activeAltitudeTier: KGAltitudeTier
     }
 
     static func snapshot(
@@ -21,28 +22,26 @@ struct KGAtlasPresentation {
         edges: [KGEdge],
         selectedNodeId: String?,
         minimumImportance: Double,
+        mode: KGAtlasMode = .importance,
+        altitude: Double = Double(KGAltitudeTier.signal.rawValue),
         userDefaults: UserDefaults = .standard
     ) -> Snapshot {
+        let activeAltitudeTier = KGAltitudeTier.tier(at: altitude)
+        let visibleAltitudeTiers = KGAltitudeTier.visibleTiers(at: altitude)
         let visibleNodes = nodes.filter { node in
-            node.importance >= minimumImportance
-                || node.id == selectedNodeId
-                || pinnedEntityNames.contains(node.name.localizedLowercase)
+            switch mode {
+            case .importance:
+                node.importance >= minimumImportance
+                    || node.id == selectedNodeId
+                    || pinnedEntityNames.contains(node.name.localizedLowercase)
+            case .tieredAltitude:
+                visibleAltitudeTiers.contains(KGAltitudeTier.tier(for: node))
+                    || node.id == selectedNodeId
+                    || pinnedEntityNames.contains(node.name.localizedLowercase)
+            }
         }
 
-        let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
-        let regions: [Region] = orderedEntityTypes.compactMap { entityType in
-            guard let values = grouped[entityType], !values.isEmpty else { return nil }
-            return Region(
-                entityType: entityType,
-                title: title(for: entityType),
-                nodes: values.sorted {
-                    if $0.importance == $1.importance {
-                        return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                    }
-                    return $0.importance > $1.importance
-                }
-            )
-        }
+        let regions = regions(for: visibleNodes, mode: mode)
         let renderableNodes = regions.flatMap { $0.nodes }
         let renderableIDs = Set(renderableNodes.map(\.id))
         let visibleEdges = virtualizedVisibleEdges(
@@ -59,7 +58,8 @@ struct KGAtlasPresentation {
             regions: regions,
             visibleNodes: renderableNodes,
             visibleEdges: visibleEdges,
-            selectedRegion: selectedRegion
+            selectedRegion: selectedRegion,
+            activeAltitudeTier: activeAltitudeTier
         )
     }
 
@@ -95,6 +95,42 @@ struct KGAtlasPresentation {
     private static func maxLinksPerNode(from userDefaults: UserDefaults) -> Int {
         let configuredValue = userDefaults.integer(forKey: maxLinksPerNodeKey)
         return configuredValue > 0 ? configuredValue : defaultMaxLinksPerNode
+    }
+
+    private static func regions(for visibleNodes: [KGNode], mode: KGAtlasMode) -> [Region] {
+        switch mode {
+        case .importance:
+            let grouped = Dictionary(grouping: visibleNodes, by: \.entityType)
+            return orderedEntityTypes.compactMap { entityType in
+                guard let values = grouped[entityType], !values.isEmpty else { return nil }
+                return Region(
+                    entityType: entityType,
+                    title: title(for: entityType),
+                    nodes: sortNodes(values)
+                )
+            }
+        case .tieredAltitude:
+            let grouped = Dictionary(grouping: visibleNodes) { node in
+                KGAltitudeTier.tier(for: node)
+            }
+            return KGAltitudeTier.allCases.compactMap { tier in
+                guard let values = grouped[tier], !values.isEmpty else { return nil }
+                return Region(
+                    entityType: "altitude-\(tier.rawValue)",
+                    title: tier.title,
+                    nodes: sortNodes(values)
+                )
+            }
+        }
+    }
+
+    private static func sortNodes(_ nodes: [KGNode]) -> [KGNode] {
+        nodes.sorted {
+            if $0.importance == $1.importance {
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            return $0.importance > $1.importance
+        }
     }
 
     private static func virtualizedVisibleEdges(
