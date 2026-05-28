@@ -131,7 +131,7 @@ graph LR
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta |
 |---|:---:|:---:|:---:|:---:|
-| **MCP tools** | 12 | 1 | 1 | 0 |
+| **MCP tools** | 13 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
 | **Real-time indexing** | ~1s | No | No | No |

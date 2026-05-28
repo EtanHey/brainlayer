@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-BrainLayer exposes **8 MCP tools** — 3 core (search/store/recall) + 5 knowledge graph (digest/entity/expand/update/get_person).
+BrainLayer exposes **13 MCP tools** — 3 core (search/store/recall) + 10 extended (resume/digest/entity/expand/update/get_person/tags/supersede/archive/enrich).
 
 ## brain_search
 

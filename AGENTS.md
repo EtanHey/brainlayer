@@ -19,11 +19,16 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 - `brain_search`
 - `brain_store`
 - `brain_recall`
-- `brain_expand`
+- `brain_resume`
+- `brain_tags`
 - `brain_digest`
 - `brain_entity`
+- `brain_get_person`
+- `brain_expand`
 - `brain_update`
-- `brain_tags`
+- `brain_supersede`
+- `brain_archive`
+- `brain_enrich`
 
 ## Concurrency Rules
 - One write at a time.
