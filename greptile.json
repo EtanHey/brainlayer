@@ -5,7 +5,7 @@
         "content": "Python project using SQLite + sqlite-vec for vector search. Uses pytest for testing."
       },
       {
-        "content": "MCP server with 13 tools: brain_search, brain_store, brain_recall, brain_resume, brain_entity, brain_expand, brain_update, brain_digest, brain_get_person, brain_tags, brain_supersede, brain_archive, brain_enrich."
+        "content": "MCP server with 8 tools: brain_search, brain_store, brain_recall, brain_entity, brain_update, brain_digest, brain_expand, brain_get_person."
       },
       {
         "content": "Entity resolution uses cascading pipeline: normalize → exact match → vector similarity → LLM fallback. Thresholds: 0.92 auto-match, 0.75 fuzzy, <0.75 create new."

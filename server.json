@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.etanhey/brainlayer",
   "title": "BrainLayer",
-  "description": "Persistent memory for AI agents — local-first semantic search, knowledge graph, and 13 MCP tools with ToolAnnotations. One SQLite file, no cloud, no API keys.",
+  "description": "Persistent memory for AI agents — local-first semantic search, knowledge graph, and 12 MCP tools with ToolAnnotations. One SQLite file, no cloud, no API keys.",
   "version": "1.0.0",
   "websiteUrl": "https://brainlayer.etanheyman.com",
   "repository": {
