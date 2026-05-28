@@ -98,3 +98,45 @@ async def test_brain_search_entity_route_threads_agent_id_to_kg_hybrid_search(mo
 
     assert store.kg_hybrid_kwargs is not None
     assert store.kg_hybrid_kwargs["agent_id"] == "codex-test-agent"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_think_route_threads_agent_id_to_hybrid_search(monkeypatch):
+    store = RecordingSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+
+    await call_tool(
+        "brain_search",
+        {
+            "query": "previously auth implementation",
+            "source": "all",
+            "agent_id": "codex-test-agent",
+        },
+    )
+
+    assert store.hybrid_kwargs is not None
+    assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_recall_route_threads_agent_id_to_hybrid_search(monkeypatch):
+    store = RecordingSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+
+    await call_tool(
+        "brain_search",
+        {
+            "query": "history of auth implementation",
+            "source": "all",
+            "agent_id": "codex-test-agent",
+        },
+    )
+
+    assert store.hybrid_kwargs is not None
+    assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"

@@ -783,6 +783,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(regression_result, list):
@@ -800,6 +801,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(timeline, list):
@@ -843,6 +845,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(ctx, tuple):
@@ -856,10 +859,22 @@ async def _brain_search_dispatch(
         return merged_text
 
     if _query_signals_think(query):
-        return await _think(context=query, project=project, max_results=max_results, include_audit=include_audit)
+        return await _think(
+            context=query,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+            agent_id=agent_id,
+        )
 
     if _query_signals_recall(query):
-        return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
+        return await _recall(
+            topic=query,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+            agent_id=agent_id,
+        )
 
     store = _get_vector_store()
     effective_source = None if source == "all" else source
@@ -1777,6 +1792,7 @@ async def _think(
     project: str | None = None,
     max_results: int = 10,
     include_audit: bool = False,
+    agent_id: str | None = None,
 ):
     """Execute think -- retrieve relevant memories for current task."""
     try:
@@ -1799,6 +1815,7 @@ async def _think(
                 project=normalized_project,
                 max_results=max_results,
                 include_audit=include_audit,
+                agent_id=agent_id,
             ),
         )
         structured = {
@@ -1820,6 +1837,7 @@ async def _recall(
     project: str | None = None,
     max_results: int = 10,
     include_audit: bool = False,
+    agent_id: str | None = None,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1843,6 +1861,7 @@ async def _recall(
                 project=normalized_project,
                 max_results=max_results,
                 include_audit=include_audit,
+                agent_id=agent_id,
             ),
         )
         structured = {
