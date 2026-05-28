@@ -77,6 +77,7 @@ def search(
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
+    agent_id: str = typer.Option(None, "--agent", help="Stable agent identifier for search ranking features"),
     text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search"),
     hybrid: bool = typer.Option(
         True, "--hybrid/--no-hybrid", help="Use hybrid search (semantic + keyword). Default: hybrid"
@@ -85,7 +86,7 @@ def search(
     """Search the knowledge base (sqlite-vec). Uses hybrid search by default."""
     from ..cli_new import search_command
 
-    search_command(query, n, project, content_type, text, hybrid)
+    search_command(query, n, project, content_type, agent_id, text, hybrid)
 
 
 @app.command()
