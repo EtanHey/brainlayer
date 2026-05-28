@@ -108,6 +108,7 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
             "source": "all",
             "tag": "speakers-workshop",
             "importance_min": 8,
+            "agent_id": None,
             "num_results": 3,
             "max_results": 10,
             "detail": "compact",
