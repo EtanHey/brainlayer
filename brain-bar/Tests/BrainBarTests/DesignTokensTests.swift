@@ -9,6 +9,8 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignTokens.Colors.backgroundBase.hexRGB, "#0C1220")
         XCTAssertEqual(BrainBarDesignTokens.Colors.accent.hexRGB, "#6EA0FF")
         XCTAssertEqual(BrainBarDesignTokens.Colors.accentViolet.hexRGB, "#A98BFF")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.graphCanvasLightTop.hexRGB, "#F2F2EB")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.graphCanvasLightBottom.hexRGB, "#E6EBF0")
 
         XCTAssertEqual(BrainBarDesignTokens.Glass.primaryAlpha, 0.34, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.Glass.secondaryAlpha, 0.26, accuracy: 0.001)

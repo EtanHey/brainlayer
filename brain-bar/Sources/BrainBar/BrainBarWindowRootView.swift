@@ -770,7 +770,6 @@ struct BrainBarDashboardLayout {
     let overviewMetricColumns: Int
     let diagnosticColumns: Int
     let diagnosticItemColumns: Int
-    let usesQueueRail: Bool
     let compactCards: Bool
     let outerPadding: CGFloat
     let sectionSpacing: CGFloat
@@ -792,7 +791,6 @@ struct BrainBarDashboardLayout {
         overviewMetricColumns = containerSize.width >= 980 ? 4 : 2
         diagnosticColumns = containerSize.width >= 960 ? 2 : 1
         diagnosticItemColumns = containerSize.width >= 820 ? 2 : 1
-        usesQueueRail = true
 
         compactCards = compactWidth || compactHeight
         outerPadding = compactCards ? 28 : 48

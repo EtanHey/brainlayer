@@ -20,6 +20,9 @@ enum BrainBarDesignTokens {
         static let textSecondary = NSColor.brainBarHex(0xAEBBD4)
         static let textMuted = NSColor.brainBarHex(0x6B7A98)
 
+        static let graphCanvasLightTop = NSColor.brainBarRGB(red: 242, green: 242, blue: 235)
+        static let graphCanvasLightBottom = NSColor.brainBarRGB(red: 230, green: 235, blue: 240)
+
         static let accent = NSColor.brainBarHex(0x6EA0FF)
         static let accentBright = NSColor.brainBarHex(0x8FB6FF)
         static let accentDeep = NSColor.brainBarHex(0x3F6FE0)
@@ -151,6 +154,8 @@ extension Color {
     static let brainBarTextPrimary = Color(nsColor: BrainBarDesignTokens.Colors.textPrimary)
     static let brainBarTextSecondary = Color(nsColor: BrainBarDesignTokens.Colors.textSecondary)
     static let brainBarTextMuted = Color(nsColor: BrainBarDesignTokens.Colors.textMuted)
+    static let brainBarGraphCanvasLightTop = Color(nsColor: BrainBarDesignTokens.Colors.graphCanvasLightTop)
+    static let brainBarGraphCanvasLightBottom = Color(nsColor: BrainBarDesignTokens.Colors.graphCanvasLightBottom)
     static let brainBarAccent = Color(nsColor: BrainBarDesignTokens.Colors.accent)
     static let brainBarAccentBright = Color(nsColor: BrainBarDesignTokens.Colors.accentBright)
     static let brainBarAccentDeep = Color(nsColor: BrainBarDesignTokens.Colors.accentDeep)

@@ -204,8 +204,8 @@ struct KGCanvasView: View {
                         .brainBarBackgroundBase,
                     ]
                     : [
-                        .brainBarTextPrimary,
-                        .brainBarTextSecondary,
+                        .brainBarGraphCanvasLightTop,
+                        .brainBarGraphCanvasLightBottom,
                     ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
