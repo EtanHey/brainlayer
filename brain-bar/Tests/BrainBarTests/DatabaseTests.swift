@@ -809,6 +809,63 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.primaryKind.label, "Checkpoint")
     }
 
+    func testListInjectionEventsRejectsImportedYoutubeSeedChunks() throws {
+        try db.insertChunk(
+            id: "live-hook",
+            content: "Injected project context for brainlayer hook session.",
+            sessionId: "session-live",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'precompact:live-hook',
+                tags = '["hook-injection"]'
+            WHERE id = 'live-hook'
+        """)
+
+        try db.insertChunk(
+            id: "youtube:UIy-WQCZdAM:179",
+            content: "Andrew Huberman and Andy Galpin discuss WHOOP overtraining podcast rules.",
+            sessionId: "seed-video",
+            project: "coach",
+            contentType: "transcript",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'youtube',
+                source_file = 'youtube:UIy-WQCZdAM',
+                tags = '["manual_seed","podcast"]'
+            WHERE id = 'youtube:UIy-WQCZdAM:179'
+        """)
+
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "actual live hook",
+            chunkIDs: ["live-hook"],
+            tokenCount: 24,
+            timestamp: "2026-05-29T00:01:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "video seed should not render",
+            chunkIDs: ["youtube:UIy-WQCZdAM:179"],
+            tokenCount: 57,
+            timestamp: "2026-05-29T00:02:00.000Z"
+        )
+
+        let events = try db.listInjectionEvents(sessionID: "claude-session-1", limit: 1)
+
+        XCTAssertEqual(events.map(\.query), ["actual live hook"])
+        XCTAssertEqual(events.first?.chunkIDs, ["live-hook"])
+        XCTAssertFalse(events.flatMap(\.chunks).contains { chunk in
+            chunk.source == "youtube" || chunk.sourceFile.hasPrefix("youtube:")
+        })
+    }
+
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
         try db.recordInjectionEvent(
             sessionID: "session-a",
