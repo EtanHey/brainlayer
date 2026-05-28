@@ -57,56 +57,85 @@ final class InjectionStore: ObservableObject {
     }
 
     private let reader: InjectionEventReading
+    private let pollInterval: Duration
+    private let refreshDebounceInterval: TimeInterval
     private var pollTask: Task<Void, Never>?
+    private var pendingRefreshTask: Task<Void, Never>?
     private var isRunning = false
+    private var isActive = false
+    private var observerInstalled = false
     private var lastDataVersion: Int?
     private var currentSessionID: String?
     private var currentLimit = 50
     private var recoveryPhase: RecoveryPhase = .healthy
 
     init(databasePath: String) throws {
-        self.reader = BrainDatabase(path: databasePath)
+        self.reader = BrainDatabase(
+            path: databasePath,
+            openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        self.pollInterval = .milliseconds(750)
+        self.refreshDebounceInterval = 0.15
     }
 
-    init(reader: InjectionEventReading) {
+    init(
+        reader: InjectionEventReading,
+        pollInterval: Duration = .milliseconds(750),
+        refreshDebounceInterval: TimeInterval = 0.15
+    ) {
         self.reader = reader
+        self.pollInterval = pollInterval
+        self.refreshDebounceInterval = refreshDebounceInterval
     }
 
-    func start(sessionID: String? = nil, limit: Int = 50) {
+    func start(sessionID: String? = nil, limit: Int = 50, active: Bool = true) {
         let parametersChanged = currentSessionID != sessionID || currentLimit != limit
         currentSessionID = sessionID
         currentLimit = limit
 
         guard !isRunning else {
+            setActive(active)
             if parametersChanged {
-                refresh(force: true)
+                scheduleRefresh(force: true, immediate: true)
             }
             return
         }
 
         isRunning = true
-        installDarwinObserver()
-        refresh(force: true)
-
-        pollTask = Task { [weak self] in
-            while let self, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled else { break }
-                self.refresh(force: false)
-            }
-        }
+        setActive(active)
     }
 
     func stop() {
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = nil
         pollTask?.cancel()
         pollTask = nil
 
-        if isRunning {
+        if observerInstalled {
             removeDarwinObserver()
         }
 
+        isActive = false
         isRunning = false
         reader.close()
+    }
+
+    func setActive(_ active: Bool) {
+        guard isRunning else { return }
+        guard isActive != active else { return }
+
+        isActive = active
+        if active {
+            installDarwinObserver()
+            scheduleRefresh(force: events.isEmpty, immediate: true)
+            startPolling()
+        } else {
+            pendingRefreshTask?.cancel()
+            pendingRefreshTask = nil
+            pollTask?.cancel()
+            pollTask = nil
+            removeDarwinObserver()
+        }
     }
 
     deinit {
@@ -131,11 +160,55 @@ final class InjectionStore: ObservableObject {
     }
 
     fileprivate func handleDatabaseMutationNotification() {
-        refresh(force: false)
+        scheduleRefresh(force: false)
     }
 
     func refreshForTesting(force: Bool) {
         refresh(force: force)
+    }
+
+    func scheduleRefreshForTesting(force: Bool) {
+        scheduleRefresh(force: force)
+    }
+
+    private func startPolling() {
+        guard pollTask == nil else { return }
+        let interval = pollInterval
+        pollTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { break }
+                await MainActor.run {
+                    guard self.isActive else { return }
+                    self.scheduleRefresh(force: false, immediate: true)
+                }
+            }
+        }
+    }
+
+    private func scheduleRefresh(force: Bool, immediate: Bool = false) {
+        guard isActive else { return }
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = nil
+
+        if immediate || refreshDebounceInterval <= 0 {
+            refresh(force: force)
+            return
+        }
+
+        let delay = refreshDebounceInterval
+        pendingRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            await MainActor.run {
+                guard let self, self.isActive else { return }
+                self.pendingRefreshTask = nil
+                self.refresh(force: force)
+            }
+        }
     }
 
     private func refresh(force: Bool) {
@@ -174,6 +247,7 @@ final class InjectionStore: ObservableObject {
     }
 
     private func installDarwinObserver() {
+        guard !observerInstalled else { return }
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterAddObserver(
             center,
@@ -183,9 +257,11 @@ final class InjectionStore: ObservableObject {
             nil,
             .deliverImmediately
         )
+        observerInstalled = true
     }
 
     private func removeDarwinObserver() {
+        guard observerInstalled else { return }
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterRemoveObserver(
             center,
@@ -193,5 +269,6 @@ final class InjectionStore: ObservableObject {
             CFNotificationName(BrainDatabase.dashboardDidChangeNotification as CFString),
             nil
         )
+        observerInstalled = false
     }
 }

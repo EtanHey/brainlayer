@@ -28,6 +28,7 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var isManualRefreshInProgress = false
     @Published private(set) var lastDataFetchedAt: Date?
+    @Published private(set) var heartbeat: DashboardHeartbeat
 
     private let dbPath: String
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
@@ -47,6 +48,8 @@ final class StatsCollector: ObservableObject {
     private var lastAgentActivitySampleAt: Date?
     private var lastNonForcedStatsRefreshAt: Date?
     private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
+    private var lastHeartbeatLogKey: String?
+    private var lastHeartbeatLogAt: Date?
 
     init(
         dbPath: String,
@@ -80,6 +83,7 @@ final class StatsCollector: ObservableObject {
         )
         self.agentActivity = .empty
         self.state = .degraded
+        self.heartbeat = .empty
     }
 
     func start() {
@@ -342,18 +346,53 @@ final class StatsCollector: ObservableObject {
     }
 
     fileprivate func handleDatabaseMutationNotification() {
-        requestRefresh(force: false, trigger: .auto)
+        recordHeartbeat(
+            event: nil,
+            trigger: "darwin_db_notification",
+            timestamp: Date()
+        )
+        schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
     }
 
     private func handleBrainBusEvent(_ event: BrainBusEvent) {
+        recordHeartbeat(
+            event: event,
+            trigger: "brain_bus",
+            timestamp: event.generatedAt
+        )
+
         switch event.type {
         case .healthTick:
             daemon = daemonMonitor.sample()
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
-            requestRefresh(force: false, trigger: .auto)
+            break
         }
+    }
+
+    private func recordHeartbeat(
+        event: BrainBusEvent?,
+        trigger: String,
+        timestamp: Date
+    ) {
+        heartbeat = heartbeat.recording(event: event, at: timestamp)
+        let eventType = event?.type.rawValue ?? "database_changed"
+        let logKey = "\(trigger):\(eventType)"
+        if lastHeartbeatLogKey == logKey,
+           let lastHeartbeatLogAt,
+           timestamp.timeIntervalSince(lastHeartbeatLogAt) < 0.5 {
+            return
+        }
+        lastHeartbeatLogKey = logKey
+        lastHeartbeatLogAt = timestamp
+        NSLog(
+            "[BrainBar] heartbeat: %@ trigger=%@ type=%@ sequence=%d",
+            ISO8601DateFormatter().string(from: timestamp),
+            trigger,
+            eventType,
+            event?.sequence ?? 0
+        )
     }
 
     private func logDashboardRefresh(

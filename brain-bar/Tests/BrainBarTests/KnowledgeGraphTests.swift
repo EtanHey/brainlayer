@@ -935,6 +935,50 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertTrue(mainActorRanDuringLoad, "loadGraph should suspend off the MainActor while database work runs")
     }
 
+    func testLoadGraphIfNeededReusesCachedGraphOnReactivation() async throws {
+        let reader = RecordingKnowledgeGraphReader(
+            entities: [
+                BrainDatabase.KGEntityRow(
+                    id: "a",
+                    name: "Alice",
+                    entityType: "person",
+                    description: nil,
+                    importance: 5,
+                    linkedChunkCount: 0
+                ),
+                BrainDatabase.KGEntityRow(
+                    id: "b",
+                    name: "BrainLayer",
+                    entityType: "project",
+                    description: nil,
+                    importance: 5,
+                    linkedChunkCount: 0
+                ),
+            ],
+            relations: [
+                BrainDatabase.KGRelationRow(
+                    id: "rel-a-b",
+                    sourceId: "a",
+                    targetId: "b",
+                    relationType: "builds",
+                    validUntil: nil,
+                    expiredAt: nil
+                ),
+            ]
+        )
+        let vm = KGViewModel(graphReader: reader)
+
+        let firstLoad = await vm.loadGraphIfNeeded()
+        let secondLoad = await vm.loadGraphIfNeeded()
+
+        XCTAssertTrue(firstLoad)
+        XCTAssertTrue(secondLoad)
+        XCTAssertEqual(reader.entityFetchCount, 1)
+        XCTAssertEqual(reader.relationFetchCount, 1)
+        XCTAssertEqual(vm.nodes.count, 2)
+        XCTAssertEqual(vm.edges.count, 1)
+    }
+
     func testLoadGraphEmptyDB() async throws {
         let vm = KGViewModel(database: db)
         await vm.loadGraph()
@@ -1389,6 +1433,35 @@ final class KGCanvasSimulationTests: XCTestCase {
         XCTAssertEqual(tickCount, 2, "A previously idle simulation should restart on the next appearance")
     }
 
+    func testInactiveSimulationDoesNotTickUntilActivated() async {
+        let controller = KGSimulationController(
+            frameDuration: .milliseconds(33),
+            sleep: { _ in await Task.yield() }
+        )
+
+        var tickCount = 0
+        controller.setActive(false)
+        controller.start {
+            tickCount += 1
+            return 1
+        }
+
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertFalse(controller.timerActive)
+        XCTAssertEqual(tickCount, 0)
+
+        controller.setActive(true)
+        controller.start {
+            tickCount += 1
+            return 0
+        }
+        await waitForSimulationToStop(controller)
+
+        XCTAssertEqual(tickCount, 1)
+    }
+
     private func waitForSimulationToStop(_ controller: KGSimulationController, iterations: Int = 200) async {
         for _ in 0..<iterations where controller.timerActive {
             await Task.yield()
@@ -1429,5 +1502,30 @@ final class KGCanvasSimulationTests: XCTestCase {
                 velocity: .zero
             ),
         ]
+    }
+}
+
+private final class RecordingKnowledgeGraphReader: KnowledgeGraphReading, @unchecked Sendable {
+    private let entities: [BrainDatabase.KGEntityRow]
+    private let relations: [BrainDatabase.KGRelationRow]
+    private(set) var entityFetchCount = 0
+    private(set) var relationFetchCount = 0
+
+    init(
+        entities: [BrainDatabase.KGEntityRow],
+        relations: [BrainDatabase.KGRelationRow]
+    ) {
+        self.entities = entities
+        self.relations = relations
+    }
+
+    func fetchKGEntities(limit: Int) throws -> [BrainDatabase.KGEntityRow] {
+        entityFetchCount += 1
+        return Array(entities.prefix(limit))
+    }
+
+    func fetchKGRelations(limit: Int) throws -> [BrainDatabase.KGRelationRow] {
+        relationFetchCount += 1
+        return Array(relations.prefix(limit))
     }
 }

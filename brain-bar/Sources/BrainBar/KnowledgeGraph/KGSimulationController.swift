@@ -14,6 +14,7 @@ final class KGSimulationController {
     private let energyThreshold: CGFloat
     private let sleep: SleepHandler
     private var simulationTask: Task<Void, Never>?
+    private var isActive = true
 
     init(
         frameDuration: Duration = KGSimulationController.defaultFrameDuration,
@@ -28,6 +29,7 @@ final class KGSimulationController {
     }
 
     func start(tick: @escaping TickHandler) {
+        guard isActive else { return }
         guard !timerActive else { return }
 
         timerActive = true
@@ -50,6 +52,13 @@ final class KGSimulationController {
         timerActive = false
         simulationTask?.cancel()
         simulationTask = nil
+    }
+
+    func setActive(_ active: Bool) {
+        isActive = active
+        if !active {
+            stop()
+        }
     }
 
     deinit {

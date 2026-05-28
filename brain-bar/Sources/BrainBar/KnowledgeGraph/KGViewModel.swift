@@ -37,6 +37,7 @@ final class KGViewModel: ObservableObject {
     private var selectedEntityFileCursor: BrainDatabase.SourceFileCursor?
     private var selectedEntityLoadTask: Task<Void, Never>?
     private var selectedEntityGeneration = 0
+    private var hasLoadedGraph = false
     private let selectedEntityChunkPageSize = 15
     private let selectedEntityFilePageSize = 15
 
@@ -78,6 +79,7 @@ final class KGViewModel: ObservableObject {
                 let graph = try await Self.fetchGraphRows(reader: graphReader)
                 applyGraph(entityRows: graph.entities, relationRows: graph.relations)
                 degradationState = .healthy
+                hasLoadedGraph = true
                 return true
             } catch {
                 lastError = error
@@ -96,6 +98,16 @@ final class KGViewModel: ObservableObject {
         // Keep previously-loaded nodes/edges so the user sees last-known-good
         // data rather than a blank canvas — degraded ≠ hidden.
         return false
+    }
+
+    @discardableResult
+    func loadGraphIfNeeded(
+        retrySleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> Bool {
+        if hasLoadedGraph {
+            return true
+        }
+        return await loadGraph(retrySleep: retrySleep)
     }
 
     @discardableResult

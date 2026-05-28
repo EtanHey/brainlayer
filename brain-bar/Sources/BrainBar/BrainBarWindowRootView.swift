@@ -116,7 +116,7 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var injectionsContent: some View {
         if let store = runtime.injectionStore {
-            BrainBarInjectionTab(store: store)
+            BrainBarInjectionTab(store: store, isActive: selectedTab == .injections && windowObserver.isWindowVisible)
         } else {
             BrainBarLoadingView(title: "Injections", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)
         }
@@ -125,7 +125,7 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var graphContent: some View {
         if let database = runtime.database {
-            BrainBarGraphTab(database: database)
+            BrainBarGraphTab(database: database, isActive: selectedTab == .graph && windowObserver.isWindowVisible)
         } else {
             BrainBarLoadingView(title: "Graph", subtitle: "Knowledge graph unavailable.")
         }
@@ -398,6 +398,12 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
+            if let heartbeatText {
+                Text("Heartbeat: \(heartbeatText)")
+                    .font(.system(size: 11, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: 0)
         }
         .foregroundStyle(.secondary)
@@ -407,6 +413,12 @@ private struct BrainBarDashboardView: View {
     private var dataFetchedText: String {
         guard let lastDataFetchedAt = collector.lastDataFetchedAt else { return "not yet" }
         return DashboardMetricFormatter.absoluteTimeString(lastDataFetchedAt)
+    }
+
+    private var heartbeatText: String? {
+        guard let updatedAt = collector.heartbeat.updatedAt else { return nil }
+        let type = collector.heartbeat.lastEvent?.type.rawValue ?? "db"
+        return "\(type) \(DashboardMetricFormatter.absoluteTimeString(updatedAt))"
     }
 
     private var overviewBadgeRow: some View {
@@ -810,25 +822,32 @@ struct BrainBarDashboardLayout {
 
 private struct BrainBarInjectionTab: View {
     let store: InjectionStore
+    let isActive: Bool
     @State private var filterText = ""
 
     var body: some View {
         InjectionFeedView(store: store, filterText: $filterText)
             .padding(16)
-            .onAppear { store.start() }
+            .onAppear { store.start(active: isActive) }
+            .onChange(of: isActive) { _, active in
+                store.setActive(active)
+            }
+            .onDisappear { store.setActive(false) }
     }
 }
 
 private struct BrainBarGraphTab: View {
+    let isActive: Bool
     @StateObject private var viewModel: KGViewModel
 
-    init(database: BrainDatabase) {
+    init(database: BrainDatabase, isActive: Bool) {
+        self.isActive = isActive
         _viewModel = StateObject(wrappedValue: KGViewModel(database: database))
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            KGCanvasView(viewModel: viewModel)
+            KGCanvasView(viewModel: viewModel, isActive: isActive)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if viewModel.degradationState.isDegraded {
@@ -1203,6 +1222,7 @@ private struct WindowAttachmentView: NSViewRepresentable {
 @MainActor
 private final class BrainBarWindowObserver: ObservableObject {
     @Published private(set) var isContentReady = false
+    @Published private(set) var isWindowVisible = true
 
     private let coordinator: BrainBarWindowCoordinator
     private var observers: [NSObjectProtocol] = []
@@ -1223,6 +1243,7 @@ private final class BrainBarWindowObserver: ObservableObject {
         removeObservers()
         configure(window: window)
         coordinator.attach(window: window)
+        isWindowVisible = window.isVisible
 
         if needsPreparation {
             DispatchQueue.main.async { [weak self, weak window] in
@@ -1252,6 +1273,24 @@ private final class BrainBarWindowObserver: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.coordinator.captureCurrentFrame()
+                }
+            },
+            center.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                Task { @MainActor [weak self, weak window] in
+                    self?.isWindowVisible = window?.isVisible == true
+                }
+            },
+            center.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.isWindowVisible = false
                 }
             },
         ]

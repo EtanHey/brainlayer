@@ -657,6 +657,30 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
+    func testBrainBusEventsUpdateHeartbeatWithoutHeavyStatsRefresh() async throws {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60,
+            autoRefreshInterval: 60,
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+
+        eventSource.publish(.lastChunkID("heartbeat-only"))
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.lastChunkID == "heartbeat-only" }
+        try await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertEqual(collector.heartbeat.lastEvent?.type, .lastChunkID)
+        XCTAssertEqual(collector.lastDataFetchedAt, fetchedAt)
+    }
+
+    @MainActor
     func testStatsCollectorComputesPendingStoreFlushRateFromDepthDrops() async throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-collector-\(UUID().uuidString).jsonl")
@@ -1038,6 +1062,7 @@ final class DashboardTests: XCTestCase {
 private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecked Sendable {
     private let lock = NSLock()
     private var requests = 0
+    private var continuation: AsyncStream<BrainBusEvent>.Continuation?
 
     var streamRequestCount: Int {
         lock.withLock { requests }
@@ -1047,7 +1072,15 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
         lock.withLock {
             requests += 1
         }
-        return AsyncStream { _ in }
+        return AsyncStream { continuation in
+            lock.withLock {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func publish(_ event: BrainBusEvent) {
+        lock.withLock { continuation }?.yield(event)
     }
 }
 
