@@ -41,9 +41,9 @@ enum QuickCaptureFeedback: Equatable {
         case .idle:
             return .clear
         case .success:
-            return Color(nsColor: .systemGreen)
+            return BrainBarStateTheme.active.theme.swiftUIColor
         case .error:
-            return Color(nsColor: .systemRed)
+            return BrainBarStateTheme.error.theme.swiftUIColor
         }
     }
 }
@@ -865,15 +865,15 @@ struct QuickCapturePanelView: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color.brainBarGlassPrimary)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Color.brainBarWhite.opacity(0.08), lineWidth: 1)
                 )
                 .shadow(color: .black.opacity(0.18), radius: 30, y: 10)
 
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color(nsColor: .systemGreen).opacity(flashOpacity))
+                .fill(BrainBarStateTheme.active.theme.swiftUIColor.opacity(flashOpacity))
                 .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 14) {
@@ -965,7 +965,7 @@ struct QuickCapturePanelView: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 14)
-                            .fill(Color(nsColor: .controlBackgroundColor))
+                            .fill(Color.brainBarGlassSecondary)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 14)
@@ -974,7 +974,7 @@ struct QuickCapturePanelView: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: statusSymbol)
-                        .foregroundStyle(viewModel.feedback.isIdle ? Color.secondary : viewModel.feedback.tintColor)
+                        .foregroundStyle(viewModel.feedback.isIdle ? Color.brainBarTextSecondary : viewModel.feedback.tintColor)
                     Text(viewModel.statusText)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(viewModel.feedback.isIdle ? .secondary : viewModel.feedback.tintColor)
@@ -1035,7 +1035,7 @@ struct QuickCapturePanelView: View {
     private var borderColor: Color {
         switch viewModel.feedback {
         case .idle:
-            return Color.white.opacity(0.08)
+            return Color.brainBarWhite.opacity(0.08)
         case .success, .error:
             return viewModel.feedback.tintColor.opacity(0.85)
         }
@@ -1068,7 +1068,7 @@ struct QuickCapturePanelView: View {
         .focusable(false)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(Color.brainBarGlassSecondary)
         )
     }
 }
@@ -1087,12 +1087,12 @@ private struct QuickCaptureModeButton: View {
                 .padding(.vertical, 8)
                 .background(
                     Capsule()
-                        .fill(isSelected ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
+                        .fill(isSelected ? Color.brainBarAccent.opacity(0.18) : Color.brainBarGlassSecondary)
                 )
         }
         .buttonStyle(.plain)
         .focusable(false)
-        .foregroundStyle(isSelected ? Color.accentColor : .primary)
+        .foregroundStyle(isSelected ? Color.brainBarAccent : .primary)
         .keyboardShortcut(shortcut, modifiers: [.command])
     }
 }
@@ -1115,7 +1115,7 @@ private struct LegacySearchResultsList: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 16)
-                                .fill(Color(nsColor: .controlBackgroundColor))
+                                .fill(Color.brainBarGlassSecondary)
                         )
                 } else {
                     ForEach(results) { row in
@@ -1136,7 +1136,7 @@ private struct LegacySearchResultsList: View {
                         .overlay(
                             RoundedRectangle(cornerRadius: 16)
                                 .strokeBorder(
-                                    row.id == selectedResultID ? Color.accentColor.opacity(0.55) : Color.clear,
+                                    row.id == selectedResultID ? Color.brainBarAccent.opacity(0.55) : Color.brainBarClear,
                                     lineWidth: 1
                                 )
                         )
@@ -1144,7 +1144,7 @@ private struct LegacySearchResultsList: View {
                             if row.id == copiedResultID {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Color(nsColor: .systemGreen))
+                                    .foregroundStyle(BrainBarStateTheme.active.theme.swiftUIColor)
                                     .padding(10)
                                     .transition(.scale.combined(with: .opacity))
                             }
@@ -1168,11 +1168,11 @@ private struct LegacySearchResultsList: View {
 
     private func backgroundColor(for row: QuickCaptureSearchRow) -> Color {
         if row.id == copiedResultID {
-            return Color(nsColor: .systemGreen).opacity(0.16)
+            return BrainBarStateTheme.active.theme.swiftUIColor.opacity(0.16)
         }
         if row.id == selectedResultID {
-            return Color.accentColor.opacity(0.16)
+            return Color.brainBarAccent.opacity(0.16)
         }
-        return Color(nsColor: .controlBackgroundColor)
+        return Color.brainBarGlassSecondary
     }
 }

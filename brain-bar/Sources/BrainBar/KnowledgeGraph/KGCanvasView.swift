@@ -178,7 +178,7 @@ struct KGCanvasView: View {
         }
         .background(
             GeometryReader { geo in
-                Color.clear
+                Color.brainBarClear
                     // This reports the actual drawable Canvas size after the
                     // sidebar and padding have been applied.
                     .onAppear { setCanvas(size: geo.size) }
@@ -200,12 +200,12 @@ struct KGCanvasView: View {
             LinearGradient(
                 colors: colorScheme == .dark
                     ? [
-                        Color(red: 0.06, green: 0.07, blue: 0.10),
-                        Color(red: 0.09, green: 0.11, blue: 0.14),
+                        .brainBarBackgroundAbyss,
+                        .brainBarBackgroundBase,
                     ]
                     : [
-                        Color(red: 0.95, green: 0.95, blue: 0.92),
-                        Color(red: 0.90, green: 0.92, blue: 0.94),
+                        .brainBarGraphCanvasLightTop,
+                        .brainBarGraphCanvasLightBottom,
                     ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -214,7 +214,7 @@ struct KGCanvasView: View {
             VStack(spacing: 64) {
                 ForEach(0..<4, id: \.self) { _ in
                     Rectangle()
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.04))
+                        .fill(Color.brainBarTextPrimary.opacity(colorScheme == .dark ? 0.05 : 0.04))
                         .frame(height: 1)
                 }
             }
@@ -277,7 +277,7 @@ struct KGCanvasView: View {
                         .padding(.vertical, 6)
                         .background(
                             Capsule()
-                                .fill(Color.primary.opacity(0.07))
+                                .fill(Color.brainBarTextPrimary.opacity(0.07))
                         )
                     }
                 }
@@ -357,7 +357,7 @@ struct KGCanvasView: View {
 
         let label = Text(region.title.uppercased())
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundColor(Color.primary.opacity(0.55))
+            .foregroundColor(Color.brainBarTextPrimary.opacity(0.55))
         context.draw(
             context.resolve(label),
             at: CGPoint(x: rect.midX, y: rect.minY - 14),
@@ -441,15 +441,15 @@ struct KGCanvasView: View {
 
     private var toolbarBackground: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color(nsColor: .windowBackgroundColor).opacity(colorScheme == .dark ? 0.82 : 0.9))
+            .fill(Color.brainBarGlassPrimary.opacity(colorScheme == .dark ? 0.82 : 0.9))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.brainBarTextPrimary.opacity(0.08), lineWidth: 1)
             )
     }
 
     private var pageBackground: some View {
-        Color(nsColor: .windowBackgroundColor)
+        Color.brainBarGlassPrimary
     }
 
     private func labelChip(_ text: String) -> some View {
@@ -459,7 +459,7 @@ struct KGCanvasView: View {
             .padding(.vertical, 6)
             .background(
                 Capsule()
-                    .fill(Color.primary.opacity(0.08))
+                    .fill(Color.brainBarTextPrimary.opacity(0.08))
             )
     }
 

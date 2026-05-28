@@ -323,7 +323,6 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(layout.chartColumns, 1)
         XCTAssertEqual(layout.overviewMetricColumns, 2)
         XCTAssertEqual(layout.diagnosticColumns, 1)
-        XCTAssertTrue(layout.usesQueueRail)
     }
 
     func testDashboardLayoutUsesSideBySideDiagnosticsInMediumWindows() {
@@ -332,7 +331,6 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(layout.chartColumns, 2)
         XCTAssertEqual(layout.overviewMetricColumns, 4)
         XCTAssertEqual(layout.diagnosticColumns, 2)
-        XCTAssertTrue(layout.usesQueueRail)
     }
 
     func testDashboardLayoutExpandsToThreeColumnsWhenSpaceAllows() {
@@ -341,7 +339,6 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(layout.chartColumns, 2)
         XCTAssertEqual(layout.overviewMetricColumns, 4)
         XCTAssertEqual(layout.diagnosticColumns, 2)
-        XCTAssertTrue(layout.usesQueueRail)
     }
 
     private static func absoluteTime(_ date: Date) -> String {

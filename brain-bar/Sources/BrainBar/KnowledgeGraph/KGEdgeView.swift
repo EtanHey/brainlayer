@@ -16,8 +16,8 @@ enum KGEdgeRenderer {
         path.addLine(to: targetPos)
 
         let color: Color = isHighlighted
-            ? (darkMode ? .white : .black.opacity(0.8))
-            : (darkMode ? .gray.opacity(0.35) : .black.opacity(0.18))
+            ? (darkMode ? .brainBarWhite : .brainBarBlack.opacity(0.8))
+            : (darkMode ? .brainBarTextMuted.opacity(0.35) : .brainBarBlack.opacity(0.18))
         context.stroke(path, with: .color(color), lineWidth: isHighlighted ? 2 : 1)
 
         // Relation label at midpoint
@@ -29,8 +29,8 @@ enum KGEdgeRenderer {
             .font(.system(size: 8))
             .foregroundColor(
                 isHighlighted
-                    ? (darkMode ? .white.opacity(0.9) : .black.opacity(0.75))
-                    : (darkMode ? .gray.opacity(0.5) : .black.opacity(0.4))
+                    ? (darkMode ? Color.brainBarWhite.opacity(0.9) : Color.brainBarBlack.opacity(0.75))
+                    : (darkMode ? Color.brainBarTextMuted.opacity(0.5) : Color.brainBarBlack.opacity(0.4))
             )
         context.draw(context.resolve(label), at: mid, anchor: .center)
     }

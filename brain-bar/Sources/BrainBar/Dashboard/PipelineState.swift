@@ -32,15 +32,19 @@ enum PipelineIndicatorStatus: Sendable, Equatable {
     }
 
     var color: NSColor {
+        stateTheme.theme.color
+    }
+
+    var stateTheme: BrainBarStateTheme {
         switch self {
         case .live:
-            return .systemGreen
+            return .active
         case .queued:
-            return .systemOrange
+            return .loading
         case .idle:
-            return .secondaryLabelColor
+            return .idle
         case .unavailable:
-            return .systemRed
+            return .error
         }
     }
 }
@@ -219,8 +223,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes)
-        let ingressColor = NSColor.systemBlue
-        let enrichmentColor = NSColor.systemGreen
+        let ingressColor = BrainBarStateTheme.loading.theme.color
+        let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
         let enrichmentsLive = stats.eventIsLive(stats.lastEnrichedAt, now: now)
@@ -511,15 +515,19 @@ enum PipelineState: String, Sendable, Equatable {
     }
 
     var color: NSColor {
+        stateTheme.theme.color
+    }
+
+    var stateTheme: BrainBarStateTheme {
         switch self {
         case .degraded:
-            return .systemOrange
+            return .degraded
         case .indexing:
-            return .systemBlue
+            return .loading
         case .enriching:
-            return .systemGreen
+            return .active
         case .idle:
-            return .systemGray
+            return .idle
         }
     }
 }

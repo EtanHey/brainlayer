@@ -31,7 +31,7 @@ struct InjectionSummaryView: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(Color.brainBarGlassSecondary)
         )
     }
 }

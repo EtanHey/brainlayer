@@ -38,7 +38,7 @@ private struct BrainBarCommandBarReady: View {
         .frame(height: 40)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.85))
+                .fill(Color.brainBarGlassSecondary.opacity(0.85))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -51,11 +51,11 @@ private struct BrainBarCommandBarReady: View {
     private var borderColor: Color {
         switch viewModel.feedback {
         case .idle:
-            return Color.white.opacity(0.08)
+            return Color.brainBarWhite.opacity(0.08)
         case .success:
-            return Color(nsColor: .systemGreen).opacity(0.55)
+            return BrainBarStateTheme.active.theme.swiftUIColor.opacity(0.55)
         case .error:
-            return Color(nsColor: .systemRed).opacity(0.55)
+            return BrainBarStateTheme.error.theme.swiftUIColor.opacity(0.55)
         }
     }
 }
@@ -76,11 +76,11 @@ private struct BrainBarCommandBarPlaceholder: View {
         .frame(height: 40)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+                .fill(Color.brainBarGlassSecondary.opacity(0.45))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                .strokeBorder(Color.brainBarWhite.opacity(0.06), lineWidth: 1)
         )
     }
 }
@@ -101,10 +101,10 @@ private struct ModePillPair: View {
         }
         .padding(3)
         .background(
-            Capsule().fill(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+            Capsule().fill(Color.brainBarGlassPrimary.opacity(0.6))
         )
         .overlay(
-            Capsule().strokeBorder(Color.white.opacity(0.05), lineWidth: 0.5)
+            Capsule().strokeBorder(Color.brainBarWhite.opacity(0.05), lineWidth: 0.5)
         )
     }
 }
@@ -121,9 +121,9 @@ private struct ModePill: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(
-                    Capsule().fill(isActive ? Color.accentColor : Color.clear)
+                    Capsule().fill(isActive ? Color.brainBarAccent : Color.brainBarClear)
                 )
-                .foregroundStyle(isActive ? Color.white : Color.secondary)
+                .foregroundStyle(isActive ? Color.brainBarWhite : Color.brainBarTextSecondary)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -320,7 +320,7 @@ private struct BrainBarCommandBarResultsOverlayGate: View {
                 // Full-area transparent tap-catcher UNDER the results card.
                 // Clicks outside the card dismiss the overlay without clearing
                 // the typed query (the dismissed flag resets on next keystroke).
-                Color.clear
+                Color.brainBarClear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         viewModel.dismissSearchOverlay()
@@ -360,7 +360,7 @@ private struct BrainBarCommandBarResultsOverlayReady: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                .strokeBorder(Color.brainBarWhite.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
     }
@@ -369,7 +369,7 @@ private struct BrainBarCommandBarResultsOverlayReady: View {
     private var emptyState: some View {
         HStack(spacing: 10) {
             Image(systemName: viewModel.feedback.isIdle ? "magnifyingglass" : "exclamationmark.triangle.fill")
-                .foregroundStyle(viewModel.feedback.isIdle ? Color.secondary : viewModel.feedback.tintColor)
+                .foregroundStyle(viewModel.feedback.isIdle ? Color.brainBarTextSecondary : viewModel.feedback.tintColor)
             if viewModel.feedback.isIdle {
                 Text("No matches yet for \"\(viewModel.inputText)\"")
                     .font(.system(size: 13, weight: .medium))
@@ -444,7 +444,7 @@ private struct BrainBarCommandBarResultRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
-                    isSelected ? Color.accentColor.opacity(0.45) : Color.clear,
+                    isSelected ? Color.brainBarAccent.opacity(0.45) : Color.brainBarClear,
                     lineWidth: 1
                 )
         )
@@ -452,7 +452,7 @@ private struct BrainBarCommandBarResultRow: View {
             if isCopied {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemGreen))
+                    .foregroundStyle(BrainBarStateTheme.active.theme.swiftUIColor)
                     .padding(6)
                     .transition(.scale.combined(with: .opacity))
             }
@@ -481,11 +481,11 @@ private struct BrainBarCommandBarResultRow: View {
 
     private var rowBackground: Color {
         if isCopied {
-            return Color(nsColor: .systemGreen).opacity(0.16)
+            return BrainBarStateTheme.active.theme.swiftUIColor.opacity(0.16)
         }
         if isSelected {
-            return Color.accentColor.opacity(0.14)
+            return Color.brainBarAccent.opacity(0.14)
         }
-        return Color.clear
+        return Color.brainBarClear
     }
 }
