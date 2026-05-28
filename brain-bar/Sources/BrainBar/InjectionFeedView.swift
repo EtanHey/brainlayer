@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -63,8 +64,8 @@ struct InjectionFeedView: View {
     let store: InjectionStore
     @Binding var filterText: String
     @StateObject private var presentationModel = InjectionFeedPresentationModel()
-    @State private var expandedEventIDs: Set<Int64> = []
     @State private var expandedBurstIDs: Set<String> = []
+    @State private var copiedContinuationBurstID: String?
     @State private var conversationSelection = InjectionConversationSelection()
     @State private var loadingConversationChunkID: String?
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
@@ -287,21 +288,43 @@ struct InjectionFeedView: View {
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("\(burst.chunkCount)")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                    Text("retrieved chunks")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 8) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(burst.chunkCount)")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                        Text("retrieved chunks")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // QA #56: the expand affordance was a faint text link that hid
+                    // the rest of the hits — give it real button weight.
                     Button {
                         toggleBurst(burst.id)
                     } label: {
                         Text(isExpanded ? "Collapse" : "Expand")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.blue)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color.blue.opacity(0.14)))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isExpanded ? "Collapse burst" : "Expand burst")
+
+                    // QA #51: copy a resume command to continue this exact thread.
+                    Button {
+                        copyContinuation(for: burst)
+                    } label: {
+                        Label(
+                            copiedContinuationBurstID == burst.id ? "Copied" : "Copy to continue",
+                            systemImage: copiedContinuationBurstID == burst.id ? "checkmark" : "arrow.right.doc.on.clipboard"
+                        )
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Copy command to continue this thread")
                 }
             }
 
@@ -357,15 +380,19 @@ struct InjectionFeedView: View {
     }
 
     private func ribbonHeader(_ bucket: InjectionPresentation.RibbonBucket) -> some View {
+        // QA #57: the time-range header (e.g. "1-2h ago") had no left padding, so
+        // the label clipped against the edge. Pad horizontally and span full width.
         HStack(spacing: 10) {
             Text(bucket.title)
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
 
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
         }
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial)
@@ -399,20 +426,16 @@ struct InjectionFeedView: View {
                         Text("\(event.chunkCount) chunks")
                         Text("\(event.tokenCount) tok")
                         Text("\(event.chunks.reduce(0) { $0 + $1.tags.count }) tags")
-                        if !event.chunkIDs.isEmpty {
-                            Button(expandedEventIDs.contains(event.id) ? "Hide hits" : "Show hits") {
-                                toggle(event.id)
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .semibold))
-                        }
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
                     chunkRibbon(for: event)
 
-                    if expandedEventIDs.contains(event.id) {
+                    // QA #55/#56: expanding a burst reveals every hit immediately.
+                    // Previously the chunk list hid behind a low-weight "Show hits"
+                    // link, so an expanded "3-chunk" burst showed only one.
+                    if !event.uniqueChunkIDs.isEmpty {
                         chunkList(for: event)
                     }
                 }
@@ -680,11 +703,28 @@ struct InjectionFeedView: View {
             )
     }
 
-    private func toggle(_ eventID: Int64) {
-        if expandedEventIDs.contains(eventID) {
-            expandedEventIDs.remove(eventID)
+    private func copyContinuation(for burst: InjectionPresentation.Burst) {
+        let command = InjectionContinuation.resumeCommand(sessionID: burst.sessionID)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(command, forType: .string)
+
+        let update = { copiedContinuationBurstID = burst.id }
+        if reduceMotion {
+            update()
         } else {
-            expandedEventIDs.insert(eventID)
+            withAnimation(.easeInOut(duration: 0.16), update)
+        }
+
+        let burstID = burst.id
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard copiedContinuationBurstID == burstID else { return }
+            if reduceMotion {
+                copiedContinuationBurstID = nil
+            } else {
+                withAnimation(.easeInOut(duration: 0.16)) { copiedContinuationBurstID = nil }
+            }
         }
     }
 
