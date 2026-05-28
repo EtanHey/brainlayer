@@ -207,22 +207,7 @@ private struct BrainBarWindowHeader: View {
                 .labelsHidden()
 
                 if let collector {
-                    Button {
-                        collector.manualRefresh()
-                    } label: {
-                        Label("Refresh now", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(collector.isManualRefreshInProgress)
-                    .help("Refresh dashboard now")
-
-                    if collector.isManualRefreshInProgress {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 16, height: 16)
-                    }
+                    BrainBarHeaderRefreshControls(collector: collector)
                 }
 
                 Spacer(minLength: 12)
@@ -241,6 +226,33 @@ private struct BrainBarWindowHeader: View {
         .padding(.bottom, 12)
         .background(.regularMaterial)
         .background(WindowDragHandle())
+    }
+}
+
+private struct BrainBarHeaderRefreshControls: View {
+    @ObservedObject private var collector: StatsCollector
+
+    init(collector: StatsCollector) {
+        self.collector = collector
+    }
+
+    var body: some View {
+        Button {
+            collector.manualRefresh()
+        } label: {
+            Label("Refresh now", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .keyboardShortcut("r", modifiers: .command)
+        .disabled(collector.isManualRefreshInProgress)
+        .help("Refresh dashboard now")
+
+        if collector.isManualRefreshInProgress {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+        }
     }
 }
 

@@ -52,6 +52,67 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
+    func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
+        let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
+        let methodSource = source[methodRange.lowerBound...]
+        let queueSnapshotRange = try XCTUnwrap(methodSource.range(of: "let pendingStoreQueue = pendingStoreQueueSnapshot()"))
+        let transactionRange = try XCTUnwrap(methodSource.range(of: "try withReadTransaction"))
+
+        XCTAssertLessThan(
+            queueSnapshotRange.lowerBound,
+            transactionRange.lowerBound,
+            "dashboardStats must not acquire the pending-store file lock while holding the SQLite read transaction."
+        )
+    }
+
+    func testBrainBarHeaderRefreshControlsObserveStatsCollector() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(
+            source.contains("private struct BrainBarHeaderRefreshControls: View"),
+            "Refresh UI should live in a child view so it can observe StatsCollector directly."
+        )
+        XCTAssertTrue(
+            source.contains("@ObservedObject private var collector: StatsCollector")
+                || source.contains("@ObservedObject var collector: StatsCollector"),
+            "Refresh UI must observe StatsCollector so spinner/disabled state update without unrelated header redraws."
+        )
+    }
+
+    func testStatsCollectorDoesNotKeepUnusedDatabaseConnection() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatsCollector.swift")
+
+        XCTAssertFalse(
+            source.contains("private let database: BrainDatabase"),
+            "StatsCollector refreshes through short-lived background handles and should not keep an unused DB connection open."
+        )
+        XCTAssertFalse(
+            source.contains("database.close()"),
+            "Removing the retained DB handle also removes the matching close call."
+        )
+    }
+
+    func testDashboardLatestEventFallbackUsesSQLMaxWithoutTextOrderingLimit() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
+        let methodRange = try XCTUnwrap(source.range(of: "private func latestIndexedTimestampEpoch("))
+        let nextMethodRange = try XCTUnwrap(source[methodRange.upperBound...].range(of: "private func latestIndexedEpochSince("))
+        let methodSource = source[methodRange.lowerBound..<nextMethodRange.lowerBound]
+
+        XCTAssertTrue(
+            methodSource.contains("SELECT MAX(event_epoch)"),
+            "Fallback latest-event lookup should compute the max normalized epoch in SQL."
+        )
+        XCTAssertFalse(
+            methodSource.contains("ORDER BY \\(column) DESC"),
+            "Fallback must not text-sort raw timestamp strings before comparing normalized epochs."
+        )
+        XCTAssertFalse(
+            methodSource.contains("LIMIT 1000"),
+            "Fallback must not cap rows before finding the max normalized epoch."
+        )
+    }
+
     func testDashboardStatsCountsTerminalEnrichmentStatusesAsCovered() throws {
         try db.insertChunk(
             id: "dash-success",
@@ -1018,6 +1079,15 @@ private func setDashboardPendingStoreQueuePath(_ path: URL) -> () -> Void {
             unsetenv("BRAINBAR_PENDING_STORES_PATH")
         }
     }
+}
+
+private func brainBarSourceFile(_ relativePath: String, testFilePath: StaticString = #filePath) throws -> String {
+    let packageRoot = URL(fileURLWithPath: "\(testFilePath)")
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let sourceURL = packageRoot.appendingPathComponent(relativePath)
+    return try String(contentsOf: sourceURL, encoding: .utf8)
 }
 
 private func writeDashboardPendingStoreQueue(count: Int, to path: URL) throws {
