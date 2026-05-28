@@ -75,6 +75,8 @@ final class BrainDatabase: @unchecked Sendable {
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
+        let recentWriteFiveMinuteCount: Int
+        let recentEnrichmentFiveMinuteCount: Int
         let activityWindowMinutes: Int
         let bucketCount: Int
         let liveWindowMinutes: Int
@@ -94,6 +96,8 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: Int64,
             recentActivityBuckets: [Int],
             recentEnrichmentBuckets: [Int],
+            recentWriteFiveMinuteCount: Int = 0,
+            recentEnrichmentFiveMinuteCount: Int = 0,
             activityWindowMinutes: Int = 30,
             bucketCount: Int = 12,
             liveWindowMinutes: Int = 1,
@@ -112,6 +116,8 @@ final class BrainDatabase: @unchecked Sendable {
             self.databaseSizeBytes = databaseSizeBytes
             self.recentActivityBuckets = recentActivityBuckets
             self.recentEnrichmentBuckets = recentEnrichmentBuckets
+            self.recentWriteFiveMinuteCount = recentWriteFiveMinuteCount
+            self.recentEnrichmentFiveMinuteCount = recentEnrichmentFiveMinuteCount
             self.activityWindowMinutes = activityWindowMinutes
             self.bucketCount = bucketCount
             self.liveWindowMinutes = liveWindowMinutes
@@ -165,6 +171,8 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 liveWindowMinutes: liveWindowMinutes,
@@ -1361,6 +1369,8 @@ final class BrainDatabase: @unchecked Sendable {
                     databaseSizeBytes: databaseSizeBytes(),
                     recentActivityBuckets: [],
                     recentEnrichmentBuckets: [],
+                    recentWriteFiveMinuteCount: 0,
+                    recentEnrichmentFiveMinuteCount: 0,
                     activityWindowMinutes: activityWindowMinutes,
                     bucketCount: bucketCount,
                     liveWindowMinutes: liveWindowMinutes
@@ -1384,6 +1394,8 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
+            let recentWriteFiveMinuteCount = try recentActivityCount(windowSeconds: 300, now: now)
+            let recentEnrichmentFiveMinuteCount = try recentEnrichmentCount(windowSeconds: 300, now: now)
 
             return DashboardStats(
                 chunkCount: chunkCount,
@@ -1394,6 +1406,8 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: recentActivityBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 liveWindowMinutes: liveWindowMinutes,
@@ -1493,6 +1507,24 @@ final class BrainDatabase: @unchecked Sendable {
             bucketCount: bucketCount,
             now: now
         )
+    }
+
+    private func recentActivityCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
+        guard windowSeconds > 0 else { return 0 }
+        return try indexedTimestampEpochs(
+            column: "created_at",
+            whereClause: nil,
+            since: now.addingTimeInterval(-windowSeconds)
+        ).count
+    }
+
+    private func recentEnrichmentCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
+        guard windowSeconds > 0 else { return 0 }
+        return try indexedTimestampEpochs(
+            column: "enriched_at",
+            whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
+            since: now.addingTimeInterval(-windowSeconds)
+        ).count
     }
 
     private func recentEnrichmentRatePerMinute(windowMinutes: Int, now: Date) throws -> Double {
