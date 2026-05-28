@@ -188,6 +188,7 @@ class HybridSearchHelper:
             "source": source,
             "tag": arguments.get("tag"),
             "importance_min": arguments.get("importance_min"),
+            "agent_id": arguments.get("agent_id"),
             "num_results": int(arguments.get("num_results") or 5),
             "max_results": int(arguments.get("max_results") or 10),
             "detail": str(arguments.get("detail") or "compact"),
