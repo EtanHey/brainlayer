@@ -28,6 +28,7 @@ struct KGCanvasView: View {
     @State private var lastScale: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
     @State private var minimumImportance: Double = 6
+    @State private var altitudeLevel: Double = Double(KGAltitudeTier.signal.rawValue)
     @State private var hasLoadedGraph = false
     @State private var simulationController = KGSimulationController()
     @GestureState private var toolbarInteractionActive = false
@@ -37,7 +38,9 @@ struct KGCanvasView: View {
             nodes: viewModel.nodes,
             edges: viewModel.edges,
             selectedNodeId: viewModel.selectedNodeId,
-            minimumImportance: minimumImportance
+            minimumImportance: minimumImportance,
+            mode: viewModel.layoutMode,
+            altitude: altitudeLevel
         )
     }
 
@@ -113,6 +116,9 @@ struct KGCanvasView: View {
                 }
             }
             .onChange(of: viewModel.nodes.count) { _, _ in
+                startSimulation()
+            }
+            .onChange(of: viewModel.layoutMode) { _, _ in
                 startSimulation()
             }
             .onDisappear {
@@ -219,19 +225,29 @@ struct KGCanvasView: View {
 
                 Spacer(minLength: 12)
 
-                labelChip("importance ≥ \(Int(minimumImportance))")
+                labelChip(statusChipText(snapshot: snapshot))
             }
+
+            Picker("Graph mode", selection: Binding(
+                get: { viewModel.layoutMode },
+                set: { viewModel.setLayoutMode($0) }
+            )) {
+                ForEach(KGAtlasMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Altitude")
                         .font(.system(size: 11, weight: .semibold))
                     Spacer()
-                    Text("Lower values reveal more nodes")
+                    Text(altitudeReadout(snapshot: snapshot))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $minimumImportance, in: 0...10, step: 1)
+                altitudeSlider
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -434,6 +450,34 @@ struct KGCanvasView: View {
                 Capsule()
                     .fill(Color.primary.opacity(0.08))
             )
+    }
+
+    @ViewBuilder
+    private var altitudeSlider: some View {
+        switch viewModel.layoutMode {
+        case .importance:
+            Slider(value: $minimumImportance, in: 0...10, step: 1)
+        case .tieredAltitude:
+            Slider(value: $altitudeLevel, in: 0...Double(KGAltitudeTier.allCases.count - 1), step: 1)
+        }
+    }
+
+    private func statusChipText(snapshot: KGAtlasPresentation.Snapshot) -> String {
+        switch viewModel.layoutMode {
+        case .importance:
+            return "importance ≥ \(Int(minimumImportance))"
+        case .tieredAltitude:
+            return "\(snapshot.activeAltitudeTier.title) \(Int(altitudeLevel) + 1)/\(KGAltitudeTier.allCases.count)"
+        }
+    }
+
+    private func altitudeReadout(snapshot: KGAtlasPresentation.Snapshot) -> String {
+        switch viewModel.layoutMode {
+        case .importance:
+            return "importance \(Int(minimumImportance))/10"
+        case .tieredAltitude:
+            return "\(snapshot.activeAltitudeTier.caption) · lower reveals more"
+        }
     }
 
     private func labelledNodeIDs(for nodes: [KGNode]) -> Set<String> {

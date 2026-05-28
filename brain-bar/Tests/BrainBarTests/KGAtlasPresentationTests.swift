@@ -91,6 +91,77 @@ final class KGAtlasPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.visibleEdges.map(\.id), ["owner-owns-site"])
     }
 
+    func testTieredAltitudeSummitShowsOnlyTopEntities() {
+        let nodes = [
+            KGNode(id: "owner", name: "Etan Heyman", entityType: "person", importance: 10, position: .zero),
+            KGNode(id: "claude", name: "Claude Code", entityType: "agent", importance: 6, position: .zero),
+            KGNode(id: "brainlayer", name: "brainlayer", entityType: "project", importance: 10, position: .zero),
+            KGNode(id: "scratch", name: "Scratch", entityType: "topic", importance: 1, position: .zero),
+        ]
+        let edges = [
+            KGEdge(sourceId: "owner", targetId: "claude", relationType: "uses"),
+            KGEdge(sourceId: "owner", targetId: "brainlayer", relationType: "owns"),
+        ]
+
+        let snapshot = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            mode: .tieredAltitude,
+            altitude: 0,
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(snapshot.visibleNodes.map(\.id), ["owner", "claude"])
+        XCTAssertEqual(snapshot.visibleEdges.map(\.id), ["owner-uses-claude"])
+        XCTAssertEqual(snapshot.regions.map(\.title), ["Summit"])
+        XCTAssertEqual(snapshot.activeAltitudeTier, .summit)
+    }
+
+    func testTieredAltitudeRevealsProgressivelyMoreNodes() {
+        let nodes = [
+            KGNode(id: "owner", name: "Etan Heyman", entityType: "person", importance: 10, position: .zero),
+            KGNode(id: "claude", name: "Claude Code", entityType: "agent", importance: 6, position: .zero),
+            KGNode(id: "core", name: "Core Agent", entityType: "agent", importance: 8, position: .zero),
+            KGNode(id: "signal", name: "MCP", entityType: "tool", importance: 7, position: .zero),
+            KGNode(id: "field", name: "BrainBar", entityType: "project", importance: 5, position: .zero),
+            KGNode(id: "ground", name: "Scratch", entityType: "topic", importance: 1, position: .zero),
+        ]
+
+        let summit = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: [],
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            mode: .tieredAltitude,
+            altitude: 0,
+            userDefaults: testUserDefaults
+        )
+        let signal = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: [],
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            mode: .tieredAltitude,
+            altitude: 2,
+            userDefaults: testUserDefaults
+        )
+        let ground = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: [],
+            selectedNodeId: nil,
+            minimumImportance: 0,
+            mode: .tieredAltitude,
+            altitude: 4,
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(summit.visibleNodes.map(\.id), ["owner", "claude"])
+        XCTAssertEqual(signal.visibleNodes.map(\.id), ["owner", "claude", "core", "signal"])
+        XCTAssertEqual(ground.visibleNodes.map(\.id), ["owner", "claude", "core", "signal", "field", "ground"])
+    }
+
     func testSnapshotVirtualizesHubLinksAtDefaultFiftyVisibleRelations() {
         let graph = makeHubGraph(edgeCount: 60)
 
