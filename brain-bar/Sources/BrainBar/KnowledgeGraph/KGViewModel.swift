@@ -138,6 +138,9 @@ final class KGViewModel: ObservableObject {
         var loadedOnce = false
         while !Task.isCancelled {
             let loaded = await loadGraph()
+            guard !Task.isCancelled else {
+                return loadedOnce
+            }
             if loaded {
                 loadedOnce = true
                 onSuccessfulLoad()
