@@ -588,6 +588,7 @@ async def _brain_search(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
+    agent_id: str | None = None,
     num_results: int = 5,
     before: int = 3,
     after: int = 3,
@@ -639,6 +640,7 @@ async def _brain_search(
                             source=source,
                             tag=tag,
                             importance_min=importance_min,
+                            agent_id=agent_id,
                             num_results=num_results,
                             max_results=max_results,
                             detail=detail,
@@ -663,6 +665,7 @@ async def _brain_search(
             date_to=date_to,
             sentiment=sentiment,
             entity_id=entity_id,
+            agent_id=agent_id,
             num_results=num_results,
             before=before,
             after=after,
@@ -693,6 +696,7 @@ async def _brain_search_dispatch(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
+    agent_id: str | None = None,
     num_results: int = 5,
     before: int = 3,
     after: int = 3,
@@ -734,6 +738,7 @@ async def _brain_search_dispatch(
             date_to=date_to,
             sentiment=sentiment,
             entity_id=entity_id,
+            agent_id=agent_id,
             detail=detail,
             source_filter_like=source_filter,
             correction_category=correction_category,
@@ -778,6 +783,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(regression_result, list):
@@ -795,6 +801,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(timeline, list):
@@ -819,6 +826,7 @@ async def _brain_search_dispatch(
             date_from=date_from,
             date_to=date_to,
             sentiment=sentiment,
+            agent_id=agent_id,
             num_results=num_results,
             max_results=max_results,
             detail=detail,
@@ -837,6 +845,7 @@ async def _brain_search_dispatch(
             project=project,
             max_results=max_results,
             include_audit=include_audit,
+            agent_id=agent_id,
         )
         merged_text = []
         if isinstance(ctx, tuple):
@@ -850,10 +859,22 @@ async def _brain_search_dispatch(
         return merged_text
 
     if _query_signals_think(query):
-        return await _think(context=query, project=project, max_results=max_results, include_audit=include_audit)
+        return await _think(
+            context=query,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+            agent_id=agent_id,
+        )
 
     if _query_signals_recall(query):
-        return await _recall(topic=query, project=project, max_results=max_results, include_audit=include_audit)
+        return await _recall(
+            topic=query,
+            project=project,
+            max_results=max_results,
+            include_audit=include_audit,
+            agent_id=agent_id,
+        )
 
     store = _get_vector_store()
     effective_source = None if source == "all" else source
@@ -942,6 +963,7 @@ async def _brain_search_dispatch(
                 project_filter=normalized_project,
                 include_checkpoints=include_checkpoints,
                 include_audit=include_audit,
+                agent_id=agent_id,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -1043,6 +1065,7 @@ async def _brain_search_dispatch(
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
+        agent_id=agent_id,
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
     )
@@ -1233,6 +1256,7 @@ async def _brain_recall(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
+    agent_id: str | None = None,
     num_results: int = 5,
     before: int = 3,
     after: int = 3,
@@ -1294,6 +1318,7 @@ async def _brain_recall(
             date_to=date_to,
             sentiment=sentiment,
             entity_id=entity_id,
+            agent_id=agent_id,
             num_results=num_results,
             before=before,
             after=after,
@@ -1356,6 +1381,7 @@ async def _search(
     date_to: str | None = None,
     sentiment: str | None = None,
     entity_id: str | None = None,
+    agent_id: str | None = None,
     detail: str = "compact",
     fts_query_override: str | None = None,
     # Backward compat: accept old 'format' kwarg
@@ -1440,6 +1466,7 @@ async def _search(
                         date_to=date_to,
                         sentiment_filter=sentiment,
                         entity_id=entity_id,
+                        agent_id=agent_id,
                         source_filter_like=source_filter_like,
                         correction_category=correction_category,
                         include_checkpoints=include_checkpoints,
@@ -1765,6 +1792,7 @@ async def _think(
     project: str | None = None,
     max_results: int = 10,
     include_audit: bool = False,
+    agent_id: str | None = None,
 ):
     """Execute think -- retrieve relevant memories for current task."""
     try:
@@ -1787,6 +1815,7 @@ async def _think(
                 project=normalized_project,
                 max_results=max_results,
                 include_audit=include_audit,
+                agent_id=agent_id,
             ),
         )
         structured = {
@@ -1808,6 +1837,7 @@ async def _recall(
     project: str | None = None,
     max_results: int = 10,
     include_audit: bool = False,
+    agent_id: str | None = None,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1831,6 +1861,7 @@ async def _recall(
                 project=normalized_project,
                 max_results=max_results,
                 include_audit=include_audit,
+                agent_id=agent_id,
             ),
         )
         structured = {

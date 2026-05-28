@@ -489,6 +489,10 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "description": "Filter results to chunks linked to this entity ID. Used for per-person memory scoping (e.g., get only memories about a specific person). Bypasses routing rules.",
                         },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Optional stable agent identifier. Threads through read-path ranking without changing default search behavior.",
+                        },
                         "sentiment_filter": {
                             "type": "string",
                             "enum": ["positive", "negative", "neutral", "mixed"],
@@ -822,6 +826,10 @@ async def list_tools() -> list[Tool]:
                             "type": "string",
                             "enum": ["frustration", "confusion", "positive", "satisfaction", "neutral"],
                             "description": "Filter by sentiment label (mode=search)",
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Optional stable agent identifier for search-mode ranking features.",
                         },
                         "num_results": {
                             "type": "integer",
@@ -1270,6 +1278,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 date_to=arguments.get("date_to"),
                 sentiment=resolved_sentiment,
                 entity_id=arguments.get("entity_id"),
+                agent_id=arguments.get("agent_id"),
                 num_results=arguments.get("num_results", 5),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
@@ -1360,6 +1369,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 date_to=arguments.get("date_to"),
                 sentiment=arguments.get("sentiment"),
                 entity_id=arguments.get("entity_id"),
+                agent_id=arguments.get("agent_id"),
                 num_results=arguments.get("num_results", 5),
                 before=max(0, min(arguments.get("before", 3), 50)),
                 after=max(0, min(arguments.get("after", 3), 50)),
