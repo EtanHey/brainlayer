@@ -553,10 +553,6 @@ private struct BrainBarDashboardView: View {
         )
     }
 
-    private var flowAccentColor: NSColor {
-        collector.state.color
-    }
-
     private var flowStateTheme: BrainBarStateTheme {
         collector.state.stateTheme
     }

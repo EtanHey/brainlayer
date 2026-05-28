@@ -120,11 +120,11 @@ extension NSColor {
         let red = CGFloat((hex >> 16) & 0xFF) / 255
         let green = CGFloat((hex >> 8) & 0xFF) / 255
         let blue = CGFloat(hex & 0xFF) / 255
-        return NSColor(deviceRed: red, green: green, blue: blue, alpha: alpha)
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
     }
 
     static func brainBarRGB(red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat = 1) -> NSColor {
-        NSColor(deviceRed: red / 255, green: green / 255, blue: blue / 255, alpha: alpha)
+        NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: alpha)
     }
 }
 

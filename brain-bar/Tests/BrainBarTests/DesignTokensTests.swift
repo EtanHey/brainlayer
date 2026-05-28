@@ -4,6 +4,8 @@ import XCTest
 @testable import BrainBar
 
 final class DesignTokensTests: XCTestCase {
+    deinit {}
+
     func testGroundTruthGlassRedesignTokensMatchMandate() {
         XCTAssertEqual(BrainBarDesignTokens.Colors.backgroundAbyss.hexRGB, "#070B14")
         XCTAssertEqual(BrainBarDesignTokens.Colors.backgroundBase.hexRGB, "#0C1220")

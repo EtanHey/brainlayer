@@ -170,13 +170,13 @@ enum DashboardStoreQueueHealth: String, Sendable, Equatable {
     var color: NSColor {
         switch self {
         case .empty:
-            return .secondaryLabelColor
+            return BrainBarStateTheme.empty.theme.color
         case .activeDraining:
-            return .systemGreen
+            return BrainBarStateTheme.active.theme.color
         case .backlogAccumulating:
-            return .systemYellow
+            return BrainBarStateTheme.degraded.theme.color
         case .writerStuck:
-            return .systemRed
+            return BrainBarStateTheme.error.theme.color
         }
     }
 }
