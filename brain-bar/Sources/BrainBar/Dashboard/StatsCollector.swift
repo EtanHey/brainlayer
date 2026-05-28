@@ -126,7 +126,7 @@ final class StatsCollector: ObservableObject {
     }
 
     func refresh(force: Bool = false) {
-        refresh(force: force, trigger: .auto)
+        requestRefresh(force: force, trigger: .auto)
     }
 
     func manualRefresh() {
@@ -210,93 +210,7 @@ final class StatsCollector: ObservableObject {
     }
 
     func refresh(force: Bool = false, trigger: DashboardRefreshTrigger) {
-        let nextDaemon = daemonMonitor.sample()
-        let snapshotTime = Date()
-        let startUnix = snapshotTime.timeIntervalSince1970
-        cancelInFlightDashboardRefresh()
-        isRefreshing = true
-        if trigger == .manual {
-            isManualRefreshInProgress = true
-        }
-        logDashboardRefresh(
-            timestamp: snapshotTime,
-            startUnix: startUnix,
-            endUnix: nil,
-            rows: stats.chunkCount,
-            writes5m: stats.recentActivityBuckets.suffix(1).reduce(0, +),
-            enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
-            trigger: trigger
-        )
-        defer { isRefreshing = false }
-        defer {
-            if trigger == .manual {
-                isManualRefreshInProgress = false
-            }
-        }
-
-        refreshAgentActivity(force: force, now: snapshotTime)
-
-        if !force, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
-            schedulePendingStatsRefresh(after: coalescedDelay)
-            logDashboardRefresh(
-                timestamp: snapshotTime,
-                startUnix: startUnix,
-                endUnix: Date().timeIntervalSince1970,
-                rows: stats.chunkCount,
-                writes5m: stats.recentActivityBuckets.suffix(1).reduce(0, +),
-                enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
-                trigger: trigger
-            )
-            return
-        }
-
-        pendingStatsRefreshTask?.cancel()
-        pendingStatsRefreshTask = nil
-
-        do {
-            database.reopenIfNeeded()
-            let nextStats = try database.dashboardStats(
-                activityWindowMinutes: Self.defaultActivityWindowMinutes,
-                bucketCount: Self.defaultBucketCount
-            )
-            let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreQueueDepth, now: snapshotTime)
-            stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
-            lastDataFetchedAt = Date()
-            if !force {
-                lastNonForcedStatsRefreshAt = snapshotTime
-            }
-        } catch {
-            daemon = nextDaemon
-            if force {
-                stats = DashboardStats(
-                    chunkCount: 0,
-                    enrichedChunkCount: 0,
-                    pendingEnrichmentCount: 0,
-                    enrichmentPercent: 0,
-                    enrichmentRatePerMinute: 0,
-                    databaseSizeBytes: 0,
-                    recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
-                    recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
-                    activityWindowMinutes: Self.defaultActivityWindowMinutes,
-                    bucketCount: Self.defaultBucketCount
-                )
-            }
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
-        }
-
-        logDashboardRefresh(
-            timestamp: snapshotTime,
-            startUnix: startUnix,
-            endUnix: Date().timeIntervalSince1970,
-            rows: stats.chunkCount,
-            writes5m: stats.recentActivityBuckets.suffix(1).reduce(0, +),
-            enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
-            trigger: trigger
-        )
+        requestRefresh(force: force, trigger: trigger)
     }
 
     private func finishRequestedRefresh(
@@ -307,18 +221,19 @@ final class StatsCollector: ObservableObject {
         force: Bool,
         trigger: DashboardRefreshTrigger
     ) {
+        let finishDaemon = daemonMonitor.sample() ?? nextDaemon
         switch result {
         case .success(let nextStats):
             let queueFlushRate = recordPendingStoreQueueDepth(nextStats.pendingStoreQueueDepth, now: snapshotTime)
             stats = nextStats.withPendingStoreFlushRate(queueFlushRate)
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            daemon = finishDaemon
+            state = PipelineState.derive(daemon: finishDaemon, stats: stats)
             lastDataFetchedAt = Date()
             if !force {
                 lastNonForcedStatsRefreshAt = snapshotTime
             }
         case .failure:
-            daemon = nextDaemon
+            daemon = finishDaemon
             if force {
                 stats = DashboardStats(
                     chunkCount: 0,
@@ -333,7 +248,7 @@ final class StatsCollector: ObservableObject {
                     bucketCount: Self.defaultBucketCount
                 )
             }
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            state = PipelineState.derive(daemon: finishDaemon, stats: stats)
         }
 
         isRefreshing = false
@@ -350,14 +265,6 @@ final class StatsCollector: ObservableObject {
             enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
             trigger: trigger
         )
-    }
-
-    private func cancelInFlightDashboardRefresh() {
-        guard dashboardRefreshTask != nil else { return }
-        dashboardRefreshTask?.cancel()
-        dashboardRefreshTask = nil
-        dashboardRefreshGeneration += 1
-        isManualRefreshInProgress = false
     }
 
     private func recordPendingStoreQueueDepth(_ depth: Int, now: Date) -> Double {

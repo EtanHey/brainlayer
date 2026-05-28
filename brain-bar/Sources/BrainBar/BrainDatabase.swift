@@ -1349,6 +1349,7 @@ final class BrainDatabase: @unchecked Sendable {
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
         try withReadTransaction {
             let liveWindowMinutes = 1
+            let now = Date()
             guard bucketCount > 0 else {
                 return DashboardStats(
                     chunkCount: 0,
@@ -1366,19 +1367,21 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             let counts = try dashboardCounts()
-            let lastEvents = try dashboardLastEvents()
+            let lastEvents = try dashboardLastEvents(now: now)
             let chunkCount = counts.chunkCount
             let enrichedChunkCount = counts.enrichedChunkCount
             let pendingEnrichmentCount = counts.pendingEnrichmentCount
             let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
-            let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes)
+            let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes, now: now)
             let recentActivityBuckets = try recentActivityBuckets(
                 activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount
+                bucketCount: bucketCount,
+                now: now
             )
             let recentEnrichmentBuckets = try recentEnrichmentBuckets(
                 activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount
+                bucketCount: bucketCount,
+                now: now
             )
             let pendingStoreQueue = pendingStoreQueueSnapshot()
 
@@ -1453,8 +1456,8 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
-    private func dashboardLastEvents() throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {
-        let recentWindowStart = Date().addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
+    private func dashboardLastEvents(now: Date) throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {
+        let recentWindowStart = now.addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
         let lastWriteAt = try latestIndexedTimestampEpoch(
             column: "created_at",
             whereClause: nil,
@@ -1468,34 +1471,36 @@ final class BrainDatabase: @unchecked Sendable {
         return (lastWriteAt: lastWriteAt, lastEnrichedAt: lastEnrichedAt)
     }
 
-    private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+    private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
 
         return try indexedTimestampBuckets(
             column: "created_at",
             whereClause: nil,
             activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount
+            bucketCount: bucketCount,
+            now: now
         )
     }
 
-    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int) throws -> [Int] {
+    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
         guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
 
         return try indexedTimestampBuckets(
             column: "enriched_at",
             whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
             activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount
+            bucketCount: bucketCount,
+            now: now
         )
     }
 
-    private func recentEnrichmentRatePerMinute(windowMinutes: Int) throws -> Double {
+    private func recentEnrichmentRatePerMinute(windowMinutes: Int, now: Date) throws -> Double {
         guard windowMinutes > 0 else { return 0 }
         let count = Double(try indexedTimestampEpochs(
             column: "enriched_at",
             whereClause: "enriched_at IS NOT NULL AND enrich_status = 'success'",
-            since: Date().addingTimeInterval(Double(-windowMinutes * 60))
+            since: now.addingTimeInterval(Double(-windowMinutes * 60))
         ).count)
         return count / Double(windowMinutes)
     }
@@ -1504,11 +1509,12 @@ final class BrainDatabase: @unchecked Sendable {
         column: String,
         whereClause: String?,
         activityWindowMinutes: Int,
-        bucketCount: Int
+        bucketCount: Int,
+        now: Date
     ) throws -> [Int] {
         let windowDuration = Double(activityWindowMinutes * 60)
         let bucketWidthSeconds = max(1, windowDuration / Double(bucketCount))
-        let windowStart = Date().addingTimeInterval(-windowDuration)
+        let windowStart = now.addingTimeInterval(-windowDuration)
         let epochs = try indexedTimestampEpochs(
             column: column,
             whereClause: whereClause,
@@ -1572,11 +1578,11 @@ final class BrainDatabase: @unchecked Sendable {
         whereClause: String?,
         since cutoffDate: Date
     ) throws -> Date? {
-        let recentEpoch = try indexedTimestampEpochs(
+        let recentEpoch = try latestIndexedEpochSince(
             column: column,
             whereClause: whereClause,
             since: cutoffDate
-        ).max()
+        )
         if let recentEpoch {
             return Date(timeIntervalSince1970: TimeInterval(recentEpoch))
         }
@@ -1610,6 +1616,40 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         return latestEpoch.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+
+    private func latestIndexedEpochSince(
+        column: String,
+        whereClause: String?,
+        since cutoffDate: Date
+    ) throws -> Int64? {
+        guard let db else { throw DBError.notOpen }
+        let epochSQL = Self.normalizedUnixEpochSQL(for: column)
+        let indexLowerBound = cutoffDate.addingTimeInterval(-Self.dashboardTimestampIndexLookbackPaddingSeconds)
+        let cutoffText = Self.dashboardTimestampIndexCutoffFormatter.string(from: indexLowerBound)
+        var predicates = ["\(column) IS NOT NULL", "\(column) >= ?"]
+        if let whereClause {
+            predicates.append(whereClause)
+        }
+        let sql = """
+            SELECT MAX(\(epochSQL)) AS event_epoch
+            FROM chunks
+            WHERE \(predicates.joined(separator: " AND "))
+        """
+
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText(cutoffText, to: stmt, index: 1)
+
+        let stepRc = sqlite3_step(stmt)
+        guard stepRc == SQLITE_ROW else { throw DBError.step(stepRc) }
+        guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
+
+        let epoch = sqlite3_column_int64(stmt, 0)
+        let cutoffEpoch = Int64(cutoffDate.timeIntervalSince1970)
+        return epoch >= cutoffEpoch ? epoch : nil
     }
 
     private static func normalizedUnixEpochSQL(for column: String) -> String {

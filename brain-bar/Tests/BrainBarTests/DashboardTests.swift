@@ -335,9 +335,24 @@ final class DashboardTests: XCTestCase {
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: -10 * 3600)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        let utcTimeZone = TimeZone(secondsFromGMT: 0)!
         let recent = Date().addingTimeInterval(-60)
+        let utcHour = Calendar(identifier: .gregorian)
+            .dateComponents(in: utcTimeZone, from: recent)
+            .hour ?? 0
+        let crossingOffsetHours = utcHour >= 10 ? 14 : -12
+        formatter.timeZone = TimeZone(secondsFromGMT: crossingOffsetHours * 3600)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+
+        let utcDay = DateFormatter()
+        utcDay.locale = Locale(identifier: "en_US_POSIX")
+        utcDay.timeZone = utcTimeZone
+        utcDay.dateFormat = "yyyy-MM-dd"
+        let offsetDay = DateFormatter()
+        offsetDay.locale = Locale(identifier: "en_US_POSIX")
+        offsetDay.timeZone = formatter.timeZone
+        offsetDay.dateFormat = "yyyy-MM-dd"
+        XCTAssertNotEqual(utcDay.string(from: recent), offsetDay.string(from: recent))
 
         db.exec("""
             UPDATE chunks
@@ -498,7 +513,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testReadOnlyStatsCollectorReopensAfterDaemonCreatesDatabase() throws {
+    func testReadOnlyStatsCollectorReopensAfterDaemonCreatesDatabase() async throws {
         db.close()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
@@ -512,6 +527,7 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing }
         XCTAssertEqual(collector.stats.chunkCount, 0)
 
         let writer = BrainDatabase(path: tempDBPath)
@@ -526,6 +542,7 @@ final class DashboardTests: XCTestCase {
         )
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.chunkCount == 1 }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
@@ -579,7 +596,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorComputesPendingStoreFlushRateFromDepthDrops() throws {
+    func testStatsCollectorComputesPendingStoreFlushRateFromDepthDrops() async throws {
         let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pending-stores-collector-\(UUID().uuidString).jsonl")
         let restoreQueuePath = setDashboardPendingStoreQueuePath(queuePath)
@@ -597,11 +614,15 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 3 }
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 3)
         XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 0)
 
         try writeDashboardPendingStoreQueue(count: 1, to: queuePath)
         collector.refresh(force: true)
+        try await waitForCollector(collector) {
+            $0.stats.pendingStoreQueueDepth == 1 && $0.stats.pendingStoreFlushRatePerMinute == 2
+        }
 
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
         XCTAssertEqual(collector.stats.pendingStoreFlushRatePerMinute, 2)
@@ -645,10 +666,12 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 3 }
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 3)
 
         try writeDashboardPendingStoreQueue(count: 2, to: queuePath)
         collector.refresh(force: false)
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 2 }
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
 
         try writeDashboardPendingStoreQueue(count: 1, to: queuePath)
@@ -656,7 +679,7 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 2)
 
-        try await Task.sleep(for: .milliseconds(120))
+        try await waitForCollector(collector) { $0.stats.pendingStoreQueueDepth == 1 }
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
     }
 
@@ -683,13 +706,13 @@ final class DashboardTests: XCTestCase {
             importance: 5
         )
 
-        try await Task.sleep(for: .milliseconds(500))
+        try await waitForCollector(collector) { $0.stats.chunkCount == 1 }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
     @MainActor
-    func testStatsCollectorRetriesAfterFailedNonForcedRefresh() throws {
+    func testStatsCollectorRetriesAfterFailedNonForcedRefresh() async throws {
         let brokenPath = NSTemporaryDirectory() + "brainbar-dashboard-broken-\(UUID().uuidString).db"
         try FileManager.default.createDirectory(
             atPath: brokenPath,
@@ -709,6 +732,7 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.refresh(force: false)
+        try await waitForCollector(collector) { !$0.isRefreshing }
         XCTAssertEqual(collector.stats.chunkCount, 0)
 
         try FileManager.default.removeItem(atPath: brokenPath)
@@ -724,6 +748,7 @@ final class DashboardTests: XCTestCase {
         repairedDB.close()
 
         collector.refresh(force: false)
+        try await waitForCollector(collector) { $0.stats.chunkCount == 1 }
 
         XCTAssertEqual(collector.stats.chunkCount, 1)
     }
@@ -922,6 +947,18 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(viewController.isViewLoaded)
         _ = viewController.view
         XCTAssertTrue(viewController.isViewLoaded)
+    }
+
+    @MainActor
+    private func waitForCollector(
+        _ collector: StatsCollector,
+        timeout: TimeInterval = 2.0,
+        until predicate: (StatsCollector) -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate(collector), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     private static func absoluteTime(_ date: Date) -> String {
