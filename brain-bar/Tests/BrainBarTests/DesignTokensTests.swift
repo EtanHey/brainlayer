@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -46,6 +47,13 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(layout.gridSpacing, 20)
         XCTAssertEqual(layout.metricValueFontSize, BrainBarDesignTokens.TypeScale.hero, accuracy: 0.001)
         XCTAssertEqual(layout.panelCornerRadius, BrainBarDesignTokens.Radius.xl, accuracy: 0.001)
+    }
+
+    func testSwiftUIColorRGBHelperUsesByteComponents() {
+        let color = NSColor(Color.brainBarRGB(red: 28, green: 40, blue: 66, opacity: 0.5))
+
+        XCTAssertEqual(color.hexRGB, "#1C2842")
+        XCTAssertEqual(color.alphaComponent, 0.5, accuracy: 0.001)
     }
 }
 

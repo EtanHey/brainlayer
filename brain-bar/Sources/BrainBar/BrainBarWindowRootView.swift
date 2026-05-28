@@ -68,6 +68,7 @@ struct BrainBarWindowRootView: View {
         )
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(BrainBarAppBackground())
+        .environment(\.colorScheme, .dark)
         .background(windowAttachment)
         .onAppear {
             activate(tab: selectedTab)

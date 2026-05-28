@@ -131,7 +131,7 @@ extension Color {
     }
 
     static func brainBarRGB(red: Double, green: Double, blue: Double, opacity: Double = 1) -> Color {
-        Color(red: red, green: green, blue: blue, opacity: opacity)
+        Color(red: red / 255, green: green / 255, blue: blue / 255, opacity: opacity)
     }
 
     static func brainBarHSB(hue: Double, saturation: Double, brightness: Double, opacity: Double = 1) -> Color {
