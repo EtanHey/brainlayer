@@ -72,11 +72,11 @@ struct InjectionFeedView: View {
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
 
     private let accentPalette: [Color] = [
-        Color(red: 0.42, green: 0.62, blue: 0.98),
-        Color(red: 0.48, green: 0.82, blue: 0.70),
-        Color(red: 0.95, green: 0.74, blue: 0.43),
-        Color(red: 0.72, green: 0.58, blue: 0.96),
-        Color(red: 0.42, green: 0.84, blue: 0.88),
+        .brainBarAccent,
+        BrainBarStateTheme.active.theme.swiftUIColor,
+        BrainBarStateTheme.degraded.theme.swiftUIColor,
+        .brainBarAccentViolet,
+        .brainBarAccentBright,
     ]
 
     var body: some View {
@@ -189,7 +189,7 @@ struct InjectionFeedView: View {
                         .padding(.vertical, 4)
                         .background(
                             Capsule()
-                                .fill(activeFilter == filter ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
+                                .fill(activeFilter == filter ? Color.brainBarAccent.opacity(0.22) : Color.brainBarTextPrimary.opacity(0.06))
                         )
                 }
                 .buttonStyle(.plain)
@@ -213,7 +213,7 @@ struct InjectionFeedView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    .background(Capsule().fill(Color.brainBarTextPrimary.opacity(0.06)))
 
                 Text("Activity ribbon")
                     .font(.system(size: 13, weight: .semibold))
@@ -324,7 +324,7 @@ struct InjectionFeedView: View {
                             .foregroundStyle(.blue)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Capsule().fill(Color.blue.opacity(0.14)))
+                            .background(Capsule().fill(Color.brainBarAccent.opacity(0.14)))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(isExpanded ? "Collapse burst" : "Expand burst")
@@ -393,7 +393,7 @@ struct InjectionFeedView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
+                .fill(Color.brainBarTextPrimary.opacity(0.045))
         )
     }
 
@@ -407,7 +407,7 @@ struct InjectionFeedView: View {
                 .fixedSize(horizontal: true, vertical: false)
 
             Rectangle()
-                .fill(Color.primary.opacity(0.08))
+                .fill(Color.brainBarTextPrimary.opacity(0.08))
                 .frame(height: 1)
         }
         .padding(.horizontal, 12)
@@ -473,7 +473,7 @@ struct InjectionFeedView: View {
             }
 
             Rectangle()
-                .fill(Color.primary.opacity(0.06))
+                .fill(Color.brainBarTextPrimary.opacity(0.06))
                 .frame(height: 1)
         }
     }
@@ -513,7 +513,7 @@ struct InjectionFeedView: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.brainBarTextPrimary.opacity(0.04))
         )
     }
 
@@ -545,7 +545,7 @@ struct InjectionFeedView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+                .fill(Color.brainBarTextPrimary.opacity(0.05))
         )
     }
 
@@ -565,7 +565,7 @@ struct InjectionFeedView: View {
                         .padding(10)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.primary.opacity(0.045))
+                                .fill(Color.brainBarTextPrimary.opacity(0.045))
                         )
                     }
                 }
@@ -619,7 +619,7 @@ struct InjectionFeedView: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+                .fill(Color.brainBarTextPrimary.opacity(0.05))
         )
     }
 
@@ -666,9 +666,9 @@ struct InjectionFeedView: View {
     }
 
     private func bucketColor(for index: Int, count: Int, snapshot: InjectionPresentation.Snapshot) -> Color {
-        guard count > 0 else { return Color.primary.opacity(0.08) }
+        guard count > 0 else { return Color.brainBarTextPrimary.opacity(0.08) }
         let progress = Double(index) / Double(max(snapshot.ribbonBuckets.count - 1, 1))
-        return Color(
+        return Color.brainBarHSB(
             hue: 0.6 - progress * 0.18,
             saturation: 0.55,
             brightness: 0.94
@@ -704,8 +704,8 @@ struct InjectionFeedView: View {
     private var pageBackground: some View {
         LinearGradient(
             colors: [
-                Color(nsColor: .windowBackgroundColor),
-                Color.accentColor.opacity(0.04),
+                Color.brainBarGlassPrimary,
+                Color.brainBarAccent.opacity(0.04),
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -714,10 +714,10 @@ struct InjectionFeedView: View {
 
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor))
+            .fill(Color.brainBarGlassSecondary)
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                    .stroke(Color.brainBarTextPrimary.opacity(0.06), lineWidth: 1)
             )
     }
 
@@ -845,7 +845,7 @@ private struct ConversationLoadingOverlay: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color.black.opacity(0.18))
+                .fill(Color.brainBarBlack.opacity(0.18))
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onClose)
 
@@ -859,11 +859,11 @@ private struct ConversationLoadingOverlay: View {
             .padding(18)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color.brainBarGlassPrimary)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.brainBarTextPrimary.opacity(0.08), lineWidth: 1)
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

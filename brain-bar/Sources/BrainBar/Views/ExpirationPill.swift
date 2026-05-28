@@ -14,7 +14,7 @@ struct ExpirationPill: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+        .background(Capsule().fill(Color.brainBarTextSecondary.opacity(0.12)))
     }
 
     nonisolated static func displayText(date: Date, label: String) -> String {

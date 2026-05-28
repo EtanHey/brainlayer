@@ -39,7 +39,7 @@ struct ChunkConversationSheet: View {
                                     .font(.system(size: 11, weight: .semibold))
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)
-                                    .background(Capsule().fill(entry.isTarget ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)))
+                                    .background(Capsule().fill(entry.isTarget ? Color.brainBarAccent.opacity(0.18) : Color.brainBarTextSecondary.opacity(0.12)))
                                 Spacer()
                                 Text(String(entry.createdAt.prefix(19)))
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -60,11 +60,11 @@ struct ChunkConversationSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
                             RoundedRectangle(cornerRadius: 10)
-                                .fill(entry.isTarget ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
+                                .fill(entry.isTarget ? Color.brainBarAccent.opacity(0.08) : Color.brainBarGlassSecondary)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
-                                .stroke(entry.isTarget ? Color.accentColor.opacity(0.35) : Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+                                .stroke(entry.isTarget ? Color.brainBarAccent.opacity(0.35) : Color.brainBarBorderSoft.opacity(0.35), lineWidth: 1)
                         )
                     }
                 }
@@ -121,20 +121,20 @@ struct ChunkConversationOverlay: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color.black.opacity(0.22))
+                .fill(Color.brainBarBlack.opacity(0.22))
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onClose)
 
             ChunkConversationSheet(conversation: conversation, title: title, onClose: onClose)
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color(nsColor: .windowBackgroundColor))
+                        .fill(Color.brainBarGlassPrimary)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .stroke(Color.brainBarTextPrimary.opacity(0.08), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.18), radius: 24, y: 10)
+                .shadow(color: Color.brainBarBlack.opacity(0.18), radius: 24, y: 10)
                 .padding(28)
                 .frame(maxWidth: 940, maxHeight: .infinity)
                 .onTapGesture {}

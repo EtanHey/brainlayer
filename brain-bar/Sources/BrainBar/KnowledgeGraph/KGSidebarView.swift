@@ -26,7 +26,7 @@ struct KGSidebarView: View {
                     synopsis(entity)
                 }
                 .padding(18)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color.brainBarGlassSecondary)
 
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 16) {
@@ -51,8 +51,8 @@ struct KGSidebarView: View {
         .background(
             LinearGradient(
                 colors: [
-                    Color(nsColor: .controlBackgroundColor),
-                    Color.accentColor.opacity(0.03),
+                    Color.brainBarGlassSecondary,
+                    Color.brainBarAccent.opacity(0.03),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -60,7 +60,7 @@ struct KGSidebarView: View {
         )
         .overlay(alignment: .leading) {
             Rectangle()
-                .fill(Color.primary.opacity(0.08))
+                .fill(Color.brainBarTextPrimary.opacity(0.08))
                 .frame(width: 1)
         }
     }
@@ -194,7 +194,7 @@ struct KGSidebarView: View {
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.primary.opacity(0.045))
+                            .fill(Color.brainBarTextPrimary.opacity(0.045))
                     )
                 }
             }
@@ -222,7 +222,7 @@ struct KGSidebarView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.primary.opacity(0.045))
+                        .fill(Color.brainBarTextPrimary.opacity(0.045))
                 )
             }
         }
@@ -262,7 +262,7 @@ struct KGSidebarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.primary.opacity(0.045))
+                                .fill(Color.brainBarTextPrimary.opacity(0.045))
                         )
                     }
 
@@ -318,7 +318,7 @@ struct KGSidebarView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.primary.opacity(0.045))
+                                    .fill(Color.brainBarTextPrimary.opacity(0.045))
                             )
                     }
 
@@ -362,10 +362,10 @@ struct KGSidebarView: View {
 
     private var sectionBackground: some View {
         RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(Color(nsColor: .windowBackgroundColor))
+            .fill(Color.brainBarGlassPrimary)
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                    .stroke(Color.brainBarTextPrimary.opacity(0.06), lineWidth: 1)
             )
     }
 
@@ -409,7 +409,7 @@ struct KGSidebarView: View {
                 Spacer()
                 Text("Open thread")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.brainBarAccent)
             }
         }
     }

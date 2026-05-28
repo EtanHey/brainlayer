@@ -131,7 +131,7 @@ private struct SearchPanelView: View {
                 .padding(.vertical, 14)
                 .background(
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                        .fill(Color.brainBarGlassSecondary)
                 )
                 .focused($isSearchFieldFocused)
                 .onSubmit {
@@ -150,9 +150,9 @@ private struct SearchPanelView: View {
                     .padding(.vertical, 8)
                     .background(
                         Capsule()
-                            .fill(viewModel.filters.primaryChip == chip ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
+                            .fill(viewModel.filters.primaryChip == chip ? Color.brainBarAccent.opacity(0.18) : Color.brainBarGlassSecondary)
                     )
-                    .foregroundStyle(viewModel.filters.primaryChip == chip ? Color.accentColor : .primary)
+                    .foregroundStyle(viewModel.filters.primaryChip == chip ? Color.brainBarAccent : .primary)
                 }
             }
 
@@ -188,7 +188,7 @@ private struct SearchPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color.brainBarGlassPrimary)
                 .shadow(color: .black.opacity(0.16), radius: 24, y: 8)
         )
         .overlay(alignment: .topTrailing) {
@@ -200,7 +200,7 @@ private struct SearchPanelView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
+        .background(Color.brainBarClear)
         .overlay {
             // QA #37: full conversation thread for the clicked search hit.
             if let conversation = conversationSelection.conversation {

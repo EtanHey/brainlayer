@@ -21,14 +21,14 @@ enum KGNodeRenderer {
 
         // Circle fill
         let fillColor = isSelected
-            ? (darkMode ? Color.white : Color.black)
+            ? (darkMode ? Color.brainBarWhite : Color.brainBarBlack)
             : node.color
         context.fill(Circle().path(in: rect), with: .color(fillColor.opacity(0.85)))
 
         // Border ring
         let strokeColor = isSelected
             ? node.color
-            : (darkMode ? Color.white.opacity(0.4) : Color.black.opacity(0.22))
+            : (darkMode ? Color.brainBarWhite.opacity(0.4) : Color.brainBarBlack.opacity(0.22))
         context.stroke(
             Circle().path(in: rect),
             with: .color(strokeColor),
@@ -41,7 +41,7 @@ enum KGNodeRenderer {
         let label = Text(node.name)
             .font(.system(size: max(9, r * 0.55), weight: isSelected ? .bold : .medium))
             .underline(isSelected)
-            .foregroundColor(isSelected ? node.color : (darkMode ? .white : .black))
+            .foregroundColor(isSelected ? node.color : (darkMode ? Color.brainBarWhite : Color.brainBarBlack))
         context.draw(
             context.resolve(label),
             at: CGPoint(x: node.position.x, y: node.position.y + r + 12),

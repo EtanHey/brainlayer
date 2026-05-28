@@ -38,13 +38,13 @@ struct SearchResultCard: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(isSelected ? Color.accentColor.opacity(0.55) : Color.clear, lineWidth: 1)
+                .strokeBorder(isSelected ? Color.brainBarAccent.opacity(0.55) : Color.brainBarClear, lineWidth: 1)
         )
         .overlay(alignment: .topTrailing) {
             if isCopied {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemGreen))
+                    .foregroundStyle(BrainBarStateTheme.active.theme.swiftUIColor)
                     .padding(10)
                     .transition(.scale.combined(with: .opacity))
             }
@@ -62,8 +62,8 @@ struct SearchResultCard: View {
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.16)))
-                        .foregroundStyle(Color.accentColor)
+                        .background(Capsule().fill(Color.brainBarAccent.opacity(0.16)))
+                        .foregroundStyle(Color.brainBarAccent)
                 }
                 .buttonStyle(.plain)
             }
@@ -75,7 +75,7 @@ struct SearchResultCard: View {
                         .font(.system(size: 11, weight: .medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                        .background(Capsule().fill(Color.brainBarTextPrimary.opacity(0.08)))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -88,11 +88,11 @@ struct SearchResultCard: View {
 
     private var backgroundColor: Color {
         if isCopied {
-            return Color(nsColor: .systemGreen).opacity(0.16)
+            return BrainBarStateTheme.active.theme.swiftUIColor.opacity(0.16)
         }
         if isSelected {
-            return Color.accentColor.opacity(0.16)
+            return Color.brainBarAccent.opacity(0.16)
         }
-        return Color(nsColor: .controlBackgroundColor)
+        return Color.brainBarGlassSecondary
     }
 }
