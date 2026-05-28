@@ -391,6 +391,11 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 11, weight: .medium))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                if collector.isHeartbeatAheadOfStats {
+                    Text("updating...")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -1161,6 +1166,7 @@ private struct BrainBarHeroSparkline: View {
                 accentColor: accentColor,
                 compact: SparklineRenderer.isCompact(size: renderSize)
             )
+            .id(pulseRevision)
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }

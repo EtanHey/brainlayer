@@ -52,6 +52,53 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
+    func testDashboardStatsRecentEnrichmentCountSharesBucketSource() {
+        let stats = DashboardStats(
+            chunkCount: 12,
+            enrichedChunkCount: 8,
+            pendingEnrichmentCount: 4,
+            enrichmentPercent: 66.7,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [1, 0, 2, 0],
+            recentEnrichmentBuckets: [0, 2, 0, 3]
+        )
+
+        XCTAssertEqual(stats.recentEnrichmentCount, stats.recentEnrichmentBuckets.reduce(0, +))
+    }
+
+    func testDashboardStatsTrailingFiveMinuteCountsUseTrueFiveMinuteWindow() throws {
+        let offsets: [(String, TimeInterval)] = [
+            ("dash-enrich-2m", -120),
+            ("dash-enrich-4m", -240),
+            ("dash-enrich-6m", -360),
+            ("dash-enrich-45m", -2_700),
+        ]
+        for (id, offset) in offsets {
+            try db.insertChunk(
+                id: id,
+                content: "Enrichment fixture \(id)",
+                sessionId: "dashboard",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+            db.exec("""
+                UPDATE chunks
+                SET created_at = datetime('now', '\(Int(offset)) seconds'),
+                    enriched_at = datetime('now', '\(Int(offset)) seconds'),
+                    enrich_status = 'success'
+                WHERE id = '\(id)'
+            """)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.recentWriteFiveMinuteCount, 2)
+        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 2)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 4)
+    }
+
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
@@ -715,6 +762,67 @@ final class DashboardTests: XCTestCase {
         try await waitForCollector(collector) { $0.lastDataFetchedAt != fetchedAt }
 
         XCTAssertNotEqual(collector.lastDataFetchedAt, fetchedAt)
+    }
+
+    @MainActor
+    func testHeartbeatMarksStatsSnapshotPendingDuringCoalescedRefresh() async throws {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60,
+            autoRefreshInterval: 60,
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+
+        eventSource.publish(.lastChunkID("pending-stats-refresh"))
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.lastChunkID == "pending-stats-refresh" }
+
+        XCTAssertEqual(collector.lastDataFetchedAt, fetchedAt)
+        XCTAssertTrue(collector.hasPendingStatsRefresh)
+        XCTAssertTrue(collector.isHeartbeatAheadOfStats)
+    }
+
+    @MainActor
+    func testManualRefreshRepopulatesRecentEnrichmentBuckets() async throws {
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60,
+            autoRefreshInterval: 60
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { !$0.isRefreshing }
+        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
+
+        try db.insertChunk(
+            id: "manual-refresh-enrichment",
+            content: "Manual refresh should repopulate the enrichment sparkline buckets",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET created_at = datetime('now', '-45 minutes'),
+                enriched_at = datetime('now'),
+                enrich_status = 'success'
+            WHERE id = 'manual-refresh-enrichment'
+        """)
+
+        collector.manualRefresh()
+        try await waitForCollector(collector) { $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1 }
+
+        XCTAssertEqual(collector.stats.recentEnrichmentCount, 1)
+        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
     }
 
     @MainActor

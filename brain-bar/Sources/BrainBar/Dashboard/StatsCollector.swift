@@ -27,6 +27,7 @@ final class StatsCollector: ObservableObject {
     @Published private(set) var state: PipelineState
     @Published private(set) var isRefreshing = false
     @Published private(set) var isManualRefreshInProgress = false
+    @Published private(set) var hasPendingStatsRefresh = false
     @Published private(set) var lastDataFetchedAt: Date?
     @Published private(set) var heartbeat: DashboardHeartbeat
 
@@ -86,6 +87,12 @@ final class StatsCollector: ObservableObject {
         self.heartbeat = .empty
     }
 
+    var isHeartbeatAheadOfStats: Bool {
+        guard hasPendingStatsRefresh, let heartbeatUpdatedAt = heartbeat.updatedAt else { return false }
+        guard let lastDataFetchedAt else { return true }
+        return heartbeatUpdatedAt > lastDataFetchedAt
+    }
+
     func start() {
         guard !isRunning else { return }
         resetRefreshTimingState()
@@ -116,6 +123,7 @@ final class StatsCollector: ObservableObject {
         dashboardRefreshTask = nil
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
+        hasPendingStatsRefresh = false
         isRefreshing = false
         isManualRefreshInProgress = false
         if isRunning {
@@ -134,6 +142,7 @@ final class StatsCollector: ObservableObject {
         NSLog("[BrainBar] manual refresh requested at %@", ISO8601DateFormatter().string(from: Date()))
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
+        hasPendingStatsRefresh = false
         requestRefresh(force: true, trigger: .manual)
     }
 
@@ -160,6 +169,7 @@ final class StatsCollector: ObservableObject {
 
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
+        hasPendingStatsRefresh = false
         dashboardRefreshTask?.cancel()
         dashboardRefreshGeneration += 1
         let generation = dashboardRefreshGeneration
@@ -180,8 +190,8 @@ final class StatsCollector: ObservableObject {
             startUnix: startUnix,
             endUnix: nil,
             rows: startStats.chunkCount,
-            writes5m: startStats.recentActivityBuckets.suffix(1).reduce(0, +),
-            enrich5m: startStats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
+            writes5m: startStats.recentWriteFiveMinuteCount,
+            enrich5m: startStats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
 
@@ -245,6 +255,8 @@ final class StatsCollector: ObservableObject {
                     databaseSizeBytes: 0,
                     recentActivityBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
                     recentEnrichmentBuckets: Array(repeating: 0, count: Self.defaultBucketCount),
+                    recentWriteFiveMinuteCount: 0,
+                    recentEnrichmentFiveMinuteCount: 0,
                     activityWindowMinutes: Self.defaultActivityWindowMinutes,
                     bucketCount: Self.defaultBucketCount
                 )
@@ -253,6 +265,7 @@ final class StatsCollector: ObservableObject {
         }
 
         isRefreshing = false
+        hasPendingStatsRefresh = false
         if trigger == .manual {
             isManualRefreshInProgress = false
         }
@@ -262,8 +275,8 @@ final class StatsCollector: ObservableObject {
             startUnix: startUnix,
             endUnix: Date().timeIntervalSince1970,
             rows: stats.chunkCount,
-            writes5m: stats.recentActivityBuckets.suffix(1).reduce(0, +),
-            enrich5m: stats.recentEnrichmentBuckets.suffix(1).reduce(0, +),
+            writes5m: stats.recentWriteFiveMinuteCount,
+            enrich5m: stats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
     }
@@ -291,6 +304,7 @@ final class StatsCollector: ObservableObject {
     }
 
     private func schedulePendingStatsRefresh(after delay: TimeInterval) {
+        hasPendingStatsRefresh = true
         guard pendingStatsRefreshTask == nil else { return }
 
         pendingStatsRefreshTask = Task { [weak self] in
@@ -305,6 +319,7 @@ final class StatsCollector: ObservableObject {
             await MainActor.run {
                 guard let self, !self.isStopped else { return }
                 self.pendingStatsRefreshTask = nil
+                self.hasPendingStatsRefresh = false
                 self.requestRefresh(force: false, trigger: .auto)
             }
         }
@@ -326,6 +341,7 @@ final class StatsCollector: ObservableObject {
                     guard let self, !self.isStopped else { return }
                     self.pendingStatsRefreshTask?.cancel()
                     self.pendingStatsRefreshTask = nil
+                    self.hasPendingStatsRefresh = false
                     self.requestRefresh(force: false, trigger: .auto)
                 }
             }
