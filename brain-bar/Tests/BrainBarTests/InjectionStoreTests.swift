@@ -156,6 +156,34 @@ final class InjectionStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testInactiveParameterChangeRefreshesWhenReactivated() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 1, 1],
+            eventResults: [
+                .success([makeEvent(id: 1, query: "old session")]),
+                .success([makeEvent(id: 2, query: "new session")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+        defer { store.stop() }
+
+        store.start(sessionID: "old", active: true)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.events.map(\.query), ["old session"])
+
+        store.setActive(false)
+        store.start(sessionID: "new", active: false)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.events.map(\.query), ["old session"])
+
+        store.setActive(true)
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(store.events.map(\.query), ["new session"])
+        XCTAssertEqual(reader.listCallCount, 2)
+    }
+
+    @MainActor
     func testActiveRefreshDebouncesMutationBursts() async throws {
         let reader = ScriptedInjectionEventReader(
             versions: [1, 2, 3, 4],

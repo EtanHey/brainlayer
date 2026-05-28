@@ -67,6 +67,7 @@ final class InjectionStore: ObservableObject {
     private var lastDataVersion: Int?
     private var currentSessionID: String?
     private var currentLimit = 50
+    private var needsRefreshOnActivation = false
     private var recoveryPhase: RecoveryPhase = .healthy
 
     init(databasePath: String) throws {
@@ -94,8 +95,12 @@ final class InjectionStore: ObservableObject {
         currentLimit = limit
 
         guard !isRunning else {
-            setActive(active)
             if parametersChanged {
+                needsRefreshOnActivation = true
+            }
+            setActive(active)
+            if parametersChanged, active {
+                needsRefreshOnActivation = false
                 scheduleRefresh(force: true, immediate: true)
             }
             return
@@ -117,6 +122,7 @@ final class InjectionStore: ObservableObject {
 
         isActive = false
         isRunning = false
+        needsRefreshOnActivation = false
         reader.close()
     }
 
@@ -127,7 +133,9 @@ final class InjectionStore: ObservableObject {
         isActive = active
         if active {
             installDarwinObserver()
-            scheduleRefresh(force: events.isEmpty, immediate: true)
+            let forceRefresh = events.isEmpty || needsRefreshOnActivation
+            needsRefreshOnActivation = false
+            scheduleRefresh(force: forceRefresh, immediate: true)
             startPolling()
         } else {
             pendingRefreshTask?.cancel()

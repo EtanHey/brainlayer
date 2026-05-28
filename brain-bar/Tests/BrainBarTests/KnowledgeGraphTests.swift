@@ -1519,6 +1519,8 @@ private final class RecordingKnowledgeGraphReader: KnowledgeGraphReading, @unche
         self.relations = relations
     }
 
+    deinit {}
+
     func fetchKGEntities(limit: Int) throws -> [BrainDatabase.KGEntityRow] {
         entityFetchCount += 1
         return Array(entities.prefix(limit))

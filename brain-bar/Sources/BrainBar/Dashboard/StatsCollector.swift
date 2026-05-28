@@ -367,7 +367,7 @@ final class StatsCollector: ObservableObject {
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
-            break
+            schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
         }
     }
 

@@ -29,7 +29,6 @@ struct KGCanvasView: View {
     @State private var canvasSize: CGSize = .zero
     @State private var minimumImportance: Double = 3
     @State private var hasLoadedGraph = false
-    @State private var hasStartedGraphPolling = false
     @State private var simulationController = KGSimulationController()
     @GestureState private var toolbarInteractionActive = false
 
@@ -92,16 +91,17 @@ struct KGCanvasView: View {
                     stopSimulation()
                     return
                 }
-                guard !hasStartedGraphPolling else { return }
-                hasStartedGraphPolling = true
-                defer { hasStartedGraphPolling = false }
-                if await viewModel.loadGraphIfNeeded() {
+
+                let loaded = await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
                     hasLoadedGraph = true
                     if reduceMotion {
                         _ = viewModel.tick(reduceMotionEnabled: true)
                     } else {
                         startSimulation()
                     }
+                })
+                if loaded {
+                    hasLoadedGraph = true
                 }
             }
             .onChange(of: reduceMotion) { _, enabled in
@@ -114,13 +114,6 @@ struct KGCanvasView: View {
             }
             .onChange(of: viewModel.nodes.count) { _, _ in
                 startSimulation()
-            }
-            .onChange(of: isActive) { _, active in
-                if active {
-                    startSimulation()
-                } else {
-                    stopSimulation()
-                }
             }
             .onDisappear {
                 stopSimulation()

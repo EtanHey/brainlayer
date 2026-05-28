@@ -657,12 +657,12 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testBrainBusEventsUpdateHeartbeatWithoutHeavyStatsRefresh() async throws {
+    func testBrainBusEventsUpdateHeartbeatAndScheduleCoalescedStatsRefresh() async throws {
         let eventSource = RecordingBrainBusEventSource()
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            statsRefreshCoalesceInterval: 60,
+            statsRefreshCoalesceInterval: 0.05,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
         )
@@ -674,10 +674,9 @@ final class DashboardTests: XCTestCase {
 
         eventSource.publish(.lastChunkID("heartbeat-only"))
         try await waitForCollector(collector) { $0.heartbeat.lastEvent?.lastChunkID == "heartbeat-only" }
-        try await Task.sleep(for: .milliseconds(120))
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != fetchedAt }
 
-        XCTAssertEqual(collector.heartbeat.lastEvent?.type, .lastChunkID)
-        XCTAssertEqual(collector.lastDataFetchedAt, fetchedAt)
+        XCTAssertNotEqual(collector.lastDataFetchedAt, fetchedAt)
     }
 
     @MainActor

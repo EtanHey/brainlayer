@@ -1243,7 +1243,7 @@ private final class BrainBarWindowObserver: ObservableObject {
         removeObservers()
         configure(window: window)
         coordinator.attach(window: window)
-        isWindowVisible = window.isVisible
+        isWindowVisible = Self.isWindowActuallyVisible(window)
 
         if needsPreparation {
             DispatchQueue.main.async { [weak self, weak window] in
@@ -1281,7 +1281,7 @@ private final class BrainBarWindowObserver: ObservableObject {
                 queue: .main
             ) { [weak self, weak window] _ in
                 Task { @MainActor [weak self, weak window] in
-                    self?.isWindowVisible = window?.isVisible == true
+                    self?.isWindowVisible = Self.isWindowActuallyVisible(window)
                 }
             },
             center.addObserver(
@@ -1294,6 +1294,11 @@ private final class BrainBarWindowObserver: ObservableObject {
                 }
             },
         ]
+    }
+
+    private static func isWindowActuallyVisible(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return window.isVisible && window.occlusionState.contains(.visible)
     }
 
     private func configure(window: NSWindow) {
