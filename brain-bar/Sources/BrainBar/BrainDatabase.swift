@@ -4762,8 +4762,9 @@ final class BrainDatabase: @unchecked Sendable {
             return nil
         }
 
+        let knownChunkIDs = Set(chunks.map(\.id))
         let liveChunkIDs = event.chunkIDs.filter { chunkID in
-            liveChunks.contains { $0.id == chunkID }
+            liveChunks.contains { $0.id == chunkID } || !knownChunkIDs.contains(chunkID)
         }
         let scopedChunkIDs = liveChunkIDs.isEmpty ? liveChunks.map(\.id) : liveChunkIDs
         return InjectionEvent(

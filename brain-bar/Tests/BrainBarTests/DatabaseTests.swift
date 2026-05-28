@@ -896,6 +896,37 @@ final class DatabaseTests: XCTestCase {
         })
     }
 
+    func testListInjectionEventsKeepsUnresolvedIDsWhenLiveChunkExists() throws {
+        try db.insertChunk(
+            id: "live-hook",
+            content: "Injected project context for brainlayer hook session.",
+            sessionId: "session-live",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'precompact:live-hook',
+                tags = '["hook-injection"]'
+            WHERE id = 'live-hook'
+        """)
+
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "live hook with unresolved legacy id",
+            chunkIDs: ["missing-legacy-id", "live-hook"],
+            tokenCount: 24,
+            timestamp: "2026-05-29T00:01:00.000Z"
+        )
+
+        let event = try XCTUnwrap(db.listInjectionEvents(sessionID: "claude-session-1", limit: 1).first)
+
+        XCTAssertEqual(event.chunkIDs, ["missing-legacy-id", "live-hook"])
+        XCTAssertEqual(event.chunks.map(\.id), ["live-hook"])
+    }
+
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
         try db.recordInjectionEvent(
             sessionID: "session-a",
