@@ -17,6 +17,7 @@ import numpy as np
 
 from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
+from .agent_profiles import boost_weight, source_weight, validate_agent_profile
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
@@ -319,8 +320,70 @@ def _precompact_content_exclusion_sql(content_expr: str) -> str:
     )
 
 
+def _profiled_multiplier(base: float, profile: dict[str, Any] | None, feature: str) -> float:
+    """Scale a multiplier's deviation from neutral by an agent profile weight."""
+    weighted = 1.0 + (base - 1.0) * boost_weight(profile, feature)
+    return min(max(weighted, 0.01), 100.0)
+
+
 class SearchMixin:
     """Search and query methods, mixed into VectorStore."""
+
+    def get_agent_profile(self, agent_id: str) -> dict[str, Any] | None:
+        """Return a validated agent ranking profile, or None when absent/invalid."""
+        if not agent_id:
+            return None
+        for attempt in range(3):
+            try:
+                row = (
+                    self._read_cursor()
+                    .execute(
+                        "SELECT profile_json, updated_at, notes FROM agent_profiles WHERE agent_id = ?",
+                        (agent_id,),
+                    )
+                    .fetchone()
+                )
+                break
+            except apsw.Error as exc:
+                if _is_sqlite_busy_error(exc):
+                    if attempt < 2:
+                        time.sleep(0.05 * (2**attempt))
+                        continue
+                    raise
+                return None
+        else:
+            return None
+        if row is None:
+            return None
+        try:
+            profile = validate_agent_profile(json.loads(row[0]))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return {"agent_id": agent_id, "profile": profile, "updated_at": row[1], "notes": row[2]}
+
+    def set_agent_profile(self, agent_id: str, profile: dict[str, Any], notes: str | None = None) -> dict[str, Any]:
+        """Validate and persist an agent ranking profile."""
+        if not agent_id or not agent_id.strip():
+            raise ValueError("agent_id is required")
+        normalized = validate_agent_profile(profile)
+        updated_at = time.time()
+        for attempt in range(3):
+            try:
+                self.conn.cursor().execute(
+                    """
+                    INSERT OR REPLACE INTO agent_profiles(agent_id, profile_json, updated_at, notes)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (agent_id, json.dumps(normalized, sort_keys=True), updated_at, notes),
+                )
+                break
+            except apsw.Error as exc:
+                if _is_sqlite_busy_error(exc) and attempt < 2:
+                    time.sleep(0.05 * (2**attempt))
+                    continue
+                raise
+        clear_hybrid_search_cache(getattr(self, "db_path", None))
+        return {"agent_id": agent_id, "profile": normalized, "updated_at": updated_at, "notes": notes}
 
     def _audit_recursion_exclusion_sql(self, chunk_id_expr: str, tags_expr: str, content_expr: str) -> str:
         return _audit_recursion_exclusion_sql(
@@ -735,12 +798,14 @@ class SearchMixin:
             )
             effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
             params = [query_bytes, effective_k] + filter_params
+            chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source, c.decay_score
+                       c.created_at, c.source, c.decay_score,
+                       {chunk_origin_expr}
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -819,12 +884,14 @@ class SearchMixin:
 
             params.append(n_results)
 
+            chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             query = f"""
                 SELECT id, content, metadata, source_file, project,
                        content_type, value_type, char_count,
                        NULL as distance,
                        summary, tags, importance, intent,
-                       created_at, source, decay_score
+                       created_at, source, decay_score,
+                       {chunk_origin_expr}
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -876,6 +943,8 @@ class SearchMixin:
                 metadata["source"] = row[14]
             if row[15] is not None:
                 metadata["decay_score"] = row[15]
+            if len(row) > 16 and row[16]:
+                metadata["chunk_origin"] = row[16]
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -1093,12 +1162,14 @@ class SearchMixin:
         )
         effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
+        chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
         query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
-                       c.created_at, c.source
+                       c.created_at, c.source, c.decay_score,
+                       {chunk_origin_expr}
                 FROM chunk_vectors_binary v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
@@ -1153,6 +1224,10 @@ class SearchMixin:
                 metadata["created_at"] = row[13]
             if row[14]:
                 metadata["source"] = row[14]
+            if row[15] is not None:
+                metadata["decay_score"] = row[15]
+            if row[16]:
+                metadata["chunk_origin"] = row[16]
             metadatas.append(metadata)
             distances.append(row[8])
 
@@ -1444,6 +1519,8 @@ class SearchMixin:
                 fts_extra.append("AND COALESCE(c.archived, 0) = 0")
                 fts_extra.append("AND COALESCE(c.status, 'active') = 'active'")
 
+            chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+
             def _fetch_fts_rows(table_name: str) -> list[tuple]:
                 params = [fts_query, *fts_filter_params, candidate_fetch_count]
                 return list(
@@ -1453,7 +1530,8 @@ class SearchMixin:
                            c.content, c.metadata, c.source_file, c.project,
                            c.content_type, c.value_type, c.char_count,
                            c.summary, c.tags, c.importance, c.intent,
-                           c.created_at, c.source, c.sender, c.language, c.decay_score
+                           c.created_at, c.source, c.sender, c.language, c.decay_score,
+                           {chunk_origin_expr}
                     FROM {table_name} f
                     JOIN chunks c ON f.chunk_id = c.id
                     {entity_join}
@@ -1506,6 +1584,7 @@ class SearchMixin:
                         "sender": row[15],
                         "language": row[16],
                         "decay_score": row[17],
+                        "chunk_origin": row[18],
                     },
                 )
 
@@ -1572,11 +1651,13 @@ class SearchMixin:
                 recent_extra.append("AND COALESCE(archived, 0) = 0")
                 recent_extra.append("AND COALESCE(status, 'active') = 'active'")
 
+            chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             recent_query = f"""
                     SELECT id, content, metadata, source_file, project,
                            content_type, value_type, char_count,
                            summary, tags, importance, intent,
-                           created_at, source, sender, language, decay_score
+                           created_at, source, sender, language, decay_score,
+                           {chunk_origin_expr}
                     FROM chunks
                     WHERE datetime(created_at) >= datetime('now', '-7 days') {" ".join(recent_extra)}
                     ORDER BY created_at DESC
@@ -1616,6 +1697,7 @@ class SearchMixin:
                         "sender": row[14],
                         "language": row[15],
                         "decay_score": row[16],
+                        "chunk_origin": row[17],
                     },
                 )
 
@@ -1636,6 +1718,7 @@ class SearchMixin:
         all_chunk_ids = set(semantic_by_id.keys()) | set(fts_ranks.keys()) | set(trigram_ranks.keys())
 
         scored = []
+        match_features_by_id: dict[str, dict[str, bool]] = {}
         for cid in all_chunk_ids:
             score = 0.0
             sem_entry = semantic_by_id.get(cid)
@@ -1688,6 +1771,8 @@ class SearchMixin:
                     meta["language"] = data["language"]
                 if data.get("decay_score") is not None:
                     meta["decay_score"] = data["decay_score"]
+                if data.get("chunk_origin"):
+                    meta["chunk_origin"] = data["chunk_origin"]
                 dist = None
             else:
                 continue
@@ -1710,17 +1795,32 @@ class SearchMixin:
                 if language_filter and meta.get("language") != language_filter:
                     continue
 
+            match_features_by_id[cid] = {
+                "vector": sem_entry is not None,
+                "fts": fts_rank is not None,
+                "trigram": trigram_rank is not None,
+            }
             scored.append((score, cid, doc, meta, dist))
+
+        agent_profile = None
+        if agent_id:
+            stored_profile = self.get_agent_profile(agent_id)
+            if stored_profile:
+                agent_profile = stored_profile["profile"]
 
         # Post-RRF boost: importance and recency adjustments
         now = datetime.now(timezone.utc)
         for i, (score, cid, doc, meta, dist) in enumerate(scored):
             boost = 1.0
+            for feature, matched in match_features_by_id.get(cid, {}).items():
+                if matched:
+                    boost *= boost_weight(agent_profile, feature)
 
             # Importance boost: scale 0-10 → 1.0-1.5x multiplier
             imp = meta.get("importance")
             if imp is not None and isinstance(imp, (int, float)):
-                boost *= 1.0 + min(max(float(imp), 0), 10) / 20.0  # 10/20 = 0.5 max boost
+                importance_boost = 1.0 + min(max(float(imp), 0), 10) / 20.0
+                boost *= _profiled_multiplier(importance_boost, agent_profile, "importance")
 
             # Recency boost: exponential decay with 30-day half-life
             created = meta.get("created_at")
@@ -1731,15 +1831,20 @@ class SearchMixin:
                         dt = dt.replace(tzinfo=timezone.utc)
                     age_days = max((now - dt).total_seconds() / 86400, 0)
                     recency = math.exp(-0.023 * age_days)  # ~0.5 at 30 days
-                    boost *= 0.7 + 0.3 * recency  # range: 0.7x (old) to 1.0x (fresh)
+                    # Base range: 0.7x (old) to 1.0x (fresh).
+                    recency_boost = 0.7 + 0.3 * recency
+                    boost *= _profiled_multiplier(recency_boost, agent_profile, "recency")
                     if recency_intent and age_days <= 7:
-                        boost *= 2.0
+                        boost *= _profiled_multiplier(2.0, agent_profile, "recency_intent")
                 except (ValueError, TypeError):
                     pass
 
             decay_score = meta.get("decay_score")
             if isinstance(decay_score, (int, float)):
-                boost *= float(decay_score)
+                boost *= _profiled_multiplier(float(decay_score), agent_profile, "decay")
+
+            boost *= source_weight(agent_profile, meta.get("source"))
+            boost *= source_weight(agent_profile, meta.get("chunk_origin"))
 
             scored[i] = (score * boost, cid, doc, meta, dist)
 
@@ -1773,7 +1878,13 @@ class SearchMixin:
                     KG_BOOST_FACTOR = 1.3
                     for i, (score, cid, doc, meta, dist) in enumerate(scored):
                         if cid in kg_linked_ids:
-                            scored[i] = (score * KG_BOOST_FACTOR, cid, doc, meta, dist)
+                            scored[i] = (
+                                score * _profiled_multiplier(KG_BOOST_FACTOR, agent_profile, "kg"),
+                                cid,
+                                doc,
+                                meta,
+                                dist,
+                            )
             except Exception:
                 pass  # KG tables may not exist in all DBs
 

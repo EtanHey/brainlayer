@@ -115,6 +115,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     _PIDFILE_REF_PIDS: dict[Path, int] = {}
     _PIDFILE_REFS_LOCK = threading.Lock()
     _PIDFILE_ACQUIRE_LOCK = threading.Lock()
+    _INIT_DB_LOCKS: dict[Path, threading.Lock] = {}
+    _INIT_DB_LOCKS_LOCK = threading.Lock()
 
     def __init__(self, db_path: Path, readonly: bool = False):
         self.db_path = db_path
@@ -136,10 +138,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         else:
             self._acquire_writer_pidfile()
             try:
-                self._init_db_with_retry()
+                with self._init_db_thread_lock():
+                    self._init_db_with_retry()
             except Exception:
                 self._release_writer_pidfile()
                 raise
+
+    def _init_db_thread_lock(self) -> threading.Lock:
+        """Serialize same-process schema init for a DB path."""
+        resolved_path = self.db_path.resolve()
+        with self._INIT_DB_LOCKS_LOCK:
+            lock = self._INIT_DB_LOCKS.get(resolved_path)
+            if lock is None:
+                lock = threading.Lock()
+                self._INIT_DB_LOCKS[resolved_path] = lock
+            return lock
 
     def _writer_pidfile_path(self) -> Path:
         pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp")).expanduser()
@@ -526,11 +539,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 details TEXT
             )
         """)
-
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                name TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS agent_profiles (
+                agent_id TEXT PRIMARY KEY,
+                profile_json TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                notes TEXT
             )
         """)
         atomic_brick_migration_applied = (
