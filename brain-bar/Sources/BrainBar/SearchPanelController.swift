@@ -18,9 +18,14 @@ final class SearchPanelController {
 
     private let panel: SearchPanel
     private let viewModel: SearchViewModel
+    private let conversationLoader: ((String) throws -> BrainDatabase.ExpandedConversation)?
 
-    init(viewModel: SearchViewModel) {
+    init(
+        viewModel: SearchViewModel,
+        conversationLoader: ((String) throws -> BrainDatabase.ExpandedConversation)? = nil
+    ) {
         self.viewModel = viewModel
+        self.conversationLoader = conversationLoader
         panel = SearchPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
             styleMask: [.nonactivatingPanel, .fullSizeContentView],
@@ -43,7 +48,11 @@ final class SearchPanelController {
             },
             rerank: { candidates, _ in candidates }
         )
-        self.init(viewModel: SearchViewModel(queryActor: actor))
+        // QA #36/#37: give the command palette the same single-click drill-in.
+        self.init(
+            viewModel: SearchViewModel(queryActor: actor),
+            conversationLoader: { try db.expandedConversation(id: $0) }
+        )
     }
 
     func show(query: String? = nil) {
@@ -80,9 +89,13 @@ final class SearchPanelController {
             self?.dismiss()
         }
         panel.contentViewController = NSHostingController(
-            rootView: SearchPanelView(viewModel: viewModel, onDismiss: { [weak self] in
-                self?.dismiss()
-            })
+            rootView: SearchPanelView(
+                viewModel: viewModel,
+                conversationLoader: conversationLoader,
+                onDismiss: { [weak self] in
+                    self?.dismiss()
+                }
+            )
         )
     }
 
@@ -100,9 +113,11 @@ final class SearchPanelController {
 
 private struct SearchPanelView: View {
     @ObservedObject var viewModel: SearchViewModel
+    let conversationLoader: ((String) throws -> BrainDatabase.ExpandedConversation)?
     let onDismiss: () -> Void
 
     @FocusState private var isSearchFieldFocused: Bool
+    @State private var conversationSelection = InjectionConversationSelection()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -151,7 +166,8 @@ private struct SearchPanelView: View {
                 onActivate: { id in
                     viewModel.selectResult(id: id)
                     _ = viewModel.activateSelectedResult()
-                }
+                },
+                onOpenConversation: conversationLoader.map { _ in { id in openConversation(id: id) } }
             )
             .onMoveCommand { direction in
                 switch direction {
@@ -185,8 +201,29 @@ private struct SearchPanelView: View {
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
+        .overlay {
+            // QA #37: full conversation thread for the clicked search hit.
+            if let conversation = conversationSelection.conversation {
+                ChunkConversationOverlay(
+                    conversation: conversation,
+                    title: conversationSelection.title,
+                    onClose: { conversationSelection.close() }
+                )
+            }
+        }
         .task {
             isSearchFieldFocused = true
+        }
+    }
+
+    private func openConversation(id: String) {
+        viewModel.selectResult(id: id)
+        guard let conversationLoader else { return }
+        do {
+            let conversation = try conversationLoader(id)
+            conversationSelection.open(conversation, title: id)
+        } catch {
+            // Leave the overlay closed on failure; the result stays selected.
         }
     }
 

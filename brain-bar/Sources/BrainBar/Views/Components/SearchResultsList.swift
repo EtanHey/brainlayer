@@ -6,6 +6,11 @@ struct SearchResultsList: View {
     let copiedResultID: String?
     let onSelect: (String) -> Void
     let onActivate: (String) -> Void
+    /// QA #36/#37: single-click drill-in. When provided, a single click opens the
+    /// conversation for that result; copy stays available as the secondary
+    /// (double-click) action. Optional so consumers without a conversation source
+    /// keep selection-only behavior.
+    var onOpenConversation: ((String) -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -22,13 +27,19 @@ struct SearchResultsList: View {
                         )
                 } else {
                     ForEach(results) { result in
+                        let resultID = result.id
+                        let openAction: (() -> Void)? = onOpenConversation.map { open in { open(resultID) } }
                         SearchResultCard(
                             result: result,
                             isSelected: result.id == selectedResultID,
-                            isCopied: result.id == copiedResultID
+                            isCopied: result.id == copiedResultID,
+                            onOpenConversation: openAction,
+                            onCopy: { onActivate(resultID) }
                         )
                         .onTapGesture {
                             onSelect(result.id)
+                            // QA #36: single click drills in instead of being a no-op.
+                            onOpenConversation?(result.id)
                         }
                         .onTapGesture(count: 2) {
                             onActivate(result.id)
