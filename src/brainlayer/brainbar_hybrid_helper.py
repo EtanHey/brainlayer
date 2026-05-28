@@ -194,8 +194,6 @@ class HybridSearchHelper:
             "detail": str(arguments.get("detail") or "compact"),
             "allow_helper_route": False,
         }
-        if arguments.get("agent_id") is not None:
-            search_kwargs["agent_id"] = arguments.get("agent_id")
         if search_profile.enabled() or query_id is not None:
             search_kwargs["profile_query_id"] = query_id
             search_kwargs["profile_scope"] = "search.helper"
