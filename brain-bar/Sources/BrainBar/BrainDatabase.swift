@@ -4731,11 +4731,22 @@ final class BrainDatabase: @unchecked Sendable {
                             COALESCE(LOWER(TRIM(feed_chunk.source)), '') != 'youtube'
                             AND COALESCE(LOWER(TRIM(feed_chunk.source_file)), '') NOT LIKE 'youtube:%'
                             AND COALESCE(LOWER(TRIM(feed_chunk.content_type)), '') NOT IN ('transcript', 'podcast', 'seed')
-                            AND COALESCE(LOWER(feed_chunk.tags), '') NOT LIKE '%"manual_seed"%'
-                            AND COALESCE(LOWER(feed_chunk.tags), '') NOT LIKE '%"seed"%'
-                            AND COALESCE(LOWER(feed_chunk.tags), '') NOT LIKE '%"imported"%'
-                            AND COALESCE(LOWER(feed_chunk.tags), '') NOT LIKE '%"podcast"%'
-                            AND COALESCE(LOWER(feed_chunk.tags), '') NOT LIKE '%"youtube"%'
+                            AND NOT EXISTS (
+                                SELECT 1
+                                FROM json_each(
+                                    CASE
+                                        WHEN json_valid(feed_chunk.tags) THEN feed_chunk.tags
+                                        ELSE '[]'
+                                    END
+                                ) AS feed_tag
+                                WHERE LOWER(TRIM(CAST(feed_tag.value AS TEXT))) IN (
+                                    'manual_seed',
+                                    'seed',
+                                    'imported',
+                                    'podcast',
+                                    'youtube'
+                                )
+                            )
                         )
                       )
                 )
@@ -4748,6 +4759,9 @@ final class BrainDatabase: @unchecked Sendable {
             return event
         }
 
+        // Mixed events are kept, but only the live hook chunks remain visible
+        // in the feed; imported seed chunks stay out of counts, previews, and
+        // expansion targets.
         let liveChunks = chunks.filter(Self.isLiveInjectionFeedChunk)
         guard !liveChunks.isEmpty else {
             return nil

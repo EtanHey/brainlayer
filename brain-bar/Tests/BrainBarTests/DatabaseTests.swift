@@ -842,6 +842,22 @@ final class DatabaseTests: XCTestCase {
             WHERE id = 'youtube:UIy-WQCZdAM:179'
         """)
 
+        try db.insertChunk(
+            id: "seed-with-spaces",
+            content: "Imported seed tagged with whitespace should not consume the feed limit.",
+            sessionId: "seed-spaced",
+            project: "coach",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'seed:manual',
+                tags = '[" seed "]'
+            WHERE id = 'seed-with-spaces'
+        """)
+
         db.recordInjectionEvent(
             sessionID: "claude-session-1",
             query: "actual live hook",
@@ -855,6 +871,13 @@ final class DatabaseTests: XCTestCase {
             chunkIDs: ["youtube:UIy-WQCZdAM:179"],
             tokenCount: 57,
             timestamp: "2026-05-29T00:02:00.000Z"
+        )
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "spaced seed should not consume limit",
+            chunkIDs: ["seed-with-spaces"],
+            tokenCount: 31,
+            timestamp: "2026-05-29T00:03:00.000Z"
         )
 
         let events = try db.listInjectionEvents(sessionID: "claude-session-1", limit: 1)
