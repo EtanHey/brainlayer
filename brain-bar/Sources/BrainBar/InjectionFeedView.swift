@@ -66,6 +66,7 @@ struct InjectionFeedView: View {
     @State private var expandedEventIDs: Set<Int64> = []
     @State private var expandedBurstIDs: Set<String> = []
     @State private var conversationSelection = InjectionConversationSelection()
+    @State private var loadingConversationChunkID: String?
     @AppStorage("brainbar.injectionFeed.typeFilter") private var typeFilterRaw = InjectionTypeFilter.all.rawValue
 
     private let accentPalette: [Color] = [
@@ -112,6 +113,8 @@ struct InjectionFeedView: View {
                     title: conversationSelection.title,
                     onClose: { conversationSelection.close() }
                 )
+            } else if loadingConversationChunkID != nil {
+                ConversationLoadingOverlay(onClose: { loadingConversationChunkID = nil })
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -417,20 +420,15 @@ struct InjectionFeedView: View {
                 Spacer(minLength: 10)
 
                 Button {
-                    if let firstChunk = event.chunkIDs.first {
-                        if let conversation = try? store.expandedConversation(chunkID: firstChunk) {
-                            conversationSelection.open(
-                                conversation,
-                                title: event.openingModalTitle(forChunkID: firstChunk)
-                            )
-                        }
+                    if let firstChunk = event.uniqueChunkIDs.first {
+                        openConversation(chunkID: firstChunk, title: event.openingModalTitle(forChunkID: firstChunk))
                     }
                 } label: {
-                    Text("Open")
+                    Text(loadingConversationChunkID == event.uniqueChunkIDs.first ? "Opening" : "Open")
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .disabled(event.chunkIDs.isEmpty)
+                .disabled(event.uniqueChunkIDs.isEmpty || loadingConversationChunkID != nil)
             }
 
             Rectangle()
@@ -461,7 +459,7 @@ struct InjectionFeedView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
-                ForEach(Array(event.chunkIDs.enumerated()), id: \.offset) { _, chunkID in
+                ForEach(Array(event.uniqueChunkIDs.enumerated()), id: \.offset) { _, chunkID in
                     let chunk = chunk(for: chunkID, event: event)
                     RoundedRectangle(cornerRadius: 999, style: .continuous)
                         .fill(color(for: chunk?.kind ?? .other))
@@ -480,14 +478,12 @@ struct InjectionFeedView: View {
 
     private func chunkList(for event: InjectionEvent) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(event.chunkIDs, id: \.self) { chunkID in
+            ForEach(Array(event.uniqueChunkIDs.enumerated()), id: \.offset) { _, chunkID in
                 Button {
-                    if let conversation = try? store.expandedConversation(chunkID: chunkID) {
-                        conversationSelection.open(
-                            conversation,
-                            title: chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
-                        )
-                    }
+                    openConversation(
+                        chunkID: chunkID,
+                        title: chunk(for: chunkID, event: event)?.kind.modalTitle ?? event.modalTitle
+                    )
                 } label: {
                     HStack(spacing: 8) {
                         Circle()
@@ -502,6 +498,7 @@ struct InjectionFeedView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .disabled(loadingConversationChunkID != nil)
             }
         }
         .padding(12)
@@ -759,6 +756,55 @@ struct InjectionFeedView: View {
             return "Retrieved chunk \(chunkID)"
         }
         return "\(chunk.kind.label) · \(chunk.id) · \(chunk.displayText)"
+    }
+
+    private func openConversation(chunkID: String, title: String) {
+        guard loadingConversationChunkID == nil else { return }
+        loadingConversationChunkID = chunkID
+        Task {
+            do {
+                let conversation = try await store.expandedConversationAsync(chunkID: chunkID)
+                guard loadingConversationChunkID == chunkID else { return }
+                conversationSelection.open(conversation, title: title)
+                loadingConversationChunkID = nil
+            } catch {
+                if loadingConversationChunkID == chunkID {
+                    loadingConversationChunkID = nil
+                }
+            }
+        }
+    }
+}
+
+private struct ConversationLoadingOverlay: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.black.opacity(0.18))
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onClose)
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Opening conversation")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(18)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .zIndex(29)
     }
 }
 

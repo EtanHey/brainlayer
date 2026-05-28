@@ -202,7 +202,7 @@ final class BrainDatabase: @unchecked Sendable {
         let disconnectedAt: String?
     }
 
-    struct StoredChunk: Sendable {
+    struct StoredChunk: Sendable, Equatable {
         let chunkID: String
         let rowID: Int64
     }
@@ -214,7 +214,7 @@ final class BrainDatabase: @unchecked Sendable {
         let importance: Int
     }
 
-    enum StoreWriteOutcome: Sendable {
+    enum StoreWriteOutcome: Sendable, Equatable {
         case stored(StoredChunk)
         case queued
     }
@@ -287,9 +287,12 @@ final class BrainDatabase: @unchecked Sendable {
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
+    var failNextStoreAfterInsertForTesting = false
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
+    private static let maximumConversationContextPerSide = 40
+    private static let maximumConversationContentCharacters = 4_000
 
     init(path: String, openConfiguration: OpenConfiguration = OpenConfiguration()) {
         self.path = path
@@ -857,23 +860,29 @@ final class BrainDatabase: @unchecked Sendable {
             }
         }
 
-        try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
-            bindText(chunkID, to: stmt, index: 1)
-            bindText(content, to: stmt, index: 2)
-            bindText(metadataJSON, to: stmt, index: 3)
-            bindText(tagsJSON, to: stmt, index: 4)
-            sqlite3_bind_int(stmt, 5, Int32(importance))
-            bindText(source, to: stmt, index: 6)
-            sqlite3_bind_int(stmt, 7, Int32(content.count))
-            bindText(Self.previewText(summary: "", content: content), to: stmt, index: 8)
+        return try withImmediateTransaction(retries: retries) {
+            try runWriteStatement(on: db, sql: sql, retries: retries) { stmt in
+                bindText(chunkID, to: stmt, index: 1)
+                bindText(content, to: stmt, index: 2)
+                bindText(metadataJSON, to: stmt, index: 3)
+                bindText(tagsJSON, to: stmt, index: 4)
+                sqlite3_bind_int(stmt, 5, Int32(importance))
+                bindText(source, to: stmt, index: 6)
+                sqlite3_bind_int(stmt, 7, Int32(content.count))
+                bindText(Self.previewText(summary: "", content: content), to: stmt, index: 8)
+            }
+            if failNextStoreAfterInsertForTesting {
+                failNextStoreAfterInsertForTesting = false
+                throw DBError.exec(SQLITE_IOERR, "simulated post-insert validation failure")
+            }
+            guard let rowID = try chunkRowID(forChunkID: chunkID) else {
+                throw DBError.noResult
+            }
+            if refreshStatistics {
+                refreshSearchStatisticsBestEffort()
+            }
+            return StoredChunk(chunkID: chunkID, rowID: rowID)
         }
-        guard let rowID = try chunkRowID(forChunkID: chunkID) else {
-            throw DBError.noResult
-        }
-        if refreshStatistics {
-            refreshSearchStatisticsBestEffort()
-        }
-        return StoredChunk(chunkID: chunkID, rowID: rowID)
     }
 
     func storeOrQueueWithinBudget(
@@ -1731,6 +1740,7 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func withImmediateTransaction<T>(
+        retries: Int = 3,
         shouldCancel: () -> Bool = { false },
         _ body: () throws -> T
     ) throws -> T {
@@ -1742,7 +1752,7 @@ final class BrainDatabase: @unchecked Sendable {
         if shouldCancel() {
             throw CancellationError()
         }
-        try execute("BEGIN IMMEDIATE", retries: 3)
+        try execute("BEGIN IMMEDIATE", retries: retries)
         explicitTransactionIsOpen = true
         do {
             let result = try body()
@@ -1818,7 +1828,7 @@ final class BrainDatabase: @unchecked Sendable {
             let message = errMsg.map { String(cString: $0) } ?? "unknown error"
             sqlite3_free(errMsg)
 
-            if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED), attempts < retries {
+            if Self.isRetryableStoreErrorCode(rc), attempts < retries {
                 attempts += 1
                 usleep(retryDelayMillis * 1_000)
                 continue
@@ -1860,7 +1870,7 @@ final class BrainDatabase: @unchecked Sendable {
             var stmt: OpaquePointer?
             let prepareRC = sqlite3_prepare_v2(handle, sql, -1, &stmt, nil)
             guard prepareRC == SQLITE_OK, let stmt else {
-                if (prepareRC == SQLITE_BUSY || prepareRC == SQLITE_LOCKED), attempts < retries {
+                if Self.isRetryableStoreErrorCode(prepareRC), attempts < retries {
                     attempts += 1
                     usleep(retryDelayMillis * 1_000)
                     continue
@@ -1877,7 +1887,7 @@ final class BrainDatabase: @unchecked Sendable {
                 return
             }
 
-            if (stepRC == SQLITE_BUSY || stepRC == SQLITE_LOCKED), attempts < retries {
+            if Self.isRetryableStoreErrorCode(stepRC), attempts < retries {
                 attempts += 1
                 usleep(retryDelayMillis * 1_000)
                 continue
@@ -3100,8 +3110,12 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private static func isRetryableQueueErrorCode(_ rc: Int32) -> Bool {
+        isRetryableStoreErrorCode(rc)
+    }
+
+    private static func isRetryableStoreErrorCode(_ rc: Int32) -> Bool {
         let primaryCode = rc & 0xFF
-        return primaryCode == SQLITE_BUSY || primaryCode == SQLITE_LOCKED
+        return primaryCode == SQLITE_BUSY || primaryCode == SQLITE_LOCKED || primaryCode == SQLITE_READONLY
     }
 
     private func hasStoredQueuedItem(queueID: String) throws -> Bool {
@@ -3295,15 +3309,19 @@ final class BrainDatabase: @unchecked Sendable {
 
     func expandChunk(id: String, before: Int = 3, after: Int = 3) throws -> [String: Any] {
         guard let db else { throw DBError.notOpen }
+        let boundedBefore = min(max(before, 0), Self.maximumConversationContextPerSide)
+        let boundedAfter = min(max(after, 0), Self.maximumConversationContextPerSide)
+        let contentLimit = Int32(Self.maximumConversationContentCharacters)
 
         // Get the target chunk with its session_id and rowid
-        let targetSQL = "SELECT rowid, id, content, conversation_id, project, content_type, importance, created_at, summary, tags FROM chunks WHERE id = ?"
+        let targetSQL = "SELECT rowid, id, substr(content, 1, ?), conversation_id, project, content_type, importance, created_at, summary, tags FROM chunks WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, targetSQL, -1, &stmt, nil) == SQLITE_OK else {
             throw DBError.prepare(sqlite3_errcode(db))
         }
         defer { sqlite3_finalize(stmt) }
-        bindText(id, to: stmt, index: 1)
+        sqlite3_bind_int(stmt, 1, contentLimit)
+        bindText(id, to: stmt, index: 2)
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw DBError.noResult }
 
         let targetRowID = sqlite3_column_int64(stmt, 0)
@@ -3325,13 +3343,14 @@ final class BrainDatabase: @unchecked Sendable {
         var afterContext: [[String: Any]] = []
 
         // Before chunks (reverse order, then flip)
-        let beforeSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
+        let beforeSQL = "SELECT id, substr(content, 1, ?), content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?"
         var beforeStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, beforeSQL, -1, &beforeStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(beforeStmt) }
-            bindText(sessionId, to: beforeStmt, index: 1)
-            sqlite3_bind_int64(beforeStmt, 2, targetRowID)
-            sqlite3_bind_int(beforeStmt, 3, Int32(before))
+            sqlite3_bind_int(beforeStmt, 1, contentLimit)
+            bindText(sessionId, to: beforeStmt, index: 2)
+            sqlite3_bind_int64(beforeStmt, 3, targetRowID)
+            sqlite3_bind_int(beforeStmt, 4, Int32(boundedBefore))
             var beforeChunks: [[String: Any]] = []
             while sqlite3_step(beforeStmt) == SQLITE_ROW {
                 beforeChunks.append([
@@ -3347,13 +3366,14 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         // After chunks
-        let afterSQL = "SELECT id, content, content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
+        let afterSQL = "SELECT id, substr(content, 1, ?), content_type, importance, created_at, summary FROM chunks WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?"
         var afterStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, afterSQL, -1, &afterStmt, nil) == SQLITE_OK {
             defer { sqlite3_finalize(afterStmt) }
-            bindText(sessionId, to: afterStmt, index: 1)
-            sqlite3_bind_int64(afterStmt, 2, targetRowID)
-            sqlite3_bind_int(afterStmt, 3, Int32(after))
+            sqlite3_bind_int(afterStmt, 1, contentLimit)
+            bindText(sessionId, to: afterStmt, index: 2)
+            sqlite3_bind_int64(afterStmt, 3, targetRowID)
+            sqlite3_bind_int(afterStmt, 4, Int32(boundedAfter))
             while sqlite3_step(afterStmt) == SQLITE_ROW {
                 afterContext.append([
                     "chunk_id": columnText(afterStmt, 0) as Any,

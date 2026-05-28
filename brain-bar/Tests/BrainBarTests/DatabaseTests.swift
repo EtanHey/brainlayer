@@ -123,6 +123,56 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testStoreRollsBackInsertedChunkWhenPostInsertValidationFails() throws {
+        let beforeCount = try sqliteCount(path: tempDBPath, table: "chunks")
+        db.failNextStoreAfterInsertForTesting = true
+
+        XCTAssertThrowsError(
+            try db.store(
+                content: "This capture must roll back completely",
+                tags: ["atomicity"],
+                importance: 7,
+                source: "quick-capture"
+            )
+        )
+
+        let afterCount = try sqliteCount(path: tempDBPath, table: "chunks")
+        XCTAssertEqual(afterCount, beforeCount)
+        let partialRows = try sqliteCount(
+            path: tempDBPath,
+            sql: "SELECT COUNT(*) FROM chunks WHERE content = 'This capture must roll back completely'"
+        )
+        XCTAssertEqual(partialRows, 0)
+    }
+
+    func testStoreOrQueueWithinBudgetQueuesReadOnlySQLiteFailures() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-readonly-queue-\(UUID().uuidString).jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        let reader = BrainDatabase(
+            path: tempDBPath,
+            openConfiguration: .init(readOnly: true)
+        )
+        defer { reader.close() }
+
+        let outcome = try reader.storeOrQueueWithinBudget(
+            content: "Queued because the BrainBar DB handle is read-only",
+            tags: ["readonly"],
+            importance: 6,
+            source: "quick-capture",
+            busyTimeoutMillis: 1
+        )
+
+        XCTAssertEqual(outcome, .queued)
+        let queuedPayload = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertTrue(queuedPayload.contains("Queued because the BrainBar DB handle is read-only"))
+    }
+
     func testInjectionEventsTableExists() throws {
         let exists = try db.tableExists("injection_events")
         XCTAssertTrue(exists, "injection_events table must exist")
