@@ -116,6 +116,33 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
     ]
 
 
+def test_helper_preserves_agent_id_for_brain_search(monkeypatch, tmp_path):
+    calls = []
+
+    async def fake_brain_search(**kwargs):
+        calls.append(kwargs)
+        return (
+            [TextContent(type="text", text="hybrid result")],
+            {"query": kwargs["query"], "results": []},
+        )
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search", fake_brain_search)
+
+    helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
+    response = helper._handle_request(
+        {
+            "method": "brain_search",
+            "arguments": {
+                "query": "agent scoped query",
+                "agent_id": "codex-test-agent",
+            },
+        }
+    )
+
+    assert response["ok"] is True
+    assert calls[0]["agent_id"] == "codex-test-agent"
+
+
 def test_helper_preserves_brain_search_mcp_error(monkeypatch, tmp_path):
     async def fake_brain_search(**_kwargs):
         return CallToolResult(content=[TextContent(type="text", text="Invalid detail='verbose'")], isError=True)

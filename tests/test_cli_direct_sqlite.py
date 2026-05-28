@@ -156,6 +156,39 @@ def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.Monk
     assert calls == [(db_path, True)]
 
 
+def test_cli_search_agent_flag_threads_to_hybrid_search(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import brainlayer.cli_new as cli_new
+    from brainlayer.cli import app
+
+    db_path = tmp_path / "brainlayer.db"
+    _seed_empty_db(db_path)
+    hybrid_calls: list[dict] = []
+
+    class SpyStore:
+        def __init__(self, _path: Path, readonly: bool = False):
+            self.readonly = readonly
+
+        def hybrid_search(self, **kwargs):
+            hybrid_calls.append(kwargs)
+            return {"ids": [["chunk-1"]], "documents": [["foo result"]], "metadatas": [[{}]], "distances": [[0.1]]}
+
+        def close(self) -> None:
+            pass
+
+    class SpyModel:
+        def embed_query(self, query: str) -> list[float]:
+            return [0.0] * 8
+
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setattr(cli_new, "VectorStore", SpyStore)
+    monkeypatch.setattr(cli_new, "get_embedding_model", lambda: SpyModel())
+
+    result = CliRunner().invoke(app, ["search", "--agent", "codex-test-agent", "foo", "--num", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert hybrid_calls[0]["agent_id"] == "codex-test-agent"
+
+
 def test_cli_stats_p95_under_200ms_with_direct_readonly_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import brainlayer.cli_new as cli_new
     from brainlayer.cli import app

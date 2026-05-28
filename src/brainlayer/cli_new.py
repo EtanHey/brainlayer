@@ -80,6 +80,7 @@ def search_command(
     n: int = typer.Option(5, "--num", "-n", help="Number of results", min=1, max=100),
     project: str = typer.Option(None, "--project", "-p", help="Filter by project"),
     content_type: str = typer.Option(None, "--type", "-t", help="Filter by content type"),
+    agent_id: str | None = None,
     text: bool = typer.Option(False, "--text", help="Use text-based search instead of semantic search"),
     hybrid: bool = True,
 ) -> None:
@@ -111,6 +112,7 @@ def search_command(
                         n_results=n,
                         project_filter=project,
                         content_type_filter=content_type,
+                        agent_id=agent_id,
                     )
                 else:
                     query_embedding = get_embedding_model().embed_query(query)
