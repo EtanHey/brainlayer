@@ -25,7 +25,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         XCTAssertNil(runtime.collector)
     }
 
-    func testWireRuntimePopulatesDatabaseAndInjectionStore() {
+    func testWireRuntimePopulatesDatabaseAndLazilyLoadsInjectionStore() {
         let runtime = BrainBarRuntime(launchMode: .menuBarWindow)
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
@@ -43,19 +43,23 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
             + "the UI gates 'Warming memory…' / QuickCaptureViewModel on database != nil. "
             + "See PR #312 (FastAPI daemon removal) — UI process must open SQLite directly."
         )
+        XCTAssertNil(
+            runtime.injectionStore,
+            "Dashboard startup should not eagerly open InjectionStore; it owns an extra writable SQLite handle."
+        )
+        runtime.ensureInjectionStore()
         XCTAssertNotNil(
             runtime.injectionStore,
-            "Regression guard: BrainBarApp must wire InjectionStore — "
-            + "the Injections tab placeholder shows when injectionStore == nil."
+            "Regression guard: BrainBarApp must provide a lazy InjectionStore factory so the Injections tab can load on demand."
         )
         XCTAssertNotNil(runtime.collector)
     }
 
     func testWireRuntimeOpensReadonlyHandleEvenWhenDBFileMissing() {
-        // Fresh-install scenario: brainlayer.db doesn't exist yet. InjectionStore
-        // must create the file first; the read-only BrainDatabase must then open
-        // successfully. Otherwise the runtime installs a permanently-closed handle
-        // that satisfies `database != nil` but breaks search/graph downstream.
+        // Fresh-install scenario: brainlayer.db doesn't exist yet. wireRuntime
+        // must bootstrap the file before installing the read-only BrainDatabase.
+        // Otherwise the runtime carries a closed handle and search/graph stay
+        // broken until app restart.
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: tempDBPath),
             "Test precondition: DB file must NOT exist at start"
@@ -75,10 +79,8 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         XCTAssertNotNil(runtime.database)
         XCTAssertTrue(
             runtime.database?.isOpen == true,
-            "Regression guard for Cursor Bugbot + ChatGPT-Codex flag (PR #314 review): "
-            + "on fresh install, wireRuntime must order InjectionStore (creates file) "
-            + "BEFORE the read-only BrainDatabase open — otherwise the runtime carries "
-            + "a closed handle and search/graph stay broken until app restart."
+            "Regression guard for fresh installs: wireRuntime must create the DB "
+            + "before installing the read-only BrainDatabase handle."
         )
     }
 }

@@ -46,19 +46,14 @@ enum BrainBarAppSupport {
         )
     }
 
-    // AIDEV-NOTE: Wires the UI runtime's database + injection store after PR #312
+    // AIDEV-NOTE: Wires the UI runtime's database after PR #312
     // removed the FastAPI daemon. Pre-#312 the daemon owned the writer and the UI
     // process consumed via socket; post-#312 each consumer opens SQLite directly.
     //
-    // Order matters: InjectionStore opens its internal connection in default
-    // writable mode and creates the schema if the file doesn't exist (fresh
-    // install / cleared state). The UI runtime's read-only handle MUST open
-    // after that, otherwise on a missing DB the read-only open fails and the UI
-    // installs a permanently-closed handle that satisfies `database != nil` but
-    // breaks search/graph. If the read-only open still fails after
-    // bootstrapping, try `reopenIfNeeded()` once — in practice the DB at
-    // ~/.local/share/brainlayer/brainlayer.db is always present, but tests +
-    // fresh-install + cleared-state must work too.
+    // The heavy InjectionStore is intentionally lazy: Dashboard startup should
+    // not open an extra writable SQLite handle just because the Injections tab
+    // exists. On a missing DB, bootstrap the schema once before installing the
+    // read-only handle so fresh installs still work.
     //
     // The UI runtime opens read-only so the writer pidfile stays uncontended
     // with the Python enrich supervisor + drain. InjectionStore keeps its own
@@ -69,19 +64,16 @@ enum BrainBarAppSupport {
         dbPath: String,
         collector: StatsCollector
     ) {
-        let injectionStore: InjectionStore?
-        do {
-            injectionStore = try InjectionStore(databasePath: dbPath)
-        } catch {
-            NSLog("[BrainBar] InjectionStore init failed: %@", String(describing: error))
-            injectionStore = nil
-        }
-
         let database = BrainDatabase(
             path: dbPath,
             openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         if !database.isOpen {
+            database.reopenIfNeeded()
+        }
+        if !database.isOpen, !FileManager.default.fileExists(atPath: dbPath) {
+            let bootstrapDatabase = BrainDatabase(path: dbPath)
+            bootstrapDatabase.close()
             database.reopenIfNeeded()
         }
         if !database.isOpen {
@@ -94,8 +86,16 @@ enum BrainBarAppSupport {
 
         runtime.install(
             collector: collector,
-            injectionStore: injectionStore,
-            database: database
+            injectionStore: nil,
+            database: database,
+            injectionStoreFactory: {
+                do {
+                    return try InjectionStore(databasePath: dbPath)
+                } catch {
+                    NSLog("[BrainBar] InjectionStore init failed: %@", String(describing: error))
+                    return nil
+                }
+            }
         )
     }
 

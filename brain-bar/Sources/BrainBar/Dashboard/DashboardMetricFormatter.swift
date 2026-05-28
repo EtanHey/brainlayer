@@ -1,6 +1,18 @@
 import Foundation
 
 enum DashboardMetricFormatter {
+    private static let absoluteTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    private static let shortAbsoluteTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
     static func speedString(ratePerMinute: Double) -> String {
         liveBadgeString(ratePerMinute: ratePerMinute)
     }
@@ -65,6 +77,12 @@ enum DashboardMetricFormatter {
             return "\(shortWindowLabel(minutes: activityWindowMinutes))+"
         }
 
+        let absolute = absoluteTimeFormatter.string(from: lastEventAt)
+        let relative = relativeEventString(lastEventAt: lastEventAt, now: now)
+        return "\(absolute) (\(relative))"
+    }
+
+    static func relativeEventString(lastEventAt: Date, now: Date = Date()) -> String {
         let secondsAgo = max(now.timeIntervalSince(lastEventAt), 0)
         if secondsAgo < 60 {
             return "Just now"
@@ -76,6 +94,14 @@ enum DashboardMetricFormatter {
 
         let hoursAgo = Int((secondsAgo / 3600).rounded(.up))
         return "\(hoursAgo)h ago"
+    }
+
+    static func absoluteTimeString(_ date: Date) -> String {
+        absoluteTimeFormatter.string(from: date)
+    }
+
+    static func shortAbsoluteTimeString(_ date: Date) -> String {
+        shortAbsoluteTimeFormatter.string(from: date)
     }
 
     static func windowLabel(minutes: Int) -> String {

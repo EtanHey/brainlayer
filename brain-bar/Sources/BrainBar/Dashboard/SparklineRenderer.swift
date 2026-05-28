@@ -15,23 +15,30 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let values: [Int]
     let activityWindowMinutes: Int
     let latestBucketName: String
+    let fetchedAt: Date
 
     init(
         label: String,
         values: [Int],
         activityWindowMinutes: Int = 30,
-        latestBucketName: String = "latest bucket count"
+        latestBucketName: String = "latest bucket count",
+        fetchedAt: Date = Date()
     ) {
         self.label = label
         self.values = values
         self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
+        self.fetchedAt = fetchedAt
     }
 
     var points: [SparklineChartPoint] {
         values.enumerated().map { index, value in
             SparklineChartPoint(bucket: index, value: value)
         }
+    }
+
+    var latestPoint: SparklineChartPoint? {
+        points.last
     }
 
     var accessibilityLabel: String {
@@ -47,6 +54,13 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     func bucketLabel(for bucket: Int) -> String {
+        guard !values.isEmpty else { return "no bucket" }
+        let clampedBucket = min(max(bucket, 0), values.count - 1)
+        let range = bucketRange(for: clampedBucket)
+        return "\(DashboardMetricFormatter.shortAbsoluteTimeString(range.start))-\(DashboardMetricFormatter.shortAbsoluteTimeString(range.end))"
+    }
+
+    func relativeBucketLabel(for bucket: Int) -> String {
         guard !values.isEmpty else { return "no bucket" }
         let clampedBucket = min(max(bucket, 0), values.count - 1)
         let totalSeconds = max(activityWindowMinutes * 60, 1)
@@ -65,7 +79,17 @@ struct SparklineChartPresentation: Equatable, Sendable {
     func tooltipText(forBucket bucket: Int) -> String {
         let clampedBucket = min(max(bucket, 0), max(values.count - 1, 0))
         let value = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
-        return "\(bucketLabel(for: clampedBucket)): \(value)"
+        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(value)"
+    }
+
+    private func bucketRange(for bucket: Int) -> (start: Date, end: Date) {
+        let totalSeconds = max(activityWindowMinutes * 60, 1)
+        let bucketWidthSeconds = max(1, Double(totalSeconds) / Double(max(values.count, 1)))
+        let bucketStart = Double(bucket) * bucketWidthSeconds
+        let bucketEnd = min(Double(bucket + 1) * bucketWidthSeconds, Double(totalSeconds))
+        let start = fetchedAt.addingTimeInterval(-(Double(totalSeconds) - bucketStart))
+        let end = fetchedAt.addingTimeInterval(-(Double(totalSeconds) - bucketEnd))
+        return (start, end)
     }
 
     private static func durationLabel(seconds: Int) -> String {
@@ -117,62 +141,89 @@ struct SparklineChart: View {
     }
 
     var body: some View {
-        Chart(presentation.points) { point in
-            if !compact {
-                AreaMark(
+        VStack(spacing: 2) {
+            Chart(presentation.points) { point in
+                if !compact {
+                    AreaMark(
+                        x: .value("Bucket", point.bucket),
+                        y: .value("Count", point.value)
+                    )
+                    .foregroundStyle(Color(nsColor: accentColor).opacity(0.10))
+                }
+
+                LineMark(
                     x: .value("Bucket", point.bucket),
                     y: .value("Count", point.value)
                 )
-                .foregroundStyle(Color(nsColor: accentColor).opacity(0.10))
+                .interpolationMethod(.catmullRom)
+                .foregroundStyle(Color(nsColor: accentColor).opacity(0.85))
+                .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
+
+                if point == presentation.latestPoint {
+                    PointMark(
+                        x: .value("Bucket", point.bucket),
+                        y: .value("Count", point.value)
+                    )
+                    .foregroundStyle(Color(nsColor: accentColor))
+                    .symbolSize(compact ? 18 : 42)
+                }
             }
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartYScale(domain: 0...presentation.maxValue)
+            .chartPlotStyle { plotArea in
+                plotArea
+                    .background(Color.clear)
+                    .padding(compact ? 2 : 10)
+            }
+            .chartOverlay { chartProxy in
+                GeometryReader { geometry in
+                    if let plotAnchor = chartProxy.plotFrame {
+                        let plotFrame = geometry[plotAnchor]
 
-            LineMark(
-                x: .value("Bucket", point.bucket),
-                y: .value("Count", point.value)
-            )
-            .interpolationMethod(.catmullRom)
-            .foregroundStyle(Color(nsColor: accentColor).opacity(0.85))
-            .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
-        }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .chartYScale(domain: 0...presentation.maxValue)
-        .chartPlotStyle { plotArea in
-            plotArea
-                .background(Color.clear)
-                .padding(compact ? 2 : 10)
-        }
-        .chartOverlay { chartProxy in
-            GeometryReader { geometry in
-                if let plotAnchor = chartProxy.plotFrame {
-                    let plotFrame = geometry[plotAnchor]
-
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                hoveredBucket = nearestBucket(
-                                    to: location,
-                                    plotFrame: plotFrame,
-                                    chartProxy: chartProxy
-                                )
-                                hoverLocation = location
-                            case .ended:
-                                hoveredBucket = nil
-                                hoverLocation = nil
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    hoveredBucket = nearestBucket(
+                                        to: location,
+                                        plotFrame: plotFrame,
+                                        chartProxy: chartProxy
+                                    )
+                                    hoverLocation = location
+                                case .ended:
+                                    hoveredBucket = nil
+                                    hoverLocation = nil
+                                }
                             }
-                        }
 
-                    if let hoveredBucket,
-                       let hoverLocation,
-                       !compact {
-                        sparklineTooltip(forBucket: hoveredBucket)
-                            .position(tooltipPosition(near: hoverLocation, in: geometry.size))
-                            .allowsHitTesting(false)
+                        if let hoveredBucket,
+                           let hoverLocation,
+                           !compact {
+                            sparklineTooltip(forBucket: hoveredBucket)
+                                .position(tooltipPosition(near: hoverLocation, in: geometry.size))
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
+            }
+
+            if !compact {
+                HStack {
+                    ForEach(xAxisBuckets, id: \.self) { bucket in
+                        Text(presentation.bucketLabel(for: bucket))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        if bucket != xAxisBuckets.last {
+                            Spacer(minLength: 8)
+                        }
+                    }
+                }
+                .frame(height: 12)
+                .padding(.horizontal, 16)
             }
         }
         .accessibilityElement(children: .combine)
@@ -195,6 +246,13 @@ struct SparklineChart: View {
             return nil
         }
         return min(max(Int(bucket.rounded()), 0), presentation.points.count - 1)
+    }
+
+    private var xAxisBuckets: [Int] {
+        guard !presentation.values.isEmpty else { return [] }
+        let last = presentation.values.count - 1
+        if last <= 0 { return [0] }
+        return Array(Set([0, last / 2, last])).sorted()
     }
 
     private func tooltipPosition(near location: CGPoint, in size: CGSize) -> CGPoint {
