@@ -83,6 +83,15 @@ struct ChunkConversationSheet: View {
     }
 
     private func roleLabel(for entry: BrainDatabase.ConversationChunk) -> String {
+        switch entry.sender.lowercased() {
+        case "user":
+            return "User"
+        case "assistant":
+            return "Assistant"
+        default:
+            break
+        }
+
         switch entry.contentType {
         case "user_message":
             return "User"

@@ -41,6 +41,40 @@ final class ChunkConversationTests: XCTestCase {
         XCTAssertTrue(conversation.entries[2].isTarget)
     }
 
+    func testExpandedConversationPreservesSenderIndependentOfContentType() throws {
+        try db.insertChunk(
+            id: "role-user",
+            content: "Can you write the copy?",
+            sessionId: "role-thread",
+            project: "brainlayer",
+            contentType: "user_message",
+            importance: 5,
+            sender: "user"
+        )
+        try db.insertChunk(
+            id: "role-assistant",
+            content: "Make your next big call with confidence.",
+            sessionId: "role-thread",
+            project: "brainlayer",
+            contentType: "user_message",
+            importance: 5,
+            sender: "assistant"
+        )
+        try db.insertChunk(
+            id: "role-user-2",
+            content: "Only this line was genuinely user-authored.",
+            sessionId: "role-thread",
+            project: "brainlayer",
+            contentType: "user_message",
+            importance: 5,
+            sender: "user"
+        )
+
+        let conversation = try db.expandedConversation(id: "role-assistant", before: 1, after: 1)
+
+        XCTAssertEqual(conversation.entries.map(\.sender), ["user", "assistant", "user"])
+    }
+
     func testExpandedConversationCapsHugeThreadWorkForResponsiveOpen() throws {
         let hugeContent = String(repeating: "Long transcript line with enough content to stress SwiftUI rendering.\n", count: 120)
         for index in 1...180 {

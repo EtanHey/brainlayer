@@ -78,6 +78,34 @@ class TestClassifyExtractsSessionId:
         assert result is not None
         assert result.metadata.get("sender") == "user"
 
+    def test_task_notification_result_is_attributed_to_assistant(self):
+        """Sub-agent completion results are assistant-authored despite outer user role."""
+        entry = {
+            "type": "user",
+            "sessionId": "abc-123",
+            "timestamp": "2026-05-28T15:11:42.891Z",
+            "message": {
+                "role": "user",
+                "content": (
+                    "<task-notification>\n"
+                    "<task-id>a397293782564108d</task-id>\n"
+                    "<status>completed</status>\n"
+                    "<summary>Agent completed</summary>\n"
+                    "<result>Make your next big call with confidence. "
+                    "Here is the assistant-authored marketing copy that should not be labeled user."
+                    "</result>\n"
+                    "</task-notification>"
+                ),
+            },
+        }
+
+        result = classify_content(entry)
+
+        assert result is not None
+        assert result.content_type == ContentType.ASSISTANT_TEXT
+        assert result.metadata.get("sender") == "assistant"
+        assert result.content.startswith("Make your next big call with confidence")
+
 
 # ── chunk_content should preserve session metadata ──
 

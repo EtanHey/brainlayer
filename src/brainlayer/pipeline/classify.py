@@ -7,6 +7,7 @@ Smart filtering to maximize search quality:
 - Content-type-aware thresholds
 """
 
+import html
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -182,6 +183,20 @@ def _extract_text_content(content: Any) -> str:
     if isinstance(content, dict) and "text" in content:
         return content.get("text", "")
     return str(content) if content else ""
+
+
+def _extract_task_notification_result(content: str) -> str | None:
+    """Return assistant-authored sub-agent result from Claude task notifications."""
+    stripped = content.lstrip()
+    if not stripped.startswith("<task-notification"):
+        return None
+
+    match = re.search(r"<result>(.*?)</result>", content, flags=re.DOTALL)
+    if not match:
+        return None
+
+    result = html.unescape(match.group(1)).strip()
+    return result or None
 
 
 # =============================================================================
@@ -372,6 +387,18 @@ def classify_content(entry: dict) -> ClassifiedContent | None:
     if entry_type == "user":
         raw_content = entry.get("message", {}).get("content", "")
         content = _extract_text_content(raw_content)
+        task_result = _extract_task_notification_result(content)
+        if task_result is not None:
+            if not _should_keep_assistant_text(task_result):
+                return None
+            classified = _classify_text(task_result)
+            classified.metadata = {
+                **base_meta,
+                **classified.metadata,
+                "sender": "assistant",
+                "role_source": "task_notification_result",
+            }
+            return classified
 
         # Smart filtering for user messages
         if not _should_keep_user_message(content):
