@@ -1347,7 +1347,8 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
-        try withReadTransaction {
+        let pendingStoreQueue = pendingStoreQueueSnapshot()
+        return try withReadTransaction {
             let liveWindowMinutes = 1
             let now = Date()
             guard bucketCount > 0 else {
@@ -1383,7 +1384,6 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let pendingStoreQueue = pendingStoreQueueSnapshot()
 
             return DashboardStats(
                 chunkCount: chunkCount,
@@ -1594,11 +1594,13 @@ final class BrainDatabase: @unchecked Sendable {
             predicates.append(whereClause)
         }
         let sql = """
-            SELECT \(epochSQL) AS event_epoch
-            FROM chunks
-            WHERE \(predicates.joined(separator: " AND "))
-            ORDER BY \(column) DESC
-            LIMIT 1000
+            SELECT MAX(event_epoch)
+            FROM (
+                SELECT \(epochSQL) AS event_epoch
+                FROM chunks
+                WHERE \(predicates.joined(separator: " AND "))
+            )
+            WHERE event_epoch IS NOT NULL
         """
 
         var stmt: OpaquePointer?
@@ -1606,16 +1608,11 @@ final class BrainDatabase: @unchecked Sendable {
         guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
         defer { sqlite3_finalize(stmt) }
 
-        var latestEpoch: Int64?
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
-            let epoch = sqlite3_column_int64(stmt, 0)
-            if latestEpoch.map({ epoch > $0 }) ?? true {
-                latestEpoch = epoch
-            }
+        guard sqlite3_step(stmt) == SQLITE_ROW, sqlite3_column_type(stmt, 0) != SQLITE_NULL else {
+            return nil
         }
 
-        return latestEpoch.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        return Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 0)))
     }
 
     private func latestIndexedEpochSince(

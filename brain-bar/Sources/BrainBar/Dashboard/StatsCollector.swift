@@ -31,7 +31,6 @@ final class StatsCollector: ObservableObject {
 
     private let dbPath: String
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
-    private let database: BrainDatabase
     private let daemonMonitor: DaemonHealthMonitor
     private let agentActivityMonitor: AgentActivityMonitor
     private let agentActivitySampleInterval: TimeInterval
@@ -61,7 +60,6 @@ final class StatsCollector: ObservableObject {
     ) {
         self.dbPath = dbPath
         self.databaseOpenConfiguration = databaseOpenConfiguration
-        self.database = BrainDatabase(path: dbPath, openConfiguration: databaseOpenConfiguration)
         self.daemonMonitor = daemonMonitor
         self.agentActivityMonitor = agentActivityMonitor
         self.agentActivitySampleInterval = agentActivitySampleInterval
@@ -122,7 +120,6 @@ final class StatsCollector: ObservableObject {
         isRunning = false
         isStopped = true
         resetRefreshTimingState()
-        database.close()
     }
 
     func refresh(force: Bool = false) {
