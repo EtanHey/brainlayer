@@ -32,6 +32,8 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+agent_profile_app = typer.Typer(help="Manage per-agent search ranking profiles")
+app.add_typer(agent_profile_app, name="agent-profile")
 
 
 @app.command()
@@ -87,6 +89,59 @@ def search(
     from ..cli_new import search_command
 
     search_command(query, n, project, content_type, agent_id, text, hybrid)
+
+
+@agent_profile_app.command("show")
+def agent_profile_show(agent_id: str = typer.Argument(..., help="Agent id to inspect")) -> None:
+    """Show a stored agent ranking profile as JSON."""
+    from ..vector_store import VectorStore
+
+    db_path = get_db_path()
+    if not db_path.exists():
+        rprint(f"[yellow]No profile found for {agent_id}[/]")
+        raise typer.Exit(1)
+
+    store = VectorStore(db_path, readonly=True)
+    try:
+        profile = store.get_agent_profile(agent_id)
+    finally:
+        store.close()
+    if profile is None:
+        rprint(f"[yellow]No profile found for {agent_id}[/]")
+        raise typer.Exit(1)
+    typer.echo(json.dumps(profile, indent=2, sort_keys=True))
+
+
+@agent_profile_app.command("set")
+def agent_profile_set(
+    agent_id: str = typer.Argument(..., help="Agent id to update"),
+    json_file_or_stdin: str = typer.Argument(..., help="JSON file path, or '-' to read stdin"),
+    notes: str | None = typer.Option(None, "--notes", help="Optional operator notes"),
+) -> None:
+    """Validate and persist an agent ranking profile."""
+    from ..agent_profiles import load_profile_json
+    from ..vector_store import VectorStore
+
+    if json_file_or_stdin == "-":
+        raw = sys.stdin.read()
+    else:
+        try:
+            raw = Path(json_file_or_stdin).read_text()
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            rprint(f"[red]Could not read profile JSON:[/] {exc}")
+            raise typer.Exit(2) from exc
+    try:
+        profile = load_profile_json(raw)
+    except ValueError as exc:
+        rprint(f"[red]Invalid profile:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    store = VectorStore(get_db_path())
+    try:
+        stored = store.set_agent_profile(agent_id, profile, notes=notes)
+    finally:
+        store.close()
+    rprint(f"[green]Stored profile for {stored['agent_id']}[/]")
 
 
 @app.command()
