@@ -3504,7 +3504,7 @@ final class BrainDatabase: @unchecked Sendable {
 
         // First try exact name match
         let exactSQL = """
-            SELECT id, entity_type, name, metadata, description
+            SELECT id, entity_type, name, metadata, description, importance
             FROM kg_entities
             WHERE name = ?
               AND (? IS NULL OR entity_type = ?)
@@ -3533,7 +3533,8 @@ final class BrainDatabase: @unchecked Sendable {
                 "entity_type": columnText(exactStmt, 1) as Any,
                 "name": columnText(exactStmt, 2) as Any,
                 "metadata": columnText(exactStmt, 3) as Any,
-                "description": columnText(exactStmt, 4) as Any
+                "description": columnText(exactStmt, 4) as Any,
+                "importance": sqlite3_column_double(exactStmt, 5)
             ]
         }
         sqlite3_finalize(exactStmt)
@@ -3541,7 +3542,7 @@ final class BrainDatabase: @unchecked Sendable {
         // If no exact match, try LIKE
         if result == nil {
             let likeSQL = """
-                SELECT id, entity_type, name, metadata, description
+                SELECT id, entity_type, name, metadata, description, importance
                 FROM kg_entities
                 WHERE name LIKE ?
                   AND (? IS NULL OR entity_type = ?)
@@ -3567,7 +3568,8 @@ final class BrainDatabase: @unchecked Sendable {
                     "entity_type": columnText(likeStmt, 1) as Any,
                     "name": columnText(likeStmt, 2) as Any,
                     "metadata": columnText(likeStmt, 3) as Any,
-                    "description": columnText(likeStmt, 4) as Any
+                    "description": columnText(likeStmt, 4) as Any,
+                    "importance": sqlite3_column_double(likeStmt, 5)
                 ]
             }
             sqlite3_finalize(likeStmt)
@@ -3577,14 +3579,14 @@ final class BrainDatabase: @unchecked Sendable {
         if let entityId, result != nil {
             let expirationSelects = try kgRelationExpirationSelects(alias: "r")
             let relSQL = """
-                SELECT r.relation_type, e.name, 'outgoing' AS direction,
+                SELECT r.relation_type, e.name, r.target_id AS related_entity_id, 'outgoing' AS direction,
                        \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
                 FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.target_id
                 WHERE r.source_id = ?
                   AND r.relation_type != 'co_occurs_with'
                 UNION ALL
-                SELECT r.relation_type, e.name, 'incoming' AS direction,
+                SELECT r.relation_type, e.name, r.source_id AS related_entity_id, 'incoming' AS direction,
                        \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
                 FROM kg_relations r
                 LEFT JOIN kg_entities e ON e.id = r.source_id
@@ -3601,13 +3603,14 @@ final class BrainDatabase: @unchecked Sendable {
                 var relations: [[String: Any]] = []
                 while sqlite3_step(relStmt) == SQLITE_ROW {
                     let targetName = columnText(relStmt, 1) ?? ""
-                    let direction = columnText(relStmt, 2) ?? "outgoing"
+                    let direction = columnText(relStmt, 3) ?? "outgoing"
                     relations.append([
                         "relation_type": columnText(relStmt, 0) as Any,
                         "target_name": targetName as Any,
+                        "target_entity_id": columnText(relStmt, 2) as Any,
                         "direction": direction as Any,
-                        "valid_until": columnText(relStmt, 3) as Any,
-                        "expired_at": columnText(relStmt, 4) as Any
+                        "valid_until": columnText(relStmt, 4) as Any,
+                        "expired_at": columnText(relStmt, 5) as Any
                     ])
                 }
                 result?["relations"] = relations

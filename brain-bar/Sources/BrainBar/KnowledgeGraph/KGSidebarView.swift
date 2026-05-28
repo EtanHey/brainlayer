@@ -13,27 +13,39 @@ struct KGSidebarView: View {
     let hasChunkLoadError: Bool
     let hasFileLoadError: Bool
     let onOpenConversation: (String) -> Void
+    let onSelectRelation: (EntityCard.Relation) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
     let onClose: () -> Void
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 16) {
-                if let entity {
+        VStack(alignment: .leading, spacing: 0) {
+            if let entity {
+                VStack(alignment: .leading, spacing: 12) {
                     header(entity)
                     synopsis(entity)
-                    relationsSection(entity.relations)
-                    if !entity.metadata.isEmpty {
-                        metadataSection(entity.metadata)
+                }
+                .padding(18)
+                .background(Color(nsColor: .controlBackgroundColor))
+
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        relationsSection(entity.relations)
+                        if !entity.metadata.isEmpty {
+                            metadataSection(entity.metadata)
+                        }
+                        chunksSection()
+                        filesSection()
                     }
-                    chunksSection()
-                    filesSection()
-                } else {
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 18)
+                }
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
                     emptyState
+                        .padding(18)
                 }
             }
-            .padding(18)
         }
         .frame(width: KGCanvasMetrics.sidebarWidth)
         .background(
@@ -73,6 +85,12 @@ struct KGSidebarView: View {
                             labelChip("chunks loading", tint: .green)
                         } else {
                             labelChip("\(chunkTotal) chunks", tint: .green)
+                        }
+                        if let importance = entity.importance {
+                            labelChip(String(format: "imp %.1f", importance), tint: .amber)
+                        }
+                        if let altitudeTierTitle = entity.altitudeTierTitle {
+                            labelChip("Tier: \(altitudeTierTitle)", tint: .blue)
                         }
                         if fileTotal > 0, !(hasFileLoadError && files.isEmpty) {
                             if hasFileLoadError, files.count < fileTotal {
@@ -137,32 +155,41 @@ struct KGSidebarView: View {
             } else {
                 ForEach(Array(relations.enumerated()), id: \.offset) { _, relation in
                     let presentation = KGRelationPresentation(relation: relation)
-                    HStack(alignment: .top, spacing: 10) {
-                        Text(relation.direction == "incoming" ? "←" : "→")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
-                            .frame(width: 14)
+                    Button {
+                        onSelectRelation(relation)
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(relation.direction == "incoming" ? "←" : "→")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
+                                .frame(width: 14)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(relation.targetName)
-                                    .font(.system(size: 13, weight: .semibold))
-                                if let expiration = presentation.inlinePill {
-                                    ExpirationPill(date: expiration.date, label: expiration.label)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(relation.targetName)
+                                        .font(.system(size: 13, weight: .semibold))
+                                    if let expiration = presentation.inlinePill {
+                                        ExpirationPill(date: expiration.date, label: expiration.label)
+                                    }
+                                }
+                                Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
+                                if let expiredText = presentation.expiredFooterText {
+                                    Text(expiredText)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
-                            Text(relation.relationType.replacingOccurrences(of: "_", with: " "))
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(presentation.isDimmed ? .tertiary : .secondary)
-                            if let expiredText = presentation.expiredFooterText {
-                                Text(expiredText)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
 
-                        Spacer()
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open related entity \(relation.targetName)")
                     .foregroundStyle(presentation.isDimmed ? .tertiary : .primary)
                     .padding(12)
                     .background(

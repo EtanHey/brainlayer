@@ -27,6 +27,7 @@ final class KGViewModel: ObservableObject {
     @Published private(set) var selectedEntityFileSidebarLoadFailed = false
     @Published private(set) var degradationState: DegradationState = .healthy
     @Published var layoutMode: KGAtlasMode = .tieredAltitude
+    @Published private(set) var isLayoutPinned = false
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
@@ -259,6 +260,7 @@ final class KGViewModel: ObservableObject {
         selectedNodeId = id
 
         guard let id else {
+            isLayoutPinned = false
             selectedEntity = nil
             resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
             selectedConversation = nil
@@ -266,13 +268,21 @@ final class KGViewModel: ObservableObject {
         }
 
         guard let database, let node = nodeById(id) else {
+            isLayoutPinned = false
             selectedEntity = nil
             resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
             selectedConversation = nil
             return
         }
+        pinLayout()
 
-        selectedEntity = (try? database.lookupEntity(query: node.name)).map(EntityCard.init(lookupPayload:))
+        selectedEntity = (try? database.lookupEntity(query: node.name)).map {
+            EntityCard(
+                lookupPayload: $0,
+                importance: node.importance,
+                altitudeTierTitle: KGAltitudeTier.tier(for: node).title
+            )
+        }
         selectedConversation = nil
         resetSelectedEntitySidebarState(isLoading: true, loadFailed: false)
         let chunkPageSize = selectedEntityChunkPageSize
@@ -306,6 +316,27 @@ final class KGViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    @discardableResult
+    func selectRelatedEntity(from relation: EntityCard.Relation) -> Bool {
+        if let targetEntityId = relation.targetEntityId,
+           nodes.contains(where: { $0.id == targetEntityId }) {
+            selectNode(id: targetEntityId)
+            return true
+        }
+
+        let targetName = relation.targetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetName.isEmpty else { return false }
+        guard let node = nodes.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(targetName) == .orderedSame
+        }) else {
+            return false
+        }
+
+        selectNode(id: node.id)
+        return true
     }
 
     func loadMoreChunks() {
@@ -389,7 +420,7 @@ final class KGViewModel: ObservableObject {
 
     func tick(reduceMotionEnabled: Bool = false) -> CGFloat {
         guard nodes.count > 1 else { return 0 }
-        if reduceMotionEnabled {
+        if reduceMotionEnabled || isLayoutPinned {
             freezeLayout()
             return 0
         }
@@ -465,6 +496,11 @@ final class KGViewModel: ObservableObject {
         for index in nodes.indices {
             nodes[index].velocity = .zero
         }
+    }
+
+    private func pinLayout() {
+        isLayoutPinned = true
+        freezeLayout()
     }
 
     private func pinOwnerEntityIfPresent() {

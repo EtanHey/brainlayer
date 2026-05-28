@@ -965,7 +965,7 @@ private struct BrainBarHeroBadge: View {
             .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(maxWidth: 190, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
             .background(.white.opacity(0.18), in: Capsule())
     }
 }
@@ -1068,6 +1068,7 @@ private struct BrainBarAgentPresencePill: View {
             Capsule()
                 .stroke(Color(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.28 : 0.1), lineWidth: 1)
         )
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -1133,7 +1134,7 @@ private struct BrainBarFlowStatusPill: View {
             .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(maxWidth: 150, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
             .background(accentColor.opacity(0.16), in: Capsule())
             .overlay(
                 Capsule()

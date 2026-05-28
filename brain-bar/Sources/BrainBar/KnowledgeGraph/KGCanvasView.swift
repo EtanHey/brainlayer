@@ -74,6 +74,11 @@ struct KGCanvasView: View {
                         hasChunkLoadError: viewModel.selectedEntityChunkSidebarLoadFailed,
                         hasFileLoadError: viewModel.selectedEntityFileSidebarLoadFailed,
                         onOpenConversation: { viewModel.openConversation(chunkID: $0) },
+                        onSelectRelation: { relation in
+                            if viewModel.selectRelatedEntity(from: relation) {
+                                stopSimulation()
+                            }
+                        },
                         onLoadMoreChunks: { viewModel.loadMoreChunks() },
                         onLoadMoreFiles: { viewModel.loadMoreFiles() },
                         onClose: { viewModel.selectNode(id: nil) }
@@ -99,7 +104,7 @@ struct KGCanvasView: View {
                     hasLoadedGraph = true
                     if reduceMotion {
                         _ = viewModel.tick(reduceMotionEnabled: true)
-                    } else {
+                    } else if !viewModel.isLayoutPinned {
                         startSimulation()
                     }
                 })
@@ -120,6 +125,11 @@ struct KGCanvasView: View {
             }
             .onChange(of: viewModel.layoutMode) { _, _ in
                 startSimulation()
+            }
+            .onChange(of: viewModel.isLayoutPinned) { _, pinned in
+                if !pinned {
+                    startSimulation()
+                }
             }
             .onDisappear {
                 stopSimulation()
@@ -360,6 +370,7 @@ struct KGCanvasView: View {
             .onEnded { value in
                 let point = canvasPoint(from: value.location, in: canvasSize)
                 if let node = nodeAt(point: point, visibleNodes: snapshot.visibleNodes) {
+                    stopSimulation()
                     viewModel.selectNode(id: node.id)
                 } else {
                     viewModel.selectNode(id: nil)
@@ -509,7 +520,7 @@ struct KGCanvasView: View {
     }
 
     private func startSimulation() {
-        guard isActive, !reduceMotion, hasLoadedGraph, viewModel.nodes.count > 1 else { return }
+        guard isActive, !reduceMotion, !viewModel.isLayoutPinned, hasLoadedGraph, viewModel.nodes.count > 1 else { return }
         simulationController.setActive(true)
         simulationController.start {
             viewModel.tick(reduceMotionEnabled: reduceMotion)
