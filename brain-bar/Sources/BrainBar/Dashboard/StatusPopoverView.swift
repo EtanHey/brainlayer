@@ -96,7 +96,7 @@ final class StatusPopoverView: NSViewController {
         let size = PopoverTab.dashboard.contentSize
         view = NSView(frame: NSRect(origin: .zero, size: size))
         view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        view.layer?.backgroundColor = BrainBarDesignTokens.Colors.backgroundBase.cgColor
         configureDashboardLabels()
         configureSegmentedControl()
         configureLayout()
@@ -211,7 +211,7 @@ final class StatusPopoverView: NSViewController {
 
         sparklineChartView.wantsLayer = true
         sparklineChartView.layer?.cornerRadius = 4
-        sparklineChartView.layer?.backgroundColor = NSColor.clear.cgColor
+        sparklineChartView.layer?.backgroundColor = NSColor.brainBarClear.cgColor
     }
 
     private func makeDashboardContent() -> NSView {
@@ -362,10 +362,10 @@ final class StatusPopoverView: NSViewController {
         statusLabel.stringValue = summary.headline
         pipelineValueLabel.stringValue = collector.state.label
         pipelineValueLabel.textColor = collector.state.color
-        headerPanel.backgroundColor = NSColor.underPageBackgroundColor.withAlphaComponent(0.92)
-        headerPanel.borderColor = NSColor.separatorColor.withAlphaComponent(0.45)
-        activityPanel.backgroundColor = NSColor.underPageBackgroundColor.withAlphaComponent(0.92)
-        activityPanel.borderColor = NSColor.separatorColor.withAlphaComponent(0.45)
+        headerPanel.backgroundColor = BrainBarDesignTokens.Glass.primary.withAlphaComponent(0.92)
+        headerPanel.borderColor = BrainBarDesignTokens.Colors.borderSoft.withAlphaComponent(0.45)
+        activityPanel.backgroundColor = BrainBarDesignTokens.Glass.primary.withAlphaComponent(0.92)
+        activityPanel.borderColor = BrainBarDesignTokens.Colors.borderSoft.withAlphaComponent(0.45)
         databaseSizeLabel.stringValue = "\(byteString(collector.stats.databaseSizeBytes)) db"
 
         let indicators = PipelineIndicators.derive(daemon: collector.daemon, stats: collector.stats)
@@ -480,8 +480,8 @@ private final class MetricTileView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
+        layer?.backgroundColor = NSColor.brainBarClear.cgColor
+        layer?.borderColor = BrainBarDesignTokens.Colors.borderSoft.withAlphaComponent(0.35).cgColor
         layer?.borderWidth = 0.8
     }
 
@@ -553,7 +553,7 @@ private final class PipelineIndicatorBadgeView: NSView {
             dotView.heightAnchor.constraint(equalToConstant: 8),
         ])
 
-        layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
+        layer?.backgroundColor = BrainBarDesignTokens.Colors.borderSoft.withAlphaComponent(0.08).cgColor
         setStatus(.idle)
     }
 

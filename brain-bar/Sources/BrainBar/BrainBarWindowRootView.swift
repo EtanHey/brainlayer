@@ -33,8 +33,6 @@ struct BrainBarWindowRootView: View {
                 commandBarViewModel: commandBarViewModel
             )
 
-            Divider()
-
             ZStack {
                 dashboardContent
                     .brainBarTabVisibility(selectedTab == .dashboard)
@@ -69,7 +67,7 @@ struct BrainBarWindowRootView: View {
             maxHeight: .infinity
         )
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(BrainBarAppBackground())
         .background(windowAttachment)
         .onAppear {
             activate(tab: selectedTab)
@@ -224,7 +222,7 @@ private struct BrainBarWindowHeader: View {
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 12)
-        .background(.regularMaterial)
+        .background(BrainBarDesignTokens.Glass.primaryMaterial)
         .background(WindowDragHandle())
     }
 }
@@ -278,11 +276,7 @@ private struct BrainBarDashboardView: View {
                 VStack(alignment: .leading, spacing: layout.sectionSpacing) {
                     overviewCard(layout: layout)
                     freshnessLine
-                    chartCards(layout: layout)
-                    agentPresenceStrip(layout: layout)
-                    if layout.usesQueueRail {
-                        queueRail(layout: layout)
-                    }
+                    pipelinePanel(layout: layout)
                     diagnostics(layout: layout)
                 }
                 .padding(layout.outerPadding)
@@ -330,22 +324,13 @@ private struct BrainBarDashboardView: View {
         }
         .padding(layout.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(nsColor: .controlBackgroundColor),
-                            Color(nsColor: flowAccentColor).opacity(0.16),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            BrainBarGlassPanel(
+                cornerRadius: layout.panelCornerRadius,
+                tint: flowStateTheme.theme.swiftUIColor,
+                emphasized: true
+            )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color(nsColor: flowAccentColor).opacity(0.18), lineWidth: 1)
-        )
+        .shadow(color: flowStateTheme.theme.glowSwiftUIColor.opacity(0.16), radius: 30, y: 12)
     }
 
     private func overviewNarrative(layout: BrainBarDashboardLayout) -> some View {
@@ -425,31 +410,42 @@ private struct BrainBarDashboardView: View {
 
     private func overviewMetaRow(layout: BrainBarDashboardLayout) -> some View {
         let columns = Array(
-            repeating: GridItem(.flexible(minimum: 130), spacing: layout.gridSpacing, alignment: .leading),
+            repeating: GridItem(.flexible(minimum: 150), spacing: layout.gridSpacing, alignment: .leading),
             count: 2
         )
 
         return LazyVGrid(columns: columns, spacing: layout.gridSpacing) {
-            BrainBarOverviewStat(label: "Chunks", value: "\(collector.stats.chunkCount)")
-            BrainBarOverviewStat(label: "Enriched", value: "\(collector.stats.enrichedChunkCount)")
-            BrainBarOverviewStat(label: "Backlog", value: "\(collector.stats.pendingEnrichmentCount)")
-            BrainBarOverviewStat(label: "Coverage", value: "\(Int(collector.stats.enrichmentPercent.rounded()))%")
+            BrainBarOverviewStat(label: "Chunks", value: "\(collector.stats.chunkCount)", isHero: true)
+            BrainBarOverviewStat(label: "Enriched", value: "\(collector.stats.enrichedChunkCount)", isHero: false)
+            BrainBarOverviewStat(label: "Backlog", value: "\(collector.stats.pendingEnrichmentCount)", isHero: false)
+            BrainBarOverviewStat(label: "Coverage", value: "\(Int(collector.stats.enrichmentPercent.rounded()))%", isHero: false)
         }
     }
 
     @ViewBuilder
-    private func chartCards(layout: BrainBarDashboardLayout) -> some View {
-        if layout.chartColumns == 2 {
-            HStack(alignment: .top, spacing: layout.gridSpacing) {
-                writesCard(layout: layout)
-                enrichmentsCard(layout: layout)
+    private func pipelinePanel(layout: BrainBarDashboardLayout) -> some View {
+        VStack(alignment: .leading, spacing: layout.gridSpacing) {
+            BrainBarSectionLabel("Pipeline")
+
+            if layout.chartColumns == 2 {
+                HStack(alignment: .top, spacing: layout.gridSpacing) {
+                    writesCard(layout: layout)
+                    enrichmentsCard(layout: layout)
+                }
+            } else {
+                VStack(spacing: layout.gridSpacing) {
+                    writesCard(layout: layout)
+                    enrichmentsCard(layout: layout)
+                }
             }
-        } else {
-            VStack(spacing: layout.gridSpacing) {
-                writesCard(layout: layout)
-                enrichmentsCard(layout: layout)
-            }
+
+            queueRail(layout: layout)
+            agentPresenceStrip(layout: layout)
         }
+        .padding(layout.cardPadding)
+        .background(
+            BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccent)
+        )
     }
 
     private func writesCard(layout: BrainBarDashboardLayout) -> some View {
@@ -551,20 +547,17 @@ private struct BrainBarDashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(BrainBarDashboardCardStyle())
+        .background(
+            BrainBarGlassPanel(cornerRadius: layout.panelCornerRadius, tint: .brainBarAccentViolet)
+        )
     }
 
     private var flowAccentColor: NSColor {
-        switch collector.state {
-        case .indexing:
-            return .systemBlue
-        case .enriching:
-            return .systemGreen
-        case .idle:
-            return .systemGray
-        case .degraded:
-            return .systemOrange
-        }
+        collector.state.color
+    }
+
+    private var flowStateTheme: BrainBarStateTheme {
+        collector.state.stateTheme
     }
 
     private var daemonSummary: String {
@@ -626,7 +619,7 @@ private struct BrainBarFlowLaneCard: View {
                 Spacer(minLength: 12)
                 BrainBarFlowStatusPill(
                     text: lane.status.label,
-                    accentColor: Color(nsColor: lane.accentColor)
+                    accentColor: Color.brainBar(nsColor: lane.accentColor)
                 )
             }
 
@@ -730,13 +723,13 @@ private struct BrainBarQueueRail: View {
     private var queueColor: Color {
         switch summary.status {
         case .empty, .stable:
-            return Color(nsColor: .systemTeal)
+            return BrainBarStateTheme.loading.theme.swiftUIColor
         case .draining:
-            return Color(nsColor: .systemGreen)
+            return BrainBarStateTheme.active.theme.swiftUIColor
         case .growing, .backlogged:
-            return Color(nsColor: .systemOrange)
+            return BrainBarStateTheme.degraded.theme.swiftUIColor
         case .unavailable:
-            return Color(nsColor: .systemRed)
+            return BrainBarStateTheme.error.theme.swiftUIColor
         }
     }
 
@@ -788,6 +781,7 @@ struct BrainBarDashboardLayout {
     let metricCardMinHeight: CGFloat
     let metricValueFontSize: CGFloat
     let sparklineHeight: CGFloat
+    let panelCornerRadius: CGFloat
 
     init(containerSize: CGSize) {
         let compactHeight = containerSize.height < 620
@@ -800,16 +794,17 @@ struct BrainBarDashboardLayout {
         usesQueueRail = true
 
         compactCards = compactWidth || compactHeight
-        outerPadding = compactCards ? 14 : 18
-        sectionSpacing = compactCards ? 12 : 16
-        gridSpacing = compactCards ? 10 : 14
-        cardPadding = compactCards ? 12 : 16
-        overviewTitleFontSize = compactCards ? 20 : 24
-        overviewSubtitleFontSize = compactCards ? 13 : 14
-        overviewStatsWidth = compactCards ? 292 : 340
-        metricCardMinHeight = compactCards ? 70 : 82
-        metricValueFontSize = compactCards ? 20 : 24
-        sparklineHeight = compactCards ? 102 : 116
+        outerPadding = compactCards ? 28 : 48
+        sectionSpacing = compactCards ? 22 : 34
+        gridSpacing = compactCards ? 18 : 24
+        cardPadding = compactCards ? 28 : 44
+        overviewTitleFontSize = compactCards ? BrainBarDesignTokens.TypeScale.title : BrainBarDesignTokens.TypeScale.display
+        overviewSubtitleFontSize = BrainBarDesignTokens.TypeScale.body
+        overviewStatsWidth = compactCards ? 310 : 420
+        metricCardMinHeight = compactCards ? 96 : 128
+        metricValueFontSize = compactCards ? 48 : BrainBarDesignTokens.TypeScale.hero
+        sparklineHeight = compactCards ? 118 : 150
+        panelCornerRadius = BrainBarDesignTokens.Radius.xl
     }
 }
 
@@ -875,7 +870,7 @@ struct DegradationBadge: View {
         .padding(.vertical, 4)
         .frame(maxWidth: 180, alignment: .leading)
         .background(
-            Capsule().fill(Color.orange.opacity(0.85))
+            Capsule().fill(BrainBarStateTheme.degraded.theme.swiftUIColor.opacity(0.85))
         )
         .help(reason ?? "Data source temporarily degraded.")
     }
@@ -903,7 +898,7 @@ private struct BrainBarMetricCard: View {
         .padding(cardPadding)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(Color.brainBarGlassSecondary)
         )
     }
 }
@@ -973,23 +968,26 @@ private struct BrainBarHeroBadge: View {
 private struct BrainBarOverviewStat: View {
     let label: String
     let value: String
+    let isHero: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: isHero ? 8 : 4) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: BrainBarDesignTokens.TypeScale.label, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextMuted)
             Text(value)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: isHero ? BrainBarDesignTokens.TypeScale.hero : BrainBarDesignTokens.TypeScale.title, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-                .fixedSize(horizontal: false, vertical: true)
+                .minimumScaleFactor(0.42)
+                .monospacedDigit()
+                .foregroundStyle(isHero ? Color.brainBarTextPrimary : Color.brainBarTextSecondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: isHero ? 128 : 62, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.66))
+            RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                .fill(Color.brainBarGlassSecondary)
         )
     }
 }
@@ -1041,7 +1039,7 @@ private struct BrainBarAgentPresencePill: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(Color(nsColor: presence.family.accentColor))
+                .fill(Color.brainBar(nsColor: presence.family.accentColor))
                 .frame(width: 8, height: 8)
                 .opacity(presence.isActive ? 1 : 0.25)
             Text(presence.family.label)
@@ -1055,18 +1053,18 @@ private struct BrainBarAgentPresencePill: View {
                 .padding(.vertical, 3)
                 .background(
                     Capsule()
-                        .fill(Color(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.18 : 0.08))
+                        .fill(Color.brainBar(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.18 : 0.08))
                 )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             Capsule()
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.66))
+                .fill(Color.brainBarGlassSecondary)
         )
         .overlay(
             Capsule()
-                .stroke(Color(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.28 : 0.1), lineWidth: 1)
+                .stroke(Color.brainBar(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.28 : 0.1), lineWidth: 1)
         )
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -1089,8 +1087,8 @@ private struct BrainBarDiagnosticTile: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.56))
+            RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                .fill(Color.brainBarGlassSecondary)
         )
     }
 }
@@ -1104,12 +1102,12 @@ private struct BrainBarDashboardCardStyle: View {
                 LinearGradient(
                     colors: emphasized
                         ? [
-                            Color(nsColor: .controlBackgroundColor).opacity(0.98),
-                            Color(nsColor: .windowBackgroundColor).opacity(0.92),
+                            .brainBarGlassPrimary,
+                            .brainBarGlassSecondary,
                         ]
                         : [
-                            Color(nsColor: .controlBackgroundColor).opacity(0.96),
-                            Color(nsColor: .controlBackgroundColor).opacity(0.94),
+                            .brainBarGlassSecondary,
+                            .brainBarGlassTertiary,
                         ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -1117,7 +1115,7 @@ private struct BrainBarDashboardCardStyle: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(emphasized ? 0.08 : 0.04), lineWidth: 1)
+                    .stroke(Color.brainBarBorderSoft, lineWidth: 1)
             )
     }
 }
@@ -1190,6 +1188,99 @@ struct BrainBarLoadingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
+    }
+}
+
+private struct BrainBarAppBackground: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [.brainBarBackgroundBase, .brainBarBackgroundAbyss],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [.brainBarAccent.opacity(0.16), .clear],
+                center: UnitPoint(x: 0.16, y: -0.10),
+                startRadius: 0,
+                endRadius: 760
+            )
+            RadialGradient(
+                colors: [.brainBarAccentViolet.opacity(0.12), .clear],
+                center: UnitPoint(x: 0.94, y: 0.06),
+                startRadius: 0,
+                endRadius: 680
+            )
+            RadialGradient(
+                colors: [BrainBarStateTheme.active.theme.swiftUIColor.opacity(0.07), .clear],
+                center: UnitPoint(x: 0.60, y: 1.16),
+                startRadius: 0,
+                endRadius: 720
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct BrainBarGlassPanel: View {
+    let cornerRadius: CGFloat
+    var tint: Color = .brainBarAccent
+    var emphasized = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(BrainBarDesignTokens.Glass.primaryMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .brainBarGlassPrimary,
+                                tint.opacity(emphasized ? 0.18 : 0.08),
+                                .brainBarGlassSecondary,
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.brainBarBorderSoft, lineWidth: 1)
+            )
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.brainBarWhite.opacity(0.06))
+                    .frame(height: 1)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            }
+            .shadow(color: .brainBarBlack.opacity(emphasized ? 0.32 : 0.24), radius: emphasized ? 36 : 24, y: emphasized ? 18 : 12)
+    }
+}
+
+private struct BrainBarSectionLabel: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(title.uppercased())
+                .font(.system(size: BrainBarDesignTokens.TypeScale.label, weight: .bold))
+                .tracking(1.6)
+                .foregroundStyle(Color.brainBarTextMuted)
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [Color.brainBarBorderSoft, .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(height: 1)
+        }
     }
 }
 

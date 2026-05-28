@@ -148,7 +148,7 @@ struct SparklineChart: View {
                         x: .value("Bucket", point.bucket),
                         y: .value("Count", point.value)
                     )
-                    .foregroundStyle(Color(nsColor: accentColor).opacity(0.10))
+                    .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.10))
                 }
 
                 LineMark(
@@ -156,7 +156,7 @@ struct SparklineChart: View {
                     y: .value("Count", point.value)
                 )
                 .interpolationMethod(.catmullRom)
-                .foregroundStyle(Color(nsColor: accentColor).opacity(0.85))
+                .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
                 .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
 
                 if point == presentation.latestPoint {
@@ -164,7 +164,7 @@ struct SparklineChart: View {
                         x: .value("Bucket", point.bucket),
                         y: .value("Count", point.value)
                     )
-                    .foregroundStyle(Color(nsColor: accentColor))
+                    .foregroundStyle(Color.brainBar(nsColor: accentColor))
                     .symbolSize(compact ? 18 : 42)
                 }
             }
@@ -173,7 +173,7 @@ struct SparklineChart: View {
             .chartYScale(domain: 0...presentation.maxValue)
             .chartPlotStyle { plotArea in
                 plotArea
-                    .background(Color.clear)
+                    .background(Color.brainBarClear)
                     .padding(compact ? 2 : 10)
             }
             .chartOverlay { chartProxy in
@@ -276,7 +276,7 @@ struct SparklineChart: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(nsColor: accentColor).opacity(0.35), lineWidth: 1)
+                    .stroke(Color.brainBar(nsColor: accentColor).opacity(0.35), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
     }

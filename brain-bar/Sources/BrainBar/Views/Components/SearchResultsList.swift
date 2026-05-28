@@ -23,7 +23,7 @@ struct SearchResultsList: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 16)
-                                .fill(Color(nsColor: .controlBackgroundColor))
+                                .fill(Color.brainBarGlassSecondary)
                         )
                 } else {
                     ForEach(results) { result in
