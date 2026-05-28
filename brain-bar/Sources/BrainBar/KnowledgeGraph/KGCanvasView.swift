@@ -18,6 +18,7 @@ enum KGCanvasMetrics {
 
 struct KGCanvasView: View {
     @ObservedObject var viewModel: KGViewModel
+    let isActive: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -26,9 +27,9 @@ struct KGCanvasView: View {
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
-    @State private var minimumImportance: Double = 3
+    @State private var minimumImportance: Double = 6
     @State private var hasLoadedGraph = false
-    @State private var hasStartedGraphPolling = false
+    @State private var simulationController = KGSimulationController()
     @GestureState private var toolbarInteractionActive = false
 
     private var atlas: KGAtlasPresentation.Snapshot {
@@ -85,23 +86,37 @@ struct KGCanvasView: View {
                     )
                 }
             }
-            .task {
-                guard !hasStartedGraphPolling else { return }
-                hasStartedGraphPolling = true
-                defer { hasStartedGraphPolling = false }
-                if await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
+            .task(id: isActive) {
+                guard isActive else {
+                    stopSimulation()
+                    return
+                }
+
+                let loaded = await viewModel.loadGraphRepeatedly(onSuccessfulLoad: {
                     hasLoadedGraph = true
                     if reduceMotion {
                         _ = viewModel.tick(reduceMotionEnabled: true)
+                    } else {
+                        startSimulation()
                     }
-                }) {
+                })
+                if loaded {
                     hasLoadedGraph = true
                 }
             }
             .onChange(of: reduceMotion) { _, enabled in
                 if enabled {
                     _ = viewModel.tick(reduceMotionEnabled: true)
+                    stopSimulation()
+                } else {
+                    startSimulation()
                 }
+            }
+            .onChange(of: viewModel.nodes.count) { _, _ in
+                startSimulation()
+            }
+            .onDisappear {
+                stopSimulation()
             }
         }
     }
@@ -116,6 +131,7 @@ struct KGCanvasView: View {
             var environment = EnvironmentValues()
             environment.colorScheme = colorScheme
             let nodeIndex = Dictionary(uniqueKeysWithValues: snapshot.visibleNodes.map { ($0.id, $0) })
+            let labelledNodeIDs = labelledNodeIDs(for: snapshot.visibleNodes)
 
             for region in snapshot.regions {
                 drawRegionBackdrop(region: region, in: &ctx, environment: environment)
@@ -138,6 +154,7 @@ struct KGCanvasView: View {
                 KGNodeRenderer.draw(
                     node: node,
                     isSelected: node.id == viewModel.selectedNodeId,
+                    showsLabel: labelledNodeIDs.contains(node.id),
                     in: &ctx,
                     environment: environment
                 )
@@ -417,5 +434,45 @@ struct KGCanvasView: View {
                 Capsule()
                     .fill(Color.primary.opacity(0.08))
             )
+    }
+
+    private func labelledNodeIDs(for nodes: [KGNode]) -> Set<String> {
+        if scale >= 1.15 {
+            return Set(nodes.map(\.id))
+        }
+
+        var labelled = Set<String>()
+        if let selectedNodeId = viewModel.selectedNodeId {
+            labelled.insert(selectedNodeId)
+        }
+
+        for node in nodes where node.name.localizedCaseInsensitiveCompare("Etan Heyman") == .orderedSame {
+            labelled.insert(node.id)
+        }
+
+        let maxLabels = scale < 0.7 ? 18 : 36
+        for node in nodes
+            .sorted(by: { lhs, rhs in
+                if lhs.importance == rhs.importance {
+                    return lhs.linkedChunkCount > rhs.linkedChunkCount
+                }
+                return lhs.importance > rhs.importance
+            })
+            .prefix(maxLabels) {
+            labelled.insert(node.id)
+        }
+        return labelled
+    }
+
+    private func startSimulation() {
+        guard isActive, !reduceMotion, hasLoadedGraph, viewModel.nodes.count > 1 else { return }
+        simulationController.setActive(true)
+        simulationController.start {
+            viewModel.tick(reduceMotionEnabled: reduceMotion)
+        }
+    }
+
+    private func stopSimulation() {
+        simulationController.setActive(false)
     }
 }

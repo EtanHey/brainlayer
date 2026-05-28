@@ -146,6 +146,45 @@ final class KGDegradationStateTests: XCTestCase {
         XCTAssertEqual(vm.degradationState.reason, "fetchFailed")
     }
 
+    func testLoadGraphRepeatedlySkipsSuccessCallbackWhenCancelledAfterFetch() async {
+        // Regression guard: Codex PR #340 flagged that a cancelled Graph tab
+        // task could resume after its background DB fetch and restart the
+        // simulation while the tab/window was inactive.
+        let reader = BlockingKnowledgeGraphReader(
+            entities: [
+                BrainDatabase.KGEntityRow(
+                    id: "a",
+                    name: "Alice",
+                    entityType: "person",
+                    description: nil,
+                    importance: 7
+                ),
+            ],
+            relations: []
+        )
+        let vm = KGViewModel(graphReader: reader)
+        var successCallbackCount = 0
+
+        let task = Task {
+            await vm.loadGraphRepeatedly(
+                refreshDelay: .seconds(60),
+                retryDelay: .seconds(60),
+                onSuccessfulLoad: {
+                    successCallbackCount += 1
+                }
+            )
+        }
+
+        await Task.yield()
+        XCTAssertTrue(reader.waitUntilFetchStarted(timeout: 1))
+        task.cancel()
+        reader.releaseFetch()
+
+        let loadedOnce = await task.value
+        XCTAssertFalse(loadedOnce)
+        XCTAssertEqual(successCallbackCount, 0)
+    }
+
     func testLoadGraphMarksDegradedWhenRetrySleepIsCancelledAfterReadFailure() async {
         // Regression guard: Cursor Bugbot PR #315 flagged cancellation between
         // failed graph-read attempts as a path that hid the degraded badge.
@@ -258,5 +297,40 @@ private final class ScriptedKnowledgeGraphReader: KnowledgeGraphReading, @unchec
 
     func fetchKGRelations(limit: Int) throws -> [BrainDatabase.KGRelationRow] {
         activeRelations
+    }
+}
+
+private final class BlockingKnowledgeGraphReader: KnowledgeGraphReading, @unchecked Sendable {
+    deinit {}
+
+    private let entities: [BrainDatabase.KGEntityRow]
+    private let relations: [BrainDatabase.KGRelationRow]
+    private let fetchStarted = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    init(
+        entities: [BrainDatabase.KGEntityRow],
+        relations: [BrainDatabase.KGRelationRow]
+    ) {
+        self.entities = entities
+        self.relations = relations
+    }
+
+    func waitUntilFetchStarted(timeout: TimeInterval) -> Bool {
+        fetchStarted.wait(timeout: .now() + timeout) == .success
+    }
+
+    func releaseFetch() {
+        release.signal()
+    }
+
+    func fetchKGEntities(limit: Int) throws -> [BrainDatabase.KGEntityRow] {
+        fetchStarted.signal()
+        release.wait()
+        return Array(entities.prefix(limit))
+    }
+
+    func fetchKGRelations(limit: Int) throws -> [BrainDatabase.KGRelationRow] {
+        Array(relations.prefix(limit))
     }
 }

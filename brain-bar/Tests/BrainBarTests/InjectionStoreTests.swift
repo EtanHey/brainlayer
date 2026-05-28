@@ -132,6 +132,81 @@ final class InjectionStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testInactiveStoreDoesNotPollUntilActivated() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 2, 3],
+            eventResults: [
+                .success([makeEvent(id: 1, query: "active event")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+        defer { store.stop() }
+
+        store.start(active: false)
+        try await Task.sleep(for: .milliseconds(180))
+
+        XCTAssertEqual(reader.dataVersionCallCount, 0)
+        XCTAssertTrue(store.events.isEmpty)
+
+        store.setActive(true)
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(store.events.map(\.query), ["active event"])
+        XCTAssertGreaterThan(reader.dataVersionCallCount, 0)
+    }
+
+    @MainActor
+    func testInactiveParameterChangeRefreshesWhenReactivated() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 1, 1],
+            eventResults: [
+                .success([makeEvent(id: 1, query: "old session")]),
+                .success([makeEvent(id: 2, query: "new session")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader)
+        defer { store.stop() }
+
+        store.start(sessionID: "old", active: true)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.events.map(\.query), ["old session"])
+
+        store.setActive(false)
+        store.start(sessionID: "new", active: false)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.events.map(\.query), ["old session"])
+
+        store.setActive(true)
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(store.events.map(\.query), ["new session"])
+        XCTAssertEqual(reader.listCallCount, 2)
+    }
+
+    @MainActor
+    func testActiveRefreshDebouncesMutationBursts() async throws {
+        let reader = ScriptedInjectionEventReader(
+            versions: [1, 2, 3, 4],
+            eventResults: [
+                .success([makeEvent(id: 1, query: "initial")]),
+                .success([makeEvent(id: 2, query: "debounced")]),
+            ]
+        )
+        let store = InjectionStore(reader: reader, refreshDebounceInterval: 0.05)
+        defer { store.stop() }
+
+        store.start(active: true)
+        store.scheduleRefreshForTesting(force: false)
+        store.scheduleRefreshForTesting(force: false)
+        store.scheduleRefreshForTesting(force: false)
+
+        try await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertEqual(reader.listCallCount, 2)
+        XCTAssertEqual(store.events.map(\.query), ["debounced"])
+    }
+
+    @MainActor
     func testInjectionFeedPresentationModelThrottlesRapidEventBursts() async throws {
         let reader = ScriptedInjectionEventReader(
             versions: [1, 2, 3],
@@ -198,6 +273,8 @@ private final class ScriptedInjectionEventReader: InjectionEventReading {
 
     var versions: [Int]
     var eventResults: [Result<[InjectionEvent], Error>]
+    private(set) var dataVersionCallCount = 0
+    private(set) var listCallCount = 0
 
     init(versions: [Int], eventResults: [Result<[InjectionEvent], Error>]) {
         self.versions = versions
@@ -205,6 +282,7 @@ private final class ScriptedInjectionEventReader: InjectionEventReading {
     }
 
     func dataVersion() throws -> Int {
+        dataVersionCallCount += 1
         if versions.count > 1 {
             return versions.removeFirst()
         }
@@ -212,6 +290,7 @@ private final class ScriptedInjectionEventReader: InjectionEventReading {
     }
 
     func listInjectionEvents(sessionID: String?, limit: Int) throws -> [InjectionEvent] {
+        listCallCount += 1
         guard !eventResults.isEmpty else {
             throw ScriptedInjectionError.unexpectedListCall
         }

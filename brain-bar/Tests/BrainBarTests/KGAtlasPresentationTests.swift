@@ -68,6 +68,29 @@ final class KGAtlasPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.selectedRegion?.title, "Agents")
     }
 
+    func testAltitudeFilterKeepsOwnerEntityVisible() {
+        let nodes = [
+            KGNode(id: "owner", name: "Etan Heyman", entityType: "person", importance: 0.5, position: .zero),
+            KGNode(id: "site", name: "etanheyman.com", entityType: "project", importance: 6, position: .zero),
+            KGNode(id: "low", name: "Scratch", entityType: "topic", importance: 0.5, position: .zero),
+        ]
+        let edges = [
+            KGEdge(sourceId: "owner", targetId: "site", relationType: "owns"),
+            KGEdge(sourceId: "owner", targetId: "low", relationType: "mentioned"),
+        ]
+
+        let snapshot = KGAtlasPresentation.snapshot(
+            nodes: nodes,
+            edges: edges,
+            selectedNodeId: nil,
+            minimumImportance: 6,
+            userDefaults: testUserDefaults
+        )
+
+        XCTAssertEqual(snapshot.visibleNodes.map(\.id), ["owner", "site"])
+        XCTAssertEqual(snapshot.visibleEdges.map(\.id), ["owner-owns-site"])
+    }
+
     func testSnapshotVirtualizesHubLinksAtDefaultFiftyVisibleRelations() {
         let graph = makeHubGraph(edgeCount: 60)
 

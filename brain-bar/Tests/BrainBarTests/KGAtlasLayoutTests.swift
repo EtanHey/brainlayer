@@ -38,4 +38,23 @@ final class KGAtlasLayoutTests: XCTestCase {
         XCTAssertLessThan(projectNode.position.x, toolNode.position.x)
         XCTAssertLessThan(abs(personNodes[0].position.x - personNodes[1].position.x), 120)
     }
+
+    func testSeededOwnerEntityStartsBelowAtlasToolbar() {
+        let seeded = KGAtlasLayout.seededNodes(
+            [
+                KGNode(
+                    id: "owner",
+                    name: "Etan Heyman",
+                    entityType: "person",
+                    importance: 0.5,
+                    position: .zero
+                ),
+            ],
+            canvasSize: CGSize(width: 860, height: 500)
+        )
+
+        let owner = seeded[0]
+        XCTAssertGreaterThan(owner.position.y, 240)
+        XCTAssertLessThan(owner.position.x, 300)
+    }
 }

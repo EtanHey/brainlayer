@@ -116,7 +116,7 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var injectionsContent: some View {
         if let store = runtime.injectionStore {
-            BrainBarInjectionTab(store: store)
+            BrainBarInjectionTab(store: store, isActive: selectedTab == .injections && windowObserver.isWindowVisible)
         } else {
             BrainBarLoadingView(title: "Injections", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)
         }
@@ -125,7 +125,7 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var graphContent: some View {
         if let database = runtime.database {
-            BrainBarGraphTab(database: database)
+            BrainBarGraphTab(database: database, isActive: selectedTab == .graph && windowObserver.isWindowVisible)
         } else {
             BrainBarLoadingView(title: "Graph", subtitle: "Knowledge graph unavailable.")
         }
@@ -360,21 +360,14 @@ private struct BrainBarDashboardView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     overviewBadgeRow
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        BrainBarHeroBadge(text: flowSummary.windowLabel)
-                        BrainBarHeroBadge(text: flowSummary.queue.status.label)
-                    }
-
-                    HStack(spacing: 8) {
-                        BrainBarHeroBadge(text: "Writes \(flowSummary.ingress.lastEventText)")
-                        BrainBarHeroBadge(text: "Enrichments \(flowSummary.enrichment.lastEventText)")
-                    }
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
+                    overviewBadgeRow
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -388,14 +381,15 @@ private struct BrainBarDashboardView: View {
 
     private var freshnessLine: some View {
         HStack(spacing: 8) {
-            Image(systemName: collector.isRefreshing ? "arrow.triangle.2.circlepath" : "clock")
+            Image(systemName: "clock")
                 .font(.system(size: 11, weight: .semibold))
             Text("Data fetched at: \(dataFetchedText)")
                 .font(.system(size: 11, weight: .semibold))
                 .monospacedDigit()
-            if collector.isRefreshing {
-                Text("Refreshing...")
+            if let heartbeatText {
+                Text("Heartbeat: \(heartbeatText)")
                     .font(.system(size: 11, weight: .medium))
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -407,6 +401,12 @@ private struct BrainBarDashboardView: View {
     private var dataFetchedText: String {
         guard let lastDataFetchedAt = collector.lastDataFetchedAt else { return "not yet" }
         return DashboardMetricFormatter.absoluteTimeString(lastDataFetchedAt)
+    }
+
+    private var heartbeatText: String? {
+        guard let updatedAt = collector.heartbeat.updatedAt else { return nil }
+        let type = collector.heartbeat.lastEvent?.type.rawValue ?? "db"
+        return "\(type) \(DashboardMetricFormatter.absoluteTimeString(updatedAt))"
     }
 
     private var overviewBadgeRow: some View {
@@ -810,25 +810,32 @@ struct BrainBarDashboardLayout {
 
 private struct BrainBarInjectionTab: View {
     let store: InjectionStore
+    let isActive: Bool
     @State private var filterText = ""
 
     var body: some View {
         InjectionFeedView(store: store, filterText: $filterText)
             .padding(16)
-            .onAppear { store.start() }
+            .onAppear { store.start(active: isActive) }
+            .onChange(of: isActive) { _, active in
+                store.setActive(active)
+            }
+            .onDisappear { store.setActive(false) }
     }
 }
 
 private struct BrainBarGraphTab: View {
+    let isActive: Bool
     @StateObject private var viewModel: KGViewModel
 
-    init(database: BrainDatabase) {
+    init(database: BrainDatabase, isActive: Bool) {
+        self.isActive = isActive
         _viewModel = StateObject(wrappedValue: KGViewModel(database: database))
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            KGCanvasView(viewModel: viewModel)
+            KGCanvasView(viewModel: viewModel, isActive: isActive)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if viewModel.degradationState.isDegraded {
@@ -855,10 +862,13 @@ struct DegradationBadge: View {
                 .font(.system(size: 10, weight: .semibold))
             Text("Degraded")
                 .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+        .frame(maxWidth: 180, alignment: .leading)
         .background(
             Capsule().fill(Color.orange.opacity(0.85))
         )
@@ -945,8 +955,12 @@ private struct BrainBarHeroBadge: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .frame(maxWidth: 190, alignment: .leading)
             .background(.white.opacity(0.18), in: Capsule())
     }
 }
@@ -991,17 +1005,18 @@ private struct BrainBarAgentPresenceStrip: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     ForEach(activity.presences, id: \.family) { presence in
                         BrainBarAgentPresencePill(presence: presence)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
+                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                     ForEach(activity.presences, id: \.family) { presence in
                         BrainBarAgentPresencePill(presence: presence)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Text("Agent presence is separate from indexed writes. A live CLI does not imply new chunks landed.")
@@ -1026,6 +1041,9 @@ private struct BrainBarAgentPresencePill: View {
                 .opacity(presence.isActive ? 1 : 0.25)
             Text(presence.family.label)
                 .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .minimumScaleFactor(0.75)
             Text("\(presence.count)")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .padding(.horizontal, 7)
@@ -1105,8 +1123,12 @@ private struct BrainBarFlowStatusPill: View {
     var body: some View {
         Text(text)
             .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.72)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .frame(maxWidth: 150, alignment: .leading)
             .background(accentColor.opacity(0.16), in: Capsule())
             .overlay(
                 Capsule()
@@ -1203,6 +1225,7 @@ private struct WindowAttachmentView: NSViewRepresentable {
 @MainActor
 private final class BrainBarWindowObserver: ObservableObject {
     @Published private(set) var isContentReady = false
+    @Published private(set) var isWindowVisible = true
 
     private let coordinator: BrainBarWindowCoordinator
     private var observers: [NSObjectProtocol] = []
@@ -1223,6 +1246,7 @@ private final class BrainBarWindowObserver: ObservableObject {
         removeObservers()
         configure(window: window)
         coordinator.attach(window: window)
+        isWindowVisible = Self.isWindowActuallyVisible(window)
 
         if needsPreparation {
             DispatchQueue.main.async { [weak self, weak window] in
@@ -1254,7 +1278,30 @@ private final class BrainBarWindowObserver: ObservableObject {
                     self?.coordinator.captureCurrentFrame()
                 }
             },
+            center.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                Task { @MainActor [weak self, weak window] in
+                    self?.isWindowVisible = Self.isWindowActuallyVisible(window)
+                }
+            },
+            center.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.isWindowVisible = false
+                }
+            },
         ]
+    }
+
+    private static func isWindowActuallyVisible(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return window.isVisible && window.occlusionState.contains(.visible)
     }
 
     private func configure(window: NSWindow) {

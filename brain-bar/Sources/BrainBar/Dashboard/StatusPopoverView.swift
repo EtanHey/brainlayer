@@ -448,7 +448,7 @@ struct PopoverGraphTab: View {
     @ObservedObject var viewModel: KGViewModel
 
     var body: some View {
-        KGCanvasView(viewModel: viewModel)
+        KGCanvasView(viewModel: viewModel, isActive: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
     }

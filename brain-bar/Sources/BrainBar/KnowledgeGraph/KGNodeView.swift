@@ -6,6 +6,7 @@ enum KGNodeRenderer {
     static func draw(
         node: KGNode,
         isSelected: Bool,
+        showsLabel: Bool = true,
         in context: inout GraphicsContext,
         environment: EnvironmentValues
     ) {
@@ -33,6 +34,8 @@ enum KGNodeRenderer {
             with: .color(strokeColor),
             lineWidth: isSelected ? 3 : 1.5
         )
+
+        guard showsLabel else { return }
 
         // Label — underlined when selected to signal clickability
         let label = Text(node.name)

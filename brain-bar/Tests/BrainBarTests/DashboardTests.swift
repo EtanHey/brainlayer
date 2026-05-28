@@ -300,6 +300,44 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testSparklineTooltipPlacementClampsHorizontally() {
+        let container = CGSize(width: 160, height: 100)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+
+        let left = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 0, y: 80),
+            in: container,
+            tooltipSize: tooltip
+        )
+        let right = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 220, y: 80),
+            in: container,
+            tooltipSize: tooltip
+        )
+
+        XCTAssertGreaterThanOrEqual(left.x - tooltip.width / 2, 8)
+        XCTAssertLessThanOrEqual(right.x + tooltip.width / 2, container.width - 8)
+    }
+
+    func testSparklineTooltipPlacementFlipsBelowNearTopEdge() {
+        let container = CGSize(width: 260, height: 120)
+        let tooltip = SparklineTooltipPlacement.tooltipSize(in: container)
+
+        let top = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 130, y: 4),
+            in: container,
+            tooltipSize: tooltip
+        )
+        let lower = SparklineTooltipPlacement.position(
+            near: CGPoint(x: 130, y: 90),
+            in: container,
+            tooltipSize: tooltip
+        )
+
+        XCTAssertGreaterThan(top.y, 4)
+        XCTAssertLessThan(lower.y, 90)
+    }
+
     func testDashboardMetricFormatterRequiresAbsoluteLastEventText() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let lastEvent = now.addingTimeInterval(-125)
@@ -654,6 +692,29 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
         XCTAssertEqual(collector.stats.chunkCount, 1)
+    }
+
+    @MainActor
+    func testBrainBusEventsUpdateHeartbeatAndScheduleCoalescedStatsRefresh() async throws {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 0.05,
+            autoRefreshInterval: 60,
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+
+        eventSource.publish(.lastChunkID("heartbeat-only"))
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.lastChunkID == "heartbeat-only" }
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != fetchedAt }
+
+        XCTAssertNotEqual(collector.lastDataFetchedAt, fetchedAt)
     }
 
     @MainActor
@@ -1038,6 +1099,7 @@ final class DashboardTests: XCTestCase {
 private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecked Sendable {
     private let lock = NSLock()
     private var requests = 0
+    private var continuation: AsyncStream<BrainBusEvent>.Continuation?
 
     var streamRequestCount: Int {
         lock.withLock { requests }
@@ -1047,7 +1109,15 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
         lock.withLock {
             requests += 1
         }
-        return AsyncStream { _ in }
+        return AsyncStream { continuation in
+            lock.withLock {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func publish(_ event: BrainBusEvent) {
+        lock.withLock { continuation }?.yield(event)
     }
 }
 

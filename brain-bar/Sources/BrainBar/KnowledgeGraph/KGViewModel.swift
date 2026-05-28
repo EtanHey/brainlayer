@@ -37,6 +37,7 @@ final class KGViewModel: ObservableObject {
     private var selectedEntityFileCursor: BrainDatabase.SourceFileCursor?
     private var selectedEntityLoadTask: Task<Void, Never>?
     private var selectedEntityGeneration = 0
+    private var hasLoadedGraph = false
     private let selectedEntityChunkPageSize = 15
     private let selectedEntityFilePageSize = 15
 
@@ -78,6 +79,7 @@ final class KGViewModel: ObservableObject {
                 let graph = try await Self.fetchGraphRows(reader: graphReader)
                 applyGraph(entityRows: graph.entities, relationRows: graph.relations)
                 degradationState = .healthy
+                hasLoadedGraph = true
                 return true
             } catch {
                 lastError = error
@@ -96,6 +98,16 @@ final class KGViewModel: ObservableObject {
         // Keep previously-loaded nodes/edges so the user sees last-known-good
         // data rather than a blank canvas — degraded ≠ hidden.
         return false
+    }
+
+    @discardableResult
+    func loadGraphIfNeeded(
+        retrySleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> Bool {
+        if hasLoadedGraph {
+            return true
+        }
+        return await loadGraph(retrySleep: retrySleep)
     }
 
     @discardableResult
@@ -125,7 +137,10 @@ final class KGViewModel: ObservableObject {
     ) async -> Bool {
         var loadedOnce = false
         while !Task.isCancelled {
-            let loaded = await loadGraph()
+            let loaded = loadedOnce ? await loadGraph() : await loadGraphIfNeeded()
+            guard !Task.isCancelled else {
+                return loadedOnce
+            }
             if loaded {
                 loadedOnce = true
                 onSuccessfulLoad()
@@ -188,6 +203,7 @@ final class KGViewModel: ObservableObject {
         nodes = zip(incomingNodes, seededNodes).map { incomingNode, seededNode in
             existingNodes[incomingNode.id] == nil ? seededNode : incomingNode
         }
+        pinOwnerEntityIfPresent()
 
         // Only include edges where both endpoints exist
         edges = relationRows.compactMap { row in
@@ -219,6 +235,7 @@ final class KGViewModel: ObservableObject {
         canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         guard !nodes.isEmpty else { return }
         nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size)
+        pinOwnerEntityIfPresent()
     }
 
     // MARK: - Selection
@@ -418,6 +435,7 @@ final class KGViewModel: ObservableObject {
             let speedSq = (nodes[i].velocity.dx * nodes[i].velocity.dx) + (nodes[i].velocity.dy * nodes[i].velocity.dy)
             totalKineticEnergy += 0.5 * speedSq
         }
+        pinOwnerEntityIfPresent()
 
         return totalKineticEnergy
     }
@@ -428,6 +446,22 @@ final class KGViewModel: ObservableObject {
         for index in nodes.indices {
             nodes[index].velocity = .zero
         }
+    }
+
+    private func pinOwnerEntityIfPresent() {
+        for index in nodes.indices where isOwnerEntity(nodes[index]) {
+            nodes[index].position = ownerAnchor
+            nodes[index].velocity = .zero
+        }
+    }
+
+    private func isOwnerEntity(_ node: KGNode) -> Bool {
+        node.name.localizedCaseInsensitiveCompare("Etan Heyman") == .orderedSame
+    }
+
+    private var ownerAnchor: CGPoint {
+        let size = graphCanvasSize
+        return CGPoint(x: size.width * 0.30, y: size.height * 0.64)
     }
 
     private func nodeById(_ id: String) -> KGNode? {
