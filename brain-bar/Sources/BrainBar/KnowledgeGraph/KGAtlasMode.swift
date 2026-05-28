@@ -78,6 +78,8 @@ enum KGAltitudeTier: Int, CaseIterable, Identifiable {
     private static let topAltitudeEntityNames: Set<String> = [
         "etan",
         "etan heyman",
+        "claudecode",
+        "claude-code",
         "claude code",
     ]
 }

@@ -94,7 +94,7 @@ final class KGAtlasPresentationTests: XCTestCase {
     func testTieredAltitudeSummitShowsOnlyTopEntities() {
         let nodes = [
             KGNode(id: "owner", name: "Etan Heyman", entityType: "person", importance: 10, position: .zero),
-            KGNode(id: "claude", name: "Claude Code", entityType: "agent", importance: 6, position: .zero),
+            KGNode(id: "claude", name: "ClaudeCode", entityType: "agent", importance: 6, position: .zero),
             KGNode(id: "brainlayer", name: "brainlayer", entityType: "project", importance: 10, position: .zero),
             KGNode(id: "scratch", name: "Scratch", entityType: "topic", importance: 1, position: .zero),
         ]

@@ -112,8 +112,9 @@ final class StatusPopoverView: NSViewController {
     // MARK: - Tab Switching
 
     func showTab(_ tab: PopoverTab) {
-        containerView.subviews.forEach { $0.removeFromSuperview() }
         currentTab = tab
+        updateGraphActivation()
+        containerView.subviews.forEach { $0.removeFromSuperview() }
 
         let content: NSView
         switch tab {
@@ -134,6 +135,7 @@ final class StatusPopoverView: NSViewController {
             content.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
         ])
 
+        updateGraphActivation()
         preferredContentSize = tab.contentSize
         onPreferredSizeChange?(tab.contentSize)
     }
@@ -314,10 +316,20 @@ final class StatusPopoverView: NSViewController {
         }
 
         let viewModel = KGViewModel(database: db)
-        let hosting = NSHostingController(rootView: PopoverGraphTab(viewModel: viewModel))
+        let hosting = NSHostingController(
+            rootView: PopoverGraphTab(viewModel: viewModel, isActive: currentTab == .graph)
+        )
         graphHosting = hosting
         addChild(hosting)
         return hosting.view
+    }
+
+    private func updateGraphActivation() {
+        guard let hosting = graphHosting else { return }
+        hosting.rootView = PopoverGraphTab(
+            viewModel: hosting.rootView.viewModel,
+            isActive: currentTab == .graph
+        )
     }
 
     // MARK: - Data Binding
@@ -446,9 +458,10 @@ struct PopoverInjectionTab: View {
 
 struct PopoverGraphTab: View {
     @ObservedObject var viewModel: KGViewModel
+    let isActive: Bool
 
     var body: some View {
-        KGCanvasView(viewModel: viewModel, isActive: true)
+        KGCanvasView(viewModel: viewModel, isActive: isActive)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
     }

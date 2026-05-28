@@ -26,7 +26,7 @@ final class KGViewModel: ObservableObject {
     @Published private(set) var selectedEntityChunkSidebarLoadFailed = false
     @Published private(set) var selectedEntityFileSidebarLoadFailed = false
     @Published private(set) var degradationState: DegradationState = .healthy
-    @Published var layoutMode: KGAtlasMode = .importance
+    @Published var layoutMode: KGAtlasMode = .tieredAltitude
 
     /// Set by KGCanvasView via GeometryReader — used for centering force
     var canvasCenter: CGPoint = CGPoint(x: 300, y: 250)
