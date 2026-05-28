@@ -28,6 +28,7 @@ struct BrainBarWindowRootView: View {
         VStack(spacing: 0) {
             BrainBarWindowHeader(
                 selectedTab: $selectedTab,
+                collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 commandBarViewModel: commandBarViewModel
             )
@@ -147,8 +148,9 @@ struct BrainBarWindowRootView: View {
     private func activate(tab: BrainBarTab) {
         switch tab {
         case .dashboard:
-            break
+            runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
         case .injections:
+            runtime.ensureInjectionStore()
             hasActivatedInjectionsTab = true
         case .graph:
             hasActivatedGraphTab = true
@@ -182,6 +184,7 @@ private extension View {
 private struct BrainBarWindowHeader: View {
     @Binding var selectedTab: BrainBarTab
 
+    let collector: StatsCollector?
     let hotkeyStatus: String
     let commandBarViewModel: QuickCaptureViewModel?
 
@@ -203,7 +206,26 @@ private struct BrainBarWindowHeader: View {
                 .frame(maxWidth: 280)
                 .labelsHidden()
 
-                Spacer(minLength: 16)
+                if let collector {
+                    Button {
+                        collector.manualRefresh()
+                    } label: {
+                        Label("Refresh now", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(collector.isManualRefreshInProgress)
+                    .help("Refresh dashboard now")
+
+                    if collector.isManualRefreshInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 16, height: 16)
+                    }
+                }
+
+                Spacer(minLength: 12)
 
                 Text(hotkeyStatus)
                     .font(.system(size: 11, weight: .medium))
@@ -243,6 +265,7 @@ private struct BrainBarDashboardView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: layout.sectionSpacing) {
                     overviewCard(layout: layout)
+                    freshnessLine
                     chartCards(layout: layout)
                     agentPresenceStrip(layout: layout)
                     if layout.usesQueueRail {
@@ -351,6 +374,29 @@ private struct BrainBarDashboardView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    private var freshnessLine: some View {
+        HStack(spacing: 8) {
+            Image(systemName: collector.isRefreshing ? "arrow.triangle.2.circlepath" : "clock")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Data fetched at: \(dataFetchedText)")
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+            if collector.isRefreshing {
+                Text("Refreshing...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+    }
+
+    private var dataFetchedText: String {
+        guard let lastDataFetchedAt = collector.lastDataFetchedAt else { return "not yet" }
+        return DashboardMetricFormatter.absoluteTimeString(lastDataFetchedAt)
+    }
+
     private var overviewBadgeRow: some View {
         Group {
             BrainBarHeroBadge(text: flowSummary.windowLabel)
@@ -395,6 +441,7 @@ private struct BrainBarDashboardView: View {
             pulseRevision: writePulseRevision,
             compact: layout.compactCards,
             chartHeight: layout.sparklineHeight,
+            fetchedAt: collector.lastDataFetchedAt ?? Date(),
             emphasize: true
         )
     }
@@ -405,6 +452,7 @@ private struct BrainBarDashboardView: View {
             pulseRevision: enrichmentPulseRevision,
             compact: layout.compactCards,
             chartHeight: layout.sparklineHeight,
+            fetchedAt: collector.lastDataFetchedAt ?? Date(),
             emphasize: true
         )
     }
@@ -545,6 +593,7 @@ private struct BrainBarFlowLaneCard: View {
     let pulseRevision: Int
     let compact: Bool
     let chartHeight: CGFloat
+    let fetchedAt: Date
     let emphasize: Bool
 
     var body: some View {
@@ -568,6 +617,7 @@ private struct BrainBarFlowLaneCard: View {
                 values: lane.values,
                 accentColor: lane.accentColor,
                 activityWindowMinutes: lane.activityWindowMinutes,
+                fetchedAt: fetchedAt,
                 pulseRevision: pulseRevision
             )
             .frame(height: chartHeight)
@@ -1057,11 +1107,8 @@ private struct BrainBarHeroSparkline: View {
     let values: [Int]
     let accentColor: NSColor
     let activityWindowMinutes: Int
+    let fetchedAt: Date
     let pulseRevision: Int
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var ringScale: CGFloat = 0.8
-    @State private var ringOpacity = 0.0
 
     var body: some View {
         GeometryReader { proxy in
@@ -1069,63 +1116,18 @@ private struct BrainBarHeroSparkline: View {
                 width: max(proxy.size.width.rounded(.up), 1),
                 height: max(proxy.size.height.rounded(.up), 1)
             )
-            let endpoint = SparklineRenderer.endpoint(
-                values: values,
-                size: renderSize
+
+            SparklineChart(
+                presentation: SparklineChartPresentation(
+                    label: "Recent activity sparkline",
+                    values: values,
+                    activityWindowMinutes: activityWindowMinutes,
+                    fetchedAt: fetchedAt
+                ),
+                accentColor: accentColor,
+                compact: SparklineRenderer.isCompact(size: renderSize)
             )
-
-            ZStack(alignment: .topLeading) {
-                SparklineChart(
-                    presentation: SparklineChartPresentation(
-                        label: "Recent activity sparkline",
-                        values: values,
-                        activityWindowMinutes: activityWindowMinutes
-                    ),
-                    accentColor: accentColor,
-                    compact: SparklineRenderer.isCompact(size: renderSize)
-                )
-                .frame(width: proxy.size.width, height: proxy.size.height)
-
-                if let endpoint, !reduceMotion {
-                    let point = CGPoint(
-                        x: endpoint.x,
-                        y: proxy.size.height - endpoint.y
-                    )
-
-                    Circle()
-                        .stroke(Color(nsColor: accentColor).opacity(0.45), lineWidth: 2)
-                        .frame(width: 26, height: 26)
-                        .scaleEffect(ringScale)
-                        .opacity(ringOpacity)
-                        .position(point)
-
-                    Circle()
-                        .fill(Color(nsColor: accentColor))
-                        .frame(width: 9, height: 9)
-                        .shadow(color: Color(nsColor: accentColor).opacity(0.65), radius: 6)
-                        .position(point)
-                }
-            }
-        }
-        .onAppear {
-            triggerPulse()
-        }
-        .onChange(of: pulseRevision) { _, _ in
-            triggerPulse()
-        }
-    }
-
-    private func triggerPulse() {
-        guard !reduceMotion else {
-            ringScale = 1
-            ringOpacity = 0
-            return
-        }
-        ringScale = 0.8
-        ringOpacity = 0.7
-        withAnimation(.easeOut(duration: 0.75)) {
-            ringScale = 1.75
-            ringOpacity = 0
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
 }

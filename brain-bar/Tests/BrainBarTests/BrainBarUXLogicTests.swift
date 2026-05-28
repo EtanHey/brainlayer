@@ -93,7 +93,7 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activityWindowMinutes: 60,
                 now: now
             ),
-            "Just now"
+            "\(Self.absoluteTime(now.addingTimeInterval(-30))) (Just now)"
         )
         XCTAssertEqual(
             DashboardMetricFormatter.lastCompletionString(
@@ -101,7 +101,7 @@ final class BrainBarUXLogicTests: XCTestCase {
                 activityWindowMinutes: 60,
                 now: now
             ),
-            "2m ago"
+            "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)"
         )
     }
 
@@ -170,7 +170,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.ingress.status, .idle)
         XCTAssertEqual(summary.queue.status, .draining)
         XCTAssertEqual(summary.enrichment.status, .recent)
-        XCTAssertEqual(summary.enrichment.lastEventText, "2m ago")
+        XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)")
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {
@@ -342,5 +342,11 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(layout.overviewMetricColumns, 4)
         XCTAssertEqual(layout.diagnosticColumns, 2)
         XCTAssertTrue(layout.usesQueueRail)
+    }
+
+    private static func absoluteTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
     }
 }

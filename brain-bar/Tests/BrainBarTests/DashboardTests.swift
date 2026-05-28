@@ -193,30 +193,60 @@ final class DashboardTests: XCTestCase {
     }
 
     func testSparklineChartPresentationCarriesBucketsAndVoiceOverMetadata() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
             label: "Recent activity sparkline",
             values: [0, 2, 5, 3],
-            activityWindowMinutes: 20
+            activityWindowMinutes: 20,
+            fetchedAt: now
         )
 
         XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
         XCTAssertEqual(presentation.points.map(\.value), [0, 2, 5, 3])
         XCTAssertEqual(presentation.accessibilityLabel, "Recent activity sparkline")
         XCTAssertEqual(presentation.accessibilityValue, "latest bucket count 3, trending down")
-        XCTAssertEqual(presentation.bucketLabel(for: 0), "20m-15m ago")
-        XCTAssertEqual(presentation.bucketLabel(for: 3), "last 5m")
-        XCTAssertEqual(presentation.tooltipText(forBucket: 2), "10m-5m ago: 5")
+        XCTAssertEqual(
+            presentation.bucketLabel(for: 0),
+            "\(Self.shortTime(now.addingTimeInterval(-20 * 60)))-\(Self.shortTime(now.addingTimeInterval(-15 * 60)))"
+        )
+        XCTAssertEqual(
+            presentation.bucketLabel(for: 3),
+            "\(Self.shortTime(now.addingTimeInterval(-5 * 60)))-\(Self.shortTime(now))"
+        )
+        XCTAssertEqual(
+            presentation.tooltipText(forBucket: 2),
+            "\(Self.shortTime(now.addingTimeInterval(-10 * 60)))-\(Self.shortTime(now.addingTimeInterval(-5 * 60))) (10m-5m ago): 5"
+        )
     }
 
     func testSparklineChartPresentationLabelsPartialMinuteBucketsLikeDatabase() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
             label: "Recent activity sparkline",
             values: Array(repeating: 0, count: 12),
-            activityWindowMinutes: 31
+            activityWindowMinutes: 31,
+            fetchedAt: now
         )
 
-        XCTAssertEqual(presentation.bucketLabel(for: 0), "31m-28m 25s ago")
-        XCTAssertEqual(presentation.bucketLabel(for: 11), "last 2m 35s")
+        let bucketWidth = Double(31 * 60) / 12
+        XCTAssertEqual(
+            presentation.bucketLabel(for: 0),
+            "\(Self.shortTime(now.addingTimeInterval(-31 * 60)))-\(Self.shortTime(now.addingTimeInterval(-(31 * 60 - bucketWidth))))"
+        )
+        XCTAssertEqual(
+            presentation.bucketLabel(for: 11),
+            "\(Self.shortTime(now.addingTimeInterval(-bucketWidth)))-\(Self.shortTime(now))"
+        )
+    }
+
+    func testDashboardMetricFormatterRequiresAbsoluteLastEventText() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let lastEvent = now.addingTimeInterval(-125)
+
+        XCTAssertEqual(
+            DashboardMetricFormatter.lastEventString(lastEventAt: lastEvent, now: now),
+            "\(Self.absoluteTime(lastEvent)) (3m ago)"
+        )
     }
 
     func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {
@@ -272,6 +302,33 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
         let lastWriteAt = try XCTUnwrap(stats.lastWriteAt)
         XCTAssertLessThan(abs(lastWriteAt.timeIntervalSince(now)), 5)
+    }
+
+    func testDashboardStatsCountsRecentOffsetTimestampCrossingUTCDateBoundary() throws {
+        try db.insertChunk(
+            id: "dash-offset-crossing",
+            content: "Recent chunk written with an offset timestamp on a different UTC date",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: -10 * 3600)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        let recent = Date().addingTimeInterval(-60)
+
+        db.exec("""
+            UPDATE chunks
+            SET created_at = '\(formatter.string(from: recent))'
+            WHERE id = 'dash-offset-crossing'
+        """)
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
+
+        XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 1)
     }
 
     func testDashboardStatsTracksRecentEnrichmentSeparatelyFromIncomingWrites() throws {
@@ -473,7 +530,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorRefreshesImmediatelyWithBrainBusEvents() throws {
+    func testStatsCollectorRefreshesWithBrainBusEvents() async throws {
         try db.insertChunk(
             id: "dash-preexisting",
             content: "Inserted before collector start",
@@ -492,6 +549,11 @@ final class DashboardTests: XCTestCase {
         defer { collector.stop() }
 
         collector.start()
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while collector.stats.chunkCount == 0 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
         XCTAssertEqual(collector.stats.chunkCount, 1)
@@ -577,6 +639,34 @@ final class DashboardTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(collector.stats.pendingStoreQueueDepth, 1)
+    }
+
+    @MainActor
+    func testStatsCollectorAutoRefreshesWithoutBrainBusEvents() async throws {
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60,
+            autoRefreshInterval: 0.05,
+            brainBusEvents: nil
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        XCTAssertEqual(collector.stats.chunkCount, 0)
+
+        try db.insertChunk(
+            id: "auto-refresh-after-silence",
+            content: "Fallback refresh should pick this up",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(collector.stats.chunkCount, 1)
     }
 
     @MainActor
@@ -813,6 +903,18 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(viewController.isViewLoaded)
         _ = viewController.view
         XCTAssertTrue(viewController.isViewLoaded)
+    }
+
+    private static func absoluteTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private static func shortTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 }
 

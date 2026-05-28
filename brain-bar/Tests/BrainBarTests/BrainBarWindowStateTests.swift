@@ -69,8 +69,14 @@ final class BrainBarWindowStateTests: XCTestCase {
         let presentation = BrainBarLivePresentation.derive(stats: stats, now: now)
 
         XCTAssertEqual(presentation.sparklineStyle, .idle)
-        XCTAssertEqual(presentation.badgeText, "2m ago")
+        XCTAssertEqual(presentation.badgeText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (2m ago)")
         XCTAssertEqual(presentation.statusText, "No enrichments in the last 60s")
+    }
+
+    private static func absoluteTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
     }
 }
 
