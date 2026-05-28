@@ -2,6 +2,19 @@ import XCTest
 @testable import BrainBar
 
 final class InjectionPresentationTests: XCTestCase {
+    func testInjectionEventDeduplicatesChunkIDsForClickableRows() {
+        let event = makeEvent(
+            id: 1,
+            sessionID: "sess-a",
+            timestamp: "2026-04-18T09:58:00Z",
+            query: "duplicate hit IDs",
+            chunkIDs: ["chunk-a", "chunk-a", "chunk-b", "chunk-a"],
+            tokenCount: 48
+        )
+
+        XCTAssertEqual(event.uniqueChunkIDs, ["chunk-a", "chunk-b"])
+    }
+
     func testSnapshotBuildsBurstGroupsAndWindowSummary() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [

@@ -40,4 +40,27 @@ final class ChunkConversationTests: XCTestCase {
         XCTAssertEqual(conversation.target.chunkID, "conv-3")
         XCTAssertTrue(conversation.entries[2].isTarget)
     }
+
+    func testExpandedConversationCapsHugeThreadWorkForResponsiveOpen() throws {
+        let hugeContent = String(repeating: "Long transcript line with enough content to stress SwiftUI rendering.\n", count: 120)
+        for index in 1...180 {
+            try db.insertChunk(
+                id: "huge-conv-\(index)",
+                content: "\(index): \(hugeContent)",
+                sessionId: "huge-conversation-thread",
+                project: "brainlayer",
+                contentType: index.isMultiple(of: 2) ? "assistant_text" : "user_message",
+                importance: 5
+            )
+        }
+
+        let conversation = try db.expandedConversation(id: "huge-conv-90", before: 10_000, after: 10_000)
+
+        XCTAssertLessThanOrEqual(conversation.entries.count, 81)
+        XCTAssertTrue(conversation.entries.contains { $0.chunkID == "huge-conv-90" && $0.isTarget })
+        XCTAssertTrue(
+            conversation.entries.allSatisfy { $0.content.count <= 4_200 },
+            "Conversation expansion must not hand full multi-thousand-line payloads to SwiftUI synchronously."
+        )
+    }
 }

@@ -12,6 +12,14 @@ protocol InjectionEventReading: AnyObject {
     func close()
 }
 
+private final class AsyncInjectionReaderBox: @unchecked Sendable {
+    let reader: InjectionEventReading
+
+    init(_ reader: InjectionEventReading) {
+        self.reader = reader
+    }
+}
+
 extension BrainDatabase: InjectionEventReading {
     func expandedConversation(
         chunkID: String,
@@ -165,6 +173,24 @@ final class InjectionStore: ObservableObject {
 
     func expandedConversation(chunkID: String, before: Int = 3, after: Int = 3) throws -> BrainDatabase.ExpandedConversation {
         try reader.expandedConversation(chunkID: chunkID, before: before, after: after)
+    }
+
+    func expandedConversationAsync(chunkID: String, before: Int = 3, after: Int = 3) async throws -> BrainDatabase.ExpandedConversation {
+        let readerBox = AsyncInjectionReaderBox(reader)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let conversation = try readerBox.reader.expandedConversation(
+                        chunkID: chunkID,
+                        before: before,
+                        after: after
+                    )
+                    continuation.resume(returning: conversation)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     fileprivate func handleDatabaseMutationNotification() {

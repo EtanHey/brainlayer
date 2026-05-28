@@ -221,8 +221,13 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
 
     var chunkCount: Int { chunkIDs.count }
 
+    var uniqueChunkIDs: [String] {
+        var seen = Set<String>()
+        return chunkIDs.filter { seen.insert($0).inserted }
+    }
+
     var primaryChunk: InjectionChunk? {
-        guard let firstChunkID = chunkIDs.first else { return chunks.first }
+        guard let firstChunkID = uniqueChunkIDs.first else { return chunks.first }
         return chunks.first { $0.id == firstChunkID }
     }
 
