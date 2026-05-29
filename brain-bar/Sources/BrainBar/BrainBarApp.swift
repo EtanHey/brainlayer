@@ -174,22 +174,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Unified Window
+    // MARK: - Menu Bar Popover
 
     @objc
     private func toggleWindowSurface(_ sender: Any?) {
         if let statusPopoverController {
             statusPopoverController.toggle(sender)
-        } else {
-            dashboardPanel?.toggle()
         }
     }
 
     func showDashboardPanel() {
         if let statusPopoverController {
             statusPopoverController.show(nil)
-        } else {
-            dashboardPanel?.show()
         }
     }
 
