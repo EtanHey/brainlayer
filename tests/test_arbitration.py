@@ -443,8 +443,16 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
         worker.join(timeout=20)
         assert worker.exitcode == 0
 
-    deadline = time.monotonic() + 45
+    # Poll-until-drained with a generous deadline. The completion signal is the
+    # DB end-state (3000 rows + FTS + empty queue), NOT a fixed time window: under
+    # machine saturation (many concurrent agents + enrichment competing for the
+    # writer) the drain legitimately takes longer. The old 45s cap was even shorter
+    # than the ~47s isolation runtime, so it flaked as `assert 2500 == 3000` under
+    # load. We stop as soon as the queue is fully consumed (deterministic), with the
+    # deadline only as a backstop against a genuine hang.
+    deadline = time.monotonic() + 240
     total_drained = 0
+    count = fts_count = 0
     while time.monotonic() < deadline:
         total_drained += drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=250, log_path=log_path)
         with _connect_apsw(db_path) as conn:
@@ -452,13 +460,16 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
             fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'arbitration'").fetchone()[
                 0
             ]
-        if count == 3000 and fts_count == 3000:
+        queue_empty = not list(queue_dir.glob("*.jsonl"))
+        if count == 3000 and fts_count == 3000 and queue_empty:
             break
         time.sleep(0.05)
 
-    assert total_drained == 3000
-    assert count == 3000
-    assert fts_count == 3000
+    assert count == 3000, (
+        f"drained {count}/3000 chunks before deadline (queue_empty={not list(queue_dir.glob('*.jsonl'))})"
+    )
+    assert fts_count == 3000, f"FTS indexed {fts_count}/3000"
+    assert total_drained == 3000, f"drain_once accumulated {total_drained} (expected 3000)"
     assert not list(queue_dir.glob("*.jsonl"))
     assert "database is locked" not in log_path.read_text(encoding="utf-8").lower()
 
