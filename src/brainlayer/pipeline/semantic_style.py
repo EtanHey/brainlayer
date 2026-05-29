@@ -31,12 +31,14 @@ try:
 except ImportError:
     HAS_NUMPY = False
 
-try:
-    from sentence_transformers import SentenceTransformer
+# Probe availability via find_spec instead of importing — importing
+# sentence_transformers eagerly pulls in torch (~3.7s) at module load, and this
+# module is imported by pipeline/__init__, which sits on the MCP server's startup
+# critical path. The actual import is deferred to SemanticStyleAnalyzer.model
+# (first real use). See fix/mcp-lazy-connect.
+import importlib.util as _importlib_util
 
-    HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    HAS_SENTENCE_TRANSFORMERS = False
+HAS_SENTENCE_TRANSFORMERS = _importlib_util.find_spec("sentence_transformers") is not None
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
@@ -157,6 +159,15 @@ class SemanticStyleAnalyzer:
     def model(self) -> SentenceTransformer:
         """Lazy load the embedding model."""
         if self._model is None:
+            # find_spec only proves the package is on disk, not importable — a
+            # broken install (e.g. corrupt torch dep) passes the __init__ guard
+            # but fails here, so re-raise with the same friendly message the old
+            # module-level try/except gave.
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as e:
+                raise ImportError("sentence-transformers required. Install: pip install sentence-transformers") from e
+
             logger.info("Loading %s...", self.model_name)
             self._model = SentenceTransformer(self.model_name)
         return self._model
