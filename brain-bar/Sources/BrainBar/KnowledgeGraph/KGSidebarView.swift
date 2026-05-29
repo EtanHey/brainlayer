@@ -38,6 +38,7 @@ struct KGSidebarView: View {
                         filesSection()
                         chunksSection()
                     }
+                    .padding(.top, 16)
                     .padding(.horizontal, 18)
                     .padding(.bottom, 18)
                 }

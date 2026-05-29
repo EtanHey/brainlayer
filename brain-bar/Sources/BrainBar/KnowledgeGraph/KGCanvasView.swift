@@ -150,10 +150,6 @@ struct KGCanvasView: View {
             let nodeIndex = Dictionary(uniqueKeysWithValues: snapshot.visibleNodes.map { ($0.id, $0) })
             let labelledNodeIDs = labelledNodeIDs(for: snapshot.visibleNodes)
 
-            for region in snapshot.regions {
-                drawRegionBackdrop(region: region, in: &ctx, environment: environment)
-            }
-
             for edge in snapshot.visibleEdges {
                 guard let source = nodeIndex[edge.sourceId], let target = nodeIndex[edge.targetId] else { continue }
                 let highlighted = viewModel.selectedNodeId == edge.sourceId || viewModel.selectedNodeId == edge.targetId
@@ -328,42 +324,6 @@ struct KGCanvasView: View {
         .background(toolbarBackground)
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-    }
-
-    private func drawRegionBackdrop(
-        region: KGAtlasPresentation.Region,
-        in context: inout GraphicsContext,
-        environment: EnvironmentValues
-    ) {
-        guard !region.nodes.isEmpty else { return }
-
-        let xs = region.nodes.map { $0.position.x }
-        let ys = region.nodes.map { $0.position.y }
-        guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else {
-            return
-        }
-
-        let rect = CGRect(
-            x: minX - 64,
-            y: minY - 52,
-            width: max((maxX - minX) + 128, 180),
-            height: max((maxY - minY) + 112, 132)
-        )
-
-        let tint = region.nodes.first?.color ?? .secondary
-        context.fill(
-            Ellipse().path(in: rect),
-            with: .color(tint.opacity(colorScheme == .dark ? 0.14 : 0.10))
-        )
-
-        let label = Text(region.title.uppercased())
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundColor(Color.brainBarTextPrimary.opacity(0.55))
-        context.draw(
-            context.resolve(label),
-            at: CGPoint(x: rect.midX, y: rect.minY - 14),
-            anchor: .center
-        )
     }
 
     private func tapGesture(snapshot: KGAtlasPresentation.Snapshot) -> some Gesture {

@@ -675,7 +675,9 @@ private struct BrainBarFlowLaneCard: View {
             }
 
             BrainBarHeroSparkline(
+                label: lane.sparklineLabel,
                 values: lane.values,
+                latestBucketName: lane.latestBucketName,
                 accentColor: lane.accentColor,
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
@@ -1193,7 +1195,9 @@ private struct BrainBarFlowStatusPill: View {
 }
 
 private struct BrainBarHeroSparkline: View {
+    let label: String
     let values: [Int]
+    let latestBucketName: String
     let accentColor: NSColor
     let activityWindowMinutes: Int
     let fetchedAt: Date
@@ -1208,9 +1212,10 @@ private struct BrainBarHeroSparkline: View {
 
             SparklineChart(
                 presentation: SparklineChartPresentation(
-                    label: "Recent activity sparkline",
+                    label: label,
                     values: values,
                     activityWindowMinutes: activityWindowMinutes,
+                    latestBucketName: latestBucketName,
                     fetchedAt: fetchedAt
                 ),
                 accentColor: accentColor,
@@ -1297,14 +1302,9 @@ private struct BrainBarGlassPanel: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.brainBarBorderSoft, lineWidth: 1)
+                    .strokeBorder(Color.brainBarBorderSoft, lineWidth: 1)
             )
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color.brainBarWhite.opacity(0.06))
-                    .frame(height: 1)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .shadow(color: .brainBarBlack.opacity(emphasized ? 0.32 : 0.24), radius: emphasized ? 36 : 24, y: emphasized ? 18 : 12)
     }
 }
