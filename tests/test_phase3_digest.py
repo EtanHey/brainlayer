@@ -471,6 +471,34 @@ def test_entity_lookup_aggregates_exact_name_duplicates_across_types(tmp_path):
     assert any(relation["relation_type"] == "created" for relation in result["relations"])
 
 
+def test_entity_lookup_does_not_aggregate_unallowlisted_cross_type_duplicates(tmp_path):
+    """Same-name entities in different domains should not inherit each other's evidence."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    project_id = store.upsert_entity("project-acme", "project", "Acme", embedding=dummy_embed("project acme"))
+    company_id = store.upsert_entity("company-acme", "company", "Acme", embedding=dummy_embed("company acme"))
+    api_id = store.upsert_entity("tool-api", "tool", "API", embedding=dummy_embed("api"))
+    store.add_relation("rel-acme-api", project_id, api_id, "uses")
+    _insert_chunks(
+        store,
+        ["acme-company"],
+        ["Acme company sales notes should stay attached to the company entity."],
+        [{"source_file": "t.jsonl", "project": "test"}],
+        [dummy_embed("acme company")],
+    )
+    store.link_entity_chunk(company_id, "acme-company", relevance=0.95, context="company notes")
+
+    result = entity_lookup("Acme", store, dummy_embed)
+
+    assert result is not None
+    assert result["entity_type"] == "project"
+    assert result["evidence"] == []
+    assert any(relation["relation_type"] == "uses" for relation in result["relations"])
+
+
 def test_entity_lookup_does_not_write_in_readonly_mode(tmp_path):
     """brain_entity runs against read-only DB handles and must not normalize by writing."""
     from brainlayer.pipeline.digest import entity_lookup

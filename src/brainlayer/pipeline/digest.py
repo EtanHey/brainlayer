@@ -33,6 +33,7 @@ DIGEST_V2_ENABLED = os.environ.get("BRAINLAYER_DIGEST_V2", "true").lower() in ("
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 MEDIUM_CONFIDENCE_THRESHOLD = 0.5
 SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
+_SAFE_CROSS_TYPE_ENTITY_AGGREGATES = {"claude code"}
 
 # Length-tiered cosine similarity thresholds for dedup
 # Research-validated: SemHash defaults to 0.90, strict 0.95 misses paraphrases
@@ -819,11 +820,17 @@ def entity_lookup(
         if not results:
             return None
 
-    # Exact-name duplicates can exist across inferred entity types (for example
-    # "Claude Code" as tool/project/technology). Prefer the sibling with real
-    # evidence, but aggregate siblings so lookups do not report an empty shell.
+    # Exact-name duplicates can exist across inferred entity types for known
+    # canonical tools like "Claude Code". Prefer the sibling with real evidence,
+    # but only aggregate cross-type siblings for names that are known-safe.
     candidate = results[0]
-    exact_siblings = _exact_name_siblings(store, candidate.get("name") or query, entity_type=entity_type)
+    candidate_name = candidate.get("name") or query
+    sibling_entity_type = entity_type
+    if entity_type is None and _normalize_lookup_name(candidate_name) in _SAFE_CROSS_TYPE_ENTITY_AGGREGATES:
+        sibling_entity_type = None
+    elif entity_type is None:
+        sibling_entity_type = candidate.get("entity_type")
+    exact_siblings = _exact_name_siblings(store, candidate_name, entity_type=sibling_entity_type)
     if exact_siblings:
         results_by_id = {r["id"]: r for r in results}
         for sibling in exact_siblings:
