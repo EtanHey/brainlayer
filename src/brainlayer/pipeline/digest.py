@@ -832,7 +832,13 @@ def entity_lookup(
         sibling_entity_type = candidate.get("entity_type")
     exact_siblings = _exact_name_siblings(store, candidate_name, entity_type=sibling_entity_type)
     if exact_siblings:
-        results_by_id = {r["id"]: r for r in results}
+        normalized_candidate_name = _normalize_lookup_name(candidate_name)
+        results_by_id = {
+            r["id"]: r
+            for r in results
+            if _normalize_lookup_name(r.get("name", "")) == normalized_candidate_name
+            and (sibling_entity_type is None or r.get("entity_type") == sibling_entity_type)
+        }
         for sibling in exact_siblings:
             results_by_id.setdefault(sibling["id"], sibling)
         results = list(results_by_id.values())

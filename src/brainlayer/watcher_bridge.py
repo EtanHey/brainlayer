@@ -22,6 +22,7 @@ from typing import Any
 import apsw
 
 from .chunk_origin import detect_chunk_origin
+from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
@@ -32,7 +33,6 @@ from .queue_io import enqueue_watcher_chunk
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 # ── Pre-classify filters ─────────────────────────────────────────────────────
 
@@ -210,17 +210,6 @@ def _extract_project_from_source(source_file: str) -> str | None:
     parent_name = p.parent.name
     if parent_name:
         return _normalize_project_name(parent_name)
-    return None
-
-
-def _extract_claude_conversation_id(source_file: str) -> str | None:
-    """Extract Claude Code's resumable conversation UUID from a JSONL source path."""
-    p = Path(source_file)
-    if _UUID_RE.match(p.stem):
-        return p.stem
-    for parent in p.parents:
-        if _UUID_RE.match(parent.name):
-            return parent.name
     return None
 
 

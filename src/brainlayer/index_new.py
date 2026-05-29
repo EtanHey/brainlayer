@@ -1,29 +1,18 @@
 """New indexing pipeline using sqlite-vec and sentence-transformers."""
 
 import logging
-import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
 from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 from .paths import DEFAULT_DB_PATH
-
-
-def _extract_claude_conversation_id(source_file: str) -> str | None:
-    p = Path(source_file)
-    if _UUID_RE.match(p.stem):
-        return p.stem
-    for parent in p.parents:
-        if _UUID_RE.match(parent.name):
-            return parent.name
-    return None
 
 
 def index_chunks_to_sqlite(

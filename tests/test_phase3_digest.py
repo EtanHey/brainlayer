@@ -499,6 +499,39 @@ def test_entity_lookup_does_not_aggregate_unallowlisted_cross_type_duplicates(tm
     assert any(relation["relation_type"] == "uses" for relation in result["relations"])
 
 
+def test_entity_lookup_selects_only_exact_siblings_when_fts_returns_partial_hits(tmp_path):
+    """Partial FTS hits with more evidence should not replace the exact candidate."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    claude_id = store.upsert_entity("agent-claude", "agent", "Claude", embedding=dummy_embed("claude"))
+    code_id = store.upsert_entity("tool-vscode", "tool", "Visual Studio Code", embedding=dummy_embed("code"))
+    _insert_chunks(
+        store,
+        ["code-1", "code-2"],
+        [
+            "Visual Studio Code has a mature extension ecosystem.",
+            "Code editor setup notes unrelated to the Claude entity.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "test"},
+            {"source_file": "t.jsonl", "project": "test"},
+        ],
+        [dummy_embed("code1"), dummy_embed("code2")],
+    )
+    store.link_entity_chunk(code_id, "code-1", relevance=0.95, context="editor")
+    store.link_entity_chunk(code_id, "code-2", relevance=0.9, context="editor")
+
+    result = entity_lookup("Claude", store, dummy_embed)
+
+    assert result is not None
+    assert result["id"] == claude_id
+    assert result["name"] == "Claude"
+    assert result["evidence"] == []
+
+
 def test_entity_lookup_does_not_write_in_readonly_mode(tmp_path):
     """brain_entity runs against read-only DB handles and must not normalize by writing."""
     from brainlayer.pipeline.digest import entity_lookup
