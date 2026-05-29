@@ -159,7 +159,14 @@ class SemanticStyleAnalyzer:
     def model(self) -> SentenceTransformer:
         """Lazy load the embedding model."""
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            # find_spec only proves the package is on disk, not importable — a
+            # broken install (e.g. corrupt torch dep) passes the __init__ guard
+            # but fails here, so re-raise with the same friendly message the old
+            # module-level try/except gave.
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as e:
+                raise ImportError("sentence-transformers required. Install: pip install sentence-transformers") from e
 
             logger.info("Loading %s...", self.model_name)
             self._model = SentenceTransformer(self.model_name)

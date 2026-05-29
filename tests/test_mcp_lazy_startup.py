@@ -33,6 +33,7 @@ _REPO_SRC = str(Path(__file__).resolve().parent.parent / "src")
 
 
 def _child_env() -> dict:
+    """Environment for subprocesses, with this worktree's src prepended to PYTHONPATH."""
     env = dict(os.environ)
     env["PYTHONPATH"] = _REPO_SRC + os.pathsep + env.get("PYTHONPATH", "")
     return env
@@ -65,10 +66,7 @@ def test_importing_embeddings_does_not_load_torch():
 
 def test_validate_config_does_not_load_torch():
     """serve()'s startup validation must not pull torch onto the critical path."""
-    out = _run_snippet(
-        "import sys, brainlayer.mcp as m; m.validate_config(); "
-        "print('torch' in sys.modules)"
-    )
+    out = _run_snippet("import sys, brainlayer.mcp as m; m.validate_config(); print('torch' in sys.modules)")
     assert out == "False", "validate_config() eagerly imported torch (blocks the MCP handshake)"
 
 
@@ -90,6 +88,7 @@ HANDSHAKE_BUDGET_SEC = 3.0  # must beat Codex's startup_timeout_sec=5 with margi
 
 
 def _hold_exclusive_lock(db_path, stop_event, ready_event):
+    """Hold a SQLite write lock on db_path until stop_event; signal ready_event once held."""
     conn = apsw.Connection(str(db_path))
     conn.cursor().execute("PRAGMA busy_timeout=200")  # fail fast, don't block on a real writer
     try:
@@ -110,6 +109,7 @@ def _hold_exclusive_lock(db_path, stop_event, ready_event):
 
 
 def _read_json_line(proc, timeout):
+    """Read one newline-delimited JSON-RPC message from proc.stdout, or None on timeout."""
     box = {}
 
     def _r():
@@ -133,9 +133,7 @@ def test_handshake_fast_under_db_write_lock():
 
     stop_event = threading.Event()
     ready_event = threading.Event()
-    lock_thread = threading.Thread(
-        target=_hold_exclusive_lock, args=(db_path, stop_event, ready_event), daemon=True
-    )
+    lock_thread = threading.Thread(target=_hold_exclusive_lock, args=(db_path, stop_event, ready_event), daemon=True)
     lock_thread.start()
     assert ready_event.wait(timeout=10), "could not acquire exclusive DB lock"
 
@@ -148,11 +146,21 @@ def test_handshake_fast_under_db_write_lock():
     )
     try:
         proc.stdin.write(
-            (json.dumps({
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                           "clientInfo": {"name": "test", "version": "0"}},
-            }) + "\n").encode()
+            (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "test", "version": "0"},
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
         )
         proc.stdin.flush()
         t0 = time.time()
@@ -160,12 +168,13 @@ def test_handshake_fast_under_db_write_lock():
         elapsed = time.time() - t0
         assert init_resp is not None, "initialize never responded"
         assert elapsed < HANDSHAKE_BUDGET_SEC, (
-            f"initialize took {elapsed:.2f}s (budget {HANDSHAKE_BUDGET_SEC}s) — would trip "
-            f"Codex startup_timeout_sec=5"
+            f"initialize took {elapsed:.2f}s (budget {HANDSHAKE_BUDGET_SEC}s) — would trip Codex startup_timeout_sec=5"
         )
 
         proc.stdin.write((json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n").encode())
-        proc.stdin.write((json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n").encode())
+        proc.stdin.write(
+            (json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n").encode()
+        )
         proc.stdin.flush()
         tools_resp = _read_json_line(proc, timeout=HANDSHAKE_BUDGET_SEC)
         assert tools_resp is not None, "tools/list never responded"
