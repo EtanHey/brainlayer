@@ -17,6 +17,8 @@ from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
+from brainlayer.drain import drain_once
+from brainlayer.queue_io import enqueue_enrichment_updates
 from brainlayer.queue_io import enqueue_hook_chunk
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,39 @@ class TestStoreRetryOnLock:
         assert item["content"] == "test memory"
 
     @pytest.mark.asyncio
+    async def test_store_retries_busy_error_before_queueing(self, tmp_path, monkeypatch):
+        """brain_store should wait for short lock bursts instead of queueing immediately."""
+        from brainlayer.mcp.store_handler import _store
+
+        queue_dir = tmp_path / "queue"
+        attempts = 0
+
+        def flaky_store_memory(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise apsw.BusyError("database is locked")
+            return {"id": "manual-landed", "related": []}
+
+        with (
+            patch("brainlayer.mcp.store_handler._get_vector_store", return_value=MagicMock()),
+            patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+            patch("brainlayer.store.store_memory", side_effect=flaky_store_memory),
+            patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+        ):
+            monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+            texts, structured = await _store(
+                content="test memory",
+                memory_type="note",
+                project="test",
+            )
+
+        assert attempts == 3
+        assert structured == {"chunk_id": "manual-landed", "related": []}
+        assert any("manual-landed" in item.text for item in texts)
+        assert not list(queue_dir.glob("mcp-*.jsonl"))
+
+    @pytest.mark.asyncio
     async def test_arbitrated_store_validates_before_queueing(self, tmp_path, monkeypatch):
         """Arbitrated store should not report queued success for invalid content."""
         from brainlayer.mcp.store_handler import _store
@@ -371,6 +406,53 @@ class TestStoreRetryOnLock:
         assert structured["queued"] is True
         assert any("queued" in item.text.lower() for item in texts)
         clear_cache.assert_called_once_with()
+
+
+def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
+    """Large enrichment queue files should be split so MCP store files can interleave."""
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+
+    conn = apsw.Connection(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    for idx in range(4):
+        conn.execute(
+            "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+            (f"c{idx}", f"content {idx}", f"h{idx}"),
+        )
+    conn.close()
+
+    queue_file = enqueue_enrichment_updates(
+        [
+            {"chunk_id": f"c{idx}", "content_hash": f"h{idx}", "enrichment": {"summary": f"s{idx}"}}
+            for idx in range(4)
+        ],
+        queue_dir=queue_dir,
+    )
+
+    monkeypatch.setenv("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", "2")
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 2
+    assert queue_file.exists()
+    assert len(queue_file.read_text(encoding="utf-8").splitlines()) == 2
+
+    conn = apsw.Connection(str(db_path))
+    summaries = dict(conn.execute("SELECT id, summary FROM chunks ORDER BY id"))
+    conn.close()
+
+    assert summaries == {"c0": "s0", "c1": "s1", "c2": None, "c3": None}
 
 
 class TestBrainUpdateRetryOnLock:

@@ -26,6 +26,10 @@ _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
 
 
+def _is_lock_error(exc: BaseException) -> bool:
+    return isinstance(exc, apsw.BusyError) or "locked" in str(exc).lower() or "busy" in str(exc).lower()
+
+
 def _new_manual_chunk_id() -> str:
     return f"manual-{uuid.uuid4().hex[:16]}"
 
@@ -485,6 +489,26 @@ def _flush_pending_stores(store, embed_fn) -> int:
     return flushed
 
 
+async def _store_memory_with_retries(store_memory, **kwargs):
+    last_err = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return store_memory(**kwargs)
+        except Exception as exc:
+            if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
+                raise
+            last_err = exc
+            delay = _retry_delay * (2**attempt)
+            logger.warning(
+                "brain_store BusyError (attempt %d/%d), retrying in %.2fs",
+                attempt + 1,
+                _RETRY_MAX_ATTEMPTS,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    raise last_err  # type: ignore[misc]
+
+
 async def _store(
     content: str,
     memory_type: str,
@@ -555,7 +579,8 @@ async def _store(
         normalized_project = _normalize_project_name(project)
 
         # Store WITHOUT embedding — returns immediately (no executor needed)
-        result = store_memory(
+        result = await _store_memory_with_retries(
+            store_memory,
             store=store,
             embed_fn=None,
             content=content,
@@ -636,7 +661,7 @@ async def _store(
     except ValueError as e:
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
-        if "locked" in str(e).lower() or "busy" in str(e).lower():
+        if _is_lock_error(e):
             queued_chunk_id = _new_manual_chunk_id()
             _queue_store(
                 {

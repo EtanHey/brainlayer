@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+_DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
+_DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 
 
 def _drain_busy_timeout_ms() -> int:
@@ -45,6 +47,30 @@ def _drain_busy_timeout_ms() -> int:
     if timeout_ms <= 0 or timeout_ms > _MAX_APSW_BUSY_TIMEOUT_MS:
         return _DEFAULT_DRAIN_BUSY_TIMEOUT_MS
     return timeout_ms
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _nonnegative_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
+def _max_events_per_transaction() -> int:
+    return _positive_int_env("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", _DEFAULT_MAX_EVENTS_PER_TRANSACTION)
+
+
+def _post_commit_yield_seconds() -> float:
+    return _nonnegative_float_env("BRAINLAYER_DRAIN_POST_COMMIT_YIELD_MS", _DEFAULT_POST_COMMIT_YIELD_MS) / 1000.0
 
 
 @dataclass
@@ -516,6 +542,15 @@ def _unlink_processed_file(path: Path, log_path: Path) -> None:
         _log(log_path, f"drain committed but could not unlink {path}: {exc}")
 
 
+def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(
+        "".join(json.dumps(event, ensure_ascii=True) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+
+
 def drain_once(
     *,
     db_path: Path | None = None,
@@ -550,6 +585,8 @@ def drain_once(
             if not events:
                 _unlink_processed_file(path, log_path)
                 continue
+            events_to_apply = events[: _max_events_per_transaction()]
+            remaining_events = events[len(events_to_apply) :]
 
             for attempt in range(5):
                 conn = _open_connection(db_path)
@@ -559,7 +596,7 @@ def drain_once(
                 try:
                     conn.execute("BEGIN IMMEDIATE")
                     ensure_dedupe_schema(conn)
-                    for event in events:
+                    for event in events_to_apply:
                         result = _apply_event(conn, event)
                         if result.chunk_id:
                             store_chunk_ids.append(result.chunk_id)
@@ -569,11 +606,21 @@ def drain_once(
                     if should_embed:
                         _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                     conn.execute("COMMIT")
+                    try:
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    except apsw.Error:
+                        pass
                     drained += attempt_drained
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
-                    _unlink_processed_file(path, log_path)
+                    if remaining_events:
+                        _rewrite_events_file(path, remaining_events)
+                    else:
+                        _unlink_processed_file(path, log_path)
+                    yield_seconds = _post_commit_yield_seconds()
+                    if yield_seconds > 0:
+                        time.sleep(yield_seconds)
                     break
                 except Exception as exc:
                     try:

@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_REALTIME_MODEL = os.environ.get("BRAINLAYER_GEMINI_REALTIME_MODEL", "gemini-2.5-flash-lite")
 DEFAULT_MAX_COMMIT_INTERVAL_MS = 250.0
+DEFAULT_POST_WRITE_YIELD_MS = 20.0
 DEFAULT_ENRICH_SUPERVISOR_LIMIT = 200_000
 DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600
 DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
@@ -278,8 +279,12 @@ def _end_store_operation(store) -> None:
             _STORE_OPERATION_CONDITION.notify_all()
 
 
-def _submit_write(store, name: str, callback) -> Any:
-    return _get_store_write_queue(store).submit(name, callback).result()
+def _submit_write(store, name: str, callback, *, yield_after: bool = True) -> Any:
+    result = _get_store_write_queue(store).submit(name, callback).result()
+    yield_seconds = _current_post_write_yield_seconds() if yield_after else 0.0
+    if yield_seconds > 0:
+        time.sleep(yield_seconds)
+    return result
 
 
 def _arbitrated_writes_enabled() -> bool:
@@ -288,6 +293,16 @@ def _arbitrated_writes_enabled() -> bool:
 
 def _current_max_commit_batch() -> int:
     return _bounded_positive_int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH"), MAX_COMMIT_BATCH)
+
+
+def _current_post_write_yield_seconds() -> float:
+    return (
+        _bounded_nonnegative_float(
+            os.environ.get("BRAINLAYER_ENRICH_POST_WRITE_YIELD_MS"),
+            DEFAULT_POST_WRITE_YIELD_MS,
+        )
+        / 1000.0
+    )
 
 
 def _enrichment_update_payload(chunk: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
@@ -404,7 +419,7 @@ def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
     _enqueue_enrichment_write(chunk, _meta_research_enrichment(chunk))
 
 
-def _ensure_enrichment_columns(store) -> None:
+def _ensure_enrichment_columns(store, *, yield_after: bool = True) -> None:
     key = _store_queue_key(store)
     with _ENRICHMENT_COLUMN_LOCK:
         if key in _ENRICHMENT_COLUMN_READY:
@@ -414,7 +429,7 @@ def _ensure_enrichment_columns(store) -> None:
         _ensure_content_hash_column(store)
         _ensure_raw_entities_json_column(store)
 
-    _submit_write(store, "ensure-enrichment-columns", _ensure)
+    _submit_write(store, "ensure-enrichment-columns", _ensure, yield_after=yield_after)
 
     with _ENRICHMENT_COLUMN_LOCK:
         _ENRICHMENT_COLUMN_READY.add(key)
@@ -1034,7 +1049,7 @@ def enrich_realtime(
             _emit_enrichment_complete(result, 0)
             return result
 
-        _ensure_enrichment_columns(store)
+        _ensure_enrichment_columns(store, yield_after=rate_per_second > 0)
 
         client = _get_gemini_client()
         sanitizer = Sanitizer.from_env()
@@ -1073,7 +1088,10 @@ def enrich_realtime(
                             write_batcher.enqueue(chunk, _meta_research_enrichment(chunk), counted_as="skipped")
                         else:
                             _submit_write(
-                                store, f"mark-meta:{chunk['id']}", lambda chunk=chunk: _mark_meta_research(store, chunk)
+                                store,
+                                f"mark-meta:{chunk['id']}",
+                                lambda chunk=chunk: _mark_meta_research(store, chunk),
+                                yield_after=rate_per_second > 0,
                             )
                         result.skipped += 1
                         continue
@@ -1090,6 +1108,7 @@ def enrich_realtime(
                             store,
                             f"apply-enrichment:{chunk['id']}",
                             lambda chunk=chunk, data=data: _apply_enrichment(store, chunk, data),
+                            yield_after=rate_per_second > 0,
                         )
                     result.enriched += 1
         finally:
