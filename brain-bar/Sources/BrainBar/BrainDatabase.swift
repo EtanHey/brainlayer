@@ -22,7 +22,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let previewExpression = """
         trim(substr(replace(replace(replace(coalesce(nullif(summary, ''), content), char(10), ' '), char(13), ' '), char(9), ' '), 1, 220))
     """
-    private static let ftsColumns = "content, summary, tags, resolved_query, chunk_id UNINDEXED"
+    private static let ftsColumns = "content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED"
     private static let ftsOptions = "prefix='2 3 4', tokenize='unicode61 remove_diacritics 2'"
     private static let trigramFTSOptions = "tokenize='trigram'"
     private static let synchronousTrigramBackfillChunkLimit = 10_000
@@ -385,6 +385,9 @@ final class BrainDatabase: @unchecked Sendable {
                     tag_confidence REAL,
                     summary TEXT,
                     preview_text TEXT,
+                    resolved_query TEXT,
+                    key_facts TEXT,
+                    resolved_queries TEXT,
                     importance REAL DEFAULT 5,
                     intent TEXT,
                     enriched_at TEXT,
@@ -558,6 +561,7 @@ final class BrainDatabase: @unchecked Sendable {
         try ensureKGEntityColumns()
         try ensureKGRelationColumns()
         try ensureKGEntityAliasTable()
+        try rebuildFTSTableIfNeeded()
         try rebuildTrigramFTSTableIfNeeded()
     }
 
@@ -2259,6 +2263,15 @@ final class BrainDatabase: @unchecked Sendable {
         if !existingColumns.contains("preview_text") {
             try execute("ALTER TABLE chunks ADD COLUMN preview_text TEXT")
         }
+        if !existingColumns.contains("resolved_query") {
+            try execute("ALTER TABLE chunks ADD COLUMN resolved_query TEXT")
+        }
+        if !existingColumns.contains("key_facts") {
+            try execute("ALTER TABLE chunks ADD COLUMN key_facts TEXT")
+        }
+        if !existingColumns.contains("resolved_queries") {
+            try execute("ALTER TABLE chunks ADD COLUMN resolved_queries TEXT")
+        }
         if !existingColumns.contains("source") {
             try execute("ALTER TABLE chunks ADD COLUMN source TEXT DEFAULT 'claude_code'")
         }
@@ -2502,17 +2515,22 @@ final class BrainDatabase: @unchecked Sendable {
                 \(Self.ftsOptions)
             )
         """)
-        try execute("DELETE FROM chunks_fts")
-        try execute("""
-            INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-            SELECT content, summary, tags, NULL, id FROM chunks
-        """)
+        let ftsCount = try countRows(in: "chunks_fts")
+        let chunkCount = try countRows(in: "chunks")
+        let needsBackfill = needsRebuild || ftsCount != chunkCount
+        if needsBackfill {
+            try execute("DELETE FROM chunks_fts")
+            try execute("""
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
+            """)
+        }
 
         try execute("DROP TRIGGER IF EXISTS chunks_fts_insert")
         try execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.key_facts, new.resolved_queries, new.id);
             END
         """)
 
@@ -2525,15 +2543,22 @@ final class BrainDatabase: @unchecked Sendable {
 
         try execute("DROP TRIGGER IF EXISTS chunks_fts_update")
         try execute("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_update
+            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
                 DELETE FROM chunks_fts WHERE chunk_id = old.id;
-                INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.key_facts, new.resolved_queries, new.id);
             END
         """)
     }
 
     private func rebuildTrigramFTSTable() throws {
+        if try trigramFTSTableNeedsRebuild() {
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_delete")
+            try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
+            try execute("DROP TABLE IF EXISTS chunks_fts_trigram")
+        }
         try ensureTrigramFTSSchemaAndTriggers()
         try execute("DELETE FROM chunks_fts_trigram")
         try backfillTrigramFTSTable()
@@ -2550,8 +2575,8 @@ final class BrainDatabase: @unchecked Sendable {
         try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_insert")
         try execute("""
             CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_insert AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.key_facts, new.resolved_queries, new.id);
             END
         """)
 
@@ -2564,18 +2589,19 @@ final class BrainDatabase: @unchecked Sendable {
 
         try execute("DROP TRIGGER IF EXISTS chunks_fts_trigram_update")
         try execute("""
-            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update AFTER UPDATE ON chunks BEGIN
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_trigram_update
+            AFTER UPDATE OF content, summary, tags, resolved_query, key_facts, resolved_queries ON chunks BEGIN
                 DELETE FROM chunks_fts_trigram WHERE chunk_id = old.id;
-                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
-                VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (new.content, new.summary, new.tags, new.resolved_query, new.key_facts, new.resolved_queries, new.id);
             END
         """)
     }
 
     private func backfillTrigramFTSTable() throws {
         try execute("""
-            INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
-            SELECT content, summary, tags, NULL, id FROM chunks
+            INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
         """)
     }
 
@@ -2624,8 +2650,8 @@ final class BrainDatabase: @unchecked Sendable {
                 )
                 try executeUpdate(
                     """
-                    INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, chunk_id)
-                    SELECT content, summary, tags, NULL, id
+                    INSERT INTO chunks_fts_trigram(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                    SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id
                     FROM chunks
                     WHERE rowid > ? AND rowid <= ?
                     ORDER BY rowid ASC
@@ -2767,7 +2793,9 @@ final class BrainDatabase: @unchecked Sendable {
         let normalizedSQL = sql.lowercased()
         let schemaIsValid = normalizedSQL.contains("tokenize='trigram'") &&
             normalizedSQL.contains("summary") &&
-            normalizedSQL.contains("resolved_query")
+            normalizedSQL.contains("resolved_query") &&
+            normalizedSQL.contains("key_facts") &&
+            normalizedSQL.contains("resolved_queries")
 
         let chunkCount = try countRows(in: "chunks")
         let trigramCount = try countRows(in: "chunks_fts_trigram")
@@ -2776,7 +2804,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func countRows(in tableName: String) throws -> Int {
         guard let db else { throw DBError.notOpen }
-        let allowedTables = ["chunks", "chunks_fts_trigram"]
+        let allowedTables = ["chunks", "chunks_fts", "chunks_fts_trigram"]
         guard allowedTables.contains(tableName) else { throw DBError.exec(SQLITE_ERROR, "invalid count table") }
 
         var stmt: OpaquePointer?
@@ -2794,7 +2822,20 @@ final class BrainDatabase: @unchecked Sendable {
         return !normalizedSQL.contains("prefix='2 3 4'") ||
             !normalizedSQL.contains("tokenize='unicode61 remove_diacritics 2'") ||
             !normalizedSQL.contains("summary") ||
-            !normalizedSQL.contains("resolved_query")
+            !normalizedSQL.contains("resolved_query") ||
+            !normalizedSQL.contains("key_facts") ||
+            !normalizedSQL.contains("resolved_queries")
+    }
+
+    private func trigramFTSTableNeedsRebuild() throws -> Bool {
+        guard let db else { throw DBError.notOpen }
+        guard let sql = try sqliteMasterSQL(name: "chunks_fts_trigram", on: db) else { return false }
+        let normalizedSQL = sql.lowercased()
+        return !normalizedSQL.contains("tokenize='trigram'") ||
+            !normalizedSQL.contains("summary") ||
+            !normalizedSQL.contains("resolved_query") ||
+            !normalizedSQL.contains("key_facts") ||
+            !normalizedSQL.contains("resolved_queries")
     }
 
     private func backfillPreviewText() throws {

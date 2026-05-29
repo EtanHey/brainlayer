@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import apsw
@@ -10,6 +11,12 @@ import sqlite_vec
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _column_names(column_list: str) -> list[str]:
+    return [column.strip().split()[0] for column in column_list.split(",")]
 
 
 def _connect_with_vec(db_path: Path) -> apsw.Connection:
@@ -120,6 +127,18 @@ def _checksum_rows(db_path: Path) -> tuple[str, int]:
         count += 1
     conn.close()
     return digest.hexdigest(), count
+
+
+def test_swift_and_python_chunks_fts_column_contracts_match():
+    swift_source = (REPO_ROOT / "brain-bar/Sources/BrainBar/BrainDatabase.swift").read_text()
+    python_source = (REPO_ROOT / "src/brainlayer/vector_store.py").read_text()
+
+    swift_match = re.search(r'private static let ftsColumns = "([^"]+)"', swift_source)
+    python_match = re.search(r'_FTS5_COLUMNS = "([^"]+)"', python_source)
+
+    assert swift_match is not None
+    assert python_match is not None
+    assert _column_names(swift_match.group(1)) == _column_names(python_match.group(1))
 
 
 def test_atomic_brick_columns_are_added_to_existing_chunks_schema(tmp_path):
