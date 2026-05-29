@@ -13,13 +13,12 @@ from unittest.mock import MagicMock, patch
 import apsw
 import pytest
 
+from brainlayer.drain import drain_once
 from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
 )
-from brainlayer.drain import drain_once
-from brainlayer.queue_io import enqueue_enrichment_updates
-from brainlayer.queue_io import enqueue_hook_chunk
+from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -435,10 +434,7 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
     conn.close()
 
     queue_file = enqueue_enrichment_updates(
-        [
-            {"chunk_id": f"c{idx}", "content_hash": f"h{idx}", "enrichment": {"summary": f"s{idx}"}}
-            for idx in range(4)
-        ],
+        [{"chunk_id": f"c{idx}", "content_hash": f"h{idx}", "enrichment": {"summary": f"s{idx}"}} for idx in range(4)],
         queue_dir=queue_dir,
     )
 
