@@ -222,9 +222,46 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(rootSource.contains("Quit BrainBar"))
         XCTAssertTrue(processSource.contains("static func restart"))
         XCTAssertTrue(processSource.contains("static func quit"))
+        XCTAssertTrue(processSource.contains("BrainBarRestartHandoff.markRestartingProcess()"))
+        XCTAssertTrue(processSource.contains("BrainBarRestartHandoff.clear()"))
         XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
         XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
+    }
+
+    func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
+        let markerPath = NSTemporaryDirectory() + "brainbar-restart-handoff-\(UUID().uuidString)"
+        let timestamp = Date(timeIntervalSince1970: 1_000)
+
+        BrainBarRestartHandoff.markRestartingProcess(pid: 42, at: timestamp, path: markerPath)
+
+        XCTAssertFalse(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 41,
+                now: Date(timeIntervalSince1970: 1_005),
+                path: markerPath
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerPath))
+        XCTAssertTrue(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 42,
+                now: Date(timeIntervalSince1970: 1_005),
+                path: markerPath
+            )
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
+
+        BrainBarRestartHandoff.markRestartingProcess(pid: 42, at: timestamp, path: markerPath)
+        XCTAssertFalse(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 42,
+                now: Date(timeIntervalSince1970: 1_020),
+                maxAge: 10,
+                path: markerPath
+            )
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
     }
 
     func testLegacyPopoverSparklineUsesLastFetchAnchor() throws {

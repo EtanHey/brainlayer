@@ -1,4 +1,5 @@
 import AppKit
+import BrainBarLifecycle
 import Foundation
 
 @MainActor
@@ -13,6 +14,8 @@ enum BrainBarProcessControl {
             return
         }
 
+        BrainBarRestartHandoff.markRestartingProcess()
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = ["-n", bundlePath]
@@ -23,6 +26,7 @@ enum BrainBarProcessControl {
                 NSApplication.shared.terminate(nil)
             }
         } catch {
+            BrainBarRestartHandoff.clear()
             NSLog("[BrainBar] Failed to schedule restart: %@", String(describing: error))
         }
     }

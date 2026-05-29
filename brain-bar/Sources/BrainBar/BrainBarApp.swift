@@ -46,9 +46,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let otherInstances = runningInstances.filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         if let existingInstance = otherInstances.first {
-            NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", existingInstance.processIdentifier)
-            NSApp.terminate(nil)
-            return
+            if BrainBarRestartHandoff.consumeIfMatches(existingPID: existingInstance.processIdentifier) {
+                NSLog("[BrainBar] Continuing launch for requested restart while PID %d exits.", existingInstance.processIdentifier)
+            } else {
+                NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", existingInstance.processIdentifier)
+                NSApp.terminate(nil)
+                return
+            }
         }
 
         NSApp.setActivationPolicy(.accessory)
