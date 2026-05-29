@@ -4,58 +4,21 @@ import XCTest
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        UserDefaults.standard.removeObject(forKey: "NSWindow Frame BrainBarPanel")
-    }
-
-    override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: "NSWindow Frame BrainBarPanel")
-        super.tearDown()
-    }
-
-    func testDashboardPanelUsesResizableUtilityWindowContract() {
+    func testDashboardPopoverUsesTransientMenuBarMountedContract() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-        let panel = controller.panelForTesting
 
-        XCTAssertTrue(panel.styleMask.contains(.titled))
-        XCTAssertTrue(panel.styleMask.contains(.resizable))
-        XCTAssertTrue(panel.styleMask.contains(.closable))
-        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
-        XCTAssertEqual(panel.frameAutosaveName, "BrainBarPanel")
+        XCTAssertEqual(controller.popoverForTesting.behavior, .transient)
         XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
-        XCTAssertEqual(panel.minSize, NSSize(width: 760, height: 560))
-        XCTAssertGreaterThanOrEqual(panel.frame.width, panel.minSize.width)
-        XCTAssertGreaterThanOrEqual(panel.frame.height, panel.minSize.height)
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertTrue(panel.canBecomeMain)
+        XCTAssertEqual(BrainBarDashboardPanelController.minSize, NSSize(width: 760, height: 560))
+        XCTAssertEqual(controller.popoverForTesting.contentSize, NSSize(width: 900, height: 640))
+        XCTAssertNotNil(controller.popoverForTesting.contentViewController)
     }
 
-    func testDashboardPanelOnlyNeedsInitialPositioningWithoutAutosavedFrame() {
-        XCTAssertTrue(
-            BrainBarDashboardPanelController.needsInitialPositioning(
-                defaults: UserDefaults.standard
-            )
-        )
-
-        UserDefaults.standard.set("saved frame", forKey: "NSWindow Frame BrainBarPanel")
-
-        XCTAssertFalse(
-            BrainBarDashboardPanelController.needsInitialPositioning(
-                defaults: UserDefaults.standard
-            )
-        )
-    }
-
-    func testDashboardPanelToggleControlsVisibility() {
+    func testDashboardPopoverDoesNotOpenWithoutStatusItemAnchor() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
 
         controller.toggle()
-        XCTAssertTrue(controller.panelForTesting.isVisible)
-        XCTAssertFalse(controller.needsInitialPositioningForTesting)
-
-        controller.toggle()
-        XCTAssertFalse(controller.panelForTesting.isVisible)
+        XCTAssertFalse(controller.isShownForTesting)
     }
 
     func testDashboardLayoutReflowsAtMinFloorAndLargeWindowSizes() {
@@ -88,23 +51,35 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
             try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
         }
 
-        // Match launch order: AppDelegate creates the hidden NSPanel before the
-        // async database install lands, then the user opens BrainBar later.
-        _ = controller.panelForTesting.contentViewController?.view
+        // Match launch order: AppDelegate creates the hidden popover content before
+        // the async database install lands, then the user opens BrainBar later.
+        _ = controller.contentViewControllerForTesting.view
         runMainRunLoop()
 
         runtime.install(collector: collector, injectionStore: nil, database: db)
         runMainRunLoop()
 
-        controller.show()
+        let anchorWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 32, height: 24),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
+        anchorWindow.contentView = anchorView
+        anchorWindow.orderFront(nil)
+        defer { anchorWindow.orderOut(nil) }
+
+        controller.show(anchoredTo: anchorView)
         runMainRunLoop()
 
-        let field = controller.panelForTesting.contentView.flatMap {
-            findSubview(ofType: KeyHandlingCommandBarField.self, in: $0)
-        }
+        let field = findSubview(
+            ofType: KeyHandlingCommandBarField.self,
+            in: controller.contentViewControllerForTesting.view
+        )
         XCTAssertNotNil(
             field,
-            "Command bar should create its ready text field when runtime.database was installed before the panel became visible."
+            "Command bar should create its ready text field when runtime.database was installed before the popover became visible."
         )
     }
 

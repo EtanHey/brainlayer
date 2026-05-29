@@ -27,11 +27,11 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     func toggle(_ sender: Any?) {
-        dashboardPanelController.toggle()
+        dashboardPanelController.toggle(anchoredTo: statusItemForTesting.button)
     }
 
     func show(_ sender: Any?) {
-        dashboardPanelController.show()
+        dashboardPanelController.show(anchoredTo: statusItemForTesting.button)
     }
 
     func close(_ sender: Any?) {
@@ -104,21 +104,6 @@ final class BrainBarStatusPopoverController: NSObject {
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(
-                title: "Run as App Window",
-                action: #selector(runAsAppWindow(_:)),
-                keyEquivalent: ""
-            )
-        )
-        contextMenuForTesting.addItem(
-            NSMenuItem(
-                title: "Run as Menu Item Daemon",
-                action: #selector(runAsMenuItemDaemon(_:)),
-                keyEquivalent: ""
-            )
-        )
-        contextMenuForTesting.addItem(NSMenuItem.separator())
-        contextMenuForTesting.addItem(
-            NSMenuItem(
                 title: "Quit BrainBar",
                 action: #selector(quitBrainBar(_:)),
                 keyEquivalent: ""
@@ -136,15 +121,5 @@ final class BrainBarStatusPopoverController: NSObject {
 
     @objc private func quitBrainBar(_ sender: Any?) {
         BrainBarProcessControl.quit()
-    }
-
-    @objc private func runAsAppWindow(_ sender: Any?) {
-        BrainBarLaunchMode.setPreferred(.appWindow)
-        BrainBarProcessControl.restart()
-    }
-
-    @objc private func runAsMenuItemDaemon(_ sender: Any?) {
-        BrainBarLaunchMode.setPreferred(.menuItemDaemon)
-        BrainBarProcessControl.restart()
     }
 }

@@ -15,10 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var uiHeartbeatTimer: DispatchSourceTimer?
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
 
-    private var launchMode: BrainBarLaunchMode {
-        runtime.launchMode
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
             self,
@@ -72,11 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         collector.start()
         configureQuickCaptureHotkey()
-        if launchMode == .appWindow {
-            NSApp.setActivationPolicy(.regular)
-            dashboardPanel.show()
-        }
-        NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: launchMode))
+        NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: runtime.launchMode))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -182,15 +174,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Unified Window
+    // MARK: - Menu Bar Popover
 
     @objc
     private func toggleWindowSurface(_ sender: Any?) {
-        dashboardPanel?.toggle()
+        if let statusPopoverController {
+            statusPopoverController.toggle(sender)
+        }
     }
 
     func showDashboardPanel() {
-        dashboardPanel?.show()
+        if let statusPopoverController {
+            statusPopoverController.show(nil)
+        }
     }
 
     // MARK: - Quick Capture / Search

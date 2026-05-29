@@ -2,13 +2,13 @@ import XCTest
 @testable import BrainBarDaemon
 
 final class BrainBarDaemonLaunchModeTests: XCTestCase {
-    func testDaemonLaunchModeParsesUnifiedEnvironmentValues() {
+    func testDaemonLaunchModeAlwaysResolvesToSingleMenuItemMode() {
         XCTAssertEqual(
             BrainBarLaunchMode.resolve(
                 environment: ["BRAINBAR_LAUNCH_MODE": "app-window"],
                 defaults: FakeKeyValueStore()
             ),
-            .appWindow
+            .menuItemDaemon
         )
 
         XCTAssertEqual(
@@ -20,13 +20,13 @@ final class BrainBarDaemonLaunchModeTests: XCTestCase {
         )
     }
 
-    func testDaemonLaunchModePreservesLegacyEnvironmentCompatibility() {
+    func testDaemonLaunchModeIgnoresLegacyAppWindowEscapeHatch() {
         XCTAssertEqual(
             BrainBarLaunchMode.resolve(
                 environment: ["BRAINBAR_APP_WINDOW": "1"],
                 defaults: FakeKeyValueStore()
             ),
-            .appWindow
+            .menuItemDaemon
         )
 
         XCTAssertEqual(
@@ -38,7 +38,7 @@ final class BrainBarDaemonLaunchModeTests: XCTestCase {
         )
     }
 
-    func testDaemonLaunchModeEnvironmentOverridesPersistedPreference() {
+    func testDaemonLaunchModeEnvironmentCannotOverrideToRemovedAppWindowMode() {
         let store = FakeKeyValueStore()
         BrainBarLaunchMode.setPreferred(.menuItemDaemon, defaults: store)
 
@@ -47,14 +47,14 @@ final class BrainBarDaemonLaunchModeTests: XCTestCase {
                 environment: ["BRAINBAR_LAUNCH_MODE": "APPWINDOW"],
                 defaults: store
             ),
-            .appWindow
+            .menuItemDaemon
         )
     }
 
-    func testDaemonLaunchModeReadsPersistedPreferenceWrittenByUI() {
+    func testDaemonLaunchModeIgnoresRemovedPersistedAppWindowPreference() {
         let store = FakeKeyValueStore()
 
-        BrainBarLaunchMode.setPreferred(.appWindow, defaults: store)
+        store.setString("app-window", forKey: BrainBarLaunchMode.defaultsKey)
 
         XCTAssertEqual(
             store.string(forKey: BrainBarLaunchMode.defaultsKey),
@@ -62,7 +62,7 @@ final class BrainBarDaemonLaunchModeTests: XCTestCase {
         )
         XCTAssertEqual(
             BrainBarLaunchMode.resolve(environment: [:], defaults: store),
-            .appWindow
+            .menuItemDaemon
         )
     }
 
