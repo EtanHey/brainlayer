@@ -37,7 +37,8 @@ BrainBar starts the helper from `HybridSearchHelperClient` with `-m brainlayer.b
 Environment contract:
 
 - `BRAINBAR_PYTHON` overrides Python executable resolution at `brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift:53`.
-- `BRAINLAYER_REPO_ROOT` is used to resolve `<repo>/src` for `PYTHONPATH` at `brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift:78`.
+- Installed package imports are the default. `BRAINLAYER_REPO_ROOT` is used to resolve `<repo>/src` for `PYTHONPATH` only when `BRAINLAYER_SOURCE_FALLBACK=1`, preserving a deliberate source-tree fallback at `brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift:78`.
+- `PYTHONPATH` priority: if `PYTHONPATH` is already set in the environment, it is preserved and takes precedence over the fallback and default installed-package behavior. Order of precedence: (1) existing `PYTHONPATH`, (2) `BRAINLAYER_SOURCE_FALLBACK=1` resolves `<repo>/src`, (3) nil uses the installed package.
 - `PYTHONPATH` is passed through or set before launch at `brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift:213`.
 - `BRAINLAYER_DB` is set to the selected DB path at `brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift:214` and by the helper at `src/brainlayer/brainbar_hybrid_helper.py:258`.
 

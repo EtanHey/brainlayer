@@ -2,74 +2,63 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key>
-    <string>com.brainlayer.enrichment</string>
-
-    <!-- Realtime Gemini enrichment LaunchAgent.
-         Runs one long-lived supervisor; launchd restarts only on process crash. -->
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>__BRAINLAYER_BIN__</string>
-        <string>enrich</string>
-        <string>--mode</string>
-        <string>realtime</string>
-        <string>--supervisor</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>__BRAINLAYER_DIR__</string>
-
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/brainlayer/enrichment.out.log</string>
-    <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/brainlayer/enrichment.err.log</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
-        <key>PYTHONPATH</key>
-        <string>__BRAINLAYER_DIR__/src</string>
-        <key>BRAINLAYER_STALL_TIMEOUT</key>
-        <string>300</string>
-        <key>BRAINLAYER_ARBITRATED</key>
-        <string>1</string>
-        <key>BRAINLAYER_ENRICH_RATE</key>
-        <string>15</string>
-        <key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-        <string>4</string>
-        <key>BRAINLAYER_MAX_COMMIT_BATCH</key>
-        <string>25</string>
-        <key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
-        <string>flex</string>
-        <key>GOOGLE_API_KEY</key>
-        <string>__GOOGLE_API_KEY__</string>
-    </dict>
-
-    <key>RunAtLoad</key>
-    <true/>
-    <key>ThrottleInterval</key>
-    <integer>60</integer>
-
-    <key>Nice</key>
-    <integer>10</integer>
-
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>ExitTimeOut</key>
-    <integer>120</integer>
-    <key>LowPriorityIO</key>
-    <false/>
-    <key>SoftResourceLimits</key>
-    <dict>
-        <key>NumberOfFiles</key>
-        <integer>4096</integer>
-    </dict>
+	<key>Label</key>
+	<string>com.brainlayer.enrichment</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BRAINLAYER_BIN__</string>
+		<string>enrich</string>
+		<string>--mode</string>
+		<string>realtime</string>
+		<string>--supervisor</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__BRAINLAYER_DIR__</string>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/enrichment.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/enrichment.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>BRAINLAYER_STALL_TIMEOUT</key>
+		<string>300</string>
+		<key>BRAINLAYER_ARBITRATED</key>
+		<string>1</string>
+		<key>BRAINLAYER_ENRICH_RATE</key>
+		<string>15</string>
+		<key>BRAINLAYER_ENRICH_CONCURRENCY</key>
+		<string>4</string>
+		<key>BRAINLAYER_MAX_COMMIT_BATCH</key>
+		<string>25</string>
+		<key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
+		<string>flex</string>
+		<key>GOOGLE_API_KEY</key>
+		<string>__GOOGLE_API_KEY__</string>
+		<key>BRAINLAYER_REPO_ROOT</key>
+		<string>__BRAINLAYER_DIR__</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ExitTimeOut</key>
+	<integer>120</integer>
+	<key>LowPriorityIO</key>
+	<false/>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>4096</integer>
+	</dict>
 </dict>
 </plist>

@@ -44,6 +44,12 @@ def _assert_no_dev_src_path_in_canonical_env(path: Path, plist: dict) -> None:
         assert not DEV_SRC_PATH_RE.search(str(value)), f"{path}: {key} leaks a concrete dev /src path"
 
 
+def _assert_uses_installed_package_not_source_path(path: Path, plist: dict) -> None:
+    env = plist.get("EnvironmentVariables") or {}
+    assert "PYTHONPATH" not in env, f"{path}: canonical LaunchAgent must import installed brainlayer package"
+    assert env.get("BRAINLAYER_REPO_ROOT") == "__BRAINLAYER_DIR__"
+
+
 def test_active_daemon_launchd_hygiene_matrix():
     cases = {
         "brain-bar/bundle/com.brainlayer.brainbar.plist": {
@@ -114,3 +120,8 @@ def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
 
     for path in plist_paths:
         _assert_no_dev_src_path_in_canonical_env(path, plistlib.loads(path.read_bytes()))
+
+
+def test_script_launchagents_use_installed_package_imports():
+    for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
+        _assert_uses_installed_package_not_source_path(path, plistlib.loads(path.read_bytes()))

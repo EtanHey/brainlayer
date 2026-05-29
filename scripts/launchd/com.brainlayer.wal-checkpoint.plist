@@ -2,54 +2,49 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key>
-    <string>com.brainlayer.wal-checkpoint</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>__BRAINLAYER_BIN__</string>
-        <string>wal-checkpoint</string>
-        <string>--mode</string>
-        <string>TRUNCATE</string>
-    </array>
-
-    <!-- Run weekly on Sunday at 4am -->
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Weekday</key>
-        <integer>0</integer>
-        <key>Hour</key>
-        <integer>4</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
-
-    <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/brainlayer/wal-checkpoint.out.log</string>
-    <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/brainlayer/wal-checkpoint.err.log</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
-    </dict>
-
-    <key>Nice</key>
-    <integer>15</integer>
-
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>ExitTimeOut</key>
-    <integer>120</integer>
-    <key>LowPriorityIO</key>
-    <true/>
-    <key>SoftResourceLimits</key>
-    <dict>
-        <key>NumberOfFiles</key>
-        <integer>4096</integer>
-    </dict>
+	<key>Label</key>
+	<string>com.brainlayer.wal-checkpoint</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BRAINLAYER_BIN__</string>
+		<string>wal-checkpoint</string>
+		<string>--mode</string>
+		<string>TRUNCATE</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>0</integer>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/wal-checkpoint.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/wal-checkpoint.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>BRAINLAYER_REPO_ROOT</key>
+		<string>__BRAINLAYER_DIR__</string>
+	</dict>
+	<key>Nice</key>
+	<integer>15</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ExitTimeOut</key>
+	<integer>120</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>4096</integer>
+	</dict>
 </dict>
 </plist>
