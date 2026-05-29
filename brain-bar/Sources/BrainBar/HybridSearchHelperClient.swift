@@ -79,6 +79,9 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         if let existing = environment["PYTHONPATH"], !existing.isEmpty {
             return existing
         }
+        guard environment["BRAINLAYER_SOURCE_FALLBACK"] == "1" else {
+            return nil
+        }
         guard let repoRoot = normalizedRepoRoot(environment: environment) else {
             return nil
         }

@@ -339,9 +339,6 @@ configure_launchagent_environment() {
     "$PLIST_BUDDY" -c "Delete :EnvironmentVariables" "$plist_path" >/dev/null 2>&1 || true
     "$PLIST_BUDDY" -c "Add :EnvironmentVariables dict" "$plist_path"
     "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINLAYER_REPO_ROOT string \"$repo_root\"" "$plist_path"
-    if [ -d "$repo_root/src" ]; then
-        "$PLIST_BUDDY" -c "Add :EnvironmentVariables:PYTHONPATH string \"$repo_root/src\"" "$plist_path"
-    fi
     if [ -x "$python_path" ]; then
         "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINBAR_PYTHON string \"$python_path\"" "$plist_path"
     fi

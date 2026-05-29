@@ -137,7 +137,10 @@ search_handler._brain_search = fake_brain_search
             client.sendall(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
             payload = b""
             while not payload.endswith(b"\n"):
-                payload += client.recv(65536)
+                chunk = client.recv(65536)
+                if not chunk:
+                    raise AssertionError("helper closed socket before sending a full NDJSON line")
+                payload += chunk
 
         response = json.loads(payload.decode("utf-8"))
     finally:
