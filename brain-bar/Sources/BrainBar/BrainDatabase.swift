@@ -651,6 +651,9 @@ final class BrainDatabase: @unchecked Sendable {
         tags: String = "[]"
     ) throws {
         guard let db else { throw DBError.notOpen }
+        if (try? tableExists("chunks")) != true {
+            try ensureSchema()
+        }
         let sql = """
             INSERT OR REPLACE INTO chunks (
                 id, content, metadata, source_file, project, content_type,
