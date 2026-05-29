@@ -26,18 +26,25 @@ final class BrainBarWindowStateTests: XCTestCase {
         )
     }
 
-    func testLaunchModeCanBeChosenByEnvironmentOrStoredPreference() {
+    func testLaunchModeIgnoresRemovedAppWindowEnvironmentAndPreference() {
         XCTAssertEqual(
             BrainBarLaunchMode.resolve(
                 environment: ["BRAINBAR_LAUNCH_MODE": "app-window"],
                 defaults: FakeKeyValueStore()
             ),
-            .appWindow
+            .menuItemDaemon
+        )
+        XCTAssertEqual(
+            BrainBarLaunchMode.resolve(
+                environment: ["BRAINBAR_APP_WINDOW": "1"],
+                defaults: FakeKeyValueStore()
+            ),
+            .menuItemDaemon
         )
 
         let store = FakeKeyValueStore()
-        BrainBarLaunchMode.setPreferred(.appWindow, defaults: store)
-        XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:], defaults: store), .appWindow)
+        store.setString("app-window", forKey: BrainBarLaunchMode.defaultsKey)
+        XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:], defaults: store), .menuItemDaemon)
 
         BrainBarLaunchMode.setPreferred(.menuItemDaemon, defaults: store)
         XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:], defaults: store), .menuItemDaemon)

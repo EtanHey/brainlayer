@@ -25,6 +25,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertEqual(panel.frameAutosaveName, "BrainBarPanel")
         XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
         XCTAssertEqual(panel.minSize, NSSize(width: 760, height: 560))
+        XCTAssertTrue(panel.hidesOnDeactivate)
         XCTAssertGreaterThanOrEqual(panel.frame.width, panel.minSize.width)
         XCTAssertGreaterThanOrEqual(panel.frame.height, panel.minSize.height)
         XCTAssertTrue(panel.canBecomeKey)
@@ -56,6 +57,22 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
 
         controller.toggle()
         XCTAssertFalse(controller.panelForTesting.isVisible)
+    }
+
+    func testDashboardPanelAnchorsBelowStatusItemWithoutChangingResponsiveSize() {
+        let currentFrame = NSRect(x: 200, y: 120, width: 900, height: 640)
+        let statusItemFrame = NSRect(x: 1_120, y: 872, width: 28, height: 22)
+        let visibleFrame = NSRect(x: 0, y: 0, width: 1_200, height: 872)
+
+        let anchoredFrame = BrainBarDashboardPanelController.anchoredFrameBelowStatusItem(
+            currentFrame: currentFrame,
+            statusItemFrame: statusItemFrame,
+            visibleScreenFrames: [visibleFrame]
+        )
+
+        XCTAssertEqual(anchoredFrame.size, currentFrame.size)
+        XCTAssertEqual(anchoredFrame.maxX, visibleFrame.maxX)
+        XCTAssertEqual(anchoredFrame.maxY, statusItemFrame.minY - BrainBarWindowPlacement.menuBarIconGap)
     }
 
     func testDashboardLayoutReflowsAtMinFloorAndLargeWindowSizes() {

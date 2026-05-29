@@ -20,7 +20,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertEqual(windowController.panelForTesting.minSize, NSSize(width: 760, height: 560))
     }
 
-    func testStatusItemContextMenuContainsRestartModeChoicesAndQuit() {
+    func testStatusItemContextMenuContainsNoLaunchModeSwitchingChoices() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
@@ -32,8 +32,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let itemTitles = controller.contextMenuForTesting.items.map(\.title)
 
         XCTAssertTrue(itemTitles.contains("Restart BrainBar"))
-        XCTAssertTrue(itemTitles.contains("Run as App Window"))
-        XCTAssertTrue(itemTitles.contains("Run as Menu Item Daemon"))
+        XCTAssertFalse(itemTitles.contains("Run as App Window"))
+        XCTAssertFalse(itemTitles.contains("Run as Menu Item Daemon"))
         XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
     }
 

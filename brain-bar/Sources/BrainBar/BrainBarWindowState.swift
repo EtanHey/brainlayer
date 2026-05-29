@@ -3,40 +3,20 @@ import CoreGraphics
 import Foundation
 
 enum BrainBarLaunchMode: Equatable {
-    case appWindow
     case menuItemDaemon
 
     static let defaultsKey = "brainbar.launchMode"
 
     var rawValue: String {
-        switch self {
-        case .appWindow:
-            return "app-window"
-        case .menuItemDaemon:
-            return "menu-item-daemon"
-        }
+        "menu-item-daemon"
     }
 
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         defaults: BrainBarKeyValueStoring = UserDefaults.standard
     ) -> BrainBarLaunchMode {
-        if let mode = parse(environment["BRAINBAR_LAUNCH_MODE"]) {
-            return mode
-        }
-
-        if isEnabled(environment["BRAINBAR_APP_WINDOW"]) {
-            return .appWindow
-        }
-
-        if isEnabled(environment["BRAINBAR_LEGACY"]) {
-            return .menuItemDaemon
-        }
-
-        if let mode = parse(defaults.string(forKey: defaultsKey)) {
-            return mode
-        }
-
+        _ = environment
+        _ = defaults
         return .menuItemDaemon
     }
 
@@ -45,30 +25,6 @@ enum BrainBarLaunchMode: Equatable {
         defaults: BrainBarKeyValueStoring = UserDefaults.standard
     ) {
         defaults.setString(mode.rawValue, forKey: defaultsKey)
-    }
-
-    private static func parse(_ value: String?) -> BrainBarLaunchMode? {
-        let rawValue = value?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        switch rawValue {
-        case "app", "app-window", "appwindow", "window":
-            return .appWindow
-        case "daemon", "menu", "menu-item", "menu-item-daemon", "menuitemdaemon", "status", "status-item":
-            return .menuItemDaemon
-        default:
-            return nil
-        }
-    }
-
-    private static func isEnabled(_ value: String?) -> Bool {
-        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes", "on":
-            return true
-        default:
-            return false
-        }
     }
 }
 

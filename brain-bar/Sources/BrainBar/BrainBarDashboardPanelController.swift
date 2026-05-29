@@ -3,12 +3,18 @@ import SwiftUI
 
 final class BrainBarDashboardPanel: NSPanel {
     var onEscape: (() -> Void)?
+    var onResignKey: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
     override func cancelOperation(_ sender: Any?) {
         onEscape?()
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        onResignKey?()
     }
 }
 
@@ -42,19 +48,20 @@ final class BrainBarDashboardPanelController {
         defaults.object(forKey: BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey) == nil
     }
 
-    func toggle() {
+    func toggle(anchoredTo anchorView: NSView? = nil) {
         if panel.isVisible {
             dismiss()
         } else {
-            show()
+            show(anchoredTo: anchorView)
         }
     }
 
-    func show() {
+    func show(anchoredTo anchorView: NSView? = nil) {
         if !panel.isVisible, needsInitialPositioning {
             centerPanel()
             needsInitialPositioning = false
         }
+        positionPanel(anchoredTo: anchorView)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
@@ -75,10 +82,14 @@ final class BrainBarDashboardPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.minSize = Self.minSize
         panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = true
         panel.backgroundColor = .windowBackgroundColor
         panel.isOpaque = true
         panel.hasShadow = true
         panel.onEscape = { [weak self] in
+            self?.dismiss()
+        }
+        panel.onResignKey = { [weak self] in
             self?.dismiss()
         }
         let hostingController = NSHostingController(
@@ -108,5 +119,42 @@ final class BrainBarDashboardPanelController {
 
     private func centerPanel() {
         panel.setFrame(initialFrame(), display: true)
+    }
+
+    private func positionPanel(anchoredTo anchorView: NSView?) {
+        guard let statusItemFrame = anchorView.flatMap(Self.statusItemFrame) else { return }
+        let anchoredFrame = Self.anchoredFrameBelowStatusItem(
+            currentFrame: panel.frame,
+            statusItemFrame: statusItemFrame
+        )
+        panel.setFrame(anchoredFrame, display: true)
+    }
+
+    private static func statusItemFrame(anchorView: NSView) -> NSRect? {
+        guard let window = anchorView.window else { return nil }
+        let frameInWindow = anchorView.convert(anchorView.bounds, to: nil)
+        return window.convertToScreen(frameInWindow)
+    }
+
+    static func anchoredFrameBelowStatusItem(
+        currentFrame: NSRect,
+        statusItemFrame: NSRect,
+        visibleScreenFrames: [NSRect] = NSScreen.screens.map(\.visibleFrame),
+        gap: CGFloat = BrainBarWindowPlacement.menuBarIconGap
+    ) -> NSRect {
+        let visibleFrame = visibleScreenFrames.first(where: { $0.intersects(statusItemFrame) })
+            ?? visibleScreenFrames.first
+            ?? currentFrame
+        let targetX = statusItemFrame.midX - currentFrame.width / 2
+        let targetY = statusItemFrame.minY - gap - currentFrame.height
+        let maxOriginX = max(visibleFrame.minX, visibleFrame.maxX - currentFrame.width)
+        let maxOriginY = visibleFrame.maxY - gap - currentFrame.height
+
+        return NSRect(
+            x: min(max(targetX, visibleFrame.minX), maxOriginX),
+            y: min(max(targetY, visibleFrame.minY), maxOriginY),
+            width: currentFrame.width,
+            height: currentFrame.height
+        )
     }
 }
