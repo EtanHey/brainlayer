@@ -237,11 +237,15 @@ final class StatusPopoverView: NSViewController {
         metricsRow.distribution = .fillEqually
         metricsRow.spacing = 10
 
-        let quitButton = NSButton(title: "Quit", target: self, action: #selector(quitBrainBar))
+        let restartButton = NSButton(title: "Restart BrainBar", target: self, action: #selector(restartBrainBar))
+        restartButton.bezelStyle = .rounded
+        restartButton.controlSize = .small
+
+        let quitButton = NSButton(title: "Quit BrainBar", target: self, action: #selector(quitBrainBar))
         quitButton.bezelStyle = .rounded
         quitButton.controlSize = .small
 
-        let footerRow = NSStackView(views: [daemonLabel, NSView(), hotkeyLabel, quitButton])
+        let footerRow = NSStackView(views: [daemonLabel, NSView(), hotkeyLabel, restartButton, quitButton])
         footerRow.orientation = .horizontal
         footerRow.alignment = .centerY
         footerRow.spacing = 10
@@ -383,7 +387,8 @@ final class StatusPopoverView: NSViewController {
             presentation: SparklineChartPresentation(
                 label: "Recent activity sparkline",
                 values: summary.enrichment.values,
-                activityWindowMinutes: summary.enrichment.activityWindowMinutes
+                activityWindowMinutes: summary.enrichment.activityWindowMinutes,
+                fetchedAt: collector.lastDataFetchedAt ?? Date()
             ),
             accentColor: collector.state.color
         )
@@ -406,7 +411,12 @@ final class StatusPopoverView: NSViewController {
 
     @objc
     private func quitBrainBar() {
-        NSApplication.shared.terminate(nil)
+        BrainBarProcessControl.quit()
+    }
+
+    @objc
+    private func restartBrainBar() {
+        BrainBarProcessControl.restart()
     }
 
     // MARK: - Helpers

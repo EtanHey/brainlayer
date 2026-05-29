@@ -1,8 +1,41 @@
 import AppKit
 import XCTest
 @testable import BrainBar
+@testable import BrainBarLifecycle
 
 final class DashboardTests: XCTestCase {
+    private final class WatchdogTestState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observedPIDs: [pid_t] = [111]
+        private var signals: [(pid_t, Int32)] = []
+        private var relaunchCount = 0
+
+        func processProvider() -> [pid_t] {
+            lock.lock()
+            defer { lock.unlock() }
+            return observedPIDs
+        }
+
+        func recordTermination(pid: pid_t, signal: Int32) {
+            lock.lock()
+            signals.append((pid, signal))
+            observedPIDs = [222]
+            lock.unlock()
+        }
+
+        func recordRelaunch() {
+            lock.lock()
+            relaunchCount += 1
+            lock.unlock()
+        }
+
+        func snapshot() -> (signals: [(pid_t, Int32)], relaunchCount: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (signals, relaunchCount)
+        }
+    }
+
     private var db: BrainDatabase!
     private var tempDBPath: String!
 
@@ -99,6 +132,39 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 4)
     }
 
+    func testDashboardStatsBucketsEventsOnFixedWallClockWindowEndingNow() throws {
+        let fixtures: [(id: String, offset: TimeInterval)] = [
+            ("dash-wallclock-52m", -52 * 60),
+            ("dash-wallclock-27m-a", -27 * 60),
+            ("dash-wallclock-27m-b", -27 * 60),
+            ("dash-wallclock-4m", -4 * 60),
+            ("dash-wallclock-outside", -65 * 60),
+        ]
+        for fixture in fixtures {
+            try db.insertChunk(
+                id: fixture.id,
+                content: "Wall-clock enrichment fixture \(fixture.id)",
+                sessionId: "dashboard",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+            db.exec("""
+                UPDATE chunks
+                SET created_at = datetime('now', '\(Int(fixture.offset)) seconds'),
+                    enriched_at = datetime('now', '\(Int(fixture.offset)) seconds'),
+                    enrich_status = 'success'
+                WHERE id = '\(fixture.id)'
+            """)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 1)
+        XCTAssertEqual(stats.recentEnrichmentCount, 4)
+    }
+
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
@@ -138,6 +204,159 @@ final class DashboardTests: XCTestCase {
             source.contains("database.close()"),
             "Removing the retained DB handle also removes the matching close call."
         )
+    }
+
+    func testDashboardShowsLoadingUntilFirstStatsFetchCompletes() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
+        XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
+    }
+
+    func testBrainBarHeaderExposesRestartAndQuitControls() throws {
+        let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let processSource = try brainBarSourceFile("Sources/BrainBar/BrainBarProcessControl.swift")
+
+        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu()"))
+        XCTAssertTrue(rootSource.contains("Restart BrainBar"))
+        XCTAssertTrue(rootSource.contains("Quit BrainBar"))
+        XCTAssertTrue(processSource.contains("static func restart"))
+        XCTAssertTrue(processSource.contains("static func quit"))
+        XCTAssertTrue(processSource.contains("BrainBarRestartHandoff.markRestartingProcess()"))
+        XCTAssertTrue(processSource.contains("BrainBarRestartHandoff.clear()"))
+        XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
+        XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
+        XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
+    }
+
+    func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
+        let markerPath = NSTemporaryDirectory() + "brainbar-restart-handoff-\(UUID().uuidString)"
+        let timestamp = Date(timeIntervalSince1970: 1_000)
+
+        BrainBarRestartHandoff.markRestartingProcess(pid: 42, at: timestamp, path: markerPath)
+
+        XCTAssertFalse(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 41,
+                now: Date(timeIntervalSince1970: 1_005),
+                path: markerPath
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerPath))
+        XCTAssertTrue(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 42,
+                now: Date(timeIntervalSince1970: 1_005),
+                path: markerPath
+            )
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
+
+        BrainBarRestartHandoff.markRestartingProcess(pid: 42, at: timestamp, path: markerPath)
+        XCTAssertFalse(
+            BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: 42,
+                now: Date(timeIntervalSince1970: 1_020),
+                maxAge: 10,
+                path: markerPath
+            )
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
+    }
+
+    func testLegacyPopoverSparklineUsesLastFetchAnchor() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatusPopoverView.swift")
+
+        XCTAssertTrue(source.contains("fetchedAt: collector.lastDataFetchedAt ?? Date()"))
+    }
+
+    func testBrainBarLifecycleWatchdogWiresUIAndDaemonHeartbeats() throws {
+        let watchdog = try brainBarSourceFile("Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift")
+        let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
+        let server = try brainBarSourceFile("Sources/BrainBar/BrainBarServer.swift")
+        let daemon = try brainBarSourceFile("Sources/BrainBarDaemon/BrainBarDaemonMain.swift")
+
+        XCTAssertTrue(watchdog.contains("brainbar-ui.heartbeat"))
+        XCTAssertTrue(watchdog.contains("brainbar-daemon.heartbeat"))
+        XCTAssertTrue(watchdog.contains("SIGTERM"))
+        XCTAssertTrue(watchdog.contains("SIGKILL"))
+        XCTAssertTrue(watchdog.contains("launchctl"))
+        XCTAssertTrue(app.contains("startUIHeartbeat"))
+        XCTAssertTrue(app.contains("startDaemonWatchdog"))
+        XCTAssertTrue(server.contains("startDaemonHeartbeatOnQueue"))
+        XCTAssertTrue(daemon.contains("startUIWatchdog"))
+    }
+
+    func testWatchdogPolicyMarksMissingAndStaleHeartbeatUnhealthy() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-watchdog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let missing = directory.appendingPathComponent("missing.heartbeat").path
+        XCTAssertTrue(BrainBarLifecycleWatchdog.isHeartbeatStale(atPath: missing, now: Date(), timeout: 5))
+
+        let heartbeat = directory.appendingPathComponent("present.heartbeat")
+        FileManager.default.createFile(atPath: heartbeat.path, contents: Data("ok".utf8))
+        let staleDate = Date(timeIntervalSince1970: 100)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: heartbeat.path)
+
+        XCTAssertTrue(
+            BrainBarLifecycleWatchdog.isHeartbeatStale(
+                atPath: heartbeat.path,
+                now: staleDate.addingTimeInterval(6),
+                timeout: 5
+            )
+        )
+        XCTAssertFalse(
+            BrainBarLifecycleWatchdog.isHeartbeatStale(
+                atPath: heartbeat.path,
+                now: staleDate.addingTimeInterval(4),
+                timeout: 5
+            )
+        )
+    }
+
+    func testWatchdogTerminatesOnlyOriginallyStaleProcessBeforeRelaunch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-watchdog-restart-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let heartbeatPath = directory.appendingPathComponent("missing.heartbeat").path
+        let relaunched = expectation(description: "watchdog relaunches stale process")
+        let state = WatchdogTestState()
+
+        let watchdog = BrainBarLifecycleWatchdog(
+            configuration: .init(
+                watchedName: "TestBrainBar",
+                heartbeatPath: heartbeatPath,
+                staleTimeout: 0.01,
+                checkInterval: 0.01,
+                terminateGraceInterval: 0.02,
+                relaunchCommand: .openBundle("/tmp/TestBrainBar.app")
+            ),
+            processProvider: {
+                state.processProvider()
+            },
+            terminateProcess: { pid, signal in
+                state.recordTermination(pid: pid, signal: signal)
+            },
+            relaunch: { _ in
+                state.recordRelaunch()
+                relaunched.fulfill()
+            }
+        )
+
+        watchdog.start()
+        wait(for: [relaunched], timeout: 1)
+        watchdog.stop()
+
+        let snapshot = state.snapshot()
+
+        XCTAssertEqual(snapshot.signals.map(\.0), [111, 111])
+        XCTAssertEqual(snapshot.signals.map(\.1), [SIGTERM, SIGKILL])
+        XCTAssertEqual(snapshot.relaunchCount, 1)
     }
 
     func testDashboardLatestEventFallbackUsesSQLMaxWithoutTextOrderingLimit() throws {
@@ -345,6 +564,27 @@ final class DashboardTests: XCTestCase {
             presentation.bucketLabel(for: 11),
             "\(Self.shortTime(now.addingTimeInterval(-bucketWidth)))-\(Self.shortTime(now))"
         )
+    }
+
+    func testSparklineChartPresentationAnchorsPointsToWallClockBucketMidpoints() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let presentation = SparklineChartPresentation(
+            label: "Recent enrichment sparkline",
+            values: [0, 3, 0, 1],
+            activityWindowMinutes: 20,
+            fetchedAt: now
+        )
+
+        XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
+        XCTAssertEqual(presentation.points.map(\.value), [0, 3, 0, 1])
+        XCTAssertEqual(presentation.points.map(\.timestamp), [
+            now.addingTimeInterval(-17.5 * 60),
+            now.addingTimeInterval(-12.5 * 60),
+            now.addingTimeInterval(-7.5 * 60),
+            now.addingTimeInterval(-2.5 * 60),
+        ])
+        XCTAssertEqual(presentation.xAxisDomainStart, now.addingTimeInterval(-20 * 60))
+        XCTAssertEqual(presentation.xAxisDomainEnd, now)
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import BrainBarLifecycle
 import Combine
 import SwiftUI
 
@@ -22,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
     private var menuBarWindowObservers: [NSObjectProtocol] = []
     private var menuBarWindowSyncTask: Task<Void, Never>?
+    private var uiHeartbeatTimer: DispatchSourceTimer?
+    private var daemonWatchdog: BrainBarLifecycleWatchdog?
     private var wasVisibleAccessibilityWindow = false
 
     private var launchMode: BrainBarLaunchMode {
@@ -43,12 +46,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let otherInstances = runningInstances.filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         if let existingInstance = otherInstances.first {
-            NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", existingInstance.processIdentifier)
-            NSApp.terminate(nil)
-            return
+            if BrainBarRestartHandoff.consumeIfMatches(existingPID: existingInstance.processIdentifier) {
+                NSLog("[BrainBar] Continuing launch for requested restart while PID %d exits.", existingInstance.processIdentifier)
+            } else {
+                NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", existingInstance.processIdentifier)
+                NSApp.terminate(nil)
+                return
+            }
         }
 
         NSApp.setActivationPolicy(.accessory)
+        startUIHeartbeat()
+        startDaemonWatchdog()
         configureRuntimeCallbacks()
 
         runtime.hotkeyStatus.onFallbackChange = { [weak self] in
@@ -88,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusPopoverController = nil
         menuBarWindowSyncTask?.cancel()
         menuBarWindowSyncTask = nil
+        uiHeartbeatTimer?.cancel()
+        uiHeartbeatTimer = nil
+        daemonWatchdog?.stop()
+        daemonWatchdog = nil
         hotkeyFileWatcher?.cancel()
         quickCaptureHotkey?.stop()
         collector?.stop()
@@ -131,6 +144,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtime.onQuickCaptureRequested = { [weak self] in
             self?.showQuickCapturePanel()
         }
+    }
+
+    private func startUIHeartbeat() {
+        let timer = BrainBarLifecycleWatchdog.makeHeartbeatTimer(
+            path: BrainBarLifecycleWatchdog.uiHeartbeatPath,
+            interval: 5,
+            queue: .main
+        )
+        uiHeartbeatTimer = timer
+    }
+
+    private func startDaemonWatchdog() {
+        let watchdog = BrainBarLifecycleWatchdog.makeDaemonWatchdog()
+        daemonWatchdog = watchdog
+        watchdog.start()
     }
 
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {

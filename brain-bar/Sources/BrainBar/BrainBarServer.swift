@@ -6,6 +6,7 @@
 // - JSON-RPC router
 // - SQLite database (single-writer)
 
+import BrainBarLifecycle
 import Foundation
 
 final class BrainBarServer: @unchecked Sendable {
@@ -109,6 +110,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var lastDatabaseRetryDelayMillis: UInt64?
     private var databaseOpenInProgress = false
     private var instanceLock: BrainBarInstanceLock?
+    private var daemonHeartbeatTimer: DispatchSourceTimer?
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
     var onStartRejected: (@Sendable (String) -> Void)?
     /// Maximum EAGAIN retries before disconnecting a stalled client.
@@ -210,6 +212,7 @@ final class BrainBarServer: @unchecked Sendable {
             onStartRejected?("failed to acquire single-instance lock \(instanceLockPath): \(error)")
             return
         }
+        startDaemonHeartbeatOnQueue()
 
         let ownedHybridClient: HybridSearchHelperClient?
         let hybridClient: HybridSearchClientProtocol?
@@ -657,6 +660,8 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func cleanup() {
+        daemonHeartbeatTimer?.cancel()
+        daemonHeartbeatTimer = nil
         databaseRetryWorkItem?.cancel()
         databaseRetryWorkItem = nil
         listenSource?.cancel()
@@ -680,6 +685,16 @@ final class BrainBarServer: @unchecked Sendable {
         instanceLock?.release()
         instanceLock = nil
         NSLog("[BrainBar] Server stopped")
+    }
+
+    private func startDaemonHeartbeatOnQueue() {
+        daemonHeartbeatTimer?.cancel()
+        let timer = BrainBarLifecycleWatchdog.makeHeartbeatTimer(
+            path: BrainBarLifecycleWatchdog.daemonHeartbeatPath,
+            interval: 5,
+            queue: queue
+        )
+        daemonHeartbeatTimer = timer
     }
 
     private func handleSubscribeTool(fd: Int32, id: Any?, arguments: [String: Any]) -> [String: Any] {
