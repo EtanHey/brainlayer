@@ -232,16 +232,19 @@ final class KGViewModel: ObservableObject {
     }
 
     func updateCanvasSize(_ size: CGSize) {
-        guard size != .zero else { return }
+        guard size.width > 0, size.height > 0 else { return }
         guard layoutCanvasSize != size else {
             canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
             return
         }
+        let isFirstResolvedCanvasSize = layoutCanvasSize == nil
         layoutCanvasSize = size
         canvasCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         guard !nodes.isEmpty else { return }
-        nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size, mode: layoutMode)
-        pinOwnerEntityIfPresent()
+        if isFirstResolvedCanvasSize {
+            nodes = KGAtlasLayout.seededNodes(nodes, canvasSize: size, mode: layoutMode)
+            pinOwnerEntityIfPresent()
+        }
     }
 
     func setLayoutMode(_ mode: KGAtlasMode) {
@@ -260,7 +263,8 @@ final class KGViewModel: ObservableObject {
         selectedNodeId = id
 
         guard let id else {
-            isLayoutPinned = false
+            // Selection changes only affect emphasis; keep the pinned layout in place.
+            freezeLayout()
             selectedEntity = nil
             resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
             selectedConversation = nil
@@ -268,7 +272,8 @@ final class KGViewModel: ObservableObject {
         }
 
         guard let database, let node = nodeById(id) else {
-            isLayoutPinned = false
+            // Missing nodes should clear selection without restarting the simulation.
+            freezeLayout()
             selectedEntity = nil
             resetSelectedEntitySidebarState(isLoading: false, loadFailed: false)
             selectedConversation = nil
