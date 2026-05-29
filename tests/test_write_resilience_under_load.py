@@ -120,18 +120,22 @@ def test_all_stores_land_under_concurrent_writer(tmp_path, small_wal_env):
     VectorStore(db).close()
 
     stop = threading.Event()
+    acquired = {"n": 0}
 
     def contender() -> None:
+        # Hold the write lock in short bursts to contend with the main thread's
+        # stores. BEGIN IMMEDIATE acquires the write lock immediately — no INSERT
+        # is needed (and a schema-specific INSERT here is brittle: chunks has
+        # NOT NULL columns like source_file, so a partial INSERT silently fails
+        # and exercises no contention at all). The held lock forces the main
+        # thread's store_memory to wait on its busy_timeout.
         c = apsw.Connection(str(db))
         c.setbusytimeout(5_000)
         cur = c.cursor()
         while not stop.is_set():
             try:
                 cur.execute("BEGIN IMMEDIATE")
-                cur.execute(
-                    "INSERT INTO chunks (id, content, metadata) VALUES (?, ?, ?)",
-                    (f"contend-{time.time_ns()}", "x" * 2000, "{}"),
-                )
+                acquired["n"] += 1
                 time.sleep(0.02)
                 cur.execute("COMMIT")
             except apsw.Error:
@@ -153,6 +157,7 @@ def test_all_stores_land_under_concurrent_writer(tmp_path, small_wal_env):
         stop.set()
         t.join(timeout=5)
 
+    assert acquired["n"] > 0, "contender never took the write lock — no contention was exercised"
     assert len(ids) == n, f"only {len(ids)}/{n} stores returned an id under contention"
     reader = apsw.Connection(str(db), flags=apsw.SQLITE_OPEN_READONLY)
     try:
