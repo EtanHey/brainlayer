@@ -14,17 +14,20 @@ final class BrainBarDashboardPanel: NSPanel {
 
 @MainActor
 final class BrainBarDashboardPanelController {
-    static let autosaveName = "BrainBarPanel"
-    static let defaultSize = NSSize(width: 1_348, height: 1_078)
-    static let minSize = NSSize(width: 760, height: 560)
+    static let autosaveName = BrainBarWindowFrameAutosave.dashboardPanelName
+    static let defaultSize = NSSize(width: BrainBarWindowPlacement.defaultSize.width, height: BrainBarWindowPlacement.defaultSize.height)
+    static let minSize = NSSize(width: BrainBarWindowPlacement.minimumSize.width, height: BrainBarWindowPlacement.minimumSize.height)
 
     let panelForTesting: BrainBarDashboardPanel
+    var needsInitialPositioningForTesting: Bool { needsInitialPositioning }
 
     private let panel: BrainBarDashboardPanel
     private let runtime: BrainBarRuntime
+    private var needsInitialPositioning: Bool
 
     init(runtime: BrainBarRuntime) {
         self.runtime = runtime
+        needsInitialPositioning = Self.needsInitialPositioning()
         panel = BrainBarDashboardPanel(
             contentRect: NSRect(origin: .zero, size: Self.defaultSize),
             styleMask: [.titled, .resizable, .closable, .nonactivatingPanel, .fullSizeContentView],
@@ -33,6 +36,10 @@ final class BrainBarDashboardPanelController {
         )
         panelForTesting = panel
         configurePanel()
+    }
+
+    static func needsInitialPositioning(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey) == nil
     }
 
     func toggle() {
@@ -44,8 +51,9 @@ final class BrainBarDashboardPanelController {
     }
 
     func show() {
-        if !panel.isVisible, panel.frame.origin == .zero {
+        if !panel.isVisible, needsInitialPositioning {
             centerPanel()
+            needsInitialPositioning = false
         }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -78,8 +86,10 @@ final class BrainBarDashboardPanelController {
         )
         hostingController.view.autoresizingMask = [.width, .height]
         panel.contentViewController = hostingController
-        panel.setFrame(initialFrame(), display: false)
         panel.setFrameAutosaveName(Self.autosaveName)
+        if needsInitialPositioning {
+            panel.setFrame(initialFrame(), display: false)
+        }
     }
 
     private func initialFrame() -> NSRect {

@@ -19,14 +19,14 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
     }
 
     func testRuntimeStartsWithDatabaseAndInjectionStoreNil() {
-        let runtime = BrainBarRuntime(launchMode: .menuBarWindow)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         XCTAssertNil(runtime.database)
         XCTAssertNil(runtime.injectionStore)
         XCTAssertNil(runtime.collector)
     }
 
     func testWireRuntimePopulatesDatabaseAndLazilyLoadsInjectionStore() {
-        let runtime = BrainBarRuntime(launchMode: .menuBarWindow)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
@@ -65,7 +65,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
             "Test precondition: DB file must NOT exist at start"
         )
 
-        let runtime = BrainBarRuntime(launchMode: .menuBarWindow)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,

@@ -4,15 +4,37 @@ import XCTest
 
 @MainActor
 final class BrainBarStatusPopoverControllerTests: XCTestCase {
-    func testControllerPrewarmsVariableLengthStatusItemPopover() {
-        let runtime = BrainBarRuntime(launchMode: .menuBarWindow)
-        let controller = BrainBarStatusPopoverController(runtime: runtime)
+    func testControllerWiresVariableLengthStatusItemToUnifiedWindow() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime,
+            dashboardPanelController: windowController
+        )
         defer { controller.stop() }
 
         XCTAssertEqual(controller.statusItemForTesting.length, NSStatusItem.variableLength)
-        XCTAssertEqual(controller.popoverForTesting.behavior, NSPopover.Behavior.transient)
-        XCTAssertNotNil(controller.popoverForTesting.contentViewController)
-        XCTAssertTrue(controller.popoverForTesting.contentViewController?.isViewLoaded == true)
+        XCTAssertEqual(controller.statusItemForTesting.button?.target as? BrainBarStatusPopoverController, controller)
+        XCTAssertTrue(BrainBarStatusPopoverController.statusItemEventMask.contains(.rightMouseUp))
+        XCTAssertNotNil(windowController.panelForTesting.contentViewController)
+        XCTAssertEqual(windowController.panelForTesting.minSize, NSSize(width: 760, height: 560))
+    }
+
+    func testStatusItemContextMenuContainsRestartModeChoicesAndQuit() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime,
+            dashboardPanelController: windowController
+        )
+        defer { controller.stop() }
+
+        let itemTitles = controller.contextMenuForTesting.items.map(\.title)
+
+        XCTAssertTrue(itemTitles.contains("Restart BrainBar"))
+        XCTAssertTrue(itemTitles.contains("Run as App Window"))
+        XCTAssertTrue(itemTitles.contains("Run as Menu Item Daemon"))
+        XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
     }
 
     func testAppSupportCollectorFactoryWiresBrainBusEvents() {

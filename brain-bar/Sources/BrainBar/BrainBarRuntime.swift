@@ -43,9 +43,6 @@ final class BrainBarRuntime: ObservableObject {
     }
 
     func handleToggleRequest() {
-        if launchMode == .menuBarWindow, windowCoordinator.toggleVisibility() {
-            return
-        }
         onToggleRequested?()
     }
 
