@@ -3,19 +3,71 @@ import CoreGraphics
 import Foundation
 
 enum BrainBarLaunchMode: Equatable {
-    case menuBarWindow
-    case legacyStatusItem
+    case appWindow
+    case menuItemDaemon
 
-    static func resolve(environment: [String: String] = ProcessInfo.processInfo.environment) -> BrainBarLaunchMode {
-        let rawValue = environment["BRAINBAR_LEGACY"]?
+    static let defaultsKey = "brainbar.launchMode"
+
+    var rawValue: String {
+        switch self {
+        case .appWindow:
+            return "app-window"
+        case .menuItemDaemon:
+            return "menu-item-daemon"
+        }
+    }
+
+    static func resolve(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        defaults: BrainBarKeyValueStoring = UserDefaults.standard
+    ) -> BrainBarLaunchMode {
+        if let mode = parse(environment["BRAINBAR_LAUNCH_MODE"]) {
+            return mode
+        }
+
+        if isEnabled(environment["BRAINBAR_APP_WINDOW"]) {
+            return .appWindow
+        }
+
+        if isEnabled(environment["BRAINBAR_LEGACY"]) {
+            return .menuItemDaemon
+        }
+
+        if let mode = parse(defaults.string(forKey: defaultsKey)) {
+            return mode
+        }
+
+        return .menuItemDaemon
+    }
+
+    static func setPreferred(
+        _ mode: BrainBarLaunchMode,
+        defaults: BrainBarKeyValueStoring = UserDefaults.standard
+    ) {
+        defaults.setString(mode.rawValue, forKey: defaultsKey)
+    }
+
+    private static func parse(_ value: String?) -> BrainBarLaunchMode? {
+        let rawValue = value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
         switch rawValue {
-        case "1", "true", "yes", "on":
-            return .legacyStatusItem
+        case "app", "app-window", "appwindow", "window":
+            return .appWindow
+        case "daemon", "menu", "menu-item", "menu-item-daemon", "menuitemdaemon", "status", "status-item":
+            return .menuItemDaemon
         default:
-            return .menuBarWindow
+            return nil
+        }
+    }
+
+    private static func isEnabled(_ value: String?) -> Bool {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
         }
     }
 }
@@ -126,8 +178,16 @@ struct BrainBarWindowFrameStore {
     }
 }
 
+enum BrainBarWindowFrameAutosave {
+    static let dashboardPanelName = "BrainBarPanel"
+    static let dashboardPanelDefaultsKey = "NSWindow Frame \(dashboardPanelName)"
+}
+
 enum BrainBarWindowPlacement {
     static let defaultSize = CGSize(width: 900, height: 640)
+    // Floor is intentionally the old menu-bar popover size: below 760x560 the
+    // dashboard data density stops fitting cleanly, so AppKit should clamp.
+    static let minimumSize = CGSize(width: 760, height: 560)
     static let menuBarClearance: CGFloat = 18
     static let menuBarIconGap: CGFloat = 4
 

@@ -4,23 +4,47 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarWindowStateTests: XCTestCase {
-    func testLaunchModeDefaultsToMenuBarWindow() {
-        XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:]), .menuBarWindow)
+    func testLaunchModeDefaultsToMenuItemDaemon() {
         XCTAssertEqual(
-            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "0"]),
-            .menuBarWindow
+            BrainBarLaunchMode.resolve(environment: [:], defaults: FakeKeyValueStore()),
+            .menuItemDaemon
+        )
+        XCTAssertEqual(
+            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "0"], defaults: FakeKeyValueStore()),
+            .menuItemDaemon
         )
     }
 
-    func testLaunchModeUsesLegacyModeWhenEscapeHatchEnabled() {
+    func testLaunchModeUsesMenuItemDaemonWhenLegacyEscapeHatchEnabled() {
         XCTAssertEqual(
-            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "1"]),
-            .legacyStatusItem
+            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "1"], defaults: FakeKeyValueStore()),
+            .menuItemDaemon
         )
         XCTAssertEqual(
-            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "true"]),
-            .legacyStatusItem
+            BrainBarLaunchMode.resolve(environment: ["BRAINBAR_LEGACY": "true"], defaults: FakeKeyValueStore()),
+            .menuItemDaemon
         )
+    }
+
+    func testLaunchModeCanBeChosenByEnvironmentOrStoredPreference() {
+        XCTAssertEqual(
+            BrainBarLaunchMode.resolve(
+                environment: ["BRAINBAR_LAUNCH_MODE": "app-window"],
+                defaults: FakeKeyValueStore()
+            ),
+            .appWindow
+        )
+
+        let store = FakeKeyValueStore()
+        BrainBarLaunchMode.setPreferred(.appWindow, defaults: store)
+        XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:], defaults: store), .appWindow)
+
+        BrainBarLaunchMode.setPreferred(.menuItemDaemon, defaults: store)
+        XCTAssertEqual(BrainBarLaunchMode.resolve(environment: [:], defaults: store), .menuItemDaemon)
+    }
+
+    func testLaunchModeAutosaveFrameDefaultsKeyMatchesAppKitWindowName() {
+        XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
     func testBrainBarTabsCoverDashboardInjectionsAndGraph() {
@@ -303,7 +327,7 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             searchRequests,
             2,
-            "Runtime.showSearchPanel must fire onSearchRequested so AppDelegate can route to the integrated command bar (menuBarWindow mode) or the legacy floating panel (legacyStatusItem mode)."
+            "Runtime.showSearchPanel must fire onSearchRequested so AppDelegate can route to the integrated command bar in the unified window."
         )
     }
 
@@ -318,7 +342,7 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             captureRequests,
             1,
-            "Runtime.showQuickCapturePanel must fire onQuickCaptureRequested so AppDelegate can route to the integrated command bar (menuBarWindow mode) or the legacy floating panel (legacyStatusItem mode)."
+            "Runtime.showQuickCapturePanel must fire onQuickCaptureRequested so AppDelegate can route to the integrated command bar in the unified window."
         )
     }
 }
