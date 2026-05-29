@@ -48,6 +48,12 @@ CANONICAL_RELATION_TYPES = {
 
 # Known agent names (beyond *Claude/*Golem pattern matching)
 _KNOWN_AGENTS = {"ralph", "claudegolem"}
+
+# Name-specific canonical type overrides applied before inferred/source types.
+# Extend this for stable product/project aliases that should always collapse to
+# one KG type. Keys are normalized names and values are entity_type strings,
+# e.g. "claudecode": "tool"; overrides are case-insensitive after
+# normalization and take precedence over model output.
 _CANONICAL_ENTITY_TYPES_BY_NAME = {
     "claudecode": "tool",
 }

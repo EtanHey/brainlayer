@@ -31,4 +31,18 @@ final class InjectionContinuationTests: XCTestCase {
             "claude --continue"
         )
     }
+
+    func testResumeCommandRejectsInvalidConversationID() {
+        XCTAssertEqual(
+            InjectionContinuation.resumeCommand(conversationID: "not-a-uuid", fallbackSessionID: "sess-42"),
+            "claude --resume sess-42"
+        )
+    }
+
+    func testResumeCommandRejectsUnsafeFallbackSessionID() {
+        XCTAssertEqual(
+            InjectionContinuation.resumeCommand(conversationID: "not-a-uuid", fallbackSessionID: "sess-42; rm -rf /"),
+            "claude --continue"
+        )
+    }
 }

@@ -156,6 +156,25 @@ final class InjectionPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.bursts.map(\.topicOrSource), ["auth refactor", "db migration"])
     }
 
+    func testBurstAggregationKeepsConversationIDOnlyWhenEventsAgree() {
+        let now = isoDate("2026-04-18T10:00:00Z")
+        let conversationID = "3679128a-f371-445f-82ba-b3946e2f20b6"
+        let matchingEvents = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:59:00Z", query: "auth refactor", chunkIDs: ["chunk-1"], tokenCount: 10, claudeConversationID: conversationID),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:58:00Z", query: "auth refactor", chunkIDs: ["chunk-2"], tokenCount: 10, claudeConversationID: conversationID),
+        ]
+        let mixedEvents = [
+            makeEvent(id: 3, sessionID: "sess-b", timestamp: "2026-04-18T09:57:00Z", query: "db migration", chunkIDs: ["chunk-3"], tokenCount: 10, claudeConversationID: conversationID),
+            makeEvent(id: 4, sessionID: "sess-b", timestamp: "2026-04-18T09:56:00Z", query: "db migration", chunkIDs: ["chunk-4"], tokenCount: 10, claudeConversationID: "84e23cfb-dce6-4f93-a2be-41f74ae5f43f"),
+        ]
+
+        let matchingSnapshot = InjectionPresentation.snapshot(events: matchingEvents, filterText: "", now: now)
+        let mixedSnapshot = InjectionPresentation.snapshot(events: mixedEvents, filterText: "", now: now)
+
+        XCTAssertEqual(matchingSnapshot.bursts[0].claudeConversationID, conversationID)
+        XCTAssertEqual(mixedSnapshot.bursts[0].claudeConversationID, "")
+    }
+
     func testBurstAggregationUsesTriggerQueryWhenChunkSummariesDiffer() {
         let now = isoDate("2026-04-18T10:00:00Z")
         let events = [
@@ -341,7 +360,8 @@ final class InjectionPresentationTests: XCTestCase {
         query: String,
         chunkIDs: [String],
         tokenCount: Int,
-        chunks: [InjectionChunk] = []
+        chunks: [InjectionChunk] = [],
+        claudeConversationID: String = ""
     ) -> InjectionEvent {
         InjectionEvent(
             id: id,
@@ -350,7 +370,8 @@ final class InjectionPresentationTests: XCTestCase {
             query: query,
             chunkIDs: chunkIDs,
             tokenCount: tokenCount,
-            chunks: chunks
+            chunks: chunks,
+            claudeConversationID: claudeConversationID
         )
     }
 

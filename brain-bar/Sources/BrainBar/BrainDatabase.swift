@@ -4736,7 +4736,7 @@ final class BrainDatabase: @unchecked Sendable {
                 return stem
             }
         }
-        return parts.first(where: isUUID)
+        return parts.reversed().first(where: isUUID)
     }
 
     private static func isUUID(_ value: String) -> Bool {

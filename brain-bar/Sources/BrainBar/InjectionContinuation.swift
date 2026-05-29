@@ -8,11 +8,14 @@ import Foundation
 enum InjectionContinuation {
     static func resumeCommand(conversationID: String, fallbackSessionID: String = "") -> String {
         let resumableID = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !resumableID.isEmpty {
+        if UUID(uuidString: resumableID) != nil {
             return "claude --resume \(resumableID)"
         }
         let fallback = fallbackSessionID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !fallback.isEmpty else { return "claude --continue" }
+        let safeCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        guard !fallback.isEmpty, fallback.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) else {
+            return "claude --continue"
+        }
         return "claude --resume \(fallback)"
     }
 }
