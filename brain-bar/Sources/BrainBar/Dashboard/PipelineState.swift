@@ -191,6 +191,8 @@ struct DashboardFlowLane: Sendable, Equatable {
     let volumeText: String
     let lastEventText: String
     let values: [Int]
+    let sparklineLabel: String
+    let latestBucketName: String
     let accentColor: NSColor
 }
 
@@ -291,21 +293,11 @@ struct DashboardFlowSummary: Sendable, Equatable {
             detail = "No writes or enrichments landed in \(windowLabel.lowercased())."
         }
 
-        let enrichmentStatusText: String
-        switch enrichmentStatus {
-        case .live:
-            enrichmentStatusText = "Enrichments live now"
-        case .draining:
-            enrichmentStatusText = "Recent enrichments are draining backlog"
-        case .queued:
-            enrichmentStatusText = "Backlog is queued without live enrichments"
-        case .recent:
-            enrichmentStatusText = "Recent enrichments in \(windowLabel.lowercased())"
-        case .idle:
-            enrichmentStatusText = "No recent enrichments"
-        case .unavailable:
-            enrichmentStatusText = "Unavailable"
-        }
+        let enrichmentStatusText = enrichmentStatusText(
+            status: enrichmentStatus,
+            stats: stats,
+            windowLabel: windowLabel
+        )
 
         return DashboardFlowSummary(
             headline: headline,
@@ -331,6 +323,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     now: now
                 ),
                 values: stats.recentActivityBuckets,
+                sparklineLabel: "Writes over \(windowLabel)",
+                latestBucketName: "latest write bucket",
                 accentColor: ingressColor
             ),
             queue: DashboardQueueSummary(
@@ -382,9 +376,53 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     now: now
                 ),
                 values: stats.recentEnrichmentBuckets,
+                sparklineLabel: "Enrichment completions over \(windowLabel)",
+                latestBucketName: "latest enrichment bucket",
                 accentColor: enrichmentColor
             )
         )
+    }
+
+    private static func enrichmentStatusText(
+        status: DashboardFlowLaneStatus,
+        stats: DashboardStats,
+        windowLabel: String
+    ) -> String {
+        if let burstText = enrichmentBurstText(stats: stats) {
+            return burstText
+        }
+
+        switch status {
+        case .live:
+            return "Enrichments live now"
+        case .draining:
+            return "Recent enrichments are draining backlog"
+        case .queued:
+            return "Backlog is queued without live enrichments"
+        case .recent:
+            return "Recent enrichments in \(windowLabel.lowercased())"
+        case .idle:
+            return "No recent enrichments"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+
+    private static func enrichmentBurstText(stats: DashboardStats) -> String? {
+        guard stats.pendingEnrichmentCount > 0,
+              let latestBucketCount = stats.recentEnrichmentBuckets.last,
+              latestBucketCount >= 25 else {
+            return nil
+        }
+
+        let earlierBucketTotal = stats.recentEnrichmentBuckets.dropLast().reduce(0, +)
+        guard latestBucketCount >= max(earlierBucketTotal * 2, 25) else {
+            return nil
+        }
+
+        let bucketMinutes = max(1, stats.activityWindowMinutes / max(stats.bucketCount, 1))
+        let bucketLabel = DashboardMetricFormatter.shortWindowLabel(minutes: bucketMinutes)
+        return "Backlog drain burst: \(latestBucketCount) enriched in latest \(bucketLabel)"
     }
 
     private static func storeQueueHealth(depth: Int, oldestAgeSeconds: Int?) -> DashboardStoreQueueHealth {

@@ -173,6 +173,31 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
     }
 
+    func testDashboardFlowSummaryLabelsRightEdgeEnrichmentBurstAsBacklogDrain() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 100_000,
+            enrichedChunkCount: 20_000,
+            pendingEnrichmentCount: 80_000,
+            enrichmentPercent: 20,
+            enrichmentRatePerMinute: 34.25,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 1],
+            recentEnrichmentBuckets: [0, 0, 0, 2_055],
+            activityWindowMinutes: 60,
+            bucketCount: 4,
+            liveWindowMinutes: 1,
+            lastEnrichedAt: now.addingTimeInterval(-10)
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
+
+        XCTAssertEqual(summary.enrichment.sparklineLabel, "Enrichment completions over Last 1h")
+        XCTAssertEqual(summary.enrichment.latestBucketName, "latest enrichment bucket")
+        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2055 enriched in latest 15m")
+        XCTAssertEqual(summary.enrichment.volumeText, "2055 in 1h")
+    }
+
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
