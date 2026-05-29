@@ -17,6 +17,7 @@ let package = Package(
         .executableTarget(
             name: "BrainBar",
             dependencies: [
+                "BrainBarLifecycle",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/BrainBar",
@@ -27,6 +28,7 @@ let package = Package(
         .executableTarget(
             name: "BrainBarDaemon",
             dependencies: [
+                "BrainBarLifecycle",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/BrainBarDaemon",
@@ -34,10 +36,15 @@ let package = Package(
                 .linkedLibrary("sqlite3"),
             ]
         ),
+        .target(
+            name: "BrainBarLifecycle",
+            path: "Sources/BrainBarLifecycle"
+        ),
         .testTarget(
             name: "BrainBarTests",
             dependencies: [
                 "BrainBar",
+                "BrainBarLifecycle",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Tests/BrainBarTests"

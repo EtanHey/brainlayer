@@ -1,8 +1,41 @@
 import AppKit
 import XCTest
 @testable import BrainBar
+@testable import BrainBarLifecycle
 
 final class DashboardTests: XCTestCase {
+    private final class WatchdogTestState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observedPIDs: [pid_t] = [111]
+        private var signals: [(pid_t, Int32)] = []
+        private var relaunchCount = 0
+
+        func processProvider() -> [pid_t] {
+            lock.lock()
+            defer { lock.unlock() }
+            return observedPIDs
+        }
+
+        func recordTermination(pid: pid_t, signal: Int32) {
+            lock.lock()
+            signals.append((pid, signal))
+            observedPIDs = [222]
+            lock.unlock()
+        }
+
+        func recordRelaunch() {
+            lock.lock()
+            relaunchCount += 1
+            lock.unlock()
+        }
+
+        func snapshot() -> (signals: [(pid_t, Int32)], relaunchCount: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (signals, relaunchCount)
+        }
+    }
+
     private var db: BrainDatabase!
     private var tempDBPath: String!
 
@@ -198,6 +231,95 @@ final class DashboardTests: XCTestCase {
         let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatusPopoverView.swift")
 
         XCTAssertTrue(source.contains("fetchedAt: collector.lastDataFetchedAt ?? Date()"))
+    }
+
+    func testBrainBarLifecycleWatchdogWiresUIAndDaemonHeartbeats() throws {
+        let watchdog = try brainBarSourceFile("Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift")
+        let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
+        let server = try brainBarSourceFile("Sources/BrainBar/BrainBarServer.swift")
+        let daemon = try brainBarSourceFile("Sources/BrainBarDaemon/BrainBarDaemonMain.swift")
+
+        XCTAssertTrue(watchdog.contains("brainbar-ui.heartbeat"))
+        XCTAssertTrue(watchdog.contains("brainbar-daemon.heartbeat"))
+        XCTAssertTrue(watchdog.contains("SIGTERM"))
+        XCTAssertTrue(watchdog.contains("SIGKILL"))
+        XCTAssertTrue(watchdog.contains("launchctl"))
+        XCTAssertTrue(app.contains("startUIHeartbeat"))
+        XCTAssertTrue(app.contains("startDaemonWatchdog"))
+        XCTAssertTrue(server.contains("startDaemonHeartbeatOnQueue"))
+        XCTAssertTrue(daemon.contains("startUIWatchdog"))
+    }
+
+    func testWatchdogPolicyMarksMissingAndStaleHeartbeatUnhealthy() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-watchdog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let missing = directory.appendingPathComponent("missing.heartbeat").path
+        XCTAssertTrue(BrainBarLifecycleWatchdog.isHeartbeatStale(atPath: missing, now: Date(), timeout: 5))
+
+        let heartbeat = directory.appendingPathComponent("present.heartbeat")
+        FileManager.default.createFile(atPath: heartbeat.path, contents: Data("ok".utf8))
+        let staleDate = Date(timeIntervalSince1970: 100)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: heartbeat.path)
+
+        XCTAssertTrue(
+            BrainBarLifecycleWatchdog.isHeartbeatStale(
+                atPath: heartbeat.path,
+                now: staleDate.addingTimeInterval(6),
+                timeout: 5
+            )
+        )
+        XCTAssertFalse(
+            BrainBarLifecycleWatchdog.isHeartbeatStale(
+                atPath: heartbeat.path,
+                now: staleDate.addingTimeInterval(4),
+                timeout: 5
+            )
+        )
+    }
+
+    func testWatchdogTerminatesOnlyOriginallyStaleProcessBeforeRelaunch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-watchdog-restart-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let heartbeatPath = directory.appendingPathComponent("missing.heartbeat").path
+        let relaunched = expectation(description: "watchdog relaunches stale process")
+        let state = WatchdogTestState()
+
+        let watchdog = BrainBarLifecycleWatchdog(
+            configuration: .init(
+                watchedName: "TestBrainBar",
+                heartbeatPath: heartbeatPath,
+                staleTimeout: 0.01,
+                checkInterval: 0.01,
+                terminateGraceInterval: 0.02,
+                relaunchCommand: .openBundle("/tmp/TestBrainBar.app")
+            ),
+            processProvider: {
+                state.processProvider()
+            },
+            terminateProcess: { pid, signal in
+                state.recordTermination(pid: pid, signal: signal)
+            },
+            relaunch: { _ in
+                state.recordRelaunch()
+                relaunched.fulfill()
+            }
+        )
+
+        watchdog.start()
+        wait(for: [relaunched], timeout: 1)
+        watchdog.stop()
+
+        let snapshot = state.snapshot()
+
+        XCTAssertEqual(snapshot.signals.map(\.0), [111, 111])
+        XCTAssertEqual(snapshot.signals.map(\.1), [SIGTERM, SIGKILL])
+        XCTAssertEqual(snapshot.relaunchCount, 1)
     }
 
     func testDashboardLatestEventFallbackUsesSQLMaxWithoutTextOrderingLimit() throws {
