@@ -93,6 +93,168 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testLegacyFiveColumnFTSSchemaMigratesToSevenColumnsAndKeepsSearchWorking() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-fts-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    source_file TEXT NOT NULL DEFAULT 'brainbar',
+                    project TEXT,
+                    content_type TEXT DEFAULT 'assistant_text',
+                    char_count INTEGER DEFAULT 0,
+                    source TEXT DEFAULT 'claude_code',
+                    conversation_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    tags TEXT DEFAULT '[]',
+                    summary TEXT,
+                    importance REAL DEFAULT 5
+                );
+                CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                    content, summary, tags, resolved_query, chunk_id UNINDEXED,
+                    prefix='2 3 4',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                CREATE VIRTUAL TABLE chunks_fts_trigram USING fts5(
+                    content, summary, tags, resolved_query, chunk_id UNINDEXED,
+                    tokenize='trigram'
+                );
+                CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                END;
+                CREATE TRIGGER chunks_fts_update AFTER UPDATE ON chunks BEGIN
+                    DELETE FROM chunks_fts WHERE chunk_id = old.id;
+                    INSERT INTO chunks_fts(content, summary, tags, resolved_query, chunk_id)
+                    VALUES (new.content, new.summary, new.tags, NULL, new.id);
+                END;
+                INSERT INTO chunks (
+                    id, content, metadata, source_file, project, content_type,
+                    char_count, source, conversation_id, tags, summary, importance
+                )
+                VALUES (
+                    'legacy-fts-row',
+                    'Legacy Swift FTS row mentions ContractNeedle',
+                    '{}',
+                    'brainbar',
+                    'brainlayer',
+                    'assistant_text',
+                    43,
+                    'mcp',
+                    'legacy-session',
+                    '["schema"]',
+                    'Legacy summary',
+                    5
+                );
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let migrated = BrainDatabase(path: legacyPath)
+        XCTAssertTrue(migrated.isOpen)
+        XCTAssertNil(migrated.lastOpenError)
+
+        let ftsColumns = try sqliteTableColumns(path: legacyPath, table: "chunks_fts")
+        let trigramColumns = try sqliteTableColumns(path: legacyPath, table: "chunks_fts_trigram")
+        XCTAssertTrue(ftsColumns.isSuperset(of: ["content", "summary", "tags", "resolved_query", "key_facts", "resolved_queries", "chunk_id"]))
+        XCTAssertTrue(trigramColumns.isSuperset(of: ["content", "summary", "tags", "resolved_query", "key_facts", "resolved_queries", "chunk_id"]))
+
+        let results = try migrated.search(query: "ContractNeedle", limit: 10)
+        XCTAssertEqual(results.first?["chunk_id"] as? String, "legacy-fts-row")
+        XCTAssertEqual(try sqliteCount(path: legacyPath, table: "chunks_fts"), 1)
+        XCTAssertEqual(try sqliteCount(path: legacyPath, table: "chunks_fts_trigram"), 1)
+        migrated.close()
+
+        let reopened = BrainDatabase(path: legacyPath)
+        defer { reopened.close() }
+        XCTAssertTrue(reopened.isOpen)
+        XCTAssertEqual(try sqliteCount(path: legacyPath, table: "chunks_fts"), 1)
+        XCTAssertEqual(try sqliteCount(path: legacyPath, table: "chunks_fts_trigram"), 1)
+        XCTAssertEqual(try reopened.search(query: "ContractNeedle", limit: 10).first?["chunk_id"] as? String, "legacy-fts-row")
+    }
+
+    func testValidSevenColumnFTSOpenDoesNotRepopulateWhenCountsMatch() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-valid-fts-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    source_file TEXT NOT NULL DEFAULT 'brainbar',
+                    project TEXT,
+                    content_type TEXT DEFAULT 'assistant_text',
+                    char_count INTEGER DEFAULT 0,
+                    source TEXT DEFAULT 'claude_code',
+                    conversation_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    tags TEXT DEFAULT '[]',
+                    summary TEXT,
+                    resolved_query TEXT,
+                    key_facts TEXT,
+                    resolved_queries TEXT,
+                    importance REAL DEFAULT 5
+                );
+                CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                    content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED,
+                    prefix='2 3 4',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                INSERT INTO chunks (
+                    id, content, metadata, source_file, project, content_type,
+                    char_count, source, conversation_id, tags, summary, importance
+                )
+                VALUES (
+                    'valid-fts-row',
+                    'Valid FTS row mentions NoRepopulateNeedle',
+                    '{}',
+                    'brainbar',
+                    'brainlayer',
+                    'assistant_text',
+                    43,
+                    'mcp',
+                    'valid-session',
+                    '["schema"]',
+                    'Chunk table summary',
+                    5
+                );
+                INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+                VALUES (
+                    'Valid FTS row mentions NoRepopulateNeedle',
+                    'FTS sentinel summary',
+                    '["schema"]',
+                    NULL,
+                    NULL,
+                    NULL,
+                    'valid-fts-row'
+                );
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let migrated = BrainDatabase(path: legacyPath)
+        defer { migrated.close() }
+
+        XCTAssertTrue(migrated.isOpen)
+        XCTAssertEqual(
+            try sqliteScalarString(path: legacyPath, sql: "SELECT summary FROM chunks_fts WHERE chunk_id = 'valid-fts-row'"),
+            "FTS sentinel summary"
+        )
+        XCTAssertEqual(try migrated.search(query: "NoRepopulateNeedle", limit: 10).first?["chunk_id"] as? String, "valid-fts-row")
+    }
+
     func testLegacyChunksSchemaAddsSenderColumnOnOpen() throws {
         let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-sender-\(UUID().uuidString).db"
         try sqliteExecWrite(
@@ -1449,6 +1611,16 @@ private func sqliteCount(path: String, table: String) throws -> Int {
 private func sqliteCount(path: String, sql: String) throws -> Int {
     try withSQLiteConnection(path: path) { db in
         try scalarInt(
+            db: db,
+            sql: sql,
+            bind: { _ in }
+        )
+    }
+}
+
+private func sqliteScalarString(path: String, sql: String) throws -> String? {
+    try withSQLiteConnection(path: path) { db in
+        try scalarString(
             db: db,
             sql: sql,
             bind: { _ in }
