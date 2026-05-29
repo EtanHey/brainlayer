@@ -1030,6 +1030,46 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
+    func testBrainBusDataEventRefreshesEnrichmentBucketsWithoutLongCoalesceDelay() async throws {
+        let eventSource = RecordingBrainBusEventSource()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            statsRefreshCoalesceInterval: 60,
+            autoRefreshInterval: 60,
+            brainBusEvents: eventSource
+        )
+        defer { collector.stop() }
+
+        collector.start()
+        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
+        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
+
+        try db.insertChunk(
+            id: "brain-bus-live-enrichment",
+            content: "BrainBus enrichment events should refresh the dashboard chart promptly",
+            sessionId: "dashboard",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 5
+        )
+        db.exec("""
+            UPDATE chunks
+            SET enriched_at = datetime('now'),
+                enrich_status = 'success'
+            WHERE id = 'brain-bus-live-enrichment'
+        """)
+
+        eventSource.publish(.enrichStatus("running"))
+
+        try await waitForCollector(collector, timeout: 0.5) {
+            $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1
+        }
+
+        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
+    }
+
+    @MainActor
     func testManualRefreshRepopulatesRecentEnrichmentBuckets() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
