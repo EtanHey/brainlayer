@@ -79,6 +79,9 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         if let existing = environment["PYTHONPATH"], !existing.isEmpty {
             return existing
         }
+        guard environment["BRAINLAYER_SOURCE_FALLBACK"] == "1" else {
+            return nil
+        }
         guard let repoRoot = normalizedRepoRoot(environment: environment) else {
             return nil
         }
@@ -211,6 +214,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         }
 
         var env = environment
+        // resolvePythonPath reads only PYTHONPATH, BRAINLAYER_SOURCE_FALLBACK, and BRAINLAYER_REPO_ROOT.
         env["BRAINLAYER_DB"] = dbPath
         if let pythonPath = Self.resolvePythonPath(environment: env) {
             env["PYTHONPATH"] = pythonPath

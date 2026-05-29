@@ -24,7 +24,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
         XCTAssertEqual(resolved, pythonPath)
     }
 
-    func testResolvePythonPathUsesRepoSourceDirectoryWhenUnset() throws {
+    func testResolvePythonPathPrefersInstalledPackageWhenUnset() throws {
         let repoRoot = NSTemporaryDirectory() + "brainbar-helper-src-\(UUID().uuidString)"
         try FileManager.default.createDirectory(
             atPath: "\(repoRoot)/src",
@@ -34,6 +34,22 @@ final class HybridSearchHelperClientTests: XCTestCase {
 
         let resolved = HybridSearchHelperClient.resolvePythonPath(environment: [
             "BRAINLAYER_REPO_ROOT": repoRoot
+        ])
+
+        XCTAssertNil(resolved)
+    }
+
+    func testResolvePythonPathUsesRepoSourceDirectoryOnlyWhenFallbackRequested() throws {
+        let repoRoot = NSTemporaryDirectory() + "brainbar-helper-src-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            atPath: "\(repoRoot)/src",
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(atPath: repoRoot) }
+
+        let resolved = HybridSearchHelperClient.resolvePythonPath(environment: [
+            "BRAINLAYER_REPO_ROOT": repoRoot,
+            "BRAINLAYER_SOURCE_FALLBACK": "1"
         ])
 
         XCTAssertEqual(resolved, "\(repoRoot)/src")

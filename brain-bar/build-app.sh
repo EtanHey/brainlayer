@@ -331,17 +331,51 @@ plist_set_string() {
     fi
 }
 
+check_brainlayer_package_installed() {
+    local repo_root="$1"
+    local python_path="$repo_root/.venv/bin/python"
+
+    local python_exec="python3"
+    if [ -x "$python_path" ]; then
+        python_exec="$python_path"
+    fi
+
+    if ! "$python_exec" -c "import brainlayer" 2>/dev/null; then
+        echo "[build-app] ERROR: brainlayer package not installed" >&2
+        echo "" >&2
+        echo "This build requires the brainlayer package to be installed." >&2
+        echo "BrainBar and launchd services no longer use PYTHONPATH for imports." >&2
+        echo "" >&2
+        echo "Install with:" >&2
+        echo "  cd $repo_root" >&2
+        if [ -x "$python_path" ]; then
+            echo "  $python_path -m pip install -e ." >&2
+        else
+            echo "  python3 -m pip install -e ." >&2
+        fi
+        echo "" >&2
+        echo "For temporary source-tree fallback:" >&2
+        echo "  export BRAINLAYER_SOURCE_FALLBACK=1" >&2
+        echo "" >&2
+        return 1
+    fi
+
+    echo "[build-app] brainlayer package is installed"
+    return 0
+}
+
 configure_launchagent_environment() {
     local plist_path="$1"
     local repo_root="$2"
     local python_path="$repo_root/.venv/bin/python"
 
+    if ! check_brainlayer_package_installed "$repo_root"; then
+        exit 1
+    fi
+
     "$PLIST_BUDDY" -c "Delete :EnvironmentVariables" "$plist_path" >/dev/null 2>&1 || true
     "$PLIST_BUDDY" -c "Add :EnvironmentVariables dict" "$plist_path"
     "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINLAYER_REPO_ROOT string \"$repo_root\"" "$plist_path"
-    if [ -d "$repo_root/src" ]; then
-        "$PLIST_BUDDY" -c "Add :EnvironmentVariables:PYTHONPATH string \"$repo_root/src\"" "$plist_path"
-    fi
     if [ -x "$python_path" ]; then
         "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINBAR_PYTHON string \"$python_path\"" "$plist_path"
     fi

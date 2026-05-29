@@ -250,7 +250,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from brainlayer.parent_death import install_parent_death_watcher
+    try:
+        from brainlayer.parent_death import install_parent_death_watcher
+    except ImportError as exc:
+        print(
+            "ERROR: brainlayer package not found.\n"
+            "\n"
+            "The hybrid search helper requires the brainlayer package to be installed.\n"
+            "Install with:\n"
+            "  pip install -e .  (development)\n"
+            "  pip install brainlayer  (production)\n"
+            "\n"
+            "For source-tree fallback:\n"
+            "  export BRAINLAYER_SOURCE_FALLBACK=1\n"
+            "\n"
+            f"Import error: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
     install_parent_death_watcher()
 

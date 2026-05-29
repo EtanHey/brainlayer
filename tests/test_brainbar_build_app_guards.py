@@ -230,6 +230,34 @@ exit 0
     return tool_dir, bin_dir
 
 
+def _install_fake_venv_python(repo: Path, *, import_brainlayer_succeeds: bool) -> Path:
+    python_path = repo / ".venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True, exist_ok=True)
+    import_exit = "0" if import_brainlayer_succeeds else "1"
+    python_path.write_text(
+        f"""#!/usr/bin/env bash
+if [[ "$*" == *"import brainlayer"* ]]; then
+  exit {import_exit}
+fi
+exit 0
+"""
+    )
+    os.chmod(python_path, 0o755)
+    return python_path
+
+
+def _fake_build_env(tmp_path: Path, tool_dir: Path, bin_dir: Path) -> dict[str, str]:
+    return {
+        "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
+        "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+        "BRAINBAR_LSREGISTER": str(tool_dir / "lsregister"),
+        "BRAINBAR_PLIST_BUDDY": str(tool_dir / "plistbuddy"),
+        "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}-{tmp_path.name}.sock",
+        "BRAINBAR_SOCKET_WAIT_ATTEMPTS": "1",
+        "PATH": f"{tool_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+
+
 def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
@@ -246,6 +274,55 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
     assert str(home / "Applications" / "BrainBar.app") in result.stdout
     assert "UI LaunchAgent: canonical install" in result.stdout
     assert "Daemon LaunchAgent: canonical install" in result.stdout
+
+
+def test_canonical_build_aborts_when_brainlayer_package_is_not_importable(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=False)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-dirty"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    assert result.returncode != 0
+    assert "[build-app] ERROR: brainlayer package not installed" in result.stderr
+    assert "BrainBar and launchd services no longer use PYTHONPATH for imports." in result.stderr
+    assert f"{repo}/.venv/bin/python -m pip install -e ." in result.stderr
+    assert not (home / "Library" / "LaunchAgents" / "com.brainlayer.brainbar.plist").exists()
+
+
+def test_canonical_build_allows_launchagent_install_when_brainlayer_package_is_importable(
+    tmp_path: Path,
+) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-dirty"],
+        extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[build-app] brainlayer package is installed" in result.stdout
 
 
 def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
