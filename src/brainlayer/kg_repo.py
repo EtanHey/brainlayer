@@ -78,6 +78,9 @@ class KGMixin:
         canonical_name = name.lower().replace(" ", "_")
         now = datetime.now(timezone.utc).isoformat()
 
+        if getattr(self, "_readonly", False):
+            return self.get_entity(keep["id"])
+
         if len(matches) > 1:
             from .pipeline.entity_resolution import merge_entities
 

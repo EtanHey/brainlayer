@@ -4692,13 +4692,55 @@ final class BrainDatabase: @unchecked Sendable {
             ]
             if let event = try? InjectionEvent(row: row) {
                 let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
+                let resumableID = Self.resumableClaudeConversationID(event: event, chunks: details)
                 guard let scopedEvent = injectionFeedScopedEvent(event, chunks: details) else {
                     continue
                 }
-                events.append(scopedEvent)
+                events.append(
+                    InjectionEvent(
+                        id: scopedEvent.id,
+                        sessionID: scopedEvent.sessionID,
+                        timestamp: scopedEvent.timestamp,
+                        query: scopedEvent.query,
+                        chunkIDs: scopedEvent.chunkIDs,
+                        tokenCount: scopedEvent.tokenCount,
+                        chunks: scopedEvent.chunks,
+                        claudeConversationID: resumableID
+                    )
+                )
             }
         }
         return events
+    }
+
+    private static func resumableClaudeConversationID(event: InjectionEvent, chunks: [InjectionChunk]) -> String {
+        if isUUID(event.claudeConversationID) {
+            return event.claudeConversationID
+        }
+        for chunk in chunks where isUUID(chunk.claudeConversationID) {
+            return chunk.claudeConversationID
+        }
+        for chunk in chunks {
+            if let id = extractClaudeConversationID(fromSourceFile: chunk.sourceFile) {
+                return id
+            }
+        }
+        return ""
+    }
+
+    private static func extractClaudeConversationID(fromSourceFile sourceFile: String) -> String? {
+        let parts = sourceFile.split(separator: "/").map(String.init)
+        if let last = parts.last {
+            let stem = URL(fileURLWithPath: last).deletingPathExtension().lastPathComponent
+            if isUUID(stem) {
+                return stem
+            }
+        }
+        return parts.first(where: isUUID)
+    }
+
+    private static func isUUID(_ value: String) -> Bool {
+        UUID(uuidString: value) != nil
     }
 
     private static func liveInjectionEventSQLPredicate(eventTable: String) -> String {
@@ -4774,7 +4816,8 @@ final class BrainDatabase: @unchecked Sendable {
             query: event.query,
             chunkIDs: scopedChunkIDs,
             tokenCount: event.tokenCount,
-            chunks: liveChunks
+            chunks: liveChunks,
+            claudeConversationID: event.claudeConversationID
         )
     }
 
@@ -4809,7 +4852,11 @@ final class BrainDatabase: @unchecked Sendable {
 
         let placeholders = Array(repeating: "?", count: orderedIDs.count).joined(separator: ",")
         let sql = """
-            SELECT id, content, summary, source, source_file, tags, content_type
+            SELECT id, content, summary, source, source_file, tags, content_type,
+                   CASE
+                       WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata, '$.claude_conversation_id'), '')
+                       ELSE ''
+                   END AS claude_conversation_id
             FROM chunks
             WHERE id IN (\(placeholders))
         """
@@ -4833,6 +4880,7 @@ final class BrainDatabase: @unchecked Sendable {
                 "source_file": columnText(stmt, 4) as Any,
                 "tags": columnText(stmt, 5) as Any,
                 "content_type": columnText(stmt, 6) as Any,
+                "claude_conversation_id": columnText(stmt, 7) as Any,
             ]
             let detail = InjectionChunk(row: row)
             detailsByID[detail.id] = detail

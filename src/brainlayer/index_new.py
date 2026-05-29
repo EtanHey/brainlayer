@@ -1,6 +1,7 @@
 """New indexing pipeline using sqlite-vec and sentence-transformers."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -10,8 +11,19 @@ from .pipeline.classify import looks_like_system_prompt
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 from .paths import DEFAULT_DB_PATH
+
+
+def _extract_claude_conversation_id(source_file: str) -> str | None:
+    p = Path(source_file)
+    if _UUID_RE.match(p.stem):
+        return p.stem
+    for parent in p.parents:
+        if _UUID_RE.match(parent.name):
+            return parent.name
+    return None
 
 
 def index_chunks_to_sqlite(
@@ -68,6 +80,7 @@ def index_chunks_to_sqlite(
     # Derive conversation_id: prefer session_id from chunk metadata,
     # fall back to the JSONL filename stem (which is the session UUID).
     file_stem = Path(source_file).stem
+    claude_conversation_id = _extract_claude_conversation_id(source_file)
 
     # Prepare data for vector store
     chunk_data = []
@@ -78,12 +91,15 @@ def index_chunks_to_sqlite(
 
         chunk_id = f"{source_file}:{i}"
         conversation_id = chunk.metadata.get("session_id") or file_stem
+        metadata = dict(chunk.metadata)
+        if claude_conversation_id:
+            metadata["claude_conversation_id"] = claude_conversation_id
 
         chunk_data.append(
             {
                 "id": chunk_id,
                 "content": chunk.content,
-                "metadata": chunk.metadata,
+                "metadata": metadata,
                 "source_file": source_file,
                 "project": project,
                 "content_type": chunk.content_type.value,
@@ -92,8 +108,8 @@ def index_chunks_to_sqlite(
                 "created_at": created_at,
                 "conversation_id": conversation_id,
                 "position": i,
-                "sender": chunk.metadata.get("sender"),
-                "source": chunk.metadata.get("source", "claude_code"),
+                "sender": metadata.get("sender"),
+                "source": metadata.get("source", "claude_code"),
             }
         )
 

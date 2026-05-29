@@ -48,6 +48,9 @@ CANONICAL_RELATION_TYPES = {
 
 # Known agent names (beyond *Claude/*Golem pattern matching)
 _KNOWN_AGENTS = {"ralph", "claudegolem"}
+_CANONICAL_ENTITY_TYPES_BY_NAME = {
+    "claudecode": "tool",
+}
 
 _RELATION_TYPE_ALIASES = {
     "ceo_of": "leads",
@@ -94,7 +97,9 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
         name_lower = name.lower().replace("-", "").replace("_", "").replace(" ", "")
 
         # *Claude or *Golem pattern → agent
-        if re.search(r"(?i)(claude|golem)$", name):
+        if name_lower in _CANONICAL_ENTITY_TYPES_BY_NAME:
+            entity.entity_type = _CANONICAL_ENTITY_TYPES_BY_NAME[name_lower]
+        elif re.search(r"(?i)(claude|golem)$", name):
             entity.entity_type = "agent"
         # Known agent names
         elif name_lower in _KNOWN_AGENTS:

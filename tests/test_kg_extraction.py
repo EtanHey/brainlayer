@@ -194,6 +194,28 @@ class TestProcessExtractionResult:
         person_count = stats["entity_types"].get("person", 0)
         assert person_count == 1  # Only one "Etan" entity
 
+    def test_claude_code_is_canonical_tool(self, store_with_chunks):
+        result = ExtractionResult(
+            entities=[
+                ExtractedEntity(
+                    text="Claude Code",
+                    entity_type="project",
+                    start=0,
+                    end=11,
+                    confidence=0.95,
+                    source="llm",
+                ),
+            ],
+            relations=[],
+            chunk_id="chunk-1",
+        )
+
+        process_extraction_result(store_with_chunks, result)
+
+        entity = store_with_chunks.resolve_entity("Claude Code")
+        assert entity is not None
+        assert entity["entity_type"] == "tool"
+
     def test_empty_extraction_no_crash(self, store_with_chunks):
         result = ExtractionResult(entities=[], relations=[], chunk_id="chunk-1")
         stats = process_extraction_result(store_with_chunks, result)
