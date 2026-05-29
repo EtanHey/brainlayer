@@ -94,7 +94,6 @@ Documentation = "https://etanhey.github.io/brainlayer"
 Issues = "https://github.com/EtanHey/brainlayer/issues"
 
 [project.scripts]
-brainlayer = "brainlayer.cli:app"
 brainlayer-mcp = "brainlayer.mcp:serve"
 
 [build-system]
@@ -114,7 +113,23 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 pythonpath = ["src"]
 markers = [
+    "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
     "integration: tests that need the real production DB (268K+ chunks)",
     "live: tests that need the live production DB or mutable local hooks state",
     "slow: tests that load ML models or take >30s",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brainlayer"]
+exclude = [
+    "src/brainlayer/cli",
+    "src/brainlayer/cli_new.py",
+    "src/brainlayer/dashboard",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "src/brainlayer/cli/**",
+    "src/brainlayer/cli_new.py",
+    "src/brainlayer/dashboard/**",
 ]
