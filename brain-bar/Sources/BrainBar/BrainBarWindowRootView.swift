@@ -103,10 +103,14 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var dashboardContent: some View {
         if let collector = runtime.collector {
-            BrainBarDashboardView(
-                collector: collector,
-                hotkeyStatus: runtime.hotkeyStatus.statusLine
-            )
+            if collector.lastDataFetchedAt == nil {
+                BrainBarLoadingView(title: "BrainBar", subtitle: "Connecting to daemon and loading dashboard data...")
+            } else {
+                BrainBarDashboardView(
+                    collector: collector,
+                    hotkeyStatus: runtime.hotkeyStatus.statusLine
+                )
+            }
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
         }
@@ -209,6 +213,8 @@ private struct BrainBarWindowHeader: View {
                     BrainBarHeaderRefreshControls(collector: collector)
                 }
 
+                BrainBarAppControlMenu()
+
                 Spacer(minLength: 12)
 
                 Text(hotkeyStatus)
@@ -252,6 +258,25 @@ private struct BrainBarHeaderRefreshControls: View {
                 .controlSize(.small)
                 .frame(width: 16, height: 16)
         }
+    }
+}
+
+private struct BrainBarAppControlMenu: View {
+    var body: some View {
+        Menu {
+            Button("Restart BrainBar") {
+                BrainBarProcessControl.restart()
+            }
+            Button("Quit BrainBar") {
+                BrainBarProcessControl.quit()
+            }
+        } label: {
+            Image(systemName: "power")
+                .frame(width: 18, height: 18)
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .help("Restart or quit BrainBar")
     }
 }
 

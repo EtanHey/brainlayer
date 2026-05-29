@@ -6,6 +6,7 @@ import SwiftUI
 struct SparklineChartPoint: Identifiable, Equatable, Sendable {
     let bucket: Int
     let value: Int
+    let timestamp: Date
 
     var id: Int { bucket }
 }
@@ -33,7 +34,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var points: [SparklineChartPoint] {
         values.enumerated().map { index, value in
-            SparklineChartPoint(bucket: index, value: value)
+            SparklineChartPoint(bucket: index, value: value, timestamp: bucketMidpoint(for: index))
         }
     }
 
@@ -51,6 +52,14 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var maxValue: Int {
         max(values.max() ?? 0, 1)
+    }
+
+    var xAxisDomainStart: Date {
+        fetchedAt.addingTimeInterval(-Double(max(activityWindowMinutes * 60, 1)))
+    }
+
+    var xAxisDomainEnd: Date {
+        fetchedAt
     }
 
     func bucketLabel(for bucket: Int) -> String {
@@ -90,6 +99,11 @@ struct SparklineChartPresentation: Equatable, Sendable {
         let start = fetchedAt.addingTimeInterval(-(Double(totalSeconds) - bucketStart))
         let end = fetchedAt.addingTimeInterval(-(Double(totalSeconds) - bucketEnd))
         return (start, end)
+    }
+
+    private func bucketMidpoint(for bucket: Int) -> Date {
+        let range = bucketRange(for: bucket)
+        return range.start.addingTimeInterval(range.end.timeIntervalSince(range.start) / 2)
     }
 
     private static func durationLabel(seconds: Int) -> String {
@@ -145,23 +159,23 @@ struct SparklineChart: View {
             Chart(presentation.points) { point in
                 if !compact {
                     AreaMark(
-                        x: .value("Bucket", point.bucket),
+                        x: .value("Time", point.timestamp),
                         y: .value("Count", point.value)
                     )
                     .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.10))
                 }
 
                 LineMark(
-                    x: .value("Bucket", point.bucket),
+                    x: .value("Time", point.timestamp),
                     y: .value("Count", point.value)
                 )
-                .interpolationMethod(.catmullRom)
+                .interpolationMethod(.linear)
                 .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
                 .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
 
                 if point == presentation.latestPoint {
                     PointMark(
-                        x: .value("Bucket", point.bucket),
+                        x: .value("Time", point.timestamp),
                         y: .value("Count", point.value)
                     )
                     .foregroundStyle(Color.brainBar(nsColor: accentColor))
@@ -170,6 +184,7 @@ struct SparklineChart: View {
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
+            .chartXScale(domain: presentation.xAxisDomainStart...presentation.xAxisDomainEnd)
             .chartYScale(domain: 0...presentation.maxValue)
             .chartPlotStyle { plotArea in
                 plotArea
@@ -250,10 +265,15 @@ struct SparklineChart: View {
         }
 
         let plotX = location.x - plotFrame.minX
-        guard let bucket: Double = chartProxy.value(atX: plotX, as: Double.self) else {
+        guard let hoveredDate: Date = chartProxy.value(atX: plotX, as: Date.self) else {
             return nil
         }
-        return min(max(Int(bucket.rounded()), 0), presentation.points.count - 1)
+        let distances = presentation.points.map { abs($0.timestamp.timeIntervalSince(hoveredDate)) }
+        guard let minDistance = distances.min(),
+              let bucket = distances.firstIndex(of: minDistance) else {
+            return nil
+        }
+        return bucket
     }
 
     private var xAxisBuckets: [Int] {

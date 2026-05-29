@@ -99,6 +99,39 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 4)
     }
 
+    func testDashboardStatsBucketsEventsOnFixedWallClockWindowEndingNow() throws {
+        let fixtures: [(id: String, offset: TimeInterval)] = [
+            ("dash-wallclock-52m", -52 * 60),
+            ("dash-wallclock-27m-a", -27 * 60),
+            ("dash-wallclock-27m-b", -27 * 60),
+            ("dash-wallclock-4m", -4 * 60),
+            ("dash-wallclock-outside", -65 * 60),
+        ]
+        for fixture in fixtures {
+            try db.insertChunk(
+                id: fixture.id,
+                content: "Wall-clock enrichment fixture \(fixture.id)",
+                sessionId: "dashboard",
+                project: "brainlayer",
+                contentType: "assistant_text",
+                importance: 5
+            )
+            db.exec("""
+                UPDATE chunks
+                SET created_at = datetime('now', '\(Int(fixture.offset)) seconds'),
+                    enriched_at = datetime('now', '\(Int(fixture.offset)) seconds'),
+                    enrich_status = 'success'
+                WHERE id = '\(fixture.id)'
+            """)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 1)
+        XCTAssertEqual(stats.recentEnrichmentCount, 4)
+    }
+
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
@@ -138,6 +171,27 @@ final class DashboardTests: XCTestCase {
             source.contains("database.close()"),
             "Removing the retained DB handle also removes the matching close call."
         )
+    }
+
+    func testDashboardShowsLoadingUntilFirstStatsFetchCompletes() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(source.contains("collector.lastDataFetchedAt == nil"))
+        XCTAssertTrue(source.contains("Connecting to daemon and loading dashboard data"))
+    }
+
+    func testBrainBarHeaderExposesRestartAndQuitControls() throws {
+        let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let processSource = try brainBarSourceFile("Sources/BrainBar/BrainBarProcessControl.swift")
+
+        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu()"))
+        XCTAssertTrue(rootSource.contains("Restart BrainBar"))
+        XCTAssertTrue(rootSource.contains("Quit BrainBar"))
+        XCTAssertTrue(processSource.contains("static func restart"))
+        XCTAssertTrue(processSource.contains("static func quit"))
+        XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
+        XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
+        XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
     }
 
     func testDashboardLatestEventFallbackUsesSQLMaxWithoutTextOrderingLimit() throws {
@@ -345,6 +399,27 @@ final class DashboardTests: XCTestCase {
             presentation.bucketLabel(for: 11),
             "\(Self.shortTime(now.addingTimeInterval(-bucketWidth)))-\(Self.shortTime(now))"
         )
+    }
+
+    func testSparklineChartPresentationAnchorsPointsToWallClockBucketMidpoints() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        let presentation = SparklineChartPresentation(
+            label: "Recent enrichment sparkline",
+            values: [0, 3, 0, 1],
+            activityWindowMinutes: 20,
+            fetchedAt: now
+        )
+
+        XCTAssertEqual(presentation.points.map(\.bucket), [0, 1, 2, 3])
+        XCTAssertEqual(presentation.points.map(\.value), [0, 3, 0, 1])
+        XCTAssertEqual(presentation.points.map(\.timestamp), [
+            now.addingTimeInterval(-17.5 * 60),
+            now.addingTimeInterval(-12.5 * 60),
+            now.addingTimeInterval(-7.5 * 60),
+            now.addingTimeInterval(-2.5 * 60),
+        ])
+        XCTAssertEqual(presentation.xAxisDomainStart, now.addingTimeInterval(-20 * 60))
+        XCTAssertEqual(presentation.xAxisDomainEnd, now)
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {
