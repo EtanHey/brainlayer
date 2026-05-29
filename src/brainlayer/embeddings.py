@@ -1,13 +1,21 @@
 """Fast embeddings using sentence-transformers with bge-large-en-v1.5."""
 
+# `from __future__ import annotations` keeps every annotation in this module a
+# lazy string, so a SentenceTransformer type hint never forces the (~3.7s) torch
+# import at module-load time. torch + sentence_transformers are imported lazily
+# inside _load_model() — this keeps `import brainlayer.embeddings` cheap, which
+# is what lets the MCP server answer its initialize/tools/list handshake fast
+# instead of stalling on the startup critical path (fix/mcp-lazy-connect).
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
-from typing import Callable, List, Optional
-
-import torch
-from sentence_transformers import SentenceTransformer
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from .pipeline.chunk import Chunk
+
+if TYPE_CHECKING:  # for type-checkers only; never imported at runtime module-load
+    from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +44,16 @@ class EmbeddingModel:
         self._model: Optional[SentenceTransformer] = None
 
     def _load_model(self) -> SentenceTransformer:
-        """Load model on first use."""
+        """Load model on first use.
+
+        torch + sentence_transformers are imported here (not at module scope) so
+        that merely importing this module — e.g. during MCP server startup
+        validation — never pays the ~3.7s torch import cost.
+        """
         if self._model is None:
+            import torch
+            from sentence_transformers import SentenceTransformer
+
             logger.info(f"Loading embedding model: {self.model_name}")
             device = "mps" if torch.backends.mps.is_available() else "cpu"
             self._model = SentenceTransformer(self.model_name, device=device)
