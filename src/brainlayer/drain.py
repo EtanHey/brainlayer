@@ -607,7 +607,13 @@ def drain_once(
                         _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                     conn.execute("COMMIT")
                     try:
-                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                        # TRUNCATE (not PASSIVE) so the WAL file is reclaimed after
+                        # each drained batch. PASSIVE leaves frames in place when a
+                        # reader pins a page, letting the WAL grow unbounded (observed
+                        # multi-GB) and starve brain_store writes. TRUNCATE checkpoints
+                        # what it can and shrinks the file; busy_timeout + the except
+                        # below keep it non-fatal if a reader briefly blocks it.
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     except apsw.Error:
                         pass
                     drained += attempt_drained
