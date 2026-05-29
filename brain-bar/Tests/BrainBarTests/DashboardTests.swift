@@ -194,6 +194,12 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
     }
 
+    func testLegacyPopoverSparklineUsesLastFetchAnchor() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatusPopoverView.swift")
+
+        XCTAssertTrue(source.contains("fetchedAt: collector.lastDataFetchedAt ?? Date()"))
+    }
+
     func testDashboardLatestEventFallbackUsesSQLMaxWithoutTextOrderingLimit() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "private func latestIndexedTimestampEpoch("))
