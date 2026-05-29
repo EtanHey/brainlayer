@@ -37,6 +37,10 @@ _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
+# The post-commit WAL checkpoint is best-effort. Bound how long TRUNCATE may wait
+# on readers so a pinned reader can't stall every other writer for the full drain
+# busy_timeout (30s). Short window → reclaim when possible, skip cheaply otherwise.
+_DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS = 1000
 
 
 def _drain_busy_timeout_ms() -> int:
@@ -46,6 +50,18 @@ def _drain_busy_timeout_ms() -> int:
         return _DEFAULT_DRAIN_BUSY_TIMEOUT_MS
     if timeout_ms <= 0 or timeout_ms > _MAX_APSW_BUSY_TIMEOUT_MS:
         return _DEFAULT_DRAIN_BUSY_TIMEOUT_MS
+    return timeout_ms
+
+
+def _checkpoint_busy_timeout_ms() -> int:
+    try:
+        timeout_ms = int(
+            os.environ.get("BRAINLAYER_DRAIN_CHECKPOINT_BUSY_TIMEOUT_MS", str(_DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS))
+        )
+    except (TypeError, ValueError):
+        return _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS
+    if timeout_ms < 0 or timeout_ms > _MAX_APSW_BUSY_TIMEOUT_MS:
+        return _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS
     return timeout_ms
 
 
@@ -606,10 +622,22 @@ def drain_once(
                     if should_embed:
                         _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                     conn.execute("COMMIT")
+                    # Best-effort WAL reclaim. The truncating checkpoint (not PASSIVE)
+                    # shrinks the WAL file after each drained batch — PASSIVE leaves
+                    # frames in place when a reader pins a page, letting the WAL grow
+                    # unbounded (observed multi-GB) and starve brain_store writes. But it
+                    # blocks other writers while waiting for readers, so bound that wait
+                    # to a short window (default 1s): if a reader pins the WAL we skip
+                    # this round rather than stall every writer for the full drain
+                    # busy_timeout. journal_size_limit and the out-of-band wal-checkpoint
+                    # job reclaim later. The except keeps a busy checkpoint non-fatal.
+                    conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                     try:
-                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     except apsw.Error:
                         pass
+                    finally:
+                        conn.setbusytimeout(_drain_busy_timeout_ms())
                     drained += attempt_drained
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
