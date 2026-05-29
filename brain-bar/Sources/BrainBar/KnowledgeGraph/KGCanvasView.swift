@@ -74,6 +74,7 @@ struct KGCanvasView: View {
                         hasChunkLoadError: viewModel.selectedEntityChunkSidebarLoadFailed,
                         hasFileLoadError: viewModel.selectedEntityFileSidebarLoadFailed,
                         onOpenConversation: { viewModel.openConversation(chunkID: $0) },
+                        onOpenFile: { viewModel.openSourceFile($0) },
                         onSelectRelation: { relation in
                             if viewModel.selectRelatedEntity(from: relation) {
                                 stopSimulation()

@@ -837,7 +837,7 @@ struct BrainBarDashboardLayout {
         let compactHeight = containerSize.height < 620
         let compactWidth = containerSize.width < 920
 
-        chartColumns = containerSize.width >= 980 ? 2 : 1
+        chartColumns = containerSize.width >= 1_200 ? 2 : 1
         overviewMetricColumns = containerSize.width >= 980 ? 4 : 2
         diagnosticColumns = containerSize.width >= 960 ? 2 : 1
         diagnosticItemColumns = containerSize.width >= 820 ? 2 : 1
@@ -884,7 +884,9 @@ private struct BrainBarGraphTab: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            KGCanvasView(viewModel: viewModel, isActive: isActive)
+            NonWindowDraggableHostingView {
+                KGCanvasView(viewModel: viewModel, isActive: isActive)
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if viewModel.degradationState.isDegraded {
@@ -1345,6 +1347,32 @@ private final class DragHandleView: NSView {
     override var mouseDownCanMoveWindow: Bool {
         true
     }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
+private struct NonWindowDraggableHostingView<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NoWindowDragHostingView<Content> {
+        NoWindowDragHostingView(rootView: content)
+    }
+
+    func updateNSView(_ nsView: NoWindowDragHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+}
+
+private final class NoWindowDragHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
 }
 
 private struct WindowAttachmentView: NSViewRepresentable {
@@ -1455,7 +1483,8 @@ private final class BrainBarWindowObserver: ObservableObject {
         window.title = "BrainBar"
         window.minSize = NSSize(width: 760, height: 560)
         window.maxSize = NSSize(width: 1_600, height: 1_200)
-        window.isMovableByWindowBackground = true
+        window.isMovable = false
+        window.isMovableByWindowBackground = false
         window.styleMask.insert(.resizable)
         if let resolvedFrame = BrainBarWindowPlacement.resolvedFrame(
             persistedFrame: BrainBarWindowFrameStore().persistedFrame()
