@@ -5,7 +5,6 @@ from pathlib import Path
 
 import tests.conftest as test_config
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
