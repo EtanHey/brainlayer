@@ -931,6 +931,27 @@ final class KGViewModelTests: XCTestCase {
         XCTAssertEqual(nodeB.position.y, 240, accuracy: 0.001)
     }
 
+    func testCollapsedCanvasSizeDoesNotConsumeFirstResolvedLayout() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+
+        let vm = KGViewModel(database: db)
+        vm.setLayoutMode(.importance)
+        vm.updateCanvasSize(CGSize(width: 0, height: 800))
+        await vm.loadGraph()
+
+        vm.updateCanvasSize(CGSize(width: 1_200, height: 800))
+
+        XCTAssertEqual(vm.canvasCenter, CGPoint(x: 600, y: 400))
+        let nodeA = try XCTUnwrap(vm.nodes.first { $0.id == "a" })
+        let nodeB = try XCTUnwrap(vm.nodes.first { $0.id == "b" })
+        XCTAssertEqual(nodeA.position.x, 312, accuracy: 0.001)
+        XCTAssertEqual(nodeA.position.y, 448, accuracy: 0.001)
+        XCTAssertEqual(nodeB.position.x, 600, accuracy: 0.001)
+        XCTAssertEqual(nodeB.position.y, 240, accuracy: 0.001)
+    }
+
     func testLoadGraphKeepsMainActorAvailableWhileLoading() async throws {
         try db.insertEntity(id: "a", type: "person", name: "Alice")
         try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
@@ -1174,7 +1195,7 @@ final class KGViewModelTests: XCTestCase {
         vm.selectNode(id: "a")
 
         XCTAssertNil(vm.selectedEntity)
-        XCTAssertFalse(vm.isLayoutPinned)
+        XCTAssertTrue(vm.isLayoutPinned)
         XCTAssertFalse(vm.isLoadingSelectedEntityChunks)
         XCTAssertTrue(vm.selectedEntityChunks.isEmpty)
     }
@@ -1190,7 +1211,56 @@ final class KGViewModelTests: XCTestCase {
         vm.selectNode(id: nil)
         XCTAssertNil(vm.selectedNodeId)
         XCTAssertNil(vm.selectedEntity)
-        XCTAssertFalse(vm.isLayoutPinned)
+        XCTAssertTrue(vm.isLayoutPinned)
+    }
+
+    func testSelectionLifecycleKeepsNodePositionsStable() async throws {
+        try db.insertEntity(id: "a", type: "person", name: "Alice")
+        try db.insertEntity(id: "b", type: "project", name: "BrainLayer")
+        try db.insertEntity(id: "c", type: "agent", name: "brainClaude")
+        try db.insertRelation(sourceId: "a", targetId: "b", relationType: "builds")
+        try db.insertRelation(sourceId: "b", targetId: "c", relationType: "uses")
+
+        let vm = KGViewModel(database: db)
+        vm.setLayoutMode(.importance)
+        vm.updateCanvasSize(CGSize(width: 1_200, height: 800))
+        await vm.loadGraph()
+        let seededState: [String: (position: CGPoint, velocity: CGVector)] = [
+            "a": (CGPoint(x: 120, y: 160), CGVector(dx: 14, dy: -9)),
+            "b": (CGPoint(x: 420, y: 360), CGVector(dx: -8, dy: 11)),
+            "c": (CGPoint(x: 760, y: 260), CGVector(dx: 5, dy: 7))
+        ]
+        for (nodeId, state) in seededState {
+            let index = try XCTUnwrap(vm.nodes.firstIndex { $0.id == nodeId })
+            vm.nodes[index].position = state.position
+            vm.nodes[index].velocity = state.velocity
+        }
+
+        vm.selectNode(id: "a")
+        let positionsAfterSelect = vm.nodes.map(\.position)
+        vm.updateCanvasSize(CGSize(width: 860, height: 800))
+
+        XCTAssertTrue(vm.isLayoutPinned)
+        XCTAssertEqual(vm.nodes.map(\.position), positionsAfterSelect)
+
+        vm.selectNode(id: nil)
+        let positionsAfterDeselect = vm.nodes.map(\.position)
+        let deselectEnergy = vm.tick()
+
+        XCTAssertNil(vm.selectedNodeId)
+        XCTAssertTrue(vm.isLayoutPinned)
+        XCTAssertEqual(deselectEnergy, 0)
+        XCTAssertEqual(positionsAfterDeselect, positionsAfterSelect)
+        XCTAssertEqual(vm.nodes.map(\.position), positionsAfterSelect)
+
+        vm.updateCanvasSize(CGSize(width: 1_200, height: 800))
+        vm.selectNode(id: nil)
+        let backgroundClickEnergy = vm.tick()
+
+        XCTAssertTrue(vm.isLayoutPinned)
+        XCTAssertEqual(backgroundClickEnergy, 0)
+        XCTAssertEqual(vm.nodes.map(\.position), positionsAfterSelect)
+        XCTAssertTrue(vm.nodes.allSatisfy { $0.velocity == .zero })
     }
 
     func testSelectNodeClearsOpenConversationOverlay() async throws {
