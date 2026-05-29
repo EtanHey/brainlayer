@@ -49,5 +49,12 @@ let package = Package(
             ],
             path: "Tests/BrainBarTests"
         ),
+        .testTarget(
+            name: "BrainBarDaemonTests",
+            dependencies: [
+                "BrainBarDaemon",
+            ],
+            path: "Tests/BrainBarDaemonTests"
+        ),
     ]
 )
