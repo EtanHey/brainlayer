@@ -22,6 +22,7 @@ from typing import Any
 import apsw
 
 from .chunk_origin import detect_chunk_origin
+from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, normalized_exact_hash
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
@@ -238,6 +239,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
             project = _extract_project_from_source(source_file)
+            claude_conversation_id = _extract_claude_conversation_id(source_file)
 
             # Layer 1: Pre-classify filter
             skip_reason = should_skip_entry(entry, source_file=source_file)
@@ -280,6 +282,9 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                     created_at = datetime.now(timezone.utc).isoformat()
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
+                metadata = dict(chunk.metadata)
+                if claude_conversation_id:
+                    metadata["claude_conversation_id"] = claude_conversation_id
                 tags = None
                 if chunk.content_type.value == "user_message":
                     correction_tags = build_correction_tags(clean_content)
@@ -292,14 +297,14 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                         enqueue_watcher_chunk(
                             chunk_id=chunk_id,
                             content=clean_content,
-                            metadata=chunk.metadata,
+                            metadata=metadata,
                             source_file=source_file,
                             project=project,
                             content_type=chunk.content_type.value,
                             value_type=chunk.value.value,
                             created_at=created_at,
                             conversation_id=conversation_id,
-                            sender=chunk.metadata.get("sender"),
+                            sender=metadata.get("sender"),
                             tags=json.loads(tags) if tags else None,
                             chunk_origin=chunk_origin,
                         )
@@ -366,7 +371,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                     (
                                         chunk_id,
                                         clean_content,
-                                        json.dumps(chunk.metadata),
+                                        json.dumps(metadata),
                                         source_file,
                                         project,
                                         chunk.content_type.value,
@@ -375,7 +380,7 @@ def create_flush_callback(db_path: Path | None = None) -> callable:
                                         "realtime_watcher",
                                         created_at,
                                         conversation_id,
-                                        chunk.metadata.get("sender"),
+                                        metadata.get("sender"),
                                         tags,
                                         chunk_origin,
                                         1,

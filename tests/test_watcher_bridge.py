@@ -17,6 +17,7 @@ import time
 from brainlayer.vector_store import VectorStore
 from brainlayer.watcher import JSONLTailer, JSONLWatcher
 from brainlayer.watcher_bridge import (
+    _extract_claude_conversation_id,
     _extract_project_from_source,
     _normalize_project_name,
     _strip_system_reminders,
@@ -135,6 +136,20 @@ class TestProjectExtraction:
         path = "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer-grill/abc123.jsonl"
         assert _extract_project_from_source(path) == "brainlayer-grill"
 
+    def test_extract_claude_conversation_id_from_top_level_jsonl(self):
+        path = (
+            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer/"
+            "3679128a-f371-445f-82ba-b3946e2f20b6.jsonl"
+        )
+        assert _extract_claude_conversation_id(path) == "3679128a-f371-445f-82ba-b3946e2f20b6"
+
+    def test_extract_claude_conversation_id_from_nested_subagent_jsonl(self):
+        path = (
+            "/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer/"
+            "3679128a-f371-445f-82ba-b3946e2f20b6/subagents/agent-acompact-123.jsonl"
+        )
+        assert _extract_claude_conversation_id(path) == "3679128a-f371-445f-82ba-b3946e2f20b6"
+
 
 # ── Flush Callback ───────────────────────────────────────────────────────────
 
@@ -154,6 +169,26 @@ class TestFlushCallback:
         rows = conn.execute("SELECT id, content, source FROM chunks WHERE source = 'realtime_watcher'").fetchall()
         conn.close()
         assert len(rows) >= 1
+
+    def test_inserts_claude_conversation_id_metadata(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        VectorStore(db_path).close()
+
+        flush = create_flush_callback(db_path)
+        conversation_id = "3679128a-f371-445f-82ba-b3946e2f20b6"
+        entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", sessionId="brainlayer-session-9")
+        entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / f"{conversation_id}.jsonl")
+
+        flush([entry])
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT metadata FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        conn.close()
+
+        assert row is not None
+        metadata = json.loads(row[0])
+        assert metadata["session_id"] == "brainlayer-session-9"
+        assert metadata["claude_conversation_id"] == conversation_id
 
     def test_insert_sets_ingested_at(self, tmp_path):
         db_path = tmp_path / "test.db"

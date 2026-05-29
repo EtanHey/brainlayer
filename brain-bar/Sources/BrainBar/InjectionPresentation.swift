@@ -21,6 +21,7 @@ struct InjectionPresentation {
 
     struct Burst: Equatable, Identifiable {
         let sessionID: String
+        let claudeConversationID: String
         let topicOrSource: String
         let startDate: Date
         let endDate: Date
@@ -220,9 +221,15 @@ struct InjectionPresentation {
         var previousDate = first.date
 
         func flush() {
+            let conversationIDs = Set(
+                currentEvents.compactMap { event in
+                    event.event.claudeConversationID.isEmpty ? nil : event.event.claudeConversationID
+                }
+            )
             bursts.append(
                 Burst(
                     sessionID: currentSessionID,
+                    claudeConversationID: conversationIDs.count == 1 ? conversationIDs.first ?? "" : "",
                     topicOrSource: currentTopicOrSource,
                     startDate: oldest,
                     endDate: newest,
@@ -300,6 +307,7 @@ struct InjectionPresentation {
             sectionBursts.append(
                 Burst(
                     sessionID: burst.sessionID,
+                    claudeConversationID: burst.claudeConversationID,
                     topicOrSource: burst.topicOrSource,
                     startDate: oldest,
                     endDate: newest,

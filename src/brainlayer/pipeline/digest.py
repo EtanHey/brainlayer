@@ -33,6 +33,7 @@ DIGEST_V2_ENABLED = os.environ.get("BRAINLAYER_DIGEST_V2", "true").lower() in ("
 HIGH_CONFIDENCE_THRESHOLD = 0.85
 MEDIUM_CONFIDENCE_THRESHOLD = 0.5
 SUPERSEDE_SIMILARITY_THRESHOLD = 0.85
+_SAFE_CROSS_TYPE_ENTITY_AGGREGATES = {"claude code"}
 
 # Length-tiered cosine similarity thresholds for dedup
 # Research-validated: SemHash defaults to 0.90, strict 0.95 misses paraphrases
@@ -819,12 +820,50 @@ def entity_lookup(
         if not results:
             return None
 
-    # Take best match
-    entity = results[0]
+    # Exact-name duplicates can exist across inferred entity types for known
+    # canonical tools like "Claude Code". Prefer the sibling with real evidence,
+    # but only aggregate cross-type siblings for names that are known-safe.
+    candidate = results[0]
+    candidate_name = candidate.get("name") or query
+    sibling_entity_type = entity_type
+    if entity_type is None and _normalize_lookup_name(candidate_name) in _SAFE_CROSS_TYPE_ENTITY_AGGREGATES:
+        sibling_entity_type = None
+    elif entity_type is None:
+        sibling_entity_type = candidate.get("entity_type")
+    exact_siblings = _exact_name_siblings(store, candidate_name, entity_type=sibling_entity_type)
+    if exact_siblings:
+        normalized_candidate_name = _normalize_lookup_name(candidate_name)
+        results_by_id = {
+            r["id"]: r
+            for r in results
+            if _normalize_lookup_name(r.get("name", "")) == normalized_candidate_name
+            and (sibling_entity_type is None or r.get("entity_type") == sibling_entity_type)
+        }
+        for sibling in exact_siblings:
+            results_by_id.setdefault(sibling["id"], sibling)
+        results = list(results_by_id.values())
+        entity = _select_evidence_rich_entity(store, results)
+        aggregate_entity_ids = [
+            r["id"]
+            for r in results
+            if _normalize_lookup_name(r.get("name", "")) == _normalize_lookup_name(entity["name"])
+        ]
+    else:
+        entity = candidate
+        aggregate_entity_ids = [entity["id"]]
     entity_id = entity["id"]
 
     # Get relations (exclude co_occurs_with noise)
-    relations_raw = store.get_entity_relations(entity_id)
+    relations_raw = []
+    seen_relation_ids = set()
+    for aggregate_id in aggregate_entity_ids:
+        for relation in store.get_entity_relations(aggregate_id):
+            relation_id = relation.get("id")
+            if relation_id and relation_id in seen_relation_ids:
+                continue
+            if relation_id:
+                seen_relation_ids.add(relation_id)
+            relations_raw.append(relation)
     relations = [
         {
             "relation_type": r["relation_type"],
@@ -839,7 +878,18 @@ def entity_lookup(
     ]
 
     # Get evidence chunks
-    evidence_raw = store.get_entity_chunks(entity_id, limit=10, include_audit=include_audit)
+    evidence_raw = []
+    seen_chunk_ids = set()
+    for aggregate_id in aggregate_entity_ids:
+        for evidence_chunk in store.get_entity_chunks(aggregate_id, limit=10, include_audit=include_audit):
+            chunk_id = evidence_chunk.get("chunk_id")
+            if chunk_id and chunk_id in seen_chunk_ids:
+                continue
+            if chunk_id:
+                seen_chunk_ids.add(chunk_id)
+            evidence_raw.append(evidence_chunk)
+    evidence_raw.sort(key=lambda chunk: chunk.get("relevance") or 0, reverse=True)
+    evidence_raw = evidence_raw[:10]
     evidence = [
         {
             "chunk_id": e["chunk_id"],
@@ -878,3 +928,71 @@ def entity_lookup(
         "completeness_score": completeness_score,
         "health_level": health_level,
     }
+
+
+def _normalize_lookup_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name.strip().casefold())
+
+
+def _exact_name_siblings(
+    store: VectorStore,
+    name: str,
+    entity_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    cursor = store._read_cursor()
+    if entity_type:
+        rows = list(
+            cursor.execute(
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance
+                   FROM kg_entities
+                   WHERE LOWER(name) = LOWER(?) AND entity_type = ?""",
+                (name, entity_type),
+            )
+        )
+    else:
+        rows = list(
+            cursor.execute(
+                """SELECT id, entity_type, name, metadata, created_at, updated_at,
+                          canonical_name, description, confidence, importance
+                   FROM kg_entities
+                   WHERE LOWER(name) = LOWER(?)""",
+                (name,),
+            )
+        )
+    return [
+        {
+            "id": row[0],
+            "entity_type": row[1],
+            "name": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "created_at": row[4],
+            "updated_at": row[5],
+            "canonical_name": row[6],
+            "description": row[7],
+            "confidence": row[8],
+            "importance": row[9],
+        }
+        for row in rows
+    ]
+
+
+def _select_evidence_rich_entity(store: VectorStore, entities: List[Dict[str, Any]]) -> Dict[str, Any]:
+    cursor = store._read_cursor()
+
+    def score(entity: Dict[str, Any]) -> tuple[int, int, float]:
+        entity_id = entity["id"]
+        chunk_count = cursor.execute(
+            "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?",
+            (entity_id,),
+        ).fetchone()[0]
+        relation_count = cursor.execute(
+            """SELECT COUNT(*) FROM kg_relations
+               WHERE (source_id = ? OR target_id = ?)
+                 AND expired_at IS NULL""",
+            (entity_id, entity_id),
+        ).fetchone()[0]
+        importance = float(entity.get("importance") or 0)
+        return (int(chunk_count), int(relation_count), importance)
+
+    return max(entities, key=score)

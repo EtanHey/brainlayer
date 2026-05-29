@@ -8,6 +8,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
     let sourceFile: String
     let tags: [String]
     let contentType: String
+    let claudeConversationID: String
 
     var displayText: String {
         let preferred = summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -27,7 +28,8 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         source: String,
         sourceFile: String,
         tags: [String],
-        contentType: String
+        contentType: String,
+        claudeConversationID: String = ""
     ) {
         self.id = id
         self.content = content
@@ -36,6 +38,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         self.sourceFile = sourceFile
         self.tags = tags
         self.contentType = contentType
+        self.claudeConversationID = claudeConversationID
     }
 
     init(row: [String: Any]) {
@@ -45,6 +48,7 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         source = row["source"] as? String ?? ""
         sourceFile = row["source_file"] as? String ?? ""
         contentType = row["content_type"] as? String ?? ""
+        claudeConversationID = row["claude_conversation_id"] as? String ?? ""
         tags = InjectionChunk.decodeTags(row["tags"])
     }
 
@@ -218,6 +222,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     let chunkIDs: [String]
     let tokenCount: Int
     let chunks: [InjectionChunk]
+    let claudeConversationID: String
 
     var chunkCount: Int { chunkIDs.count }
 
@@ -277,7 +282,8 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         query: String,
         chunkIDs: [String],
         tokenCount: Int,
-        chunks: [InjectionChunk] = []
+        chunks: [InjectionChunk] = [],
+        claudeConversationID: String = ""
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -286,6 +292,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         self.chunkIDs = chunkIDs
         self.tokenCount = tokenCount
         self.chunks = chunks
+        self.claudeConversationID = claudeConversationID
     }
 
     init(row: [String: Any]) throws {
@@ -300,6 +307,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         timestamp = row["timestamp"] as? String ?? ""
         query = row["query"] as? String ?? ""
         tokenCount = row["token_count"] as? Int ?? 0
+        claudeConversationID = row["claude_conversation_id"] as? String ?? ""
 
         if let rawChunkIDs = row["chunk_ids"] as? [String] {
             self.chunkIDs = rawChunkIDs

@@ -722,7 +722,10 @@ struct InjectionFeedView: View {
     }
 
     private func copyContinuation(for burst: InjectionPresentation.Burst) {
-        let command = InjectionContinuation.resumeCommand(sessionID: burst.sessionID)
+        let command = InjectionContinuation.resumeCommand(
+            conversationID: burst.claudeConversationID,
+            fallbackSessionID: burst.sessionID
+        )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(command, forType: .string)

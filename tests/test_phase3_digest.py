@@ -436,6 +436,130 @@ def test_entity_lookup_merges_case_duplicate_entities(tmp_path):
     assert remaining == [(rich_id,)]
 
 
+def test_entity_lookup_aggregates_exact_name_duplicates_across_types(tmp_path):
+    """Exact-name duplicates should not hide linked chunks behind an empty shell."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    tool_id = store.upsert_entity("tool-claude-code", "tool", "Claude Code", embedding=dummy_embed("tool"))
+    project_id = store.upsert_entity("project-claude-code", "project", "Claude Code", embedding=dummy_embed("project"))
+    tech_id = store.upsert_entity("tech-anthropic", "company", "Anthropic", embedding=dummy_embed("anthropic"))
+    store.add_relation("rel-created", tech_id, tool_id, "created")
+    _insert_chunks(
+        store,
+        ["cc-1", "cc-2"],
+        [
+            "Claude Code watcher chunks should link to the real entity.",
+            "Claude Code resume commands use the JSONL conversation UUID.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "test"},
+            {"source_file": "t.jsonl", "project": "test"},
+        ],
+        [dummy_embed("cc1"), dummy_embed("cc2")],
+    )
+    store.link_entity_chunk(project_id, "cc-1", relevance=0.9, context="watcher")
+    store.link_entity_chunk(project_id, "cc-2", relevance=0.8, context="resume")
+
+    result = entity_lookup("Claude Code", store, dummy_embed)
+
+    assert result is not None
+    assert result["name"] == "Claude Code"
+    assert len(result["evidence"]) == 2
+    assert any(relation["relation_type"] == "created" for relation in result["relations"])
+
+
+def test_entity_lookup_does_not_aggregate_unallowlisted_cross_type_duplicates(tmp_path):
+    """Same-name entities in different domains should not inherit each other's evidence."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    project_id = store.upsert_entity("project-acme", "project", "Acme", embedding=dummy_embed("project acme"))
+    company_id = store.upsert_entity("company-acme", "company", "Acme", embedding=dummy_embed("company acme"))
+    api_id = store.upsert_entity("tool-api", "tool", "API", embedding=dummy_embed("api"))
+    store.add_relation("rel-acme-api", project_id, api_id, "uses")
+    _insert_chunks(
+        store,
+        ["acme-company"],
+        ["Acme company sales notes should stay attached to the company entity."],
+        [{"source_file": "t.jsonl", "project": "test"}],
+        [dummy_embed("acme company")],
+    )
+    store.link_entity_chunk(company_id, "acme-company", relevance=0.95, context="company notes")
+
+    result = entity_lookup("Acme", store, dummy_embed)
+
+    assert result is not None
+    assert result["entity_type"] == "project"
+    assert result["evidence"] == []
+    assert any(relation["relation_type"] == "uses" for relation in result["relations"])
+
+
+def test_entity_lookup_selects_only_exact_siblings_when_fts_returns_partial_hits(tmp_path):
+    """Partial FTS hits with more evidence should not replace the exact candidate."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    claude_id = store.upsert_entity("agent-claude", "agent", "Claude", embedding=dummy_embed("claude"))
+    code_id = store.upsert_entity("tool-vscode", "tool", "Visual Studio Code", embedding=dummy_embed("code"))
+    _insert_chunks(
+        store,
+        ["code-1", "code-2"],
+        [
+            "Visual Studio Code has a mature extension ecosystem.",
+            "Code editor setup notes unrelated to the Claude entity.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "test"},
+            {"source_file": "t.jsonl", "project": "test"},
+        ],
+        [dummy_embed("code1"), dummy_embed("code2")],
+    )
+    store.link_entity_chunk(code_id, "code-1", relevance=0.95, context="editor")
+    store.link_entity_chunk(code_id, "code-2", relevance=0.9, context="editor")
+
+    result = entity_lookup("Claude", store, dummy_embed)
+
+    assert result is not None
+    assert result["id"] == claude_id
+    assert result["name"] == "Claude"
+    assert result["evidence"] == []
+
+
+def test_entity_lookup_does_not_write_in_readonly_mode(tmp_path):
+    """brain_entity runs against read-only DB handles and must not normalize by writing."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    db_path = tmp_path / "test.db"
+    store = VectorStore(db_path)
+    dummy_embed = _dummy_embed
+    eid = store.upsert_entity("tool-claude-code", "tool", "Claude Code", embedding=dummy_embed("tool"))
+    _insert_chunks(
+        store,
+        ["cc-readonly"],
+        ["Claude Code read-only lookup should still return linked evidence."],
+        [{"source_file": "t.jsonl", "project": "test"}],
+        [dummy_embed("cc")],
+    )
+    store.link_entity_chunk(eid, "cc-readonly", relevance=0.9, context="readonly")
+    store.close()
+
+    readonly_store = VectorStore(db_path, readonly=True)
+    try:
+        result = entity_lookup("Claude Code", readonly_store, dummy_embed)
+    finally:
+        readonly_store.close()
+
+    assert result is not None
+    assert len(result["evidence"]) == 1
+
+
 def test_upsert_entity_adds_flowbar_voicebar_rename_relation(tmp_path):
     """Project upserts should seed the FlowBar -> VoiceBar rename edge."""
     store = VectorStore(tmp_path / "test.db")

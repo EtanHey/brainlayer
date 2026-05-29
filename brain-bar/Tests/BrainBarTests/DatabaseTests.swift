@@ -809,6 +809,38 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.primaryKind.label, "Checkpoint")
     }
 
+    func testListInjectionEventsLoadsResumableClaudeConversationID() throws {
+        let conversationID = "3679128a-f371-445f-82ba-b3946e2f20b6"
+        try db.insertChunk(
+            id: "chunk-resume",
+            content: "This chunk belongs to a Claude Code JSONL conversation.",
+            sessionId: "brainlayer-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6
+        )
+        db.exec("""
+            UPDATE chunks
+            SET metadata = '{"session_id":"brainlayer-session","claude_conversation_id":"\(conversationID)"}',
+                source = 'realtime_watcher',
+                source_file = '/Users/etanheyman/.claude/projects/-Users-etanheyman-Gits-brainlayer/\(conversationID).jsonl'
+            WHERE id = 'chunk-resume'
+        """)
+        try db.recordInjectionEvent(
+            sessionID: "brainlayer-session",
+            query: "copy should resume Claude Code conversation",
+            chunkIDs: ["chunk-resume"],
+            tokenCount: 33,
+            timestamp: "2026-03-31T04:00:00.000Z"
+        )
+
+        let event = try XCTUnwrap(db.listInjectionEvents(limit: 1).first)
+
+        XCTAssertEqual(event.sessionID, "brainlayer-session")
+        XCTAssertEqual(event.claudeConversationID, conversationID)
+        XCTAssertEqual(event.chunks.first?.claudeConversationID, conversationID)
+    }
+
     func testListInjectionEventsRejectsImportedYoutubeSeedChunks() throws {
         try db.insertChunk(
             id: "live-hook",
