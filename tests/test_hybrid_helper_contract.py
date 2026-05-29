@@ -95,9 +95,7 @@ search_handler._brain_search = fake_brain_search
     env = os.environ.copy()
     env["BRAINLAYER_REPO_ROOT"] = str(REPO_ROOT)
     env["BRAINBAR_PYTHON"] = sys.executable
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(sitecustomize_dir), str(SRC_ROOT), env.get("PYTHONPATH", "")]
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(sitecustomize_dir), str(SRC_ROOT), env.get("PYTHONPATH", "")])
     env["PYTHONUNBUFFERED"] = "1"
 
     process = subprocess.Popen(
