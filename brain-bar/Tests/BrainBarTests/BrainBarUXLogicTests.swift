@@ -325,10 +325,10 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(layout.diagnosticColumns, 1)
     }
 
-    func testDashboardLayoutUsesSideBySideDiagnosticsInMediumWindows() {
+    func testDashboardLayoutStacksPipelineChartsInMediumWindows() {
         let layout = BrainBarDashboardLayout(containerSize: CGSize(width: 1_020, height: 640))
 
-        XCTAssertEqual(layout.chartColumns, 2)
+        XCTAssertEqual(layout.chartColumns, 1)
         XCTAssertEqual(layout.overviewMetricColumns, 4)
         XCTAssertEqual(layout.diagnosticColumns, 2)
     }

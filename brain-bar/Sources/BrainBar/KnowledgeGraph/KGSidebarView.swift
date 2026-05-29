@@ -13,6 +13,7 @@ struct KGSidebarView: View {
     let hasChunkLoadError: Bool
     let hasFileLoadError: Bool
     let onOpenConversation: (String) -> Void
+    let onOpenFile: (BrainDatabase.SourceFileRow) -> Void
     let onSelectRelation: (EntityCard.Relation) -> Void
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
@@ -34,8 +35,8 @@ struct KGSidebarView: View {
                         if !entity.metadata.isEmpty {
                             metadataSection(entity.metadata)
                         }
-                        chunksSection()
                         filesSection()
+                        chunksSection()
                     }
                     .padding(.horizontal, 18)
                     .padding(.bottom, 18)
@@ -74,7 +75,7 @@ struct KGSidebarView: View {
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 8) {
+                    WrappingPillLayout(spacing: 8, lineSpacing: 8) {
                         labelChip(entity.entityType.isEmpty ? "entity" : entity.entityType.capitalized, tint: .blue)
                         labelChip("\(entity.relations.count) links", tint: .primary)
                         if hasChunkLoadError, chunks.isEmpty {
@@ -313,13 +314,18 @@ struct KGSidebarView: View {
             } else {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(files) { file in
-                        fileRow(file)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.brainBarTextPrimary.opacity(0.045))
-                            )
+                        Button {
+                            onOpenFile(file)
+                        } label: {
+                            fileRow(file)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.brainBarTextPrimary.opacity(0.045))
+                        )
                     }
 
                     if canLoadMoreFiles {
@@ -372,6 +378,8 @@ struct KGSidebarView: View {
     private func labelChip(_ text: String, tint: ChipTint) -> some View {
         Text(text)
             .font(.system(size: KGBadgeStyle.fontSize, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, KGBadgeStyle.horizontalPadding)
             .padding(.vertical, KGBadgeStyle.verticalPadding)
             .background(

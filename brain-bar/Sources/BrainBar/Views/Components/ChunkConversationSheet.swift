@@ -121,14 +121,18 @@ struct ChunkConversationOverlay: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color.brainBarBlack.opacity(0.22))
+                .fill(Color.brainBarBlack.opacity(0.5))
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onClose)
 
             ChunkConversationSheet(conversation: conversation, title: title, onClose: onClose)
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.brainBarGlassPrimary)
+                        .fill(.regularMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .fill(Color.brainBarGlassPrimary)
+                        )
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)

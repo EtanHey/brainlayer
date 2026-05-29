@@ -68,7 +68,8 @@ final class BrainBarDashboardPanelController {
         panel.title = "BrainBar"
         panel.titleVisibility = .visible
         panel.titlebarAppearsTransparent = false
-        panel.isMovableByWindowBackground = true
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

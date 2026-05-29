@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 protocol KnowledgeGraphReading: AnyObject, Sendable {
@@ -405,6 +406,15 @@ final class KGViewModel: ObservableObject {
     func openConversation(chunkID: String) {
         guard let database else { return }
         selectedConversation = try? database.expandedConversation(id: chunkID)
+    }
+
+    func openSourceFile(_ file: BrainDatabase.SourceFileRow) {
+        let url = URL(fileURLWithPath: file.sourceFile)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - Hit Testing
