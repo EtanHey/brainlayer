@@ -177,9 +177,7 @@ class TestFlushCallback:
         flush = create_flush_callback(db_path)
         conversation_id = "3679128a-f371-445f-82ba-b3946e2f20b6"
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", sessionId="brainlayer-session-9")
-        entry["_source_file"] = str(
-            tmp_path / "projects" / "-Users-test-Gits-myproject" / f"{conversation_id}.jsonl"
-        )
+        entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / f"{conversation_id}.jsonl")
 
         flush([entry])
 

@@ -830,7 +830,11 @@ def entity_lookup(
             results_by_id.setdefault(sibling["id"], sibling)
         results = list(results_by_id.values())
         entity = _select_evidence_rich_entity(store, results)
-        aggregate_entity_ids = [r["id"] for r in results if _normalize_lookup_name(r.get("name", "")) == _normalize_lookup_name(entity["name"])]
+        aggregate_entity_ids = [
+            r["id"]
+            for r in results
+            if _normalize_lookup_name(r.get("name", "")) == _normalize_lookup_name(entity["name"])
+        ]
     else:
         entity = candidate
         aggregate_entity_ids = [entity["id"]]
@@ -871,7 +875,7 @@ def entity_lookup(
             if chunk_id:
                 seen_chunk_ids.add(chunk_id)
             evidence_raw.append(evidence_chunk)
-    evidence_raw.sort(key=lambda chunk: (chunk.get("relevance") or 0), reverse=True)
+    evidence_raw.sort(key=lambda chunk: chunk.get("relevance") or 0, reverse=True)
     evidence_raw = evidence_raw[:10]
     evidence = [
         {
