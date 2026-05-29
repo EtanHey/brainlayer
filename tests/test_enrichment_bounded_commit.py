@@ -129,6 +129,27 @@ def test_enrichment_batcher_retains_current_item_when_overdue_flush_fails(monkey
     assert [chunk["id"] for chunk, _, _ in batcher._pending] == ["c0", "c1"]
 
 
+def test_submit_write_yields_after_successful_write(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    sleeps = []
+
+    class ImmediateQueue:
+        def submit(self, name, callback):
+            future = MagicMock()
+            future.result.return_value = callback()
+            return future
+
+    monkeypatch.setattr(controller, "_get_store_write_queue", lambda store: ImmediateQueue())
+    monkeypatch.setattr(controller, "_current_post_write_yield_seconds", lambda: 0.123)
+    monkeypatch.setattr(controller.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = controller._submit_write(MagicMock(), "apply-enrichment:c0", lambda: "ok")
+
+    assert result == "ok"
+    assert sleeps == [0.123]
+
+
 def test_enrich_batch_reports_final_flush_failure_without_crashing(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
