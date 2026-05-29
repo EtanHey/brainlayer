@@ -4,42 +4,38 @@ import SwiftUI
 
 @MainActor
 final class BrainBarStatusPopoverController: NSObject {
-    static let contentSize = NSSize(width: 900, height: 640)
+    static let statusItemEventMask: NSEvent.EventTypeMask = [.leftMouseUp, .rightMouseUp]
 
     let statusItemForTesting: NSStatusItem
-    let popoverForTesting: NSPopover
+    let contextMenuForTesting: NSMenu
 
     private let runtime: BrainBarRuntime
+    private let dashboardPanelController: BrainBarDashboardPanelController
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
 
-    init(runtime: BrainBarRuntime) {
+    init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
+        self.dashboardPanelController = dashboardPanelController
         statusItemForTesting = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        popoverForTesting = NSPopover()
+        contextMenuForTesting = NSMenu(title: "BrainBar")
         super.init()
 
+        configureContextMenu()
         configureStatusItem()
-        prewarmPopover()
         bindRuntime()
     }
 
     func toggle(_ sender: Any?) {
-        if popoverForTesting.isShown {
-            popoverForTesting.performClose(sender)
-        } else {
-            show(sender)
-        }
+        dashboardPanelController.toggle()
     }
 
     func show(_ sender: Any?) {
-        guard let button = statusItemForTesting.button else { return }
-        popoverForTesting.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popoverForTesting.contentViewController?.view.window?.makeKey()
+        dashboardPanelController.show()
     }
 
     func close(_ sender: Any?) {
-        popoverForTesting.performClose(sender)
+        dashboardPanelController.dismiss()
     }
 
     func stop() {
@@ -52,19 +48,8 @@ final class BrainBarStatusPopoverController: NSObject {
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
         button.target = self
         button.action = #selector(toggleFromStatusItem(_:))
+        button.sendAction(on: Self.statusItemEventMask)
         button.toolTip = "BrainBar"
-    }
-
-    private func prewarmPopover() {
-        popoverForTesting.behavior = .transient
-        popoverForTesting.contentSize = Self.contentSize
-
-        let hosting = NSHostingController(
-            rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false)
-                .frame(width: Self.contentSize.width, height: Self.contentSize.height)
-        )
-        _ = hosting.view
-        popoverForTesting.contentViewController = hosting
     }
 
     private func bindRuntime() {
@@ -99,6 +84,67 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     @objc private func toggleFromStatusItem(_ sender: Any?) {
+        if let event = NSApp.currentEvent, event.type == .rightMouseUp,
+           let button = statusItemForTesting.button {
+            NSMenu.popUpContextMenu(contextMenuForTesting, with: event, for: button)
+            return
+        }
+
         toggle(sender)
+    }
+
+    private func configureContextMenu() {
+        contextMenuForTesting.addItem(
+            NSMenuItem(
+                title: "Restart BrainBar",
+                action: #selector(restartBrainBar(_:)),
+                keyEquivalent: ""
+            )
+        )
+        contextMenuForTesting.addItem(NSMenuItem.separator())
+        contextMenuForTesting.addItem(
+            NSMenuItem(
+                title: "Run as App Window",
+                action: #selector(runAsAppWindow(_:)),
+                keyEquivalent: ""
+            )
+        )
+        contextMenuForTesting.addItem(
+            NSMenuItem(
+                title: "Run as Menu Item Daemon",
+                action: #selector(runAsMenuItemDaemon(_:)),
+                keyEquivalent: ""
+            )
+        )
+        contextMenuForTesting.addItem(NSMenuItem.separator())
+        contextMenuForTesting.addItem(
+            NSMenuItem(
+                title: "Quit BrainBar",
+                action: #selector(quitBrainBar(_:)),
+                keyEquivalent: ""
+            )
+        )
+
+        for item in contextMenuForTesting.items where item.action != nil {
+            item.target = self
+        }
+    }
+
+    @objc private func restartBrainBar(_ sender: Any?) {
+        BrainBarProcessControl.restart()
+    }
+
+    @objc private func quitBrainBar(_ sender: Any?) {
+        BrainBarProcessControl.quit()
+    }
+
+    @objc private func runAsAppWindow(_ sender: Any?) {
+        BrainBarLaunchMode.setPreferred(.appWindow)
+        BrainBarProcessControl.restart()
+    }
+
+    @objc private func runAsMenuItemDaemon(_ sender: Any?) {
+        BrainBarLaunchMode.setPreferred(.menuItemDaemon)
+        BrainBarProcessControl.restart()
     }
 }

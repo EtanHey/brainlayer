@@ -37,11 +37,14 @@ final class StatsCollector: ObservableObject {
     private let agentActivityMonitor: AgentActivityMonitor
     private let agentActivitySampleInterval: TimeInterval
     private let statsRefreshCoalesceInterval: TimeInterval
+    private let liveStatsRefreshDelay: TimeInterval
     private let autoRefreshInterval: TimeInterval
     private let brainBusEvents: BrainBusEventSource?
     private var brainBusTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
     private var pendingStatsRefreshTask: Task<Void, Never>?
+    private var pendingStatsRefreshFireAt: Date?
+    private var pendingStatsRefreshBypassesCoalescing = false
     private var dashboardRefreshTask: Task<Void, Never>?
     private var dashboardRefreshGeneration = 0
     private var isRunning = false
@@ -58,6 +61,7 @@ final class StatsCollector: ObservableObject {
         agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
         agentActivitySampleInterval: TimeInterval = 5,
         statsRefreshCoalesceInterval: TimeInterval = 5,
+        liveStatsRefreshDelay: TimeInterval = 0.2,
         autoRefreshInterval: TimeInterval = 30,
         brainBusEvents: BrainBusEventSource? = nil,
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
@@ -68,6 +72,7 @@ final class StatsCollector: ObservableObject {
         self.agentActivityMonitor = agentActivityMonitor
         self.agentActivitySampleInterval = agentActivitySampleInterval
         self.statsRefreshCoalesceInterval = statsRefreshCoalesceInterval
+        self.liveStatsRefreshDelay = liveStatsRefreshDelay
         self.autoRefreshInterval = autoRefreshInterval
         self.brainBusEvents = brainBusEvents
         self.stats = DashboardStats(
@@ -123,7 +128,9 @@ final class StatsCollector: ObservableObject {
         dashboardRefreshTask = nil
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
-        hasPendingStatsRefresh = false
+        pendingStatsRefreshFireAt = nil
+        pendingStatsRefreshBypassesCoalescing = false
+        hasPendingStatsRefresh = pendingStatsRefreshTask != nil
         isRefreshing = false
         isManualRefreshInProgress = false
         if isRunning {
@@ -142,16 +149,22 @@ final class StatsCollector: ObservableObject {
         NSLog("[BrainBar] manual refresh requested at %@", ISO8601DateFormatter().string(from: Date()))
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
+        pendingStatsRefreshFireAt = nil
+        pendingStatsRefreshBypassesCoalescing = false
         hasPendingStatsRefresh = false
         requestRefresh(force: true, trigger: .manual)
     }
 
-    func requestRefresh(force: Bool = false, trigger: DashboardRefreshTrigger = .auto) {
+    func requestRefresh(
+        force: Bool = false,
+        trigger: DashboardRefreshTrigger = .auto,
+        bypassCoalescing: Bool = false
+    ) {
         let nextDaemon = daemonMonitor.sample()
         let snapshotTime = Date()
         refreshAgentActivity(force: force, now: snapshotTime)
 
-        if !force, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
+        if !force, !bypassCoalescing, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
             daemon = nextDaemon
             state = PipelineState.derive(daemon: nextDaemon, stats: stats)
             schedulePendingStatsRefresh(after: coalescedDelay)
@@ -169,6 +182,8 @@ final class StatsCollector: ObservableObject {
 
         pendingStatsRefreshTask?.cancel()
         pendingStatsRefreshTask = nil
+        pendingStatsRefreshFireAt = nil
+        pendingStatsRefreshBypassesCoalescing = false
         hasPendingStatsRefresh = false
         dashboardRefreshTask?.cancel()
         dashboardRefreshGeneration += 1
@@ -265,7 +280,7 @@ final class StatsCollector: ObservableObject {
         }
 
         isRefreshing = false
-        hasPendingStatsRefresh = false
+        hasPendingStatsRefresh = pendingStatsRefreshTask != nil
         if trigger == .manual {
             isManualRefreshInProgress = false
         }
@@ -303,10 +318,20 @@ final class StatsCollector: ObservableObject {
         return statsRefreshCoalesceInterval - elapsed
     }
 
-    private func schedulePendingStatsRefresh(after delay: TimeInterval) {
+    private func schedulePendingStatsRefresh(after delay: TimeInterval, bypassCoalescing: Bool = false) {
+        let fireAt = Date().addingTimeInterval(delay)
         hasPendingStatsRefresh = true
-        guard pendingStatsRefreshTask == nil else { return }
+        if pendingStatsRefreshTask != nil {
+            let shouldReplacePendingRefresh =
+                (bypassCoalescing && !pendingStatsRefreshBypassesCoalescing) ||
+                pendingStatsRefreshFireAt.map { fireAt < $0 } ?? false
+            guard shouldReplacePendingRefresh else { return }
+            pendingStatsRefreshTask?.cancel()
+            pendingStatsRefreshTask = nil
+        }
 
+        pendingStatsRefreshFireAt = fireAt
+        pendingStatsRefreshBypassesCoalescing = bypassCoalescing
         pendingStatsRefreshTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(delay))
@@ -319,10 +344,20 @@ final class StatsCollector: ObservableObject {
             await MainActor.run {
                 guard let self, !self.isStopped else { return }
                 self.pendingStatsRefreshTask = nil
+                self.pendingStatsRefreshFireAt = nil
+                let shouldBypassCoalescing = self.pendingStatsRefreshBypassesCoalescing
+                self.pendingStatsRefreshBypassesCoalescing = false
                 self.hasPendingStatsRefresh = false
-                self.requestRefresh(force: false, trigger: .auto)
+                self.requestRefresh(force: false, trigger: .auto, bypassCoalescing: shouldBypassCoalescing)
             }
         }
+    }
+
+    private func scheduleLiveStatsRefresh() {
+        schedulePendingStatsRefresh(
+            after: min(statsRefreshCoalesceInterval, liveStatsRefreshDelay),
+            bypassCoalescing: true
+        )
     }
 
     private func startAutoRefreshLoop() {
@@ -341,6 +376,8 @@ final class StatsCollector: ObservableObject {
                     guard let self, !self.isStopped else { return }
                     self.pendingStatsRefreshTask?.cancel()
                     self.pendingStatsRefreshTask = nil
+                    self.pendingStatsRefreshFireAt = nil
+                    self.pendingStatsRefreshBypassesCoalescing = false
                     self.hasPendingStatsRefresh = false
                     self.requestRefresh(force: false, trigger: .auto)
                 }
@@ -367,7 +404,7 @@ final class StatsCollector: ObservableObject {
             trigger: "darwin_db_notification",
             timestamp: Date()
         )
-        schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
+        schedulePendingStatsRefresh(after: max(statsRefreshCoalesceInterval, 1.0))
     }
 
     private func handleBrainBusEvent(_ event: BrainBusEvent) {
@@ -383,7 +420,7 @@ final class StatsCollector: ObservableObject {
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
         case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
-            schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
+            scheduleLiveStatsRefresh()
         }
     }
 

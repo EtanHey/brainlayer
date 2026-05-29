@@ -23,7 +23,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertTrue(panel.styleMask.contains(.closable))
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.frameAutosaveName, "BrainBarPanel")
-        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 1_348, height: 1_078))
+        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
         XCTAssertEqual(panel.minSize, NSSize(width: 760, height: 560))
         XCTAssertGreaterThanOrEqual(panel.frame.width, panel.minSize.width)
         XCTAssertGreaterThanOrEqual(panel.frame.height, panel.minSize.height)
@@ -31,14 +31,43 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertTrue(panel.canBecomeMain)
     }
 
+    func testDashboardPanelOnlyNeedsInitialPositioningWithoutAutosavedFrame() {
+        XCTAssertTrue(
+            BrainBarDashboardPanelController.needsInitialPositioning(
+                defaults: UserDefaults.standard
+            )
+        )
+
+        UserDefaults.standard.set("saved frame", forKey: "NSWindow Frame BrainBarPanel")
+
+        XCTAssertFalse(
+            BrainBarDashboardPanelController.needsInitialPositioning(
+                defaults: UserDefaults.standard
+            )
+        )
+    }
+
     func testDashboardPanelToggleControlsVisibility() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
 
         controller.toggle()
         XCTAssertTrue(controller.panelForTesting.isVisible)
+        XCTAssertFalse(controller.needsInitialPositioningForTesting)
 
         controller.toggle()
         XCTAssertFalse(controller.panelForTesting.isVisible)
+    }
+
+    func testDashboardLayoutReflowsAtMinFloorAndLargeWindowSizes() {
+        let floorLayout = BrainBarDashboardLayout(containerSize: CGSize(width: 760, height: 560))
+        XCTAssertEqual(floorLayout.chartColumns, 1)
+        XCTAssertEqual(floorLayout.diagnosticColumns, 1)
+        XCTAssertTrue(floorLayout.compactCards)
+
+        let largeLayout = BrainBarDashboardLayout(containerSize: CGSize(width: 1_348, height: 1_078))
+        XCTAssertEqual(largeLayout.chartColumns, 2)
+        XCTAssertEqual(largeLayout.diagnosticColumns, 2)
+        XCTAssertFalse(largeLayout.compactCards)
     }
 
     func testCommandBarBecomesReadyWhenDatabaseWasInstalledWhilePanelWasHidden() {

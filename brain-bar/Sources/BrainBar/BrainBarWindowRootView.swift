@@ -193,35 +193,31 @@ private struct BrainBarWindowHeader: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                Label("BrainBar", systemImage: "brain")
-                    .font(.system(size: 18, weight: .semibold))
-                    .labelStyle(.titleAndIcon)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    brand
+                    Spacer(minLength: 16)
+                    sectionPicker(maxWidth: 280)
+                    refreshControls
+                    BrainBarAppControlMenu()
+                    Spacer(minLength: 12)
+                    hotkeyLabel
+                }
 
-                Spacer(minLength: 16)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 12) {
+                        brand
+                        Spacer(minLength: 12)
+                        BrainBarAppControlMenu()
+                        hotkeyLabel
+                            .frame(maxWidth: 180, alignment: .trailing)
+                    }
 
-                Picker("Section", selection: $selectedTab) {
-                    ForEach(BrainBarTab.allCases) { tab in
-                        Text(tab.title).tag(tab)
+                    HStack(alignment: .center, spacing: 10) {
+                        sectionPicker(maxWidth: .infinity)
+                        refreshControls
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 280)
-                .labelsHidden()
-
-                if let collector {
-                    BrainBarHeaderRefreshControls(collector: collector)
-                }
-
-                BrainBarAppControlMenu()
-
-                Spacer(minLength: 12)
-
-                Text(hotkeyStatus)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
             }
 
             BrainBarCommandBar(viewModel: commandBarViewModel)
@@ -231,6 +227,39 @@ private struct BrainBarWindowHeader: View {
         .padding(.bottom, 12)
         .background(BrainBarDesignTokens.Glass.primaryMaterial)
         .background(WindowDragHandle())
+    }
+
+    private var brand: some View {
+        Label("BrainBar", systemImage: "brain")
+            .font(.system(size: 18, weight: .semibold))
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+    }
+
+    private var hotkeyLabel: some View {
+        Text(hotkeyStatus)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    @ViewBuilder
+    private var refreshControls: some View {
+        if let collector {
+            BrainBarHeaderRefreshControls(collector: collector)
+        }
+    }
+
+    private func sectionPicker(maxWidth: CGFloat) -> some View {
+        Picker("Section", selection: $selectedTab) {
+            ForEach(BrainBarTab.allCases) { tab in
+                Text(tab.title).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: maxWidth)
+        .labelsHidden()
     }
 }
 
