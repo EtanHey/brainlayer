@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.brainlayer.maintenance-weekly</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__PYTHON_BIN__</string>
+		<string>__REPO_ROOT__/scripts/maintenance/brainlayer_maintenance.py</string>
+		<string>--full</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>0</integer>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/maintenance-weekly.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/maintenance-weekly.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>BRAINLAYER_REPO_ROOT</key>
+		<string>__BRAINLAYER_DIR__</string>
+	</dict>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>7200</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>4096</integer>
+	</dict>
+</dict>
+</plist>
