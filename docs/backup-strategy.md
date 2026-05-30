@@ -20,7 +20,7 @@ Daily at 03:17 local time via `com.brainlayer.backup-daily`.
 
 Retention:
 
-Keep the latest 30 daily snapshots plus the latest snapshot for each of the latest 12 months.
+Keep the latest 7 daily snapshots. Weekly maintenance uses the same Drive API path with a 4-snapshot retention policy.
 
 ## Why This Approach
 
@@ -36,7 +36,7 @@ That mount is not present after repair, and `/Applications/Google Drive.app` is 
 
 Repo files:
 
-- `src/brainlayer/backup_daily.py`: creates the SQLite backup, gzips it, uploads it to Drive, and prunes retention.
+- `src/brainlayer/backup_daily.py`: creates the SQLite backup, gzips it, uploads it to Drive, verifies the uploaded file, removes the local staging copy, and prunes retention.
 - `scripts/launchd/backup-daily.sh`: launchd wrapper installed to `~/.local/lib/brainlayer/backup-daily.sh`.
 - `scripts/launchd/com.brainlayer.backup-daily.plist`: LaunchAgent template.
 - `scripts/launchd/install.sh backup`: installs the wrapper and LaunchAgent.

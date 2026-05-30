@@ -10,7 +10,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
+_DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 5000
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 # The post-commit WAL checkpoint is best-effort. Bound how long TRUNCATE may wait
 # on readers so a pinned reader can't stall every other writer for the full drain
@@ -93,6 +94,16 @@ def _post_commit_yield_seconds() -> float:
 class ApplyResult:
     chunk_id: str | None = None
     collision_chunk_id: str | None = None
+
+
+@dataclass
+class BurnDrainResult:
+    scanned_files: int = 0
+    applied_events: int = 0
+    skipped_verified_stale: int = 0
+    files_deleted: int = 0
+    failed_files: int = 0
+    checkpoints: int = 0
 
 
 def _default_db_path() -> Path:
@@ -567,6 +578,172 @@ def _rewrite_events_file(path: Path, events: list[dict[str, Any]]) -> None:
     tmp_path.replace(path)
 
 
+def _select_burn_batch(
+    files: list[Path], max_events_per_transaction: int
+) -> tuple[list[tuple[Path, list[dict[str, Any]]]], int]:
+    selected: list[tuple[Path, list[dict[str, Any]]]] = []
+    scanned = 0
+    event_count = 0
+    for path in files:
+        scanned += 1
+        try:
+            events = _read_events(path)
+        except (UnicodeDecodeError, OSError) as exc:
+            raise RuntimeError(f"failed to read queue file {path.name}: {exc}") from exc
+        if not events:
+            selected.append((path, []))
+            continue
+        if selected and event_count + len(events) > max_events_per_transaction:
+            break
+        selected.append((path, events))
+        event_count += len(events)
+        if event_count >= max_events_per_transaction:
+            break
+    return selected, scanned
+
+
+def _prefetch_enrichment_state(
+    conn: apsw.Connection, events: list[dict[str, Any]]
+) -> dict[str, tuple[str | None, str | None, str | None]]:
+    cols = _columns(conn, "chunks")
+    if not {"content_hash", "enrich_status", "enriched_at"}.issubset(cols):
+        return {}
+    chunk_ids = sorted(
+        {
+            str(event.get("chunk_id"))
+            for event in events
+            if _event_payload(event).get("kind") == "enrichment_update" and event.get("chunk_id")
+        }
+    )
+    if not chunk_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in chunk_ids)
+    rows = conn.execute(
+        f"SELECT id, content_hash, enrich_status, enriched_at FROM chunks WHERE id IN ({placeholders})",
+        chunk_ids,
+    )
+    return {str(row[0]): (row[1], row[2], row[3]) for row in rows}
+
+
+def _already_enriched(enrich_status: str | None, enriched_at: str | None) -> bool:
+    return enrich_status == "success" or bool(enriched_at)
+
+
+def _is_verified_redundant_enrichment(
+    event: dict[str, Any],
+    prefetched_state: dict[str, tuple[str | None, str | None, str | None]],
+) -> bool:
+    payload = _event_payload(event)
+    if payload.get("kind") != "enrichment_update":
+        return False
+    chunk_id = payload.get("chunk_id")
+    expected_hash = payload.get("content_hash")
+    if not chunk_id or not expected_hash:
+        return False
+    state = prefetched_state.get(str(chunk_id))
+    if state is None:
+        return False
+    content_hash, enrich_status, enriched_at = state
+    return content_hash == expected_hash and _already_enriched(enrich_status, enriched_at)
+
+
+def burn_drain_once(
+    *,
+    db_path: Path | None = None,
+    queue_dir: Path | None = None,
+    batch_size: int = 5000,
+    max_events_per_transaction: int = _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION,
+    log_path: Path | None = None,
+    embed_fn: Callable[[str], list[float]] | None = None,
+) -> BurnDrainResult:
+    """Drain a large queue backlog with one writer and one commit per large batch.
+
+    Queue files are unlinked only after the transaction commits. Verified redundant
+    enrichment updates are skipped inside the same committed batch so old queue
+    files can be safely removed without reapplying stale work.
+    """
+    db_path = db_path or _default_db_path()
+    queue_dir = queue_dir or _default_queue_dir()
+    log_path = log_path or _default_log_path()
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    max_events_per_transaction = max(1, max_events_per_transaction)
+
+    result = BurnDrainResult()
+    lock_fd = _acquire_queue_lock(queue_dir)
+    try:
+        files = sorted(queue_dir.glob("*.jsonl"), key=lambda path: (path.name.startswith("enrichment-"), path.name))[
+            :batch_size
+        ]
+        if not files:
+            return result
+        try:
+            batch, scanned = _select_burn_batch(files, max_events_per_transaction)
+        except RuntimeError as exc:
+            _log(log_path, f"burn drain failed before transaction: {exc}")
+            result.failed_files = 1
+            return result
+        result.scanned_files = scanned
+        if not batch:
+            return result
+
+        all_events = [event for _, events in batch for event in events]
+        conn = _open_connection(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            prefetched_state = _prefetch_enrichment_state(conn, all_events)
+            store_chunk_ids: list[str] = []
+            for _, events in batch:
+                for event in events:
+                    if _is_verified_redundant_enrichment(event, prefetched_state):
+                        result.skipped_verified_stale += 1
+                        continue
+                    applied = _apply_event(conn, event)
+                    result.applied_events += 1
+                    if applied.chunk_id:
+                        store_chunk_ids.append(applied.chunk_id)
+            if _embedding_enabled():
+                _embed_store_chunks(conn, store_chunk_ids, embed_fn)
+            conn.execute("COMMIT")
+            conn.setbusytimeout(_checkpoint_busy_timeout_ms())
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                result.checkpoints += 1
+            except apsw.Error as exc:
+                _log(log_path, f"burn drain checkpoint skipped: {exc}")
+            finally:
+                conn.setbusytimeout(_drain_busy_timeout_ms())
+        except Exception as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            result.failed_files = len(batch)
+            _log(log_path, f"burn drain failed; batch preserved: {exc}")
+            return result
+        finally:
+            conn.close()
+
+        for path, _events in batch:
+            try:
+                path.unlink()
+                result.files_deleted += 1
+            except FileNotFoundError:
+                result.files_deleted += 1
+            except OSError as exc:
+                _log(log_path, f"burn drain committed but could not unlink {path}: {exc}")
+        if result.applied_events or result.skipped_verified_stale:
+            _log(
+                log_path,
+                "burn drained="
+                f"{result.applied_events} skipped_verified_stale={result.skipped_verified_stale} "
+                f"files_deleted={result.files_deleted}",
+            )
+        return result
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
 def drain_once(
     *,
     db_path: Path | None = None,
@@ -686,9 +863,24 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--burn", action="store_true")
     parser.add_argument("--interval", type=float, default=0.5)
     parser.add_argument("--batch-size", type=int, default=250)
+    parser.add_argument("--max-events-per-transaction", type=int, default=_DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION)
     args = parser.parse_args()
+    if args.burn:
+        print(
+            json.dumps(
+                asdict(
+                    burn_drain_once(
+                        batch_size=args.batch_size,
+                        max_events_per_transaction=args.max_events_per_transaction,
+                    )
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
     if args.once:
         print(drain_once(batch_size=args.batch_size))
         return 0
