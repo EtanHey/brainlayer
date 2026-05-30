@@ -457,6 +457,68 @@ def test_entity_lookup_uses_summary_when_key_facts_normalize_empty(tmp_path):
     assert result["facts"][0]["frequency"] == 1
 
 
+def test_brain_entity_handler_surfaces_persisted_entity_facts(tmp_path, monkeypatch):
+    """brain_entity output includes persisted entity_facts with frequency."""
+    import asyncio
+
+    from brainlayer.mcp.entity_handler import _brain_entity
+    from brainlayer.pipeline import digest as digest_module
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    eid = store.upsert_entity("project-brainlayer", "project", "BrainLayer", embedding=dummy_embed("BrainLayer"))
+    _insert_chunks(
+        store,
+        ["bl-handler-1", "bl-handler-2"],
+        [
+            "BrainLayer stores durable memory for the golems ecosystem.",
+            "BrainLayer stores durable memory and indexes memories for recall.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+        ],
+        [dummy_embed("handler fact 1"), dummy_embed("handler fact 2")],
+    )
+    store.update_enrichment(
+        "bl-handler-1",
+        key_facts=["BrainLayer stores durable memory."],
+        summary="BrainLayer stores durable memory.",
+    )
+    store.update_enrichment(
+        "bl-handler-2",
+        key_facts=["BrainLayer stores durable memory."],
+        summary="BrainLayer stores durable memory.",
+    )
+    store.link_entity_chunk(eid, "bl-handler-1", relevance=0.9, context="durable memory")
+    store.link_entity_chunk(eid, "bl-handler-2", relevance=0.8, context="durable memory")
+    store.refresh_entity_facts(eid)
+
+    class DummyModel:
+        def embed_query(self, text: str) -> list[float]:  # noqa: ARG002
+            return dummy_embed(text)
+
+    def entity_lookup_without_facts(*args, **kwargs):  # noqa: ARG001
+        return {
+            "id": eid,
+            "name": "BrainLayer",
+            "entity_type": "project",
+            "description": "",
+            "metadata": {},
+            "relations": [],
+            "evidence": [],
+        }
+
+    monkeypatch.setattr("brainlayer.mcp.entity_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.entity_handler._get_embedding_model", lambda: DummyModel())
+    monkeypatch.setattr(digest_module, "entity_lookup", entity_lookup_without_facts)
+
+    result = asyncio.run(_brain_entity("BrainLayer", entity_type="project"))
+
+    assert "- BrainLayer stores durable memory. (x2)" in result.content[0].text
+
+
 def test_entity_lookup_not_found(tmp_path):
     """entity_lookup returns None for unknown entities."""
     from brainlayer.pipeline.digest import entity_lookup
