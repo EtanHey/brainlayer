@@ -1341,6 +1341,21 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_kg_ec_chunk ON kg_entity_chunks(chunk_id)")
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entity_facts (
+                entity_id TEXT NOT NULL,
+                fact_text TEXT NOT NULL,
+                frequency INTEGER DEFAULT 1,
+                first_seen TEXT,
+                last_seen TEXT,
+                status TEXT DEFAULT 'active',
+                superseded_by TEXT,
+                provenance_chunk_ids TEXT DEFAULT '[]',
+                PRIMARY KEY (entity_id, fact_text)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_facts_entity_status ON entity_facts(entity_id, status)")
+
+        cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS kg_vec_entities USING vec0(
                 entity_id TEXT PRIMARY KEY,
                 embedding FLOAT[1024]

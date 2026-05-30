@@ -901,6 +901,40 @@ def entity_lookup(
         for e in evidence_raw
     ]
 
+    facts_by_text: dict[str, Dict[str, Any]] = {}
+    for aggregate_id in aggregate_entity_ids:
+        for fact in store.refresh_entity_facts(aggregate_id, include_audit=include_audit):
+            fact_text = fact.get("fact_text")
+            if not fact_text:
+                continue
+            merged = facts_by_text.setdefault(
+                fact_text,
+                {
+                    "entity_id": entity_id,
+                    "fact_text": fact_text,
+                    "frequency": 0,
+                    "first_seen": fact.get("first_seen"),
+                    "last_seen": fact.get("last_seen"),
+                    "status": fact.get("status", "active"),
+                    "superseded_by": fact.get("superseded_by"),
+                    "provenance_chunk_ids": [],
+                },
+            )
+            merged["frequency"] += int(fact.get("frequency") or 0)
+            first_seen = fact.get("first_seen")
+            if first_seen and (not merged.get("first_seen") or first_seen < merged["first_seen"]):
+                merged["first_seen"] = first_seen
+            last_seen = fact.get("last_seen")
+            if last_seen and (not merged.get("last_seen") or last_seen > merged["last_seen"]):
+                merged["last_seen"] = last_seen
+            for chunk_id in fact.get("provenance_chunk_ids") or []:
+                if chunk_id not in merged["provenance_chunk_ids"]:
+                    merged["provenance_chunk_ids"].append(chunk_id)
+    facts = list(facts_by_text.values())
+    for fact in facts:
+        fact["provenance_chunk_ids"] = sorted(fact["provenance_chunk_ids"])
+    facts.sort(key=lambda fact: (-int(fact["frequency"]), fact["fact_text"]))
+
     # R49: Include health data if available
     completeness_score = None
     health_level = None
@@ -925,6 +959,7 @@ def entity_lookup(
         "metadata": entity.get("metadata", {}),
         "relations": relations,
         "evidence": evidence,
+        "facts": facts,
         "completeness_score": completeness_score,
         "health_level": health_level,
     }

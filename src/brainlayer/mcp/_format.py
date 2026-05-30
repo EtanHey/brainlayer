@@ -212,8 +212,16 @@ def format_entity_simple(entity: dict) -> str:
 
     # Relations from entity_lookup result (filter co_occurs_with)
     lines.extend(["", "### KG Facts"])
+    facts = entity.get("facts", [])
     relations = entity.get("relations", [])
     semantic_rels = [r for r in relations if isinstance(r, dict) and r.get("relation_type") != "co_occurs_with"]
+    if facts:
+        for fact in facts[:10]:
+            fact_text = fact.get("fact_text", "") if isinstance(fact, dict) else str(fact)
+            frequency = int(fact.get("frequency") or 0) if isinstance(fact, dict) else 0
+            suffix = f" (x{frequency})" if frequency > 1 else ""
+            if fact_text:
+                lines.append(f"- {_truncate(fact_text, 140)}{suffix}")
     if semantic_rels:
         for rel in semantic_rels[:10]:
             rtype = rel.get("relation_type", "related_to")
@@ -221,7 +229,7 @@ def format_entity_simple(entity: dict) -> str:
             if expired := _expired_date(rel):
                 line += f" (expired {expired})"
             lines.append(line)
-    else:
+    if not facts and not semantic_rels:
         lines.append("- None")
 
     # Chunks / memories

@@ -12,6 +12,46 @@ class KGMixin:
     """Knowledge graph methods, mixed into VectorStore."""
 
     @staticmethod
+    def _normalize_fact_text(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return " ".join(value.strip().split())
+
+    @classmethod
+    def _chunk_fact_candidates(
+        cls,
+        key_facts_value: Optional[str],
+        summary: Optional[str],
+        content: Optional[str],
+    ) -> list[str]:
+        candidates: list[str] = []
+        if key_facts_value:
+            try:
+                parsed_key_facts = json.loads(key_facts_value)
+            except (TypeError, json.JSONDecodeError):
+                parsed_key_facts = key_facts_value
+
+            if isinstance(parsed_key_facts, list):
+                candidates.extend(item for item in parsed_key_facts if isinstance(item, str))
+            elif isinstance(parsed_key_facts, str):
+                candidates.append(parsed_key_facts)
+
+        seen: set[str] = set()
+        facts: list[str] = []
+        for candidate in candidates:
+            fact_text = cls._normalize_fact_text(candidate)
+            if fact_text and fact_text not in seen:
+                seen.add(fact_text)
+                facts.append(fact_text)
+        for fallback in (summary, content):
+            if facts:
+                break
+            fallback_fact = cls._normalize_fact_text(fallback)
+            if fallback_fact:
+                facts.append(fallback_fact)
+        return facts
+
+    @staticmethod
     def _entity_row_to_dict(row: Any) -> Dict[str, Any]:
         return {
             "id": row[0],
@@ -528,6 +568,171 @@ class KGMixin:
             }
             for row in rows
         ]
+
+    def aggregate_entity_facts(
+        self,
+        entity_id: str,
+        *,
+        include_audit: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate deterministic facts for an entity from linked chunk metadata."""
+        cursor = self._read_cursor()
+        where_clauses = ["ec.entity_id = ?"]
+        if not include_audit:
+            where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
+        where_sql = " AND ".join(where_clauses)
+        rows = list(
+            cursor.execute(
+                f"""
+                SELECT ec.chunk_id, c.key_facts, c.summary, c.content, c.created_at
+                FROM kg_entity_chunks ec
+                JOIN chunks c ON ec.chunk_id = c.id
+                WHERE {where_sql}
+                ORDER BY COALESCE(c.created_at, ''), ec.chunk_id
+                """,
+                (entity_id,),
+            )
+        )
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        facts_by_text: dict[str, Dict[str, Any]] = {}
+        for chunk_id, key_facts_value, summary, content, created_at in rows:
+            observed_at = created_at or now
+            for fact_text in self._chunk_fact_candidates(key_facts_value, summary, content):
+                fact = facts_by_text.setdefault(
+                    fact_text,
+                    {
+                        "entity_id": entity_id,
+                        "fact_text": fact_text,
+                        "frequency": 0,
+                        "first_seen": observed_at,
+                        "last_seen": observed_at,
+                        "status": "active",
+                        "superseded_by": None,
+                        "provenance_chunk_ids": [],
+                    },
+                )
+                fact["frequency"] += 1
+                if observed_at < fact["first_seen"]:
+                    fact["first_seen"] = observed_at
+                if observed_at > fact["last_seen"]:
+                    fact["last_seen"] = observed_at
+                if chunk_id not in fact["provenance_chunk_ids"]:
+                    fact["provenance_chunk_ids"].append(chunk_id)
+
+        facts = list(facts_by_text.values())
+        for fact in facts:
+            fact["provenance_chunk_ids"] = sorted(fact["provenance_chunk_ids"])
+        facts.sort(key=lambda fact: (-int(fact["frequency"]), fact["fact_text"]))
+        return facts
+
+    def refresh_entity_facts(
+        self,
+        entity_id: str,
+        *,
+        include_audit: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Rebuild persisted active facts for an entity and return the live aggregation."""
+        facts = self.aggregate_entity_facts(entity_id, include_audit=include_audit)
+        if getattr(self, "_readonly", False):
+            return facts
+
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        active_fact_texts = {fact["fact_text"] for fact in facts}
+        existing_rows = list(
+            cursor.execute(
+                "SELECT fact_text FROM entity_facts WHERE entity_id = ? AND status = 'active'",
+                (entity_id,),
+            )
+        )
+        for (fact_text,) in existing_rows:
+            if fact_text not in active_fact_texts:
+                cursor.execute(
+                    """
+                    UPDATE entity_facts
+                    SET status = 'superseded',
+                        last_seen = ?,
+                        superseded_by = NULL
+                    WHERE entity_id = ? AND fact_text = ?
+                    """,
+                    (now, entity_id, fact_text),
+                )
+
+        for fact in facts:
+            cursor.execute(
+                """
+                INSERT INTO entity_facts (
+                    entity_id, fact_text, frequency, first_seen, last_seen,
+                    status, superseded_by, provenance_chunk_ids
+                )
+                VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)
+                ON CONFLICT(entity_id, fact_text) DO UPDATE SET
+                    frequency = excluded.frequency,
+                    first_seen = excluded.first_seen,
+                    last_seen = excluded.last_seen,
+                    status = 'active',
+                    superseded_by = NULL,
+                    provenance_chunk_ids = excluded.provenance_chunk_ids
+                """,
+                (
+                    entity_id,
+                    fact["fact_text"],
+                    fact["frequency"],
+                    fact["first_seen"],
+                    fact["last_seen"],
+                    json.dumps(fact["provenance_chunk_ids"]),
+                ),
+            )
+        return facts
+
+    def get_entity_facts(
+        self,
+        entity_id: str,
+        limit: int = 20,
+        *,
+        refresh: bool = False,
+        include_audit: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return active facts for an entity, optionally refreshing from linked chunks first."""
+        if refresh:
+            return self.refresh_entity_facts(entity_id, include_audit=include_audit)[:limit]
+
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """
+                SELECT entity_id, fact_text, frequency, first_seen, last_seen,
+                       status, superseded_by, provenance_chunk_ids
+                FROM entity_facts
+                WHERE entity_id = ? AND status = 'active'
+                ORDER BY frequency DESC, fact_text ASC
+                LIMIT ?
+                """,
+                (entity_id, limit),
+            )
+        )
+        facts = []
+        for row in rows:
+            try:
+                provenance_chunk_ids = json.loads(row[7]) if row[7] else []
+            except json.JSONDecodeError:
+                provenance_chunk_ids = []
+            if not isinstance(provenance_chunk_ids, list):
+                provenance_chunk_ids = []
+            facts.append(
+                {
+                    "entity_id": row[0],
+                    "fact_text": row[1],
+                    "frequency": row[2],
+                    "first_seen": row[3],
+                    "last_seen": row[4],
+                    "status": row[5],
+                    "superseded_by": row[6],
+                    "provenance_chunk_ids": provenance_chunk_ids,
+                }
+            )
+        return facts
 
     def search_entities(
         self,
