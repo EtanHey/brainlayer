@@ -18,6 +18,7 @@ struct KGSidebarView: View {
     let onLoadMoreChunks: () -> Void
     let onLoadMoreFiles: () -> Void
     let onClose: () -> Void
+    @State private var isFilesExpanded = Self.filesSectionDefaultExpanded
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,7 +36,7 @@ struct KGSidebarView: View {
                         if !entity.metadata.isEmpty {
                             metadataSection(entity.metadata)
                         }
-                        filesSection()
+                        filesAccordion()
                         chunksSection()
                     }
                     .padding(.top, 16)
@@ -232,6 +233,26 @@ struct KGSidebarView: View {
         .background(sectionBackground)
     }
 
+    private func filesAccordion() -> some View {
+        DisclosureGroup(isExpanded: $isFilesExpanded) {
+            filesSection()
+                .padding(.top, 10)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Files")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(fileCountSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(16)
+        .background(sectionBackground)
+    }
+
     private func chunksSection() -> some View {
         return VStack(alignment: .leading, spacing: 12) {
             Text("Linked chunks")
@@ -295,10 +316,6 @@ struct KGSidebarView: View {
 
     private func filesSection() -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Files")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-
             if hasFileLoadError, files.isEmpty {
                 Text("Source files are unavailable right now.")
                     .font(.system(size: 13, weight: .medium))
@@ -350,8 +367,6 @@ struct KGSidebarView: View {
                 }
             }
         }
-        .padding(16)
-        .background(sectionBackground)
     }
 
     private var emptyState: some View {
@@ -402,6 +417,17 @@ struct KGSidebarView: View {
 
     private func relevanceText(for file: BrainDatabase.SourceFileRow) -> String {
         "\(Int((file.topRelevance * 100).rounded()))%"
+    }
+
+    private var fileCountSummary: String {
+        if hasFileLoadError, files.isEmpty {
+            return "unavailable"
+        }
+        if isLoadingFiles, files.isEmpty {
+            return "loading"
+        }
+        let count = fileTotal > 0 ? fileTotal : files.count
+        return "\(count) \(count == 1 ? "file" : "files")"
     }
 
     private func chunkCard(_ chunk: BrainDatabase.KGChunkRow) -> some View {
@@ -456,6 +482,8 @@ struct KGSidebarView: View {
     nonisolated static func fileLoadMoreTriggerID(visibleCount: Int) -> String {
         "file-load-more-\(visibleCount)"
     }
+
+    nonisolated static let filesSectionDefaultExpanded = false
 
     nonisolated static let noLinkedChunksMessage = "No linked chunks are stored yet."
 

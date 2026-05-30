@@ -6,6 +6,8 @@
 
 import XCTest
 import SQLite3
+import AppKit
+import SwiftUI
 @testable import BrainBar
 
 private final class DashboardChangeNotificationProbe {
@@ -42,6 +44,81 @@ final class KGSidebarViewTests: XCTestCase {
             KGSidebarView.fileLoadMoreTriggerID(visibleCount: 15),
             KGSidebarView.fileLoadMoreTriggerID(visibleCount: 30)
         )
+    }
+
+    func testFilesSectionAccordionStartsCollapsed() {
+        XCTAssertFalse(KGSidebarView.filesSectionDefaultExpanded)
+    }
+
+    @MainActor
+    func testRendersFilesAccordionQAImage() throws {
+        let entity = EntityCard(
+            id: "person-etan",
+            name: "Etan Heyman",
+            entityType: "person",
+            description: "BrainLayer owner.",
+            relations: [
+                .init(relationType: "builds", targetName: "BrainLayer"),
+                .init(relationType: "uses", targetName: "Claude Code"),
+            ]
+        )
+        let files = (0..<18).map {
+            BrainDatabase.SourceFileRow(
+                sourceFile: "/Users/etanheyman/Gits/brainlayer/Sources/BrainBar/File\($0).swift",
+                chunkCount: 3 + $0,
+                topRelevance: 0.92
+            )
+        }
+        let chunks = [
+            BrainDatabase.KGChunkRow(
+                chunkID: "chunk-1",
+                snippet: "Linked chunks remain visible without expanding the long files list.",
+                importance: 8,
+                relevance: 0.94
+            ),
+        ]
+        let view = KGSidebarView(
+            entity: entity,
+            chunks: chunks,
+            chunkTotal: chunks.count,
+            isLoadingChunks: false,
+            canLoadMoreChunks: false,
+            files: files,
+            fileTotal: files.count,
+            isLoadingFiles: false,
+            canLoadMoreFiles: false,
+            hasChunkLoadError: false,
+            hasFileLoadError: false,
+            onOpenConversation: { _ in },
+            onOpenFile: { _ in },
+            onSelectRelation: { _ in },
+            onLoadMoreChunks: {},
+            onLoadMoreFiles: {},
+            onClose: {}
+        )
+        .frame(width: KGCanvasMetrics.sidebarWidth, height: 720)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            XCTFail("Expected KG sidebar renderer to produce a PNG")
+            return
+        }
+
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs.local/wave3-qa/bug7-atlas-files-accordion.png")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try png.write(to: url)
+        XCTAssertGreaterThan(png.count, 1_000)
     }
 }
 

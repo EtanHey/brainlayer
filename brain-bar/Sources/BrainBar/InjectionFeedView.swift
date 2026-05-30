@@ -161,9 +161,19 @@ struct InjectionFeedView: View {
 
             VStack(alignment: .trailing, spacing: 8) {
                 TextField("Filter injections", text: $filterText)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
                     .font(.system(size: 12))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
                     .frame(minWidth: 220, maxWidth: 280)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Self.filterControlFillColor)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Self.filterControlBorderColor, lineWidth: 1)
+                    )
 
                 if !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Showing \(snapshot.filteredEvents.count) matching events")
@@ -189,7 +199,11 @@ struct InjectionFeedView: View {
                         .padding(.vertical, 4)
                         .background(
                             Capsule()
-                                .fill(activeFilter == filter ? Color.brainBarAccent.opacity(0.22) : Color.brainBarTextPrimary.opacity(0.06))
+                                .fill(activeFilter == filter ? Self.filterControlSelectedFillColor : Self.filterControlFillColor)
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(activeFilter == filter ? Self.filterControlBorderColor : .clear, lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
@@ -200,12 +214,7 @@ struct InjectionFeedView: View {
 
     private func overviewStrip(snapshot: InjectionPresentation.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                overviewMetric(label: "Queries", value: "\(snapshot.summary.queryCount)")
-                overviewMetric(label: "Chunks", value: "\(snapshot.summary.chunkCount)")
-                overviewMetric(label: "Tokens", value: "\(snapshot.summary.tokenCount)")
-                overviewMetric(label: "Sessions", value: "\(snapshot.summary.activeSessionCount)")
-            }
+            InjectionSummaryView(events: snapshot.windowEvents)
 
             HStack(alignment: .center, spacing: 12) {
                 Text("Last 1h")
@@ -309,9 +318,11 @@ struct InjectionFeedView: View {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(burst.chunkCount)")
                             .font(.system(size: 24, weight: .bold, design: .rounded))
-                        Text("retrieved chunks")
+                        Text(Self.burstChunkCounterLabel)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
                     }
 
                     // QA #56: the expand affordance was a faint text link that hid
@@ -427,17 +438,21 @@ struct InjectionFeedView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 7) {
                         Text(event.primaryKind.glyph)
-                        Text(event.primaryKind.label)
-                            .font(.system(size: 11, weight: .semibold))
+                        if let kindLabel = event.expandedRowKindLabel {
+                            Text(kindLabel)
+                                .font(.system(size: 11, weight: .semibold))
+                        }
                         Text(event.displayTitle)
                             .font(.system(size: 14, weight: .semibold))
                             .lineLimit(2)
                     }
 
-                    Text(event.triggeredByText)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    if let triggeredBy = event.expandedRowTriggeredByText {
+                        Text(triggeredBy)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
 
                     HStack(spacing: 10) {
                         Text("Session \(shortSessionID(event.sessionID))")
@@ -724,7 +739,8 @@ struct InjectionFeedView: View {
     private func copyContinuation(for burst: InjectionPresentation.Burst) {
         let command = InjectionContinuation.resumeCommand(
             conversationID: burst.claudeConversationID,
-            fallbackSessionID: burst.sessionID
+            fallbackSessionID: burst.sessionID,
+            projectPath: burst.claudeProjectPath
         )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -891,7 +907,23 @@ struct InjectionConversationSelection: Equatable {
     }
 }
 
-private extension InjectionFeedView {
+extension InjectionFeedView {
+    nonisolated static var filterControlsUseAccentTint: Bool { false }
+
+    nonisolated static let burstChunkCounterLabel = "memories surfaced into context"
+
+    static var filterControlFillColor: Color {
+        Color.brainBarTextPrimary.opacity(0.06)
+    }
+
+    static var filterControlSelectedFillColor: Color {
+        Color.brainBarTextPrimary.opacity(0.11)
+    }
+
+    static var filterControlBorderColor: Color {
+        Color.brainBarTextPrimary.opacity(0.14)
+    }
+
     enum BurstChipTint {
         case neutral
         case blue

@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 @testable import BrainBar
 
 final class InjectionPresentationTests: XCTestCase {
@@ -7,6 +9,148 @@ final class InjectionPresentationTests: XCTestCase {
             InjectionFeedView.expandedBurstDetailsID(burstID: "burst-42"),
             "expanded-burst-details-burst-42"
         )
+    }
+
+    func testFilterControlsUseNeutralTint() {
+        XCTAssertFalse(InjectionFeedView.filterControlsUseAccentTint)
+    }
+
+    func testBurstChunkCounterUsesMeaningfulLabel() {
+        XCTAssertEqual(InjectionFeedView.burstChunkCounterLabel, "memories surfaced into context")
+    }
+
+    func testExpandedEventFieldsSuppressDuplicateKindAndTrigger() {
+        let event = makeEvent(
+            id: 1,
+            sessionID: "sess-a",
+            timestamp: "2026-04-18T09:58:00Z",
+            query: "Realtime Capture",
+            chunkIDs: ["chunk-1"],
+            tokenCount: 10,
+            chunks: [
+                makeChunk(
+                    id: "chunk-1",
+                    content: "Realtime Capture",
+                    source: "realtime_watcher"
+                )
+            ]
+        )
+
+        XCTAssertEqual(event.displayTitle, "Realtime Capture")
+        XCTAssertNil(event.expandedRowKindLabel)
+        XCTAssertNil(event.expandedRowTriggeredByText)
+    }
+
+    func testInjectionFeedRendersSummaryViewOnLivePath() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/InjectionFeedView.swift")
+        XCTAssertTrue(source.contains("InjectionSummaryView(events: snapshot.windowEvents)"))
+    }
+
+    @MainActor
+    func testRendersInjectionSummaryLivePathQAImage() throws {
+        let events = [
+            makeEvent(id: 1, sessionID: "sess-a", timestamp: "2026-04-18T09:58:00Z", query: "auth refactor", chunkIDs: ["chunk-1", "chunk-2"], tokenCount: 48),
+            makeEvent(id: 2, sessionID: "sess-a", timestamp: "2026-04-18T09:55:00Z", query: "db migration", chunkIDs: ["chunk-3"], tokenCount: 52),
+        ]
+        let view = InjectionSummaryView(events: events)
+            .padding(24)
+            .frame(width: 430, height: 120)
+
+        try renderInjectionPNG(view, name: "bug2-injection-summary-live-path.png")
+    }
+
+    @MainActor
+    func testRendersDedupedExpandedEventQAImage() throws {
+        let event = makeEvent(
+            id: 1,
+            sessionID: "sess-a",
+            timestamp: "2026-04-18T09:58:00Z",
+            query: "Realtime Capture",
+            chunkIDs: ["chunk-1"],
+            tokenCount: 10,
+            chunks: [
+                makeChunk(id: "chunk-1", content: "Realtime Capture", source: "realtime_watcher")
+            ]
+        )
+
+        let view = VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Text(event.primaryKind.glyph)
+                if let kindLabel = event.expandedRowKindLabel {
+                    Text(kindLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(event.displayTitle)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            if let triggeredBy = event.expandedRowTriggeredByText {
+                Text(triggeredBy)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text("Session sess-a   1 chunks   10 tok")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(width: 420, height: 120, alignment: .leading)
+
+        try renderInjectionPNG(view, name: "bug4-deduped-expanded-event.png")
+    }
+
+    @MainActor
+    func testRendersBurstChunkCounterQAImage() throws {
+        let view = VStack(alignment: .trailing, spacing: 2) {
+            Text("3")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+            Text(InjectionFeedView.burstChunkCounterLabel)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+        .padding(24)
+        .frame(width: 240, height: 120, alignment: .trailing)
+
+        try renderInjectionPNG(view, name: "bug5-meaningful-chunk-counter.png")
+    }
+
+    @MainActor
+    func testRendersNeutralFilterControlsQAImage() throws {
+        let view = VStack(alignment: .trailing, spacing: 8) {
+            TextField("Filter injections", text: .constant(""))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(width: 260)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(InjectionFeedView.filterControlFillColor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(InjectionFeedView.filterControlBorderColor, lineWidth: 1)
+                )
+
+            HStack(spacing: 6) {
+                Text("All")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(InjectionFeedView.filterControlSelectedFillColor))
+                    .overlay(Capsule().stroke(InjectionFeedView.filterControlBorderColor, lineWidth: 1))
+                Text("Claude")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(InjectionFeedView.filterControlFillColor))
+            }
+        }
+        .padding(24)
+        .frame(width: 340, height: 140)
+
+        try renderInjectionPNG(view, name: "bug3-neutral-filter-controls.png")
     }
 
     func testInjectionEventDeduplicatesChunkIDsForClickableRows() {
@@ -375,12 +519,12 @@ final class InjectionPresentationTests: XCTestCase {
         )
     }
 
-    private func makeChunk(id: String, content: String) -> InjectionChunk {
+    private func makeChunk(id: String, content: String, source: String = "mcp") -> InjectionChunk {
         InjectionChunk(
             id: id,
             content: content,
             summary: "",
-            source: "mcp",
+            source: source,
             sourceFile: "",
             tags: [],
             contentType: "memory"
@@ -397,5 +541,34 @@ final class InjectionPresentationTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
+    }
+
+    @MainActor
+    private func renderInjectionPNG<V: View>(_ view: V, name: String) throws {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            XCTFail("Expected renderer to produce a PNG")
+            return
+        }
+
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs.local/wave3-qa/\(name)")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try png.write(to: url)
+        XCTAssertGreaterThan(png.count, 1_000)
+    }
+
+    private func brainBarSourceFile(_ relativePath: String, testFilePath: StaticString = #filePath) throws -> String {
+        let testsDir = URL(fileURLWithPath: "\(testFilePath)").deletingLastPathComponent()
+        let packageRoot = testsDir.deletingLastPathComponent().deletingLastPathComponent()
+        let url = packageRoot.appendingPathComponent(relativePath)
+        return try String(contentsOf: url, encoding: .utf8)
     }
 }

@@ -21,6 +21,10 @@ struct InjectionChunk: Equatable, Sendable, Identifiable {
         InjectionKind.classify(source: source, sourceFile: sourceFile, tags: tags, content: content)
     }
 
+    var claudeProjectPath: String {
+        InjectionContinuation.projectPath(fromClaudeSourceFile: sourceFile)
+    }
+
     init(
         id: String,
         content: String,
@@ -245,6 +249,10 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         return kinds.isEmpty ? [.other] : kinds
     }
 
+    var claudeProjectPath: String {
+        chunks.lazy.map(\.claudeProjectPath).first { !$0.isEmpty } ?? ""
+    }
+
     func matches(typeFilter: InjectionTypeFilter) -> Bool {
         if chunks.isEmpty, !chunkIDs.isEmpty, typeFilter != .all {
             return true
@@ -259,8 +267,17 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         return InjectionChunk.elide(query, limit: 80)
     }
 
+    var expandedRowKindLabel: String? {
+        let label = primaryKind.label
+        return Self.normalizedForDedupe(label) == Self.normalizedForDedupe(displayTitle) ? nil : label
+    }
+
     var triggeredByText: String {
         "Triggered by: \(InjectionChunk.elide(query, limit: 96))"
+    }
+
+    var expandedRowTriggeredByText: String? {
+        Self.normalizedForDedupe(query) == Self.normalizedForDedupe(displayTitle) ? nil : triggeredByText
     }
 
     var modalTitle: String {
@@ -273,6 +290,14 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
 
     var summaryLine: String {
         "\(query) • \(chunkCount) chunks • \(tokenCount) tok"
+    }
+
+    private static func normalizedForDedupe(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
     }
 
     init(

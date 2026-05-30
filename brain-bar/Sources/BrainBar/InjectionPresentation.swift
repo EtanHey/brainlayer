@@ -35,6 +35,9 @@ struct InjectionPresentation {
         var queryCount: Int { events.count }
         var chunkCount: Int { events.reduce(0) { $0 + $1.chunkCount } }
         var tokenCount: Int { events.reduce(0) { $0 + $1.tokenCount } }
+        var claudeProjectPath: String {
+            events.lazy.map(\.claudeProjectPath).first { !$0.isEmpty } ?? ""
+        }
 
         var summaryTitle: String {
             if let chunkTitle = InjectionPresentation.previewChunks(for: events, limit: 1).first?.displayText,
