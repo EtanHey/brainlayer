@@ -824,10 +824,11 @@ class KGMixin:
         for existing_fact_text, new_fact in merge_updates.items():
             existing_fact = existing_by_text[existing_fact_text]
             merged_provenance = sorted(
-                set(existing_fact.get("provenance_chunk_ids") or [])
-                | set(new_fact.get("provenance_chunk_ids") or [])
+                set(existing_fact.get("provenance_chunk_ids") or []) | set(new_fact.get("provenance_chunk_ids") or [])
             )
-            first_seen_values = [value for value in (existing_fact.get("first_seen"), new_fact.get("first_seen")) if value]
+            first_seen_values = [
+                value for value in (existing_fact.get("first_seen"), new_fact.get("first_seen")) if value
+            ]
             last_seen_values = [value for value in (existing_fact.get("last_seen"), new_fact.get("last_seen")) if value]
             cursor.execute(
                 """

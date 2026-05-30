@@ -72,14 +72,18 @@ def test_refresh_entity_facts_supersedes_conflicting_active_fact(tmp_path):
     assert judge.calls[0]["new_fact"]["fact_text"] == "BrainLayer uses sqlite-vec."
     assert judge.calls[0]["conflicting_fact"]["fact_text"] == "BrainLayer uses ChromaDB."
 
-    row = store.conn.cursor().execute(
-        """
+    row = (
+        store.conn.cursor()
+        .execute(
+            """
         SELECT status, superseded_by
         FROM entity_facts
         WHERE entity_id = ? AND fact_text = ?
         """,
-        (entity_id, "BrainLayer uses ChromaDB."),
-    ).fetchone()
+            (entity_id, "BrainLayer uses ChromaDB."),
+        )
+        .fetchone()
+    )
     assert row == ("superseded", "BrainLayer uses sqlite-vec.")
 
 
