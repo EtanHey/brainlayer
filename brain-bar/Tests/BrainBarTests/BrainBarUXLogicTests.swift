@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 @testable import BrainBar
 
 final class BrainBarUXLogicTests: XCTestCase {
@@ -267,7 +269,34 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.queue.storeHealth, .writerStuck)
         XCTAssertEqual(summary.queue.storeHealthText, "writer stuck - investigate")
-        XCTAssertEqual(summary.queue.title, "Queue writer stuck - investigate")
+        XCTAssertEqual(summary.queue.title, "Q: writer stuck - investigate")
+    }
+
+    @MainActor
+    func testRendersWriterStuckQueueLabelQAImage() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 120,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 100,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            pendingStoreQueueDepth: 7,
+            pendingStoreOldestQueuedAt: now.addingTimeInterval(-300),
+            pendingStoreFlushRatePerMinute: 0
+        )
+        let title = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now).queue.title
+        let view = Text(title)
+            .font(.system(size: 18, weight: .semibold))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.thinMaterial, in: Capsule())
+            .frame(width: 360, height: 80)
+
+        try renderPNG(view, name: "bug1-writer-stuck-label.png")
     }
 
     func testIncomingRelationDisplayPutsEntityNameBeforeRelationVerb() {
@@ -371,4 +400,26 @@ final class BrainBarUXLogicTests: XCTestCase {
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
     }
+}
+
+@MainActor
+private func renderPNG<V: View>(_ view: V, name: String) throws {
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 2
+    guard let image = renderer.nsImage,
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          let png = bitmap.representation(using: .png, properties: [:]) else {
+        XCTFail("Expected renderer to produce a PNG")
+        return
+    }
+
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("docs.local/wave3-qa/\(name)")
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try png.write(to: url)
+    XCTAssertGreaterThan(png.count, 1_000)
 }

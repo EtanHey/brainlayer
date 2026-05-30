@@ -455,6 +455,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
         backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth
     ) -> String {
+        if storeHealth == .writerStuck {
+            return "Q: \(storeHealth.label)"
+        }
         if storeHealth != .empty {
             return "Queue \(storeHealth.label)"
         }
