@@ -44,6 +44,8 @@ async def _brain_entity(
 
     entity_id = result["id"]
     entity_record = await loop.run_in_executor(None, lambda: store.get_entity(entity_id))
+    facts = await loop.run_in_executor(None, lambda: store.get_entity_facts(entity_id))
+    result["facts"] = facts
     if entity_record and entity_record.get("parent_id"):
         parent = await loop.run_in_executor(None, lambda: store.get_entity_parent(entity_id))
         if parent is not None:

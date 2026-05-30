@@ -264,6 +264,18 @@ class TestFormatEntitySimple:
         assert "knows" in result
         assert "Y" in result
 
+    def test_with_long_fact_truncates_output(self):
+        long_fact = "A" * 180
+        entity = {
+            "name": "X",
+            "id": "1",
+            "entity_type": "project",
+            "facts": [{"fact_text": long_fact, "frequency": 2}],
+        }
+        result = format_entity_simple(entity)
+        assert long_fact not in result
+        assert f"- {'A' * 139}\u2026 (x2)" in result
+
     def test_with_chunks(self):
         entity = {
             "name": "X",

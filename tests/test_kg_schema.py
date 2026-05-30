@@ -62,6 +62,11 @@ class TestKGTableCreation:
         tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "kg_entity_chunks" in tables
 
+    def test_entity_facts_table_exists(self, store):
+        cursor = store._read_cursor()
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "entity_facts" in tables
+
     def test_kg_vec_entities_virtual_table_exists(self, store):
         cursor = store._read_cursor()
         # Virtual tables show up in sqlite_master too
@@ -123,6 +128,24 @@ class TestKGTableCreation:
         cursor = store._read_cursor()
         cols = {row[1] for row in cursor.execute("PRAGMA table_info(kg_entity_chunks)")}
         assert cols == {"entity_id", "chunk_id", "relevance", "context", "mention_type", "relation_tier", "weight"}
+
+    def test_entity_facts_columns_and_index(self, store):
+        cursor = store._read_cursor()
+        cols = {row[1] for row in cursor.execute("PRAGMA table_info(entity_facts)")}
+        expected = {
+            "entity_id",
+            "fact_text",
+            "frequency",
+            "first_seen",
+            "last_seen",
+            "status",
+            "superseded_by",
+            "provenance_chunk_ids",
+        }
+        assert cols == expected
+
+        indexes = {row[1] for row in cursor.execute("PRAGMA index_list(entity_facts)")}
+        assert "idx_entity_facts_entity_status" in indexes
 
     def test_source_project_id_column_on_chunks(self, store):
         cursor = store._read_cursor()

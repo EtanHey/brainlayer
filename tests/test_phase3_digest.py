@@ -385,6 +385,140 @@ def test_entity_lookup_returns_structured_data(tmp_path):
     assert len(result["evidence"]) >= 1
 
 
+def test_entity_lookup_returns_aggregated_facts_from_linked_chunks(tmp_path):
+    """brain_entity includes deterministic fact frequencies from linked chunks."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    eid = store.upsert_entity("project-brainlayer", "project", "BrainLayer", embedding=dummy_embed("BrainLayer"))
+    _insert_chunks(
+        store,
+        ["bl-fact-1", "bl-fact-2"],
+        [
+            "BrainLayer stores durable memory for the golems ecosystem.",
+            "BrainLayer stores durable memory and indexes memories for recall.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+        ],
+        [dummy_embed("fact1"), dummy_embed("fact2")],
+    )
+    store.update_enrichment(
+        "bl-fact-1",
+        key_facts=["BrainLayer stores durable memory.", "BrainLayer uses SQLite."],
+        summary="BrainLayer stores durable memory.",
+    )
+    store.update_enrichment(
+        "bl-fact-2",
+        key_facts=["BrainLayer stores durable memory."],
+        summary="BrainLayer indexes memories for recall.",
+    )
+    store.link_entity_chunk(eid, "bl-fact-1", relevance=0.9, context="durable memory")
+    store.link_entity_chunk(eid, "bl-fact-2", relevance=0.8, context="durable memory")
+
+    result = entity_lookup("BrainLayer", store, dummy_embed, entity_type="project")
+
+    assert result is not None
+    facts = result["facts"]
+    assert facts[0]["fact_text"] == "BrainLayer stores durable memory."
+    assert facts[0]["frequency"] == 2
+    assert set(facts[0]["provenance_chunk_ids"]) == {"bl-fact-1", "bl-fact-2"}
+
+
+def test_entity_lookup_uses_summary_when_key_facts_normalize_empty(tmp_path):
+    """Empty key_facts do not block summary fallback for entity facts."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    eid = store.upsert_entity("project-brainlayer", "project", "BrainLayer", embedding=dummy_embed("BrainLayer"))
+    _insert_chunks(
+        store,
+        ["bl-summary-fallback"],
+        ["BrainLayer summary should become the fact when key facts are empty."],
+        [{"source_file": "t.jsonl", "project": "brainlayer"}],
+        [dummy_embed("summary fallback")],
+    )
+    store.update_enrichment(
+        "bl-summary-fallback",
+        key_facts=["   "],
+        summary="BrainLayer summarizes linked chunks into facts.",
+    )
+    store.link_entity_chunk(eid, "bl-summary-fallback", relevance=0.9, context="summary fallback")
+
+    result = entity_lookup("BrainLayer", store, dummy_embed, entity_type="project")
+
+    assert result is not None
+    assert result["facts"][0]["fact_text"] == "BrainLayer summarizes linked chunks into facts."
+    assert result["facts"][0]["frequency"] == 1
+
+
+def test_brain_entity_handler_surfaces_persisted_entity_facts(tmp_path, monkeypatch):
+    """brain_entity output includes persisted entity_facts with frequency."""
+    import asyncio
+
+    from brainlayer.mcp.entity_handler import _brain_entity
+    from brainlayer.pipeline import digest as digest_module
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    eid = store.upsert_entity("project-brainlayer", "project", "BrainLayer", embedding=dummy_embed("BrainLayer"))
+    _insert_chunks(
+        store,
+        ["bl-handler-1", "bl-handler-2"],
+        [
+            "BrainLayer stores durable memory for the golems ecosystem.",
+            "BrainLayer stores durable memory and indexes memories for recall.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+            {"source_file": "t.jsonl", "project": "brainlayer"},
+        ],
+        [dummy_embed("handler fact 1"), dummy_embed("handler fact 2")],
+    )
+    store.update_enrichment(
+        "bl-handler-1",
+        key_facts=["BrainLayer stores durable memory."],
+        summary="BrainLayer stores durable memory.",
+    )
+    store.update_enrichment(
+        "bl-handler-2",
+        key_facts=["BrainLayer stores durable memory."],
+        summary="BrainLayer stores durable memory.",
+    )
+    store.link_entity_chunk(eid, "bl-handler-1", relevance=0.9, context="durable memory")
+    store.link_entity_chunk(eid, "bl-handler-2", relevance=0.8, context="durable memory")
+    store.refresh_entity_facts(eid)
+
+    class DummyModel:
+        def embed_query(self, text: str) -> list[float]:  # noqa: ARG002
+            return dummy_embed(text)
+
+    def entity_lookup_without_facts(*args, **kwargs):  # noqa: ARG001
+        return {
+            "id": eid,
+            "name": "BrainLayer",
+            "entity_type": "project",
+            "description": "",
+            "metadata": {},
+            "relations": [],
+            "evidence": [],
+        }
+
+    monkeypatch.setattr("brainlayer.mcp.entity_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.entity_handler._get_embedding_model", lambda: DummyModel())
+    monkeypatch.setattr(digest_module, "entity_lookup", entity_lookup_without_facts)
+
+    result = asyncio.run(_brain_entity("BrainLayer", entity_type="project"))
+
+    assert "- BrainLayer stores durable memory. (x2)" in result.content[0].text
+
+
 def test_entity_lookup_not_found(tmp_path):
     """entity_lookup returns None for unknown entities."""
     from brainlayer.pipeline.digest import entity_lookup
