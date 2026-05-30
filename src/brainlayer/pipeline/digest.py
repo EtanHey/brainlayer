@@ -903,7 +903,11 @@ def entity_lookup(
 
     facts_by_text: dict[str, Dict[str, Any]] = {}
     for aggregate_id in aggregate_entity_ids:
-        for fact in store.refresh_entity_facts(aggregate_id, include_audit=include_audit):
+        for fact in store.refresh_entity_facts(
+            aggregate_id,
+            include_audit=include_audit,
+            adjudicate_corrections=False,
+        ):
             fact_text = fact.get("fact_text")
             if not fact_text:
                 continue
@@ -934,6 +938,14 @@ def entity_lookup(
     for fact in facts:
         fact["provenance_chunk_ids"] = sorted(fact["provenance_chunk_ids"])
     facts.sort(key=lambda fact: (-int(fact["frequency"]), fact["fact_text"]))
+    superseded_fact_chunk_ids: set[str] = set()
+    try:
+        for aggregate_id in aggregate_entity_ids:
+            superseded_fact_chunk_ids.update(store.get_superseded_entity_fact_chunk_ids(aggregate_id))
+    except Exception:
+        superseded_fact_chunk_ids = set()
+    if superseded_fact_chunk_ids:
+        evidence = [chunk for chunk in evidence if chunk.get("chunk_id") not in superseded_fact_chunk_ids]
 
     # R49: Include health data if available
     completeness_score = None

@@ -1,11 +1,35 @@
 """Knowledge graph CRUD and traversal methods for VectorStore (mixin)."""
 
 import json
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ._helpers import _escape_fts5_query, serialize_f32
 from .phonetic import phonetic_key, phonetic_tokens
+
+logger = logging.getLogger(__name__)
+
+_ENTITY_FACT_CONFLICT_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
 
 
 class KGMixin:
@@ -16,6 +40,45 @@ class KGMixin:
         if not isinstance(value, str):
             return ""
         return " ".join(value.strip().split())
+
+    @staticmethod
+    def _entity_fact_tokens(value: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[\w]+", value.casefold())
+            if token and token not in _ENTITY_FACT_CONFLICT_STOPWORDS
+        }
+
+    @classmethod
+    def _entity_facts_may_conflict(cls, new_fact_text: str, existing_fact_text: str) -> bool:
+        if new_fact_text == existing_fact_text:
+            return False
+        new_tokens = cls._entity_fact_tokens(new_fact_text)
+        existing_tokens = cls._entity_fact_tokens(existing_fact_text)
+        return len(new_tokens & existing_tokens) >= 2
+
+    @staticmethod
+    def _decode_entity_fact_provenance(value: Any) -> list[str]:
+        try:
+            provenance_chunk_ids = json.loads(value) if value else []
+        except json.JSONDecodeError:
+            provenance_chunk_ids = []
+        if not isinstance(provenance_chunk_ids, list):
+            return []
+        return [str(chunk_id) for chunk_id in provenance_chunk_ids if chunk_id]
+
+    @classmethod
+    def _entity_fact_row_to_dict(cls, row: Any) -> Dict[str, Any]:
+        return {
+            "entity_id": row[0],
+            "fact_text": row[1],
+            "frequency": row[2],
+            "first_seen": row[3],
+            "last_seen": row[4],
+            "status": row[5],
+            "superseded_by": row[6],
+            "provenance_chunk_ids": cls._decode_entity_fact_provenance(row[7]),
+        }
 
     @classmethod
     def _chunk_fact_candidates(
@@ -631,8 +694,10 @@ class KGMixin:
         entity_id: str,
         *,
         include_audit: bool = False,
+        correction_judge: Any | None = None,
+        adjudicate_corrections: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Rebuild persisted active facts for an entity and return the live aggregation."""
+        """Rebuild persisted facts for an entity and return active facts after adjudication."""
         facts = self.aggregate_entity_facts(entity_id, include_audit=include_audit)
         if getattr(self, "_readonly", False):
             return facts
@@ -642,11 +707,26 @@ class KGMixin:
         active_fact_texts = {fact["fact_text"] for fact in facts}
         existing_rows = list(
             cursor.execute(
-                "SELECT fact_text FROM entity_facts WHERE entity_id = ? AND status = 'active'",
+                """
+                SELECT entity_id, fact_text, frequency, first_seen, last_seen,
+                       status, superseded_by, provenance_chunk_ids
+                FROM entity_facts
+                WHERE entity_id = ?
+                """,
                 (entity_id,),
             )
         )
-        for (fact_text,) in existing_rows:
+        existing_by_text = {row[1]: self._entity_fact_row_to_dict(row) for row in existing_rows}
+        existing_active = {
+            fact_text: fact for fact_text, fact in existing_by_text.items() if fact.get("status") == "active"
+        }
+        judged_superseded_texts = {
+            fact_text
+            for fact_text, fact in existing_by_text.items()
+            if fact.get("status") == "superseded" and fact.get("superseded_by")
+        }
+
+        for fact_text in existing_active:
             if fact_text not in active_fact_texts:
                 cursor.execute(
                     """
@@ -659,7 +739,63 @@ class KGMixin:
                     (now, entity_id, fact_text),
                 )
 
+        skipped_fact_texts: set[str] = set()
+        supersede_updates: dict[str, str] = {}
+        merge_updates: dict[str, Dict[str, Any]] = {}
+        effective_correction_judge = correction_judge
+        if not adjudicate_corrections:
+            effective_correction_judge = None
+        elif effective_correction_judge is None:
+            try:
+                from .correction_judge import get_correction_judge
+
+                effective_correction_judge = get_correction_judge(store=self)
+            except Exception:
+                logger.warning("Correction judge factory failed for entity fact refresh", exc_info=True)
+                effective_correction_judge = None
+
         for fact in facts:
+            fact_text = fact["fact_text"]
+            if fact_text in judged_superseded_texts:
+                continue
+
+            if effective_correction_judge is not None and fact_text not in existing_active:
+                for existing_fact_text, existing_fact in existing_active.items():
+                    if existing_fact_text in supersede_updates:
+                        continue
+                    if not self._entity_facts_may_conflict(fact_text, existing_fact_text):
+                        continue
+                    try:
+                        verdict = effective_correction_judge.judge(
+                            {"entity_id": entity_id},
+                            fact,
+                            existing_fact,
+                            {
+                                "entity_id": entity_id,
+                                "include_audit": include_audit,
+                                "new_provenance_chunk_ids": fact.get("provenance_chunk_ids", []),
+                                "existing_provenance_chunk_ids": existing_fact.get("provenance_chunk_ids", []),
+                            },
+                        )
+                    except Exception:
+                        logger.warning("Correction judge failed for entity fact refresh", exc_info=True)
+                        continue
+
+                    action = getattr(verdict, "action", None)
+                    if action == "supersede":
+                        supersede_updates[existing_fact_text] = fact_text
+                        break
+                    if action == "merge":
+                        merge_updates[existing_fact_text] = fact
+                        skipped_fact_texts.add(fact_text)
+                        break
+                    if action == "noise":
+                        skipped_fact_texts.add(fact_text)
+                        break
+
+            if fact_text in skipped_fact_texts:
+                continue
+
             cursor.execute(
                 """
                 INSERT INTO entity_facts (
@@ -677,14 +813,81 @@ class KGMixin:
                 """,
                 (
                     entity_id,
-                    fact["fact_text"],
+                    fact_text,
                     fact["frequency"],
                     fact["first_seen"],
                     fact["last_seen"],
                     json.dumps(fact["provenance_chunk_ids"]),
                 ),
             )
-        return facts
+
+        for existing_fact_text, new_fact in merge_updates.items():
+            existing_fact = existing_by_text[existing_fact_text]
+            merged_provenance = sorted(
+                set(existing_fact.get("provenance_chunk_ids") or [])
+                | set(new_fact.get("provenance_chunk_ids") or [])
+            )
+            first_seen_values = [value for value in (existing_fact.get("first_seen"), new_fact.get("first_seen")) if value]
+            last_seen_values = [value for value in (existing_fact.get("last_seen"), new_fact.get("last_seen")) if value]
+            cursor.execute(
+                """
+                UPDATE entity_facts
+                SET frequency = ?,
+                    first_seen = ?,
+                    last_seen = ?,
+                    status = 'active',
+                    superseded_by = NULL,
+                    provenance_chunk_ids = ?
+                WHERE entity_id = ? AND fact_text = ?
+                """,
+                (
+                    int(existing_fact.get("frequency") or 0) + int(new_fact.get("frequency") or 0),
+                    min(first_seen_values) if first_seen_values else None,
+                    max(last_seen_values) if last_seen_values else None,
+                    json.dumps(merged_provenance),
+                    entity_id,
+                    existing_fact_text,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO entity_facts (
+                    entity_id, fact_text, frequency, first_seen, last_seen,
+                    status, superseded_by, provenance_chunk_ids
+                )
+                VALUES (?, ?, ?, ?, ?, 'superseded', ?, ?)
+                ON CONFLICT(entity_id, fact_text) DO UPDATE SET
+                    frequency = excluded.frequency,
+                    first_seen = excluded.first_seen,
+                    last_seen = excluded.last_seen,
+                    status = 'superseded',
+                    superseded_by = excluded.superseded_by,
+                    provenance_chunk_ids = excluded.provenance_chunk_ids
+                """,
+                (
+                    entity_id,
+                    new_fact["fact_text"],
+                    new_fact["frequency"],
+                    new_fact["first_seen"],
+                    new_fact["last_seen"],
+                    existing_fact_text,
+                    json.dumps(new_fact["provenance_chunk_ids"]),
+                ),
+            )
+
+        for old_fact_text, new_fact_text in supersede_updates.items():
+            cursor.execute(
+                """
+                UPDATE entity_facts
+                SET status = 'superseded',
+                    last_seen = ?,
+                    superseded_by = ?
+                WHERE entity_id = ? AND fact_text = ?
+                """,
+                (now, new_fact_text, entity_id, old_fact_text),
+            )
+
+        return self.get_entity_facts(entity_id, limit=max(len(facts), len(existing_by_text), 20))
 
     def get_entity_facts(
         self,
@@ -714,25 +917,32 @@ class KGMixin:
         )
         facts = []
         for row in rows:
-            try:
-                provenance_chunk_ids = json.loads(row[7]) if row[7] else []
-            except json.JSONDecodeError:
-                provenance_chunk_ids = []
-            if not isinstance(provenance_chunk_ids, list):
-                provenance_chunk_ids = []
-            facts.append(
-                {
-                    "entity_id": row[0],
-                    "fact_text": row[1],
-                    "frequency": row[2],
-                    "first_seen": row[3],
-                    "last_seen": row[4],
-                    "status": row[5],
-                    "superseded_by": row[6],
-                    "provenance_chunk_ids": provenance_chunk_ids,
-                }
-            )
+            facts.append(self._entity_fact_row_to_dict(row))
         return facts
+
+    def get_superseded_entity_fact_chunk_ids(self, entity_id: str) -> set[str]:
+        """Return chunks that only support judged-superseded facts for an entity."""
+        cursor = self._read_cursor()
+        rows = list(
+            cursor.execute(
+                """
+                SELECT status, superseded_by, provenance_chunk_ids
+                FROM entity_facts
+                WHERE entity_id = ?
+                  AND (status = 'active' OR (status = 'superseded' AND superseded_by IS NOT NULL))
+                """,
+                (entity_id,),
+            )
+        )
+        active_chunk_ids: set[str] = set()
+        superseded_chunk_ids: set[str] = set()
+        for status, superseded_by, provenance_value in rows:
+            chunk_ids = set(self._decode_entity_fact_provenance(provenance_value))
+            if status == "active":
+                active_chunk_ids.update(chunk_ids)
+            elif status == "superseded" and superseded_by:
+                superseded_chunk_ids.update(chunk_ids)
+        return superseded_chunk_ids - active_chunk_ids
 
     def search_entities(
         self,
