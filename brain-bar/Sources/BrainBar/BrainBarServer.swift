@@ -238,7 +238,8 @@ final class BrainBarServer: @unchecked Sendable {
         //    initialize + tools/list work without a database.
         router = MCPRouter(
             hybridSearchClient: hybridClient,
-            hybridSearchBudget: Self.hybridSearchBudgetSeconds
+            hybridSearchBudget: Self.hybridSearchBudgetSeconds,
+            dbPath: dbPath
         )
 
         // 2. Bind socket BEFORE database init.

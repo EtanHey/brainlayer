@@ -129,7 +129,15 @@ final class BrainBarReliabilityTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.20)
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["queued"] as? Bool, true)
+        let queueID = try XCTUnwrap(result["queue_id"] as? String)
+        let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
+        XCTAssertFalse(queueID.isEmpty)
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath))
+        let queuedText = try String(contentsOfFile: queuePath, encoding: .utf8)
+        XCTAssertTrue(queuedText.contains("Queued while another writer holds the database lock"))
+        XCTAssertTrue(queuedText.contains(queueID))
+        XCTAssertTrue(queuedText.contains(queuedAt))
     }
 
     func testQueuedWriteBurstDoesNotTakeReadPathDown() throws {

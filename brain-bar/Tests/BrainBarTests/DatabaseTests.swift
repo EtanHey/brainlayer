@@ -405,9 +405,16 @@ final class DatabaseTests: XCTestCase {
             busyTimeoutMillis: 1
         )
 
-        XCTAssertEqual(outcome, .queued)
+        guard case .queued(let queueID, let queuedAt) = outcome else {
+            XCTFail("Expected queued outcome, got \(outcome)")
+            return
+        }
+        XCTAssertFalse(queueID.isEmpty)
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
         let queuedPayload = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertTrue(queuedPayload.contains("Queued because the BrainBar DB handle is read-only"))
+        XCTAssertTrue(queuedPayload.contains(queueID))
+        XCTAssertTrue(queuedPayload.contains(queuedAt))
     }
 
     func testInjectionEventsTableExists() throws {

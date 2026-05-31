@@ -56,6 +56,7 @@ final class MCPRouter: @unchecked Sendable {
     private var database: BrainDatabase?
     private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
+    private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
@@ -83,9 +84,14 @@ final class MCPRouter: @unchecked Sendable {
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
 
-    init(hybridSearchClient: HybridSearchClientProtocol? = nil, hybridSearchBudget: TimeInterval = 0.8) {
+    init(
+        hybridSearchClient: HybridSearchClientProtocol? = nil,
+        hybridSearchBudget: TimeInterval = 0.8,
+        dbPath: String? = nil
+    ) {
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
+        self.dbPath = dbPath
     }
 
     /// Inject database for tool handlers + load entity cache.
@@ -462,36 +468,64 @@ final class MCPRouter: @unchecked Sendable {
         }
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
-        let db = try writeDB()
-        switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp") {
-        case .stored(let stored):
-            let flushedStores = db.flushPendingStores()
-            return ToolOutput(
-                text: Formatters.formatStoreResult(chunkId: stored.chunkID),
-                metadata: [
-                    "queued": false,
-                    "flushed_count": flushedStores.count,
-                    "_brainbarStoredChunk": [
-                        "chunk_id": stored.chunkID,
-                        "rowid": stored.rowID
-                    ],
-                    "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
-                        [
-                            "chunk_id": flushed.storedChunk.chunkID,
-                            "rowid": flushed.storedChunk.rowID,
-                            "content": flushed.content,
-                            "tags": flushed.tags,
-                            "importance": flushed.importance
-                        ] as [String: Any]
-                    }
-                ]
-            )
-        case .queued:
-            return ToolOutput(
-                text: Formatters.formatStoreResult(chunkId: "", queued: true),
-                metadata: ["queued": true]
-            )
+        guard let db = database else {
+            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp")
         }
+        do {
+            switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp") {
+            case .stored(let stored):
+                let flushedStores = db.flushPendingStores()
+                return ToolOutput(
+                    text: Formatters.formatStoreResult(chunkId: stored.chunkID),
+                    metadata: [
+                        "queued": false,
+                        "flushed_count": flushedStores.count,
+                        "_brainbarStoredChunk": [
+                            "chunk_id": stored.chunkID,
+                            "rowid": stored.rowID
+                        ],
+                        "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
+                            [
+                                "chunk_id": flushed.storedChunk.chunkID,
+                                "rowid": flushed.storedChunk.rowID,
+                                "content": flushed.content,
+                                "tags": flushed.tags,
+                                "importance": flushed.importance
+                            ] as [String: Any]
+                        }
+                    ]
+                )
+            case .queued(let queueID, let queuedAt):
+                return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt)
+            }
+        } catch BrainDatabase.DBError.notOpen {
+            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp")
+        }
+    }
+
+    private func queueBrainStore(content: String, tags: [String], importance: Int, source: String) throws -> ToolOutput {
+        guard let dbPath else {
+            throw ToolError.noDatabase
+        }
+        let queued = try BrainDatabase.queuePendingStore(
+            dbPath: dbPath,
+            content: content,
+            tags: tags,
+            importance: importance,
+            source: source
+        )
+        return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt)
+    }
+
+    private func queuedBrainStoreOutput(queueID: String, queuedAt: String) -> ToolOutput {
+        ToolOutput(
+            text: Formatters.formatStoreResult(chunkId: "", queued: true),
+            metadata: [
+                "queued": true,
+                "queue_id": queueID,
+                "queued_at": queuedAt
+            ]
+        )
     }
 
     private func handleBrainGetPerson(_ args: [String: Any]) throws -> ToolOutput {
