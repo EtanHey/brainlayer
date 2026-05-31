@@ -101,6 +101,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var clients: [Int32: ClientState] = [:]
     private var router: MCPRouter!
     private var database: BrainDatabase!
+    private var readDatabase: BrainDatabase?
     private var hybridSearchHelperClient: HybridSearchHelperClient?
     private let providedHybridSearchClient: HybridSearchClientProtocol?
     private let enableHybridSearchHelper: Bool
@@ -117,6 +118,8 @@ final class BrainBarServer: @unchecked Sendable {
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
     static let maxWriteRetries = 50
+    private static let readOnlyBusyTimeoutMillis: Int32 = 250
+    private static let hybridSearchBudgetSeconds: TimeInterval = 0.8
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -220,7 +223,10 @@ final class BrainBarServer: @unchecked Sendable {
             ownedHybridClient = nil
             hybridClient = providedHybridSearchClient
         } else if providedDatabase == nil && enableHybridSearchHelper {
-            let client = HybridSearchHelperClient(dbPath: dbPath)
+            let client = HybridSearchHelperClient(
+                dbPath: dbPath,
+                socketIOTimeout: Self.hybridSearchBudgetSeconds
+            )
             ownedHybridClient = client
             hybridClient = client
         } else {
@@ -230,7 +236,10 @@ final class BrainBarServer: @unchecked Sendable {
 
         // 1. Create router FIRST (no DB dependency).
         //    initialize + tools/list work without a database.
-        router = MCPRouter(hybridSearchClient: hybridClient)
+        router = MCPRouter(
+            hybridSearchClient: hybridClient,
+            hybridSearchBudget: Self.hybridSearchBudgetSeconds
+        )
 
         // 2. Bind socket BEFORE database init.
         //    After a restart the socket must exist before Claude Code tries
@@ -318,7 +327,7 @@ final class BrainBarServer: @unchecked Sendable {
         guard database == nil, !databaseOpenInProgress else { return }
 
         if let providedDatabase {
-            finishDatabaseOpen(providedDatabase)
+            finishDatabaseOpen(providedDatabase, readDatabase: providedDatabase)
             return
         }
 
@@ -330,27 +339,40 @@ final class BrainBarServer: @unchecked Sendable {
                 path: dbPath,
                 openConfiguration: .init(busyTimeoutMillis: busyTimeoutMillis)
             )
+            let readDB = db.isOpen
+                ? BrainDatabase(
+                    path: dbPath,
+                    openConfiguration: .init(
+                        busyTimeoutMillis: Self.readOnlyBusyTimeoutMillis,
+                        readOnly: true
+                    )
+                )
+                : nil
             self?.queue.async { [weak self] in
                 self?.databaseOpenInProgress = false
-                self?.finishDatabaseOpen(db)
+                self?.finishDatabaseOpen(db, readDatabase: readDB)
             }
         }
     }
 
-    private func finishDatabaseOpen(_ db: BrainDatabase) {
+    private func finishDatabaseOpen(_ db: BrainDatabase, readDatabase readDB: BrainDatabase?) {
         guard listenSource != nil else {
             if providedDatabase == nil {
+                if let readDB, readDB !== db {
+                    readDB.close()
+                }
                 db.close()
             }
             return
         }
 
-        if db.isOpen {
+        if db.isOpen, let readDB, readDB.isOpen {
             databaseRetryWorkItem?.cancel()
             databaseRetryWorkItem = nil
             lastDatabaseRetryDelayMillis = nil
             database = db
-            router.setDatabase(db)
+            readDatabase = readDB
+            router.setDatabases(write: db, read: readDB)
             onDatabaseReady?(db)
             brainBus.publish(.dbBusy(false))
             brainBus.publish(.queueDepth(brainBusQueueDepthEstimate))
@@ -359,12 +381,16 @@ final class BrainBarServer: @unchecked Sendable {
             return
         }
 
+        let lastOpenError = db.isOpen ? readDB?.lastOpenError : db.lastOpenError
         if providedDatabase == nil {
+            if let readDB, readDB !== db {
+                readDB.close()
+            }
             db.close()
         }
         NSLog("[BrainBar] ⚠️ DATABASE FAILED TO OPEN — tools/call will return errors (%@)", dbPath)
         brainBus.publish(.dbBusy(true))
-        scheduleDatabaseRetry(lastError: db.lastOpenError)
+        scheduleDatabaseRetry(lastError: lastOpenError)
     }
 
     private func scheduleDatabaseRetry(lastError: Error?) {
@@ -675,9 +701,14 @@ final class BrainBarServer: @unchecked Sendable {
         clients.removeAll()
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
+        let writeDatabase = database
         if providedDatabase == nil {
-            database?.close()
+            if let readDatabase, let writeDatabase, readDatabase !== writeDatabase {
+                readDatabase.close()
+            }
+            writeDatabase?.close()
         }
+        readDatabase = nil
         database = nil
         hybridSearchHelperClient?.stop()
         hybridSearchHelperClient = nil
