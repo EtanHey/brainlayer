@@ -1,12 +1,10 @@
-import sqlite3
-
 import pytest
 from mcp.types import CallToolResult, TextContent
 
 from brainlayer.brainbar_hybrid_helper import HybridSearchHelper
 
 
-def test_warm_preloads_embedding_then_hybrid_search(monkeypatch, tmp_path):
+def test_warm_preloads_embedding_without_running_hybrid_search(monkeypatch, tmp_path):
     calls = []
 
     class FakeModel:
@@ -17,7 +15,7 @@ def test_warm_preloads_embedding_then_hybrid_search(monkeypatch, tmp_path):
     class FakeStore:
         def hybrid_search(self, **kwargs):
             calls.append(("hybrid_search", kwargs))
-            return [{"chunk_id": "warm-1"}]
+            raise AssertionError("warmup must not run a full hybrid search")
 
     monkeypatch.setattr("brainlayer.mcp._shared._get_embedding_model", lambda: FakeModel())
     monkeypatch.setattr("brainlayer.mcp._shared._get_search_vector_store", lambda: FakeStore())
@@ -25,43 +23,29 @@ def test_warm_preloads_embedding_then_hybrid_search(monkeypatch, tmp_path):
     helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
     helper.warm()
 
-    assert calls == [
-        ("embed_query", "brainbar hybrid helper warmup"),
-        (
-            "hybrid_search",
-            {
-                "query_embedding": [0.1, 0.2, 0.3],
-                "query_text": "brainbar hybrid helper warmup",
-                "n_results": 5,
-            },
-        ),
-    ]
+    assert calls == [("embed_query", "brainbar hybrid helper warmup")]
 
 
-def test_warm_retries_locked_hybrid_search_and_continues(monkeypatch, tmp_path):
+def test_warm_does_not_sleep_for_hybrid_search_retries(monkeypatch, tmp_path):
     calls = []
-    sleeps = []
 
     class FakeModel:
         def embed_query(self, text):
+            calls.append(("embed_query", text))
             return [0.1, 0.2, 0.3]
 
     class FakeStore:
         def hybrid_search(self, **kwargs):
             calls.append(kwargs)
-            if len(calls) < 3:
-                raise sqlite3.OperationalError("database is locked")
-            return [{"chunk_id": "warm-1"}]
+            raise AssertionError("warmup must not retry a full hybrid search")
 
     monkeypatch.setattr("brainlayer.mcp._shared._get_embedding_model", lambda: FakeModel())
     monkeypatch.setattr("brainlayer.mcp._shared._get_search_vector_store", lambda: FakeStore())
-    monkeypatch.setattr("brainlayer.brainbar_hybrid_helper.time.sleep", lambda delay: sleeps.append(delay))
 
     helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
     helper.warm()
 
-    assert len(calls) == 3
-    assert sleeps == [0.05, 0.1]
+    assert calls == [("embed_query", "brainbar hybrid helper warmup")]
 
 
 def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkeypatch, tmp_path):
@@ -113,6 +97,7 @@ def test_helper_routes_brain_search_to_python_mcp_with_source_all_default(monkey
             "max_results": 10,
             "detail": "compact",
             "allow_helper_route": False,
+            "brainbar_helper_fast_profile": True,
         }
     ]
 

@@ -160,6 +160,7 @@ search_handler._brain_search = fake_brain_search
     assert structured["accepted_keys"] == [
         "agent_id",
         "allow_helper_route",
+        "brainbar_helper_fast_profile",
         "detail",
         "importance_min",
         "max_results",

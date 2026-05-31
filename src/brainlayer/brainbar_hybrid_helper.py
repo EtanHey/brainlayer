@@ -10,13 +10,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import signal
 import socket
-import sqlite3
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +21,6 @@ from . import search_profile
 
 _ACCEPT_TIMEOUT_SECONDS = 0.25
 _CONNECTION_TIMEOUT_SECONDS = 5.0
-_WARMUP_RETRY_DELAYS_SECONDS = (0.05, 0.1)
-_LOGGER = logging.getLogger(__name__)
 
 
 def _json_safe(value: Any) -> Any:
@@ -62,25 +57,7 @@ class HybridSearchHelper:
         )
         model = _get_embedding_model()
         warmup_query = "brainbar hybrid helper warmup"
-        query_embedding = model.embed_query(warmup_query)
-        for attempt in range(len(_WARMUP_RETRY_DELAYS_SECONDS) + 1):
-            try:
-                store.hybrid_search(
-                    query_embedding=query_embedding,
-                    query_text=warmup_query,
-                    n_results=5,
-                )
-                return
-            except sqlite3.OperationalError as exc:
-                if "database is locked" not in str(exc).lower():
-                    _LOGGER.warning("BrainBar hybrid warmup skipped after SQLite error: %s", exc)
-                    return
-                if attempt >= len(_WARMUP_RETRY_DELAYS_SECONDS):
-                    _LOGGER.warning("BrainBar hybrid warmup skipped after repeated SQLite busy errors")
-                    return
-                delay = _WARMUP_RETRY_DELAYS_SECONDS[attempt]
-                _LOGGER.warning("BrainBar hybrid warmup hit SQLite busy; retrying in %.2fs", delay)
-                time.sleep(delay)
+        model.embed_query(warmup_query)
 
     def serve_forever(self) -> None:
         if self.socket_path.exists():
@@ -193,6 +170,7 @@ class HybridSearchHelper:
             "max_results": int(arguments.get("max_results") or 10),
             "detail": str(arguments.get("detail") or "compact"),
             "allow_helper_route": False,
+            "brainbar_helper_fast_profile": True,
         }
         if search_profile.enabled() or query_id is not None:
             search_kwargs["profile_query_id"] = query_id
