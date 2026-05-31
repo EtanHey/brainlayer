@@ -230,7 +230,7 @@ final class BrainBarServer: @unchecked Sendable {
 
         // 1. Create router FIRST (no DB dependency).
         //    initialize + tools/list work without a database.
-        router = MCPRouter(hybridSearchClient: hybridClient)
+        router = MCPRouter(hybridSearchClient: hybridClient, dbPath: dbPath)
 
         // 2. Bind socket BEFORE database init.
         //    After a restart the socket must exist before Claude Code tries

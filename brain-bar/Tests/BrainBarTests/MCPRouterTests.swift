@@ -1275,6 +1275,78 @@ final class MCPRouterTests: XCTestCase {
 
     // MARK: - brain_store queue fallback
 
+    func testBrainStoreQueuesWithoutDatabaseWhenRouterHasDBPath() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let router = MCPRouter(dbPath: dbPath)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Store should queue even before the database opens",
+                    "tags": ["queue-on-lock"],
+                    "importance": 8
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let queueID = try XCTUnwrap(result["queue_id"] as? String)
+        let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
+        XCTAssertFalse(queueID.isEmpty)
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+
+        let queuedPayload = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
+        XCTAssertEqual(queuedPayload["content"] as? String, "Store should queue even before the database opens")
+        XCTAssertEqual(queuedPayload["queue_id"] as? String, queueID)
+        XCTAssertEqual(queuedPayload["queued_at"] as? String, queuedAt)
+    }
+
+    func testBrainStoreQueuesWhenDatabaseHandleIsNotOpen() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let db = BrainDatabase(path: dbPath)
+        db.close()
+
+        let router = MCPRouter(dbPath: dbPath)
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Store should queue when the database handle is not open",
+                    "tags": ["queue-on-lock"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        XCTAssertFalse((result["queue_id"] as? String ?? "").isEmpty)
+        XCTAssertFalse((result["queued_at"] as? String ?? "").isEmpty)
+
+        let queuedPayload = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
+        XCTAssertEqual(queuedPayload["content"] as? String, "Store should queue when the database handle is not open")
+    }
+
     func testBrainStoreQueuesWhenWriteHitsTransientSQLiteLock() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -1315,10 +1387,16 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertNotEqual(result?["isError"] as? Bool, true, "brain_store should queue instead of surfacing a transient lock")
         XCTAssertTrue(text.localizedCaseInsensitiveContains("queued"))
+        let queueID = try XCTUnwrap(result?["queue_id"] as? String)
+        let queuedAt = try XCTUnwrap(result?["queued_at"] as? String)
+        XCTAssertFalse(queueID.isEmpty)
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
 
         let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertTrue(queuedText.contains("Store should queue after transient SQLite lock"))
+        XCTAssertTrue(queuedText.contains(queueID))
+        XCTAssertTrue(queuedText.contains(queuedAt))
     }
 
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
@@ -1758,6 +1836,15 @@ private func setPendingStoreQueueMaxLines(_ maxLines: Int) -> () -> Void {
 private func posixPermissions(path: URL) throws -> Int {
     let attributes = try FileManager.default.attributesOfItem(atPath: path.path)
     return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+}
+
+private func readSinglePendingStorePayload(queuePath: URL) throws -> [String: Any]? {
+    guard FileManager.default.fileExists(atPath: queuePath.path) else { return nil }
+    let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+    let lines = queuedText.split(whereSeparator: \.isNewline)
+    guard lines.count == 1 else { return nil }
+    let data = Data(lines[0].utf8)
+    return try JSONSerialization.jsonObject(with: data) as? [String: Any]
 }
 
 private func chunkContents(path: String) throws -> [String] {

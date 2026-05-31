@@ -216,7 +216,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     enum StoreWriteOutcome: Sendable, Equatable {
         case stored(StoredChunk)
-        case queued
+        case queued(queueID: String, queuedAt: String)
     }
 
     struct PendingStoreItem: Codable, Sendable {
@@ -941,8 +941,8 @@ final class BrainDatabase: @unchecked Sendable {
             guard shouldQueueStoreError(error) else {
                 throw error
             }
-            try queuePendingStore(content: content, tags: tags, importance: importance, source: source)
-            return .queued
+            let queued = try queuePendingStore(content: content, tags: tags, importance: importance, source: source)
+            return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt)
         }
     }
 
@@ -972,26 +972,35 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    func queuePendingStore(content: String, tags: [String], importance: Int, source: String) throws {
+    @discardableResult
+    func queuePendingStore(content: String, tags: [String], importance: Int, source: String) throws -> (queueID: String, queuedAt: String) {
+        try Self.queuePendingStore(dbPath: path, content: content, tags: tags, importance: importance, source: source)
+    }
+
+    @discardableResult
+    static func queuePendingStore(dbPath: String, content: String, tags: [String], importance: Int, source: String) throws -> (queueID: String, queuedAt: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
-        let path = pendingStorePath()
+        let path = pendingStorePath(forDBPath: dbPath)
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        let queueID = UUID().uuidString.lowercased()
+        let queuedAt = Self.timestamp()
         let item = PendingStoreItem(
             content: content,
             tags: tags,
             importance: importance,
             source: source,
-            queueID: UUID().uuidString.lowercased(),
-            queuedAt: Self.timestamp()
+            queueID: queueID,
+            queuedAt: queuedAt
         )
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
         try appendPendingStoreLine(line, to: path)
+        return (queueID: queueID, queuedAt: queuedAt)
     }
 
     func flushPendingStores() -> [FlushedPendingStore] {
@@ -1002,7 +1011,7 @@ final class BrainDatabase: @unchecked Sendable {
         do {
             return try Self.withPendingStoreProcessLock(for: path) {
                 guard FileManager.default.fileExists(atPath: path.path) else { return [] }
-                guard let snapshot = readPendingStoreData(at: path) else {
+                guard let snapshot = Self.readPendingStoreData(at: path) else {
                     NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
                     return []
                 }
@@ -2873,14 +2882,18 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func pendingStorePath() -> URL {
+        Self.pendingStorePath(forDBPath: path)
+    }
+
+    private static func pendingStorePath(forDBPath dbPath: String) -> URL {
         if let override = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: override)
         }
-        return URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
+        return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("pending-stores.jsonl")
     }
 
-    private func appendPendingStoreLine(_ line: Data, to path: URL) throws {
+    private static func appendPendingStoreLine(_ line: Data, to path: URL) throws {
         try Self.withPendingStoreProcessLock(for: path) {
             let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
             guard fd >= 0 else {
@@ -2890,7 +2903,7 @@ final class BrainDatabase: @unchecked Sendable {
             defer { Darwin.close(fd) }
             try Self.enforcePendingStoreFileMode(fd: fd, path: path)
 
-            let existingLineCount = Self.pendingStoreLines(from: readPendingStoreData(at: path) ?? Data()).count
+            let existingLineCount = Self.pendingStoreLines(from: Self.readPendingStoreData(at: path) ?? Data()).count
             let maxLines = Self.pendingStoreMaxLines()
             guard existingLineCount < maxLines else {
                 throw DBError.exec(
@@ -2903,7 +2916,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private func readPendingStoreData(at path: URL) -> Data? {
+    private static func readPendingStoreData(at path: URL) -> Data? {
         try? Data(contentsOf: path)
     }
 
@@ -2915,7 +2928,7 @@ final class BrainDatabase: @unchecked Sendable {
         do {
             return try Self.withPendingStoreProcessLock(for: path) {
                 guard FileManager.default.fileExists(atPath: path.path),
-                      let data = readPendingStoreData(at: path) else {
+                      let data = Self.readPendingStoreData(at: path) else {
                     return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
                 }
 
