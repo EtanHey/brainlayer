@@ -42,6 +42,12 @@ EXPECTED = {
     "junk": 491,
 }
 
+VOICE_VARIANT_KEYS = {
+    "voiceclaude",
+    "voicelayerclaude",
+    "voicelayerclaudeworkeremail1",
+}
+
 
 def normalize_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
@@ -89,10 +95,7 @@ def is_local_path_or_file(name: str) -> bool:
     ):
         return True
     # Deliberately excludes .js because names like Node.js/Next.js are real entities.
-    return (
-        "/" not in name
-        and re.search(r"\.(md|json|py|ts|tsx|swift|toml|ya?ml|sh|db|sqlite|mov)$", lower) is not None
-    )
+    return "/" not in name and re.search(r"\.(md|json|py|ts|tsx|swift|toml|ya?ml|sh|db|sqlite|mov)$", lower) is not None
 
 
 def junk_reasons(row: dict[str, Any]) -> list[str]:
@@ -116,12 +119,7 @@ def build_plan(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_id = {row["id"]: row for row in rows}
 
     brain_named = [row for row in rows if normalize_name(row["name"]) in {"brainclaude", "brainlayerclaude"}]
-    voice_named = [
-        row
-        for row in rows
-        if normalize_name(row["name"]) in {"voiceclaude", "voicelayerclaude"}
-        or "voicelayerclaude" in row["name"].lower()
-    ]
+    voice_named = [row for row in rows if normalize_name(row["name"]) in VOICE_VARIANT_KEYS]
     gliner_sources = [by_id[GLINER_TOOL_ID]] if GLINER_TOOL_ID in by_id else []
 
     person_groups: list[dict[str, Any]] = []
@@ -135,6 +133,9 @@ def build_plan(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not persons or len(family) <= 1:
             continue
         target = max(persons, key=lambda row: (row["chunks"], row["rels"], row["name"]))
+        # Approved P2 scope intentionally absorbs all PERSON_token placeholder rows,
+        # including rows that KG extraction mistyped as project/tool/etc. These are not
+        # real cross-type ontology entities.
         sources = [row for row in family if row["id"] != target["id"]]
         person_groups.append({"key": key, "target": target, "sources": sources})
     person_groups.sort(key=lambda group: (-sum(row["chunks"] for row in group["sources"]), group["key"]))
@@ -210,7 +211,8 @@ def archive_entity(store: VectorStore, entity_id: str, reason: str, archived_at:
         "reason": reason,
         "archived_at": archived_at,
     }
-    store.conn.cursor().execute(
+    cursor = store.conn.cursor()
+    cursor.execute(
         """
         UPDATE kg_entities
         SET status = 'archived',
@@ -221,7 +223,10 @@ def archive_entity(store: VectorStore, entity_id: str, reason: str, archived_at:
         """,
         (archived_at, json.dumps(metadata, sort_keys=True), entity_id),
     )
-    return store.conn.changes() > 0
+    changes = getattr(store.conn, "changes", None)
+    if callable(changes):
+        return changes() > 0
+    return getattr(cursor, "rowcount", 0) > 0
 
 
 def merge_many(store: VectorStore, target_id: str, sources: list[dict[str, Any]], stats: Counter[str]) -> None:

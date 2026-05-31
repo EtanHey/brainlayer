@@ -154,6 +154,22 @@ def _min_present(left: int | None, right: int | None) -> int | None:
     return min(left, right)
 
 
+def _earliest_present(left: str | None, right: str | None) -> str | None:
+    """Return the earliest non-null comparable timestamp."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
+def _latest_valid_until(left: str | None, right: str | None) -> str | None:
+    """Return the widest valid-until bound; None represents open-ended validity."""
+    if left is None or right is None:
+        return None
+    return max(left, right)
+
+
 def _merge_mention_type(left: str | None, right: str | None) -> str | None:
     """Preserve explicit mentions over inferred/implicit support."""
     if left == "explicit" or right == "explicit":
@@ -323,8 +339,8 @@ def merge_entities_preserving_links(store: VectorStore, keep_id: str, merge_id: 
                     max(existing_user_verified or 0, user_verified or 0),
                     existing_fact or fact,
                     _max_present(existing_importance, importance),
-                    existing_valid_from or valid_from,
-                    existing_valid_until or valid_until,
+                    _earliest_present(existing_valid_from, valid_from),
+                    _latest_valid_until(existing_valid_until, valid_until),
                     merged_expired_at,
                     existing_source_chunk_id or source_chunk_id,
                     existing_id,

@@ -294,14 +294,21 @@ class TestMergeEntities:
 
         stats = merge_entities_preserving_links(store, keep_id, merge_id)
 
-        row = store.conn.cursor().execute(
-            "SELECT entity_id, relevance, context, mention_type FROM kg_entity_chunks WHERE chunk_id = 'chunk-1'"
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT entity_id, relevance, context, mention_type FROM kg_entity_chunks WHERE chunk_id = 'chunk-1'"
+            )
+            .fetchone()
+        )
         assert row == (keep_id, 0.9, "strong", "explicit")
         assert stats["chunk_conflicts_merged"] == 1
-        assert store.conn.cursor().execute(
-            "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (merge_id,)
-        ).fetchone()[0] == 0
+        assert (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (merge_id,))
+            .fetchone()[0]
+            == 0
+        )
 
     def test_merge_combines_duplicate_relations_without_losing_richer_fact(self, store):
         """Relation conflicts should keep a single canonical edge with richer evidence."""
@@ -335,9 +342,12 @@ class TestMergeEntities:
         )
         assert rows == [(keep_id, company_id, "works_at", 0.9, "Etan works at Domica", 0.8, "chunk-rich")]
         assert stats["relation_conflicts_merged"] == 1
-        assert store.conn.cursor().execute(
-            "SELECT COUNT(*) FROM kg_relations WHERE source_id = ? OR target_id = ?", (merge_id, merge_id)
-        ).fetchone()[0] == 0
+        assert (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM kg_relations WHERE source_id = ? OR target_id = ?", (merge_id, merge_id))
+            .fetchone()[0]
+            == 0
+        )
 
     def test_merge_relation_conflict_keeps_later_expiration(self, store):
         """When both conflicting relations are expired, keep the later expiration."""
@@ -364,6 +374,36 @@ class TestMergeEntities:
         assert len(rows) == 1
         assert rows[0][0] == "2026-02-01T00:00:00Z"
 
+    def test_merge_relation_conflict_preserves_widest_validity_window(self, store):
+        """Relation conflicts should keep the earliest start and latest end dates."""
+        from brainlayer.pipeline.entity_resolution import merge_entities_preserving_links
+
+        keep_id = _upsert(store, "person", "Etan Heyman")
+        merge_id = _upsert(store, "person", "Etan")
+        company_id = _upsert(store, "company", "Domica")
+
+        store.add_relation(
+            "rel-short",
+            keep_id,
+            company_id,
+            "works_at",
+            valid_from="2026-05-01T00:00:00Z",
+            valid_until="2026-06-01T00:00:00Z",
+        )
+        store.add_relation(
+            "rel-wide",
+            merge_id,
+            company_id,
+            "works_at",
+            valid_from="2026-01-01T00:00:00Z",
+            valid_until="2026-12-01T00:00:00Z",
+        )
+
+        merge_entities_preserving_links(store, keep_id, merge_id)
+
+        rows = list(store.conn.cursor().execute("SELECT valid_from, valid_until FROM kg_relations"))
+        assert rows == [("2026-01-01T00:00:00Z", "2026-12-01T00:00:00Z")]
+
 
 # ── Archive Operation ──
 
@@ -375,6 +415,7 @@ class TestArchiveEntity:
         """Archiving a non-existent entity should return False."""
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
         from kg_p2_safe_cleanup import archive_entity
 
@@ -385,6 +426,7 @@ class TestArchiveEntity:
         """Archiving an active entity should return True."""
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
         from kg_p2_safe_cleanup import archive_entity
 
@@ -399,11 +441,12 @@ class TestArchiveEntity:
         """Re-archiving an already archived entity should return False."""
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
         from kg_p2_safe_cleanup import archive_entity
 
         entity_id = _upsert(store, "person", "Test Person")
-        
+
         # Archive once
         result1 = archive_entity(store, entity_id, "first-reason", "2026-05-31T00:00:00.000000Z")
         assert result1 is True
