@@ -490,6 +490,109 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
     }
 
+    func testReadToolsUseReadonlyReadDatabaseWhenWriteHandleIsUnavailable() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-read-db-routing-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let setupDB = BrainDatabase(path: tempDB)
+        try setupDB.insertChunk(
+            id: "read-db-route-target",
+            content: "Read database route target content",
+            sessionId: "read-db-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6,
+            tags: "[\"readonly-route\"]"
+        )
+        try setupDB.insertEntity(id: "entity-readonly-person", type: "person", name: "ReadOnly Person")
+        setupDB.close()
+
+        let writeDB = BrainDatabase(path: tempDB)
+        let readDB = BrainDatabase(
+            path: tempDB,
+            openConfiguration: .init(busyTimeoutMillis: 250, readOnly: true)
+        )
+        defer { readDB.close() }
+
+        XCTAssertEqual(try sqlitePragma(handle: readDB.dbHandle, name: "query_only"), "1")
+        XCTAssertEqual(try sqlitePragma(handle: readDB.dbHandle, name: "busy_timeout"), "250")
+        writeDB.close()
+
+        let router = MCPRouter()
+        router.setDatabases(write: writeDB, read: readDB)
+
+        let searchText = try toolText(router.handle(toolCall(id: 301, name: "brain_search", arguments: [
+            "query": "read database route target",
+            "num_results": 5,
+            "agent_id": "force-swift-read-path"
+        ])))
+        XCTAssertTrue(searchText.contains("Read database route target content"), searchText)
+
+        let recallText = try toolText(router.handle(toolCall(id: 302, name: "brain_recall", arguments: [
+            "mode": "stats"
+        ])))
+        XCTAssertTrue(recallText.contains("Chunks: 1"), recallText)
+
+        let entityText = try toolText(router.handle(toolCall(id: 303, name: "brain_entity", arguments: [
+            "query": "ReadOnly Person"
+        ])))
+        XCTAssertTrue(entityText.contains("ReadOnly Person"), entityText)
+
+        let personText = try toolText(router.handle(toolCall(id: 304, name: "brain_get_person", arguments: [
+            "name": "ReadOnly Person"
+        ])))
+        XCTAssertTrue(personText.contains("ReadOnly Person"), personText)
+
+        let expandText = try toolText(router.handle(toolCall(id: 305, name: "brain_expand", arguments: [
+            "chunk_id": "read-db-route-target"
+        ])))
+        XCTAssertTrue(expandText.contains("brain_expand: read-db-route-target"), expandText)
+
+        let tagsText = try toolText(router.handle(toolCall(id: 306, name: "brain_tags", arguments: [
+            "query": "readonly"
+        ])))
+        XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
+    }
+
+    func testBrainSearchFallsBackToReadDatabaseWhenHybridHelperExceedsBudget() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-budget-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let writeDB = BrainDatabase(path: tempDB)
+        defer { writeDB.close() }
+        try writeDB.insertChunk(
+            id: "hybrid-budget-fallback",
+            content: "Hybrid budget fallback content from Swift read database",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        let readDB = BrainDatabase(
+            path: tempDB,
+            openConfiguration: .init(busyTimeoutMillis: 250, readOnly: true)
+        )
+        defer { readDB.close() }
+
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(text: "slow helper should not win"),
+            delay: 0.50
+        )
+        let router = MCPRouter(hybridSearchClient: helper, hybridSearchBudget: 0.05)
+        router.setDatabases(write: writeDB, read: readDB)
+
+        let started = Date()
+        let response = router.handle(toolCall(id: 307, name: "brain_search", arguments: [
+            "query": "hybrid budget fallback",
+            "num_results": 5
+        ]))
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 0.25)
+        XCTAssertEqual(helper.requests.count, 1)
+        let text = try toolText(response)
+        XCTAssertTrue(text.contains("Hybrid budget fallback content"), text)
+        XCTAssertFalse(text.contains("slow helper should not win"), text)
+    }
+
     func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-unread-helper-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -1922,6 +2025,44 @@ private func chunkEnrichedAt(path: String, id: String) throws -> String? {
     }
     guard let value = sqlite3_column_text(stmt, 0) else {
         return nil
+    }
+    return String(cString: value)
+}
+
+private func toolCall(id: Int, name: String, arguments: [String: Any]) -> [String: Any] {
+    [
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": [
+            "name": name,
+            "arguments": arguments
+        ] as [String: Any]
+    ]
+}
+
+private func toolText(_ response: [String: Any]) throws -> String {
+    let result = try XCTUnwrap(response["result"] as? [String: Any])
+    XCTAssertNil(result["isError"], String(describing: result))
+    let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+    return content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+}
+
+private func sqlitePragma(handle: OpaquePointer?, name: String) throws -> String {
+    guard let handle else {
+        throw NSError(domain: "MCPRouterTests", code: Int(SQLITE_MISUSE))
+    }
+    var stmt: OpaquePointer?
+    let sql = "PRAGMA \(name)"
+    let prepareRC = sqlite3_prepare_v2(handle, sql, -1, &stmt, nil)
+    guard prepareRC == SQLITE_OK else {
+        throw NSError(domain: "MCPRouterTests", code: Int(prepareRC))
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    guard sqlite3_step(stmt) == SQLITE_ROW,
+          let value = sqlite3_column_text(stmt, 0) else {
+        throw NSError(domain: "MCPRouterTests", code: Int(SQLITE_EMPTY))
     }
     return String(cString: value)
 }

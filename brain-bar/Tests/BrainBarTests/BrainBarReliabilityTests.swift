@@ -204,6 +204,60 @@ final class BrainBarReliabilityTests: XCTestCase {
         XCTAssertTrue(text.contains("read-survives-write-burst") || text.contains("read path should survive"))
     }
 
+    func testReadOnlySearchSucceedsWhileAnotherWriterHoldsImmediateTransaction() throws {
+        let directory = makeReliabilityTempDirectory()
+        let dbPath = directory.appendingPathComponent("brainbar.db").path
+
+        let writeDB = BrainDatabase(path: dbPath)
+        XCTAssertTrue(writeDB.isOpen)
+        defer { writeDB.close() }
+        try writeDB.insertChunk(
+            id: "read-db-wal-concurrent",
+            content: "Read-only WAL search survives immediate writer transaction",
+            sessionId: "s1",
+            project: "reliability",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let readDB = BrainDatabase(
+            path: dbPath,
+            openConfiguration: .init(busyTimeoutMillis: 250, readOnly: true)
+        )
+        XCTAssertTrue(readDB.isOpen)
+        defer { readDB.close() }
+
+        let lockDB = try openReliabilitySQLiteConnection(path: dbPath)
+        defer { sqlite3_close(lockDB) }
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        defer { sqlite3_exec(lockDB, "COMMIT", nil, nil, nil) }
+
+        let router = MCPRouter()
+        router.setDatabases(write: writeDB, read: readDB)
+
+        let started = Date()
+        let searchResponse = router.handle([
+            "jsonrpc": "2.0",
+            "id": 199,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": "WAL search survives",
+                    "num_results": 5,
+                    "agent_id": "force-swift-read-path"
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.20)
+        let result = try XCTUnwrap(searchResponse["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        XCTAssertTrue(text.contains("Read-only WAL search survives"), text)
+    }
+
     private func makeReliabilityTempDirectory() -> URL {
         let shortID = UUID().uuidString.prefix(8)
         let directory = URL(fileURLWithPath: "/private/tmp/br-\(shortID)", isDirectory: true)

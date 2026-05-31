@@ -14,6 +14,7 @@ enum RecordingHybridSearchClientError: LocalizedError {
 
 final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked Sendable {
     private let result: Result<HybridSearchResponse, Error>
+    private let delay: TimeInterval
     private let lock = NSLock()
     private var recordedRequests: [[String: Any]] = []
 
@@ -23,12 +24,14 @@ final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked 
         return recordedRequests
     }
 
-    init(response: HybridSearchResponse) {
+    init(response: HybridSearchResponse, delay: TimeInterval = 0) {
         result = .success(response)
+        self.delay = delay
     }
 
-    init(error: Error = RecordingHybridSearchClientError.injectedFailure) {
+    init(error: Error = RecordingHybridSearchClientError.injectedFailure, delay: TimeInterval = 0) {
         result = .failure(error)
+        self.delay = delay
     }
 
     deinit {}
@@ -37,6 +40,9 @@ final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked 
         lock.lock()
         recordedRequests.append(arguments)
         lock.unlock()
+        if delay > 0 {
+            Thread.sleep(forTimeInterval: delay)
+        }
         return try result.get()
     }
 }
