@@ -17,6 +17,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,16 @@ DEFAULT_POST_WRITE_YIELD_MS = 20.0
 DEFAULT_ENRICH_SUPERVISOR_LIMIT = 200_000
 DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600
 DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
+DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
+ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
+
+# Gemini Developer API paid-tier text prices per 1M tokens for gemini-2.5-flash-lite.
+GEMINI_FLASH_LITE_TEXT_PRICES_USD_PER_1M = {
+    "standard": {"input": 0.10, "output": 0.40},
+    "batch": {"input": 0.05, "output": 0.20},
+    "flex": {"input": 0.05, "output": 0.20},
+    "priority": {"input": 0.18, "output": 0.72},
+}
 
 
 def _bounded_nonnegative_float(value: Any, default: float) -> float:
@@ -53,6 +64,149 @@ def _bounded_positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return max(1, default)
     return max(1, parsed)
+
+
+def _enrich_daily_usd_cap() -> float:
+    return _bounded_nonnegative_float(os.environ.get("BRAINLAYER_ENRICH_DAILY_USD_CAP"), DEFAULT_ENRICH_DAILY_USD_CAP)
+
+
+def _local_cost_counter_date(now: datetime | None = None) -> str:
+    current = now or datetime.now().astimezone()
+    return current.date().isoformat()
+
+
+def _enrich_cost_counter_path() -> Path:
+    override_dir = os.environ.get("BRAINLAYER_ENRICH_COST_DIR")
+    if override_dir:
+        return Path(override_dir).expanduser() / ENRICH_DAILY_COST_COUNTER_FILENAME
+
+    from .paths import get_db_path
+
+    return get_db_path().parent / ENRICH_DAILY_COST_COUNTER_FILENAME
+
+
+@contextmanager
+def _locked_enrich_cost_counter(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with _ENRICH_COST_LOCK:
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
+            try:
+                yield
+            finally:
+                try:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+
+
+def _read_enrich_cost_record(path: Path | None = None, today: str | None = None) -> dict[str, Any]:
+    path = path or _enrich_cost_counter_path()
+    today = today or _local_cost_counter_date()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"date": today, "spent_usd": 0.0}
+
+    if data.get("date") != today:
+        return {"date": today, "spent_usd": 0.0}
+
+    try:
+        spent = float(data.get("spent_usd", 0.0))
+    except (TypeError, ValueError):
+        spent = 0.0
+    return {"date": today, "spent_usd": max(0.0, spent)}
+
+
+def _write_enrich_cost_record(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _daily_cap_message(spent_usd: float, cap_usd: float) -> str:
+    return f"ENRICH_DAILY_CAP_REACHED spent=${spent_usd:.6f} cap=${cap_usd:.2f}"
+
+
+def _raise_if_enrich_daily_cap_reached() -> None:
+    cap_usd = _enrich_daily_usd_cap()
+    path = _enrich_cost_counter_path()
+    today = _local_cost_counter_date()
+    with _locked_enrich_cost_counter(path):
+        record = _read_enrich_cost_record(path, today)
+        spent_usd = float(record["spent_usd"])
+        if spent_usd >= cap_usd:
+            message = _daily_cap_message(spent_usd, cap_usd)
+            logger.warning(message)
+            raise EnrichmentDailyCapReached(message)
+
+
+def _usage_value(usage: Any, *names: str) -> int:
+    if usage is None:
+        return 0
+    for name in names:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _estimate_gemini_response_cost_usd(response: Any, service_tier: str | None = None) -> float:
+    usage = getattr(response, "usage_metadata", None) or getattr(response, "usageMetadata", None)
+    input_tokens = _usage_value(usage, "prompt_token_count", "promptTokenCount")
+    candidate_tokens = _usage_value(usage, "candidates_token_count", "candidatesTokenCount")
+    thoughts_tokens = _usage_value(usage, "thoughts_token_count", "thoughtsTokenCount")
+    total_tokens = _usage_value(usage, "total_token_count", "totalTokenCount")
+    output_tokens = candidate_tokens + thoughts_tokens
+    if total_tokens and input_tokens:
+        output_tokens = max(output_tokens, total_tokens - input_tokens)
+
+    tier = (service_tier or _get_gemini_service_tier()).lower()
+    prices = GEMINI_FLASH_LITE_TEXT_PRICES_USD_PER_1M.get(
+        tier,
+        GEMINI_FLASH_LITE_TEXT_PRICES_USD_PER_1M["standard"],
+    )
+    return (input_tokens * prices["input"] + output_tokens * prices["output"]) / 1_000_000
+
+
+def _record_enrich_response_usage(response: Any) -> float:
+    cost_usd = _estimate_gemini_response_cost_usd(response)
+    if cost_usd <= 0:
+        return 0.0
+
+    cap_usd = _enrich_daily_usd_cap()
+    path = _enrich_cost_counter_path()
+    today = _local_cost_counter_date()
+    with _locked_enrich_cost_counter(path):
+        record = _read_enrich_cost_record(path, today)
+        spent_usd = float(record["spent_usd"]) + cost_usd
+        _write_enrich_cost_record(path, {"date": today, "spent_usd": spent_usd})
+
+    if spent_usd >= cap_usd:
+        logger.warning(_daily_cap_message(spent_usd, cap_usd))
+    return cost_usd
+
+
+def _is_monthly_spending_cap_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "resource_exhausted" in text and "monthly" in text and "spending cap" in text
+
+
+def _result_hit_daily_cap(result: EnrichmentResult) -> bool:
+    return any(str(error).startswith("ENRICH_DAILY_CAP_REACHED") for error in result.errors)
 
 
 # Auto-enrichment on brain_store: set to "0" or "false" to disable
@@ -84,6 +238,7 @@ _STORE_OPERATION_COUNTS: dict[str, int] = {}
 _STORE_OPERATION_LOCK = threading.Lock()
 _STORE_OPERATION_CONDITION = threading.Condition(_STORE_OPERATION_LOCK)
 _STORE_CLOSING: set[str] = set()
+_ENRICH_COST_LOCK = threading.Lock()
 
 _META_RESEARCH_PATTERNS = [
     re.compile(r"brain_search\s*\(", re.IGNORECASE),
@@ -118,6 +273,10 @@ class EnrichmentSupervisorResult:
     failed_cycles: int = 0
     errors: list[str] = field(default_factory=list)
     exit_code: int = 0
+
+
+class EnrichmentDailyCapReached(RuntimeError):
+    """Raised when the local daily enrichment spend counter reaches its cap."""
 
 
 def _current_idle_poll_seconds() -> float:
@@ -174,6 +333,11 @@ def run_enrich_supervisor(
 
             try:
                 result = enrich_fn(store, limit=limit, since_hours=since_hours)
+            except EnrichmentDailyCapReached as exc:
+                stats.cycles += 1
+                stats.errors.append(str(exc))
+                logger.warning("Enrich supervisor stopping: %s", exc)
+                break
             except Exception as exc:  # noqa: BLE001
                 stats.cycles += 1
                 stats.failed_cycles += 1
@@ -190,6 +354,9 @@ def run_enrich_supervisor(
             stats.skipped += result.skipped
             stats.failed += result.failed
             stats.errors.extend(result.errors)
+
+            if _result_hit_daily_cap(result):
+                break
 
             if result.attempted == 0 and (max_cycles is None or stats.cycles < max_cycles):
                 logger.info("Enrich supervisor queue empty; sleeping %.1fs", idle_poll_seconds)
@@ -595,14 +762,16 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
         return None
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_EXTRACTION_MODEL,
-            contents=prompt,
-            config={
+        response = _generate_content_with_rate_limit(
+            client,
+            GEMINI_EXTRACTION_MODEL,
+            prompt,
+            {
                 "response_mime_type": "application/json",
                 "thinking_config": {"thinking_budget": 0},
                 "http_options": _build_gemini_http_options(timeout_ms=30_000),
             },
+            None,
         )
         return response.text if response and response.text else None
     except Exception:
@@ -757,6 +926,8 @@ def _retry_with_backoff(
         try:
             return fn()
         except retryable_errors as exc:
+            if isinstance(exc, EnrichmentDailyCapReached) or _is_monthly_spending_cap_error(exc):
+                raise
             if attempt >= max_retries:
                 raise
             delay = min(base_delay * (2**attempt), max_delay)
@@ -775,13 +946,16 @@ def _retry_with_backoff(
 def _generate_content_with_rate_limit(
     client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None
 ):
+    _raise_if_enrich_daily_cap_reached()
     if limiter is not None:
         limiter.acquire()
-    return client.models.generate_content(
+    response = client.models.generate_content(
         model=model,
         contents=prompt,
         config=config,
     )
+    _record_enrich_response_usage(response)
+    return response
 
 
 def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
@@ -873,6 +1047,8 @@ def _enrich_single_chunk(
         if not enrichment:
             return (chunk, "error", "invalid_enrichment")
         return (chunk, "ok", enrichment)
+    except EnrichmentDailyCapReached:
+        raise
     except Exception as exc:  # noqa: BLE001
         return (chunk, "error", str(exc))
 
@@ -936,6 +1112,9 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
                 base_delay=0.3,
                 max_delay=5.0,
             )
+        except EnrichmentDailyCapReached as exc:
+            logger.warning("enrich_single: %s", exc)
+            return None
         except Exception as exc:
             logger.warning("enrich_single: Gemini call failed for %s: %s", chunk_id, exc)
             return None
@@ -1079,7 +1258,14 @@ def enrich_realtime(
                     )
 
                 for future in as_completed(futures):
-                    chunk, status, data = future.result()
+                    try:
+                        chunk, status, data = future.result()
+                    except EnrichmentDailyCapReached as exc:
+                        result.errors.append(str(exc))
+                        _emit_enrichment_error("realtime", "daily-cap", str(exc))
+                        for pending in futures:
+                            pending.cancel()
+                        break
                     if status == "skip":
                         result.skipped += 1
                         continue
@@ -1210,6 +1396,10 @@ def enrich_batch(
                             lambda chunk=chunk, enrichment=enrichment: _apply_enrichment(store, chunk, enrichment),
                         )
                     result.enriched += 1
+                except EnrichmentDailyCapReached as exc:
+                    result.errors.append(str(exc))
+                    _emit_enrichment_error("batch", "daily-cap", str(exc))
+                    break
                 except Exception as exc:
                     result.failed += 1
                     result.errors.append(f"{chunk['id']}: {exc}")
