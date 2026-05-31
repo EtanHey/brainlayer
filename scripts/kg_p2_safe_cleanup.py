@@ -221,7 +221,7 @@ def archive_entity(store: VectorStore, entity_id: str, reason: str, archived_at:
         """,
         (archived_at, json.dumps(metadata, sort_keys=True), entity_id),
     )
-    return True
+    return store.conn.changes() > 0
 
 
 def merge_many(store: VectorStore, target_id: str, sources: list[dict[str, Any]], stats: Counter[str]) -> None:

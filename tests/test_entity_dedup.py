@@ -363,3 +363,51 @@ class TestMergeEntities:
         rows = list(store.conn.cursor().execute("SELECT expired_at FROM kg_relations"))
         assert len(rows) == 1
         assert rows[0][0] == "2026-02-01T00:00:00Z"
+
+
+# ── Archive Operation ──
+
+
+class TestArchiveEntity:
+    """Archive entity operation tests from kg_p2_safe_cleanup.py."""
+
+    def test_archive_nonexistent_entity_returns_false(self, store):
+        """Archiving a non-existent entity should return False."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        result = archive_entity(store, "nonexistent-id", "test", "2026-05-31T00:00:00.000000Z")
+        assert result is False
+
+    def test_archive_active_entity_returns_true(self, store):
+        """Archiving an active entity should return True."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        entity_id = _upsert(store, "person", "Test Person")
+        result = archive_entity(store, entity_id, "test-reason", "2026-05-31T00:00:00.000000Z")
+        assert result is True
+
+        row = store.conn.cursor().execute("SELECT status FROM kg_entities WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] == "archived"
+
+    def test_rearchive_archived_entity_returns_false(self, store):
+        """Re-archiving an already archived entity should return False."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        entity_id = _upsert(store, "person", "Test Person")
+        
+        # Archive once
+        result1 = archive_entity(store, entity_id, "first-reason", "2026-05-31T00:00:00.000000Z")
+        assert result1 is True
+
+        # Try to archive again
+        result2 = archive_entity(store, entity_id, "second-reason", "2026-05-31T01:00:00.000000Z")
+        assert result2 is False, "Re-archiving should return False since entity is already archived"
