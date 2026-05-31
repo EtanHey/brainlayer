@@ -149,6 +149,7 @@ _INPUT_STRING_MAX_LENGTHS = {
     "agent_id": 128,
     "chunk_id": 128,
     "content": 200_000,
+    "content_class": 32,
     "content_type": 64,
     "content_type_filter": 64,
     "context": 4_096,
@@ -528,6 +529,16 @@ async def list_tools() -> list[Tool]:
                             "default": False,
                             "description": "Opt in to audit/eval and recursive MCP-output memories. Defaults false to prevent audit-recursion pollution.",
                         },
+                        "include_operational": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to operational/test chunks that default search hides to avoid status and eval pollution.",
+                        },
+                        "content_class": {
+                            "type": "string",
+                            "enum": ["knowledge", "decision", "operational", "test"],
+                            "description": "Restrict search to one content_class. Defaults to visible knowledge/decision classes.",
+                        },
                         "detail": {
                             "type": "string",
                             "enum": ["compact", "full"],
@@ -853,6 +864,16 @@ async def list_tools() -> list[Tool]:
                             "type": "boolean",
                             "default": False,
                             "description": "Opt in to audit/eval and recursive MCP-output memories in mode=search. Defaults false to prevent audit-recursion pollution.",
+                        },
+                        "include_operational": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Opt in to operational/test chunks in mode=search.",
+                        },
+                        "content_class": {
+                            "type": "string",
+                            "enum": ["knowledge", "decision", "operational", "test"],
+                            "description": "Restrict mode=search results to one content_class.",
                         },
                     },
                 }
@@ -1288,6 +1309,8 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 correction_category=arguments.get("correction_category"),
                 include_checkpoints=arguments.get("include_checkpoints", False),
                 include_audit=arguments.get("include_audit", False),
+                include_operational=arguments.get("include_operational", False),
+                content_class_filter=arguments.get("content_class"),
             )
         )
 
@@ -1378,6 +1401,8 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 entity_type=arguments.get("entity_type"),
                 include_checkpoints=arguments.get("include_checkpoints", False),
                 include_audit=arguments.get("include_audit", False),
+                include_operational=arguments.get("include_operational", False),
+                content_class_filter=arguments.get("content_class"),
             )
         )
 

@@ -176,6 +176,10 @@ class HybridSearchHelper:
             "allow_helper_route": False,
             "brainbar_helper_fast_profile": True,
         }
+        if arguments.get("include_operational"):
+            search_kwargs["include_operational"] = True
+        if arguments.get("content_class"):
+            search_kwargs["content_class_filter"] = arguments.get("content_class")
         if search_profile.enabled() or query_id is not None:
             search_kwargs["profile_query_id"] = query_id
             search_kwargs["profile_scope"] = "search.helper"

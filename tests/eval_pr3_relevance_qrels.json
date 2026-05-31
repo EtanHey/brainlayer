@@ -1,0 +1,68 @@
+{
+  "pr3_knowledge_stale": {
+    "brainbar-7989685f-bac": 3,
+    "rt-98df19e4-0090fad79b309adf": 2,
+    "rt-964c6957-f5a1d5f8fea36bce": 2,
+    "brainbar-234a6f54-ab2": 0,
+    "brainbar-095f59ff-4a1": 0,
+    "rt-a35c444a-667de04e67dcb99f": 0,
+    "rt-98df19e4-bf28356be0680243": 0
+  },
+  "pr3_memory_decay_refresh": {
+    "brainbar-7989685f-bac": 3,
+    "rt-98df19e4-0090fad79b309adf": 2,
+    "rt-964c6957-f5a1d5f8fea36bce": 2,
+    "claude-project:Gits-golems-packages-coach/9daab3d4-ed2e-44b7-a340-3de005128e27.jsonl:240": 1,
+    "rt-47778ed8-43f6e3794369dfbd": 0
+  },
+  "pr3_status_pollution": {
+    "brainbar-fd72fed3-89d": 3,
+    "brainbar-6736168c-420": 3,
+    "rt-8cae5283-24bc29e5eec5ee41": 2,
+    "rt-9a9e9117-9787ff319b482513": 0,
+    "rt-9a9e9117-4e08f7d928cdfe13": 0,
+    "rt-33abe108-9d9a378099c5f543": 0
+  },
+  "pr3_durable_decisions": {
+    "brainbar-6736168c-420": 3,
+    "rt-84f1f074-2dedebdd6a3c7cf1": 2,
+    "rt-84f1f074-85f243e256a0e885": 1,
+    "rt-102c64f5-865dbef0e09503cc": 0,
+    "rt-102c64f5-cc8e5674b997f326": 0
+  },
+  "pr3_rrf_relevance_design": {
+    "brainbar-eca14fa2-6b7": 3,
+    "brainbar-93d44600-f2c": 2,
+    "rt-84f1f074-bfd9c5102336dbf1": 2,
+    "claude-project:Gits-orchestrator/6172a890-ef94-4e4f-9cb4-174f56a5b577.jsonl:2": 1,
+    "brainbar-fd72fed3-89d": 1
+  },
+  "pr3_sqlite_vector_decision": {
+    "rt-d10dcedd-aeae8435bef43b13": 3,
+    "rt-d10dcedd-29486144bd9cb5d7": 2,
+    "rt-f540e538-6b5bd06251dc9cbb": 2,
+    "rt-f540e538-bcb0b336e2222c32": 2,
+    "rt-33abe108-cf564530f5243d52": 2,
+    "rt-befb2c43-26606686859d87d9": 1
+  },
+  "pr3_telegram_socket_research": {
+    "claude-project:Desktop-Gits-ralphtools/3cceab66-9c27-44a5-890a-32e5e4754a56/subagents/agent-a87dd68.jsonl:0": 3,
+    "claude-project:Desktop-Gits-ralphtools/3cceab66-9c27-44a5-890a-32e5e4754a56.jsonl:16039": 2,
+    "claude-project:Gits-orchestrator/36549975-5d64-41d5-a5d4-697c02237dde.jsonl:6711": 1,
+    "claude-project:Gits-orchestrator/36549975-5d64-41d5-a5d4-697c02237dde.jsonl:1302": 0
+  },
+  "pr3_operational_status_opt_in": {
+    "rt-80a1b907-dfe65add78094860": 3,
+    "rt-agent-a4-dc897fba2e744b7e": 2,
+    "rt-98df19e4-a16eff4a102e0f76": 2,
+    "rt-f79f0168-2e3d579c7b5e0b67": 2,
+    "brainbar-234a6f54-ab2": 0
+  },
+  "pr3_test_eval_opt_in": {
+    "rt-80a1b907-f68db534e4e3d40a": 3,
+    "rt-9a9e9117-dfebd8858b7f05a0": 2,
+    "claude-project:Gits-brainlayer/63e2366e-df82-4d24-b3d4-b1b26f612fac/subagents/agent-a44052bb21a0288e5.jsonl:7": 1,
+    "brainbar-fd72fed3-89d": 1,
+    "rt-9a9e9117-0cb36326ea2b9396": 1
+  }
+}
