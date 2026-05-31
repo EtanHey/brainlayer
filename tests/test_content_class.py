@@ -96,6 +96,50 @@ def test_classify_content_class_decision_first(content: str, content_type: str, 
     assert classify_content_class(content, content_type=content_type) == expected
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("CLAUDE_COUNTER: 4", "operational"),
+        (
+            "CLAUDE_COUNTER: 7\n\n"
+            "Fixed the BrainBar helper readiness path and added coverage for persistent helper lifecycle "
+            "state, socket startup, and search request forwarding.",
+            "knowledge",
+        ),
+        ("Done.\n\nCLAUDE_COUNTER: 3", "operational"),
+        ("<task-notification><result>worker done</result></task-notification>", "operational"),
+        (
+            "<task-notification><result>worker done</result></task-notification>\n\n"
+            "The worker result means the schema migration needs a second verification pass before rollout.",
+            "knowledge",
+        ),
+        (
+            "Created two stories in update.json and documented the offline sync route, MCP socket path, "
+            "screen owners, rollout checklist, and fixture coverage.\n\nheartbeat",
+            "knowledge",
+        ),
+    ],
+)
+def test_operational_markers_must_dominate_content(content: str, expected: str) -> None:
+    from brainlayer.content_class import classify_content_class
+
+    assert classify_content_class(content, content_type="note") == expected
+
+
+def test_bundled_counter_substance_is_never_default_hidden() -> None:
+    from brainlayer.content_class import classify_content_class, content_class_is_default_hidden
+
+    content = (
+        "CLAUDE_COUNTER: 11\n\n"
+        "Created two stories in update.json for the new onboarding flow and updated the fixtures, "
+        "screen-state notes, animation timing checklist, and release checklist."
+    )
+    content_class = classify_content_class(content, content_type="note")
+
+    assert content_class == "knowledge"
+    assert content_class_is_default_hidden(content_class) is False
+
+
 def test_store_memory_persists_content_class_decision_first(tmp_path: Path) -> None:
     store = VectorStore(tmp_path / "content-class-store.db")
     try:
@@ -275,6 +319,7 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
                 ('decision-visible', '[BL-LEAD DECISION: chose X over Y because durable]', '{}', 'test', 'brainlayer', 'note', 57),
                 ('operational-hidden', '[BL-LEAD tick] CLAUDE_COUNTER: 4', '{}', 'test', 'brainlayer', 'note', 33),
                 ('test-hidden', 'ad-hoc eval test query', '{}', 'test', 'brainlayer', 'note', 22),
+                ('bundled-visible', 'CLAUDE_COUNTER: 8\n\nCreated two update.json stories and refreshed fixture coverage for onboarding screens.', '{}', 'test', 'brainlayer', 'note', 94),
                 ('hebrew-visible', '[BL-LEAD tick] שלום heartbeat status', '{}', 'test', 'brainlayer', 'note', 38),
                 ('person-visible', '[BL-LEAD tick] Etan heartbeat status', '{}', 'test', 'brainlayer', 'note', 37),
                 ('personal-visible', '[BL-LEAD tick] health finance heartbeat status', '{}', 'test', 'brainlayer', 'note', 47)"""
@@ -285,16 +330,20 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
     finally:
         store.close()
 
-    assert report["counts"] == {"decision": 1, "knowledge": 3, "operational": 1, "test": 1}
+    assert report["counts"] == {"decision": 1, "knowledge": 4, "operational": 1, "test": 1}
     assert report["keep_visible_override_total"] == 3
+    assert report["operational_marker_kept_total"] == 4
     assert report["personal_hidden"] == 0
     assert report["hidden_decision_or_personal_risk_total"] == 0
     rescued_ids = {row["chunk_id"] for row in report["keep_visible_override_samples"]}
     assert rescued_ids == {"hebrew-visible", "person-visible", "personal-visible"}
+    marker_kept_ids = {row["chunk_id"] for row in report["operational_marker_kept_samples"]}
+    assert "bundled-visible" in marker_kept_ids
     assert [row["chunk_id"] for row in report["samples"]["operational"]] == ["operational-hidden"]
     assert [row["chunk_id"] for row in report["samples"]["decision"]] == ["decision-visible"]
     assert rows_after == {
         "decision-visible": "knowledge",
+        "bundled-visible": "knowledge",
         "operational-hidden": "knowledge",
         "test-hidden": "knowledge",
         "hebrew-visible": "knowledge",

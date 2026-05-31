@@ -8,6 +8,7 @@ from typing import Any
 DEFAULT_CONTENT_CLASS = "knowledge"
 CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test"})
 DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test"})
+_OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS = 20
 
 _DECISION_RE = re.compile(
     r"\b("
@@ -27,6 +28,21 @@ _OPERATIONAL_RE = re.compile(
 )
 _BL_OPERATIONAL_RE = re.compile(
     r"\[bl-[^\]]*(?:tick|status|heartbeat|claude_counter|working|poll|surface|monitor|done)",
+    re.IGNORECASE,
+)
+_TASK_NOTIFICATION_BLOCK_RE = re.compile(
+    r"<task-notification\b[^>]*>.*?</task-notification>",
+    re.IGNORECASE | re.DOTALL,
+)
+_OPERATIONAL_MARKER_LINE_RE = re.compile(
+    r"^\s*("
+    r"\[?\s*claude_counter\b(?:\s*:?\s*\d+)?\s*\]?|"
+    r"\[bl-[^\]]*(?:tick|status|heartbeat|claude_counter|working|poll|surface|monitor|done)[^\]]*\].*|"
+    r"(?:orc\s+)?tick\b.*|loop tick\b.*|(?:watcher\s+)?heartbeat\b.*|"
+    r"surface:\d+\b.*|bare status\b.*|status only\b.*|"
+    r"task[_ -]?notification\b.*|milestone\b.*|retraction\b.*|done_fixes\b.*|"
+    r"worker done\b.*|agent coordination\b.*"
+    r")\s*$",
     re.IGNORECASE,
 )
 _TEST_RE = re.compile(
@@ -127,6 +143,45 @@ def keep_visible_signals(content: str | None, *, content_type: str | None = None
     return signals
 
 
+def strip_operational_markers(content: str | None) -> str:
+    """Remove operational-only marker lines/blocks while preserving substantive text."""
+    if not content:
+        return ""
+    without_blocks = _TASK_NOTIFICATION_BLOCK_RE.sub("\n", content)
+    residual_lines = [
+        "" if _OPERATIONAL_MARKER_LINE_RE.match(line) else line
+        for line in without_blocks.splitlines()
+    ]
+    return "\n".join(residual_lines).strip()
+
+
+def _residual_is_trivial(residual: str) -> bool:
+    compact = re.sub(r"\s+", " ", residual).strip()
+    if not compact:
+        return True
+    if len(compact) <= _OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS:
+        return True
+    return not any(char.isalnum() for char in compact)
+
+
+def has_operational_marker(content: str | None) -> bool:
+    """Return true when content contains operational markers, regardless of dominance."""
+    if not content:
+        return False
+    if _TASK_NOTIFICATION_BLOCK_RE.search(content):
+        return True
+    if _OPERATIONAL_RE.search(content) or _BL_OPERATIONAL_RE.search(content):
+        return True
+    return any(_OPERATIONAL_MARKER_LINE_RE.match(line) for line in content.splitlines())
+
+
+def has_dominant_operational_marker(content: str | None) -> bool:
+    """Return true only when operational markers dominate the chunk content."""
+    if not has_operational_marker(content):
+        return False
+    return _residual_is_trivial(strip_operational_markers(content))
+
+
 def classify_content_class_raw(
     content: str | None,
     *,
@@ -153,7 +208,7 @@ def classify_content_class_raw(
 
     if _TEST_RE.search(text):
         return "test"
-    if _OPERATIONAL_RE.search(text) or _BL_OPERATIONAL_RE.search(text):
+    if has_dominant_operational_marker(text):
         return "operational"
 
     return DEFAULT_CONTENT_CLASS
