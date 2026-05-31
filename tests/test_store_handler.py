@@ -38,6 +38,63 @@ async def test_busy_queue_fallback_returns_queued_chunk_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_writer_in_use_error_queues_instead_of_erroring(tmp_path):
+    """Writer pidfile contention queues the store instead of returning an MCP error."""
+    from brainlayer.mcp.store_handler import _store
+    from brainlayer.vector_store import WriterInUseError
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store"),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch(
+            "brainlayer.store.store_memory",
+            side_effect=WriterInUseError("another writer is using brainlayer.db (pid 123)"),
+        ),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        texts, structured = await _store(
+            content="queued under held writer pidfile",
+            memory_type="note",
+            project="test",
+        )
+
+    assert structured["queued"] is True
+    assert structured["chunk_id"] != "queued"
+    assert any("queued" in item.text.lower() for item in texts)
+    assert len(list(queue_dir.glob("mcp-*.jsonl"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_prepare_lock_error_queues_instead_of_erroring(tmp_path):
+    """Prepare-time transient SQLite lock failures are queueable store failures."""
+    from brainlayer.mcp.store_handler import _store
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store"),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch(
+            "brainlayer.store.store_memory",
+            side_effect=RuntimeError("SQLite prepare failed: database schema is locked"),
+        ),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        texts, structured = await _store(
+            content="queued under prepare-time sqlite lock",
+            memory_type="note",
+            project="test",
+        )
+
+    assert structured["queued"] is True
+    assert structured["chunk_id"] != "queued"
+    assert any("queued" in item.text.lower() for item in texts)
+    assert len(list(queue_dir.glob("mcp-*.jsonl"))) == 1
+
+
+@pytest.mark.asyncio
 async def test_busy_queue_fallback_preserves_supersedes(tmp_path):
     """DB-busy fallback queues supersedes so the deferred write keeps lifecycle intent."""
     from brainlayer.mcp.store_handler import _store

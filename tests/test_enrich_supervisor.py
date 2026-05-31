@@ -54,6 +54,53 @@ def test_supervisor_reuses_one_vector_store_across_cycles(tmp_path):
     assert result.enriched == 3
 
 
+def test_supervisor_uses_readonly_store_when_arbitrated(tmp_path, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    init_args = []
+
+    class FakeVectorStore:
+        def __init__(self, db_path: Path, readonly: bool = False):
+            init_args.append((db_path, readonly))
+
+        def close(self):
+            pass
+
+    result = controller.run_enrich_supervisor(
+        tmp_path / "brainlayer.db",
+        max_cycles=1,
+        vector_store_cls=FakeVectorStore,
+        enrich_fn=lambda store, **kwargs: _result(attempted=0),
+        sleep_fn=lambda seconds: None,
+    )
+
+    assert init_args == [(tmp_path / "brainlayer.db", True)]
+    assert result.cycles == 1
+
+
+def test_enrich_realtime_skips_schema_writer_when_arbitrated(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setattr(
+        controller,
+        "_ensure_enrichment_columns",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not open schema writer")),
+    )
+    monkeypatch.setattr(controller, "_enqueue_enrichment_write_batch", lambda items: None)
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: object())
+
+    class FakeStore:
+        def get_enrichment_candidates(self, **kwargs):  # noqa: ARG002
+            return [{"id": "c1", "content": "brain_search('recursive MCP output')"}]
+
+    result = controller.enrich_realtime(FakeStore(), limit=1, rate_per_second=0)
+
+    assert result.skipped == 1
+    assert result.failed == 0
+
+
 def test_supervisor_logs_gemini_error_and_continues(tmp_path, caplog):
     from brainlayer import enrichment_controller as controller
 
