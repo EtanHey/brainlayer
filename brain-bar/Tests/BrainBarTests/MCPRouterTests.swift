@@ -593,6 +593,39 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(text.contains("slow helper should not win"), text)
     }
 
+    func testBrainSearchDoesNotCallHybridHelperBeforeItIsReady() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-not-ready-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "hybrid-not-ready-fallback",
+            content: "Hybrid not ready fallback content from Swift database",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(text: "helper should not be called while warming")
+        )
+        helper.ready = false
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle(toolCall(id: 308, name: "brain_search", arguments: [
+            "query": "hybrid not ready fallback",
+            "num_results": 5
+        ]))
+
+        XCTAssertEqual(helper.requests.count, 0)
+        XCTAssertEqual(helper.warmStarts, 1)
+        let text = try toolText(response)
+        XCTAssertTrue(text.contains("Hybrid not ready fallback content"), text)
+        XCTAssertFalse(text.contains("helper should not be called while warming"), text)
+    }
+
     func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-unread-helper-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

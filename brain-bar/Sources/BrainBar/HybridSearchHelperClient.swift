@@ -14,31 +14,51 @@ protocol HybridSearchClientProtocol: AnyObject, Sendable {
     func search(arguments: [String: Any]) throws -> HybridSearchResponse
 }
 
-final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sendable {
+protocol HybridSearchReadinessProviding: AnyObject, Sendable {
+    var isReady: Bool { get }
+    func startWarming()
+}
+
+final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchReadinessProviding, @unchecked Sendable {
     private static let maxResponseBytes = 10 * 1024 * 1024
     private static let defaultSocketIOTimeout: TimeInterval = 60
+    private static let defaultReadinessTimeout: TimeInterval = 180
+    private static let defaultReadinessProbeInterval: TimeInterval = 0.25
+    private static let defaultReadinessProbeTimeout: TimeInterval = 1
     private static let queueKey = DispatchSpecificKey<UUID>()
     private let socketPath: String
     private let dbPath: String
     private let pythonExecutable: String
     private let environment: [String: String]
     private let socketIOTimeout: TimeInterval
+    private let readinessTimeout: TimeInterval
+    private let readinessProbeInterval: TimeInterval
+    private let readinessProbeTimeout: TimeInterval
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.hybrid-helper")
     private let queueID = UUID()
+    private let stateLock = NSLock()
     private var process: Process?
+    private var ready = false
+    private var warming = false
 
     init(
         socketPath: String? = nil,
         dbPath: String,
         pythonExecutable: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        socketIOTimeout: TimeInterval = defaultSocketIOTimeout
+        socketIOTimeout: TimeInterval = defaultSocketIOTimeout,
+        readinessTimeout: TimeInterval = defaultReadinessTimeout,
+        readinessProbeInterval: TimeInterval = defaultReadinessProbeInterval,
+        readinessProbeTimeout: TimeInterval = defaultReadinessProbeTimeout
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath
         self.pythonExecutable = pythonExecutable ?? Self.resolvePythonExecutable(environment: environment)
         self.environment = environment
         self.socketIOTimeout = socketIOTimeout
+        self.readinessTimeout = max(0.001, readinessTimeout)
+        self.readinessProbeInterval = max(0.001, readinessProbeInterval)
+        self.readinessProbeTimeout = max(0.001, readinessProbeTimeout)
         queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
@@ -120,9 +140,30 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         }
     }
 
+    var isReady: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return ready
+    }
+
     func start() throws {
         try queue.sync {
             try startLocked()
+        }
+    }
+
+    func startWarming() {
+        guard markWarmingIfNeeded() else { return }
+        queue.async {
+            defer { self.setWarming(false) }
+            do {
+                try self.startLocked()
+                try self.waitUntilReadyLocked(timeout: self.readinessTimeout)
+                NSLog("[BrainBar] Hybrid search helper ready socket=%@", self.socketPath)
+            } catch {
+                NSLog("[BrainBar] Hybrid search helper warmup failed: %@", String(describing: error))
+                self.stopLocked()
+            }
         }
     }
 
@@ -144,6 +185,9 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         do {
             let response = try queue.sync {
                 try startLocked()
+                guard isReady else {
+                    throw HybridSearchHelperError.notReady
+                }
                 do {
                     return try send(arguments: arguments)
                 } catch {
@@ -173,12 +217,31 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
     }
 
     private func stopLocked() {
+        setReady(false)
+        setWarming(false)
         if let process, process.isRunning {
             process.terminate()
-            process.waitUntilExit()
+            Self.waitForProcessExit(process, timeout: 2.0)
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                Self.waitForProcessExit(process, timeout: 1.0)
+            }
         }
         process = nil
         unlink(socketPath)
+    }
+
+    private static func waitForProcessExit(_ process: Process, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !process.isRunning {
+                return
+            }
+            if kill(process.processIdentifier, 0) == -1 && errno == ESRCH {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
     }
 
     private func startLocked() throws {
@@ -186,6 +249,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             return
         }
 
+        setReady(false)
         try Self.validateSocketPath(socketPath)
         unlink(socketPath)
 
@@ -237,22 +301,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
     }
 
     private func send(arguments: [String: Any]) throws -> HybridSearchResponse {
-        let fd = try connectWithRetry()
-        defer { close(fd) }
-
-        let payload: [String: Any] = [
-            "method": "brain_search",
-            "arguments": arguments
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        var framed = data
-        framed.append(0x0A)
-        try writeAll(fd: fd, data: framed)
-        let responseData = try readLine(fd: fd)
-        let decoded = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
-        guard let decoded else {
-            throw HybridSearchHelperError.invalidResponse
-        }
+        let decoded = try sendRequest(method: "brain_search", arguments: arguments, timeout: socketIOTimeout)
         if let ok = decoded["ok"] as? Bool, !ok {
             let message = decoded["error"] as? String ?? "unknown helper error"
             throw HybridSearchHelperError.helperError(message)
@@ -264,7 +313,78 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         return HybridSearchResponse(text: text, metadata: metadata)
     }
 
-    private func connectWithRetry() throws -> Int32 {
+    private func sendStatusProbeLocked() throws -> Bool {
+        let decoded = try sendRequest(method: "status", arguments: nil, timeout: readinessProbeTimeout)
+        guard let ok = decoded["ok"] as? Bool, ok else {
+            return false
+        }
+        return decoded["ready"] as? Bool == true
+    }
+
+    private func sendRequest(method: String, arguments: [String: Any]?, timeout: TimeInterval) throws -> [String: Any] {
+        let fd = try connectWithRetry(timeout: timeout)
+        defer { close(fd) }
+
+        var payload: [String: Any] = ["method": method]
+        if let arguments {
+            payload["arguments"] = arguments
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        var framed = data
+        framed.append(0x0A)
+        try writeAll(fd: fd, data: framed)
+        let responseData = try readLine(fd: fd)
+        guard let decoded = try JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+            throw HybridSearchHelperError.invalidResponse
+        }
+        return decoded
+    }
+
+    private func waitUntilReadyLocked(timeout: TimeInterval) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            guard process?.isRunning == true else {
+                throw HybridSearchHelperError.notReady
+            }
+            if FileManager.default.fileExists(atPath: socketPath) {
+                do {
+                    if try sendStatusProbeLocked() {
+                        setReady(true)
+                        return
+                    }
+                } catch {
+                    // A helper may create the socket slightly before accept is ready.
+                    // Keep polling until the readiness deadline.
+                }
+            }
+            Thread.sleep(forTimeInterval: readinessProbeInterval)
+        }
+        throw HybridSearchHelperError.notReady
+    }
+
+    private func setReady(_ isReady: Bool) {
+        stateLock.lock()
+        ready = isReady
+        stateLock.unlock()
+    }
+
+    private func markWarmingIfNeeded() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if ready || warming {
+            return false
+        }
+        warming = true
+        return true
+    }
+
+    private func setWarming(_ isWarming: Bool) {
+        stateLock.lock()
+        warming = isWarming
+        stateLock.unlock()
+    }
+
+    private func connectWithRetry(timeout: TimeInterval? = nil) throws -> Int32 {
         var lastErrno: Int32 = 0
         for attempt in 0..<50 {
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -296,7 +416,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
             }
             if rc == 0 {
                 do {
-                    try Self.configureSocketTimeouts(fd: fd, timeout: socketIOTimeout)
+                    try Self.configureSocketTimeouts(fd: fd, timeout: timeout ?? socketIOTimeout)
                     return fd
                 } catch {
                     close(fd)
@@ -349,7 +469,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, @unchecked Sen
         switch helperError {
         case .connect, .configureSocket, .write, .read, .responseTooLarge, .invalidResponse:
             return true
-        case .socket, .socketPathTooLong, .launch, .helperError:
+        case .socket, .socketPathTooLong, .launch, .helperError, .notReady:
             return false
         }
     }
@@ -419,6 +539,7 @@ enum HybridSearchHelperError: LocalizedError {
     case responseTooLarge(Int)
     case invalidResponse
     case helperError(String)
+    case notReady
 
     var errorDescription: String? {
         switch self {
@@ -442,6 +563,8 @@ enum HybridSearchHelperError: LocalizedError {
             return "hybrid helper returned an invalid response"
         case .helperError(let message):
             return "hybrid helper error: \(message)"
+        case .notReady:
+            return "hybrid helper is not ready"
         }
     }
 }

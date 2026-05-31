@@ -41,6 +41,7 @@ class HybridSearchHelper:
         self.db_path = db_path
         self._stopped = False
         self._warm_called = False
+        self._ready = False
 
     def warm(self) -> None:
         self._warm_called = True
@@ -58,6 +59,7 @@ class HybridSearchHelper:
         model = _get_embedding_model()
         warmup_query = "brainbar hybrid helper warmup"
         model.embed_query(warmup_query)
+        self._ready = True
 
     def serve_forever(self) -> None:
         if self.socket_path.exists():
@@ -65,11 +67,11 @@ class HybridSearchHelper:
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            self.warm()
             server.bind(os.fspath(self.socket_path))
             os.chmod(self.socket_path, 0o600)
             server.listen(16)
             server.settimeout(_ACCEPT_TIMEOUT_SECONDS)
-            self.warm()
 
             while not self._stopped:
                 try:
@@ -134,6 +136,8 @@ class HybridSearchHelper:
         return b"".join(chunks)
 
     def _handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("method") == "status":
+            return {"ok": True, "ready": self._ready}
         if request.get("method") != "brain_search":
             raise ValueError(f"unsupported method: {request.get('method')}")
         arguments = request.get("arguments") or {}

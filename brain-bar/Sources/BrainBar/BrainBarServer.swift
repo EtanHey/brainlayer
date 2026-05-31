@@ -119,7 +119,8 @@ final class BrainBarServer: @unchecked Sendable {
     /// below the UI budget while still bounding serial-queue stalls.
     static let maxWriteRetries = 50
     private static let readOnlyBusyTimeoutMillis: Int32 = 250
-    private static let hybridSearchBudgetSeconds: TimeInterval = 0.8
+    static let hybridSearchBudgetSeconds: TimeInterval = 0.8
+    static let hybridHelperSocketIOTimeoutSeconds: TimeInterval = 120
     private let debugLogPath = "/tmp/brainbar-debug.log"
 
     private func debugLog(_ msg: String) {
@@ -225,7 +226,7 @@ final class BrainBarServer: @unchecked Sendable {
         } else if providedDatabase == nil && enableHybridSearchHelper {
             let client = HybridSearchHelperClient(
                 dbPath: dbPath,
-                socketIOTimeout: Self.hybridSearchBudgetSeconds
+                socketIOTimeout: Self.hybridHelperSocketIOTimeoutSeconds
             )
             ownedHybridClient = client
             hybridClient = client
@@ -310,11 +311,6 @@ final class BrainBarServer: @unchecked Sendable {
 
         if let ownedHybridClient {
             hybridSearchHelperClient = ownedHybridClient
-            do {
-                try ownedHybridClient.start()
-            } catch {
-                NSLog("[BrainBar] Hybrid search helper startup deferred after failure: %@", String(describing: error))
-            }
         }
 
         // 3. NOW open the database (may take time on cold start with 8 GB file).
@@ -374,6 +370,7 @@ final class BrainBarServer: @unchecked Sendable {
             database = db
             readDatabase = readDB
             router.setDatabases(write: db, read: readDB)
+            hybridSearchHelperClient?.startWarming()
             onDatabaseReady?(db)
             brainBus.publish(.dbBusy(false))
             brainBus.publish(.queueDepth(brainBusQueueDepthEstimate))
