@@ -633,6 +633,50 @@ def test_entity_lookup_does_not_aggregate_unallowlisted_cross_type_duplicates(tm
     assert any(relation["relation_type"] == "uses" for relation in result["relations"])
 
 
+def test_entity_lookup_prefers_exact_typed_match_when_name_resolves_to_other_type(tmp_path, monkeypatch):
+    """A typed lookup should not let a cross-type exact-name row force partial FTS fallback."""
+    from brainlayer.pipeline.digest import entity_lookup
+
+    store = VectorStore(tmp_path / "test.db")
+    dummy_embed = _dummy_embed
+
+    company_id = store.upsert_entity("company-domica", "company", "domica", embedding=dummy_embed("company domica"))
+    project_id = store.upsert_entity("project-domica", "project", "domica", embedding=dummy_embed("project domica"))
+    partial_id = store.upsert_entity(
+        "project-etanhey-domica",
+        "project",
+        "EtanHey/domica",
+        embedding=dummy_embed("partial domica"),
+    )
+    _insert_chunks(
+        store,
+        ["project-domica-rich", "partial-domica"],
+        [
+            "The domica repo is the high-support project hub.",
+            "EtanHey/domica is a low-support partial repo label.",
+        ],
+        [
+            {"source_file": "t.jsonl", "project": "test"},
+            {"source_file": "t.jsonl", "project": "test"},
+        ],
+        [dummy_embed("project rich"), dummy_embed("partial")],
+    )
+    store.link_entity_chunk(project_id, "project-domica-rich", relevance=0.9, context="repo hub")
+    store.link_entity_chunk(partial_id, "partial-domica", relevance=0.95, context="partial label")
+    company = store.get_entity(company_id)
+    partial = store.get_entity(partial_id)
+    assert company is not None and partial is not None
+    monkeypatch.setattr(store, "resolve_entity", lambda _query: company)
+    monkeypatch.setattr(store, "search_entities", lambda *args, **kwargs: [partial])
+
+    result = entity_lookup("Domica", store, dummy_embed, entity_type="project")
+
+    assert company_id is not None
+    assert result is not None
+    assert result["id"] == project_id
+    assert result["entity_type"] == "project"
+
+
 def test_entity_lookup_selects_only_exact_siblings_when_fts_returns_partial_hits(tmp_path):
     """Partial FTS hits with more evidence should not replace the exact candidate."""
     from brainlayer.pipeline.digest import entity_lookup

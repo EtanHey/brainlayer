@@ -809,16 +809,20 @@ def entity_lookup(
     if resolved and (entity_type is None or resolved["entity_type"] == entity_type):
         results = [resolved]
     else:
-        # Try FTS search first
-        results = store.search_entities(query, entity_type=entity_type, limit=5)
+        typed_exact_matches = _exact_name_siblings(store, query, entity_type=entity_type) if entity_type else []
+        if typed_exact_matches:
+            results = [_select_evidence_rich_entity(store, typed_exact_matches)]
+        else:
+            # Try FTS search first
+            results = store.search_entities(query, entity_type=entity_type, limit=5)
 
-        if not results:
-            # Fall back to semantic search
-            query_embedding = embed_fn(query)
-            results = store.search_entities_semantic(query_embedding, entity_type=entity_type, limit=5)
+            if not results:
+                # Fall back to semantic search
+                query_embedding = embed_fn(query)
+                results = store.search_entities_semantic(query_embedding, entity_type=entity_type, limit=5)
 
-        if not results:
-            return None
+            if not results:
+                return None
 
     # Exact-name duplicates can exist across inferred entity types for known
     # canonical tools like "Claude Code". Prefer the sibling with real evidence,
