@@ -1,6 +1,7 @@
 import pytest
 
 from brainlayer.mcp import call_tool
+from brainlayer.mcp.search_handler import _brain_search
 
 
 class FakeEmbeddingModel:
@@ -72,6 +73,29 @@ async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_brain_search_threads_helper_fast_profile_to_hybrid_search(monkeypatch):
+    store = RecordingSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    await _brain_search(
+        query="auth implementation",
+        source="all",
+        allow_helper_route=False,
+        brainbar_helper_fast_profile=True,
+    )
+
+    assert store.hybrid_kwargs is not None
+    assert store.hybrid_kwargs["brainbar_helper_fast_profile"] is True
+
+
+@pytest.mark.asyncio
 async def test_brain_search_entity_route_threads_agent_id_to_kg_hybrid_search(monkeypatch):
     store = RecordingKgSearchStore()
 
@@ -98,6 +122,33 @@ async def test_brain_search_entity_route_threads_agent_id_to_kg_hybrid_search(mo
 
     assert store.kg_hybrid_kwargs is not None
     assert store.kg_hybrid_kwargs["agent_id"] == "codex-test-agent"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_threads_helper_fast_profile_to_kg_hybrid_search(monkeypatch):
+    store = RecordingKgSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._kg_facts_sql", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._detect_entities",
+        lambda *_args, **_kwargs: [{"name": "Alice"}],
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    await _brain_search(
+        query="what do we know about Alice",
+        source="all",
+        allow_helper_route=False,
+        brainbar_helper_fast_profile=True,
+    )
+
+    assert store.kg_hybrid_kwargs is not None
+    assert store.kg_hybrid_kwargs["brainbar_helper_fast_profile"] is True
 
 
 @pytest.mark.asyncio

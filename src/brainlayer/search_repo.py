@@ -42,6 +42,10 @@ try:
 except (TypeError, ValueError):
     _MMR_LAMBDA = 1.0
 _FILTERED_KNN_MAX = 2000
+# BrainBar helper requests need a bounded candidate scan so semantic results
+# can beat the Swift fallback budget even when checkpoint/audit filters are large.
+_BRAINBAR_HELPER_FAST_K = 400
+_BRAINBAR_HELPER_FTS_BUDGET_MS = 50.0
 # sqlite-vec rejects vec0 KNN queries above this hard limit.
 _SQLITE_VEC_MAX_K = 4096
 META_NOISE_PATTERNS = [
@@ -1093,6 +1097,7 @@ class SearchMixin:
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         include_audit: bool = False,
+        brainbar_helper_fast_profile: bool = False,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
         cursor = self._read_cursor()
@@ -1163,7 +1168,10 @@ class SearchMixin:
         needs_overfetch = (
             entity_id or (source_filter and source_filter != "claude_code") or source_filter_like or correction_category
         )
-        effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
+        if brainbar_helper_fast_profile:
+            effective_k = min(max(n_results, _BRAINBAR_HELPER_FAST_K), _SQLITE_VEC_MAX_K)
+        else:
+            effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
         chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
         query = f"""
@@ -1179,7 +1187,7 @@ class SearchMixin:
                 ORDER BY v.distance
                 """
         results = list(cursor.execute(query, params))
-        if len(results) < n_results:
+        if len(results) < n_results and not brainbar_helper_fast_profile:
             retry_k = self._effective_knn_k(
                 n_results,
                 bool(needs_overfetch),
@@ -1323,6 +1331,7 @@ class SearchMixin:
         include_audit: bool = False,
         profile_query_id: str | None = None,
         profile_scope: str = "search.repo",
+        brainbar_helper_fast_profile: bool = False,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -1359,7 +1368,14 @@ class SearchMixin:
             include_archived,
             include_checkpoints,
             include_audit,
-        ) + (fts_query_override, kg_boost, source_filter_like, correction_category, filter_meta_noise)
+        ) + (
+            fts_query_override,
+            kg_boost,
+            source_filter_like,
+            correction_category,
+            filter_meta_noise,
+            brainbar_helper_fast_profile,
+        )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
             cached_result, cached_at = _hybrid_cache[cache_key]
@@ -1396,6 +1412,7 @@ class SearchMixin:
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
                 include_audit=include_audit,
+                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
             )
             search_profile.emit(
                 profile_scope,
@@ -1404,6 +1421,7 @@ class SearchMixin:
                 search_profile.dur_ms(binary_started),
                 binary_index_available=True,
                 candidate_count=len(semantic.get("ids", [[]])[0]),
+                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
             )
             rerank_started = search_profile.now()
             semantic = self._rerank_binary_results_with_float(query_embedding, semantic)
@@ -1460,6 +1478,7 @@ class SearchMixin:
         fts_query = fts_query_override or _escape_fts5_query(query_text)
         fts_results = []
         trigram_fts_results = []
+        fts_timeout_ms = _BRAINBAR_HELPER_FTS_BUDGET_MS if brainbar_helper_fast_profile else None
         fts_started = search_profile.now()
         if fts_query:
             fts_extra = []
@@ -1524,11 +1543,35 @@ class SearchMixin:
 
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
 
-            def _fetch_fts_rows(table_name: str) -> list[tuple]:
+            def _set_fts_progress_handler(timeout_ms: float):
+                connection = None
+                for accessor_name in ("get_connection", "getconnection", "connection"):
+                    accessor = getattr(cursor, accessor_name, None)
+                    if accessor is None:
+                        continue
+                    connection = accessor() if callable(accessor) else accessor
+                    if connection is not None:
+                        break
+                if connection is None:
+                    return None
+
+                setter = getattr(connection, "set_progress_handler", None) or getattr(
+                    connection, "setprogresshandler", None
+                )
+                if setter is None:
+                    return None
+
+                deadline = time.monotonic() + (timeout_ms / 1000.0)
+
+                def _progress() -> int:
+                    return 1 if time.monotonic() >= deadline else 0
+
+                setter(_progress, 1000)
+                return setter
+
+            def _fetch_fts_rows(table_name: str, timeout_ms: float | None = None) -> list[tuple]:
                 params = [fts_query, *fts_filter_params, candidate_fetch_count]
-                return list(
-                    cursor.execute(
-                        f"""
+                query_sql = f"""
                     SELECT f.chunk_id, f.rank,
                            c.content, c.metadata, c.source_file, c.project,
                            c.content_type, c.value_type, c.char_count,
@@ -1541,13 +1584,24 @@ class SearchMixin:
                     WHERE {table_name} MATCH ? {" ".join(fts_extra)}
                     ORDER BY f.rank
                     LIMIT ?
-                """,
-                        params,
-                    )
-                )
+                """
+                progress_setter = _set_fts_progress_handler(timeout_ms) if timeout_ms is not None else None
+                try:
+                    return list(cursor.execute(query_sql, params))
+                except apsw.InterruptError:
+                    if timeout_ms is not None:
+                        return []
+                    raise
+                except apsw.Error as exc:
+                    if timeout_ms is not None and "interrupted" in str(exc).lower():
+                        return []
+                    raise
+                finally:
+                    if progress_setter is not None:
+                        progress_setter(None, 0)
 
-            fts_results = _fetch_fts_rows("chunks_fts")
-            if getattr(self, "_trigram_fts_available", False):
+            fts_results = _fetch_fts_rows("chunks_fts", timeout_ms=fts_timeout_ms)
+            if getattr(self, "_trigram_fts_available", False) and not brainbar_helper_fast_profile:
                 trigram_fts_results = _fetch_fts_rows("chunks_fts_trigram")
         search_profile.emit(
             profile_scope,
@@ -1557,6 +1611,7 @@ class SearchMixin:
             fts_enabled=bool(fts_query),
             fts_count=len(fts_results),
             trigram_count=len(trigram_fts_results),
+            fts_timeout_ms=fts_timeout_ms,
         )
 
         # Build FTS rank map

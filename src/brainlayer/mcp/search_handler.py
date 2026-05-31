@@ -609,6 +609,7 @@ async def _brain_search(
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     allow_helper_route: bool = True,
+    brainbar_helper_fast_profile: bool = False,
 ):
     """Unified search dispatcher -- routes to the right internal handler."""
     if search_profile.enabled() and profile_query_id is None:
@@ -685,6 +686,7 @@ async def _brain_search(
             include_audit=include_audit,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
+            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
         )
     finally:
         search_profile.emit(profile_scope, "brain_search", profile_query_id, search_profile.dur_ms(profile_started))
@@ -716,6 +718,7 @@ async def _brain_search_dispatch(
     include_audit: bool = False,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
+    brainbar_helper_fast_profile: bool = False,
 ):
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
@@ -754,6 +757,7 @@ async def _brain_search_dispatch(
             include_audit=include_audit,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
+            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
         )
 
     if chunk_id is not None:
@@ -844,6 +848,7 @@ async def _brain_search_dispatch(
             include_audit=include_audit,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
+            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
         )
 
     if _query_signals_current_context(query):
@@ -973,6 +978,7 @@ async def _brain_search_dispatch(
                 include_checkpoints=include_checkpoints,
                 include_audit=include_audit,
                 agent_id=agent_id,
+                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -1095,6 +1101,7 @@ async def _brain_search_dispatch(
         agent_id=agent_id,
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
+        brainbar_helper_fast_profile=brainbar_helper_fast_profile,
     )
     return result
 
@@ -1420,6 +1427,7 @@ async def _search(
     include_audit: bool = False,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
+    brainbar_helper_fast_profile: bool = False,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -1500,6 +1508,7 @@ async def _search(
                         include_audit=include_audit,
                         profile_query_id=profile_query_id,
                         profile_scope=profile_scope,
+                        brainbar_helper_fast_profile=brainbar_helper_fast_profile,
                     )
                     break
                 except Exception as e:
