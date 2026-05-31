@@ -145,6 +145,55 @@ def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
     assert captured["config"]["http_options"]["extra_body"]["serviceTier"] == "flex"
 
 
+def test_gemini_sdk_transmits_flex_service_tier_in_request_body(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+    genai = pytest.importorskip("google.genai")
+
+    from brainlayer import enrichment_controller as controller
+
+    captured = {}
+
+    def handler(request):
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": '{"summary":"ok","tags":[]}'}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2,
+                },
+            },
+        )
+
+    httpx_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = genai.Client(api_key="test-key-no-spend", http_options={"httpx_client": httpx_client})
+
+    response = client.models.generate_content(
+        model=controller.GEMINI_REALTIME_MODEL,
+        contents="wire capture no spend",
+        config={
+            "response_mime_type": "application/json",
+            "thinking_config": {"thinking_budget": 0},
+            "http_options": controller._build_gemini_http_options(timeout_ms=30_000),
+        },
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1beta/models/gemini-2.5-flash-lite:generateContent")
+    assert captured["body"]["serviceTier"] == "flex"
+    assert response.text == '{"summary":"ok","tags":[]}'
+
+
 def test_enrich_realtime_calls_parse_enrichment_on_response(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
@@ -242,6 +291,25 @@ def test_retry_with_backoff_retries_12_times_on_429(monkeypatch):
 
     assert attempts["count"] == 13
     assert len(sleeps) == 12
+
+
+def test_retry_with_backoff_short_circuits_monthly_spend_cap_429(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    sleeps = []
+    monkeypatch.setattr(controller.time, "sleep", sleeps.append)
+
+    attempts = {"count": 0}
+
+    def capped():
+        attempts["count"] += 1
+        raise RuntimeError("429 RESOURCE_EXHAUSTED: request blocked because the monthly spending cap was reached")
+
+    with pytest.raises(RuntimeError):
+        controller._retry_with_backoff(capped, max_retries=12)
+
+    assert attempts["count"] == 1
+    assert sleeps == []
 
 
 def test_retry_with_backoff_respects_max_delay_cap(monkeypatch):
@@ -749,6 +817,51 @@ def test_retry_only_catches_specified_errors(monkeypatch):
             max_retries=3,
             retryable_errors=(RuntimeError,),
         )
+
+
+def test_enrich_realtime_stops_new_calls_when_daily_cap_crosses(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "0.01")
+    monkeypatch.setattr(controller, "ENRICH_CONCURRENCY", 1)
+    monkeypatch.setattr(controller, "_ensure_enrichment_columns", lambda *args, **kwargs: None)
+    monkeypatch.setattr(controller, "_submit_write", lambda _store, _name, callback, **_kwargs: callback())
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
+    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
+    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
+    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
+    monkeypatch.setattr(controller.time, "sleep", lambda _: None)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        class _Models:
+            def generate_content(self, **kwargs):  # noqa: ARG002
+                calls["count"] += 1
+                return SimpleNamespace(
+                    text='{"summary":"sum","tags":["python"]}',
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=1_000_000,
+                        candidates_token_count=0,
+                        total_token_count=1_000_000,
+                    ),
+                )
+
+        def __init__(self):
+            self.models = self._Models()
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
+
+    result = controller.enrich_realtime(store, limit=2, rate_per_second=0, max_retries=0)
+
+    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text())
+    assert calls["count"] == 1
+    assert counter["spent_usd"] == pytest.approx(0.05)
+    assert result.enriched == 1
+    assert any("ENRICH_DAILY_CAP_REACHED" in error for error in result.errors)
 
 
 # ── Error handling tests ──────────────────────────────────────────────────────
