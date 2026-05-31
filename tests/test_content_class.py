@@ -87,6 +87,11 @@ def test_content_class_schema_defaults_to_knowledge(tmp_path: Path) -> None:
         ("[BL-LEAD tick] Etan heartbeat status", "note", "knowledge"),
         ("[BL-LEAD tick] health finance heartbeat status", "note", "knowledge"),
         ("ad-hoc eval test query for search ranking", "note", "test"),
+        (
+            "BrainLayer Search Benchmark diagnostic prompt: evaluate conceptual queries and rank recall results",
+            "note",
+            "benchmark",
+        ),
         ("ambiguous coordination note with useful context", "note", "knowledge"),
     ],
 )
@@ -124,6 +129,86 @@ def test_operational_markers_must_dominate_content(content: str, expected: str) 
     from brainlayer.content_class import classify_content_class
 
     assert classify_content_class(content, content_type="note") == expected
+
+
+def test_audit_recursion_benchmark_class_does_not_require_trivial_residual() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = (
+        "BrainLayer Search Benchmark\n\n"
+        "Diagnostic prompt: run conceptual query coverage for memory retrieval, compare ranked results, "
+        "and explain why the benchmark prompt ranked itself first."
+    )
+
+    assert classify_content_class(content, content_type="note", tags='["audit", "r02"]') == "benchmark"
+
+
+def test_audit_tagged_substantive_analysis_that_mentions_search_stays_visible() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = (
+        "BrainLayer MCP implementation audit found a real handler issue. "
+        "The fix is to preserve structured errors in search_handler.py and add coverage."
+    )
+
+    assert classify_content_class(content, content_type="note", tags='["audit", "r02"]') == "knowledge"
+
+
+def test_audit_tagged_project_search_prompt_stays_visible_without_benchmark_signals() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = (
+        "Audit story: search the codebase for localStorage usage and report mismatches between visitorId "
+        "and email usage in SongScript."
+    )
+
+    assert classify_content_class(content, content_type="note", tags='["audit"]') == "knowledge"
+
+
+def test_metric_reference_without_eval_table_stays_visible() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = (
+        "The demo framing says k=60 was a flat optimum and MAP moved only 0.0023, "
+        "which affects BrainLayer top-K design."
+    )
+
+    assert classify_content_class(content, content_type="note", tags='["audit", "r02"]') == "knowledge"
+
+
+def test_eval_results_table_is_benchmark() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = (
+        "EVAL FINAL RESULTS with pooled qrels:\n"
+        "| Metric | FTS5 | Hybrid |\n"
+        "| ndcg@10 | 0.910 | 0.930 |\n"
+        "| recall@20 | 0.671 | 0.700 |"
+    )
+
+    assert classify_content_class(content, content_type="note") == "benchmark"
+
+
+def test_leading_brain_search_dump_is_benchmark() -> None:
+    from brainlayer.content_class import classify_content_class
+
+    content = '┌─ brain_search: "overnight sprint" ─ 3 results\n│ result dump'
+
+    assert classify_content_class(content, content_type="note") == "benchmark"
+
+
+def test_embedded_brain_search_reference_in_analysis_stays_visible() -> None:
+    from brainlayer.content_class import classify_content_class, content_class_is_default_hidden
+
+    content = (
+        "Results are there with non-zero scores. The issue is that some chunks contain text like "
+        "`┌─ brain_search: ...` because those chunks are search output; the fix is an ingest guard."
+    )
+
+    content_class = classify_content_class(content, content_type="note")
+
+    assert content_class != "benchmark"
+    assert content_class_is_default_hidden(content_class) is False
 
 
 def test_bundled_counter_substance_is_never_default_hidden() -> None:
@@ -191,6 +276,13 @@ def test_hybrid_search_excludes_operational_and_test_by_default(tmp_path: Path) 
         )
         _insert_chunk(
             store,
+            chunk_id="benchmark-semantic",
+            content="BrainLayer Search Benchmark diagnostic exactmatch",
+            content_class="benchmark",
+            embedding=query_embedding,
+        )
+        _insert_chunk(
+            store,
             chunk_id="knowledge-survivor",
             content="durable knowledge memory exactmatch",
             content_class="knowledge",
@@ -222,6 +314,7 @@ def test_hybrid_search_excludes_operational_and_test_by_default(tmp_path: Path) 
     assert default_results["ids"][0] == ["knowledge-survivor"]
     assert "operational-semantic" in opt_in_results["ids"][0]
     assert "test-semantic" in opt_in_results["ids"][0]
+    assert "benchmark-semantic" in opt_in_results["ids"][0]
     assert class_filter_results["ids"][0] == ["operational-semantic"]
 
 
@@ -319,6 +412,7 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
                 ('decision-visible', '[BL-LEAD DECISION: chose X over Y because durable]', '{}', 'test', 'brainlayer', 'note', 57),
                 ('operational-hidden', '[BL-LEAD tick] CLAUDE_COUNTER: 4', '{}', 'test', 'brainlayer', 'note', 33),
                 ('test-hidden', 'ad-hoc eval test query', '{}', 'test', 'brainlayer', 'note', 22),
+                ('benchmark-hidden', 'BrainLayer Search Benchmark diagnostic exactmatch', '{}', 'test', 'brainlayer', 'note', 46),
                 ('bundled-visible', 'CLAUDE_COUNTER: 8\n\nCreated two update.json stories and refreshed fixture coverage for onboarding screens.', '{}', 'test', 'brainlayer', 'note', 94),
                 ('hebrew-visible', '[BL-LEAD tick] שלום heartbeat status', '{}', 'test', 'brainlayer', 'note', 38),
                 ('person-visible', '[BL-LEAD tick] Etan heartbeat status', '{}', 'test', 'brainlayer', 'note', 37),
@@ -330,7 +424,7 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
     finally:
         store.close()
 
-    assert report["counts"] == {"decision": 1, "knowledge": 4, "operational": 1, "test": 1}
+    assert report["counts"] == {"decision": 1, "knowledge": 4, "operational": 1, "test": 1, "benchmark": 1}
     assert report["keep_visible_override_total"] == 3
     assert report["operational_marker_kept_total"] == 4
     assert report["personal_hidden"] == 0
@@ -340,12 +434,14 @@ def test_dry_run_backfill_reports_counts_and_samples_without_updating(tmp_path: 
     marker_kept_ids = {row["chunk_id"] for row in report["operational_marker_kept_samples"]}
     assert "bundled-visible" in marker_kept_ids
     assert [row["chunk_id"] for row in report["samples"]["operational"]] == ["operational-hidden"]
+    assert [row["chunk_id"] for row in report["samples"]["benchmark"]] == ["benchmark-hidden"]
     assert [row["chunk_id"] for row in report["samples"]["decision"]] == ["decision-visible"]
     assert rows_after == {
         "decision-visible": "knowledge",
         "bundled-visible": "knowledge",
         "operational-hidden": "knowledge",
         "test-hidden": "knowledge",
+        "benchmark-hidden": "knowledge",
         "hebrew-visible": "knowledge",
         "person-visible": "knowledge",
         "personal-visible": "knowledge",

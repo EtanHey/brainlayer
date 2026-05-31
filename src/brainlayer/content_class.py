@@ -6,8 +6,8 @@ import re
 from typing import Any
 
 DEFAULT_CONTENT_CLASS = "knowledge"
-CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test"})
-DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test"})
+CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test", "benchmark"})
+DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test", "benchmark"})
 _OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS = 20
 
 _DECISION_RE = re.compile(
@@ -52,6 +52,12 @@ _TEST_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_BENCHMARK_RE = re.compile(
+    r"("
+    r"^\W*(?:brainlayer search benchmark|bl quality bench(?:mark)?|eval (?:final )?results)\b"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
 _PERSONAL_RE = re.compile(
     r"("
     r"\bjournal\b|\bpersonal\b|\bmy life\b|\betan's life\b|\bfamily\b|"
@@ -88,6 +94,25 @@ _OPERATIONAL_INTENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_BENCHMARK_INTENT_RE = re.compile(
+    r"\b(?:benchmark|diagnostic prompt|qrels|search quality eval)\b",
+    re.IGNORECASE,
+)
+
+
+def has_benchmark_signal(content: str | None, *, tags: Any = None, source_file: str | None = None) -> bool:
+    """Return true for benchmark/diagnostic prompt chunks that should not pollute search."""
+    del tags, source_file
+    text = content or ""
+    compact_prefix = re.sub(r"\s+", "", text[:512]).casefold()
+    if compact_prefix.startswith("┌─brain_") or text.lstrip().casefold().startswith(
+        "mcp brainlayer memory: invalid json-rpc message"
+    ):
+        return True
+    text_head = text[:1200]
+    if _BENCHMARK_RE.search(text_head):
+        return True
+    return False
 
 
 def normalize_content_class(value: Any) -> str:
@@ -193,14 +218,15 @@ def classify_content_class_raw(
 ) -> str:
     """Classify a chunk before keep-visible safety overrides.
 
-    Decision signals are intentionally evaluated before operational/test signals:
-    durable "why we did X" records must stay visible even when they include
-    coordination prefixes like "[BL-LEAD]".
+    Benchmark signals are evaluated first because audit-recursion prompts often
+    look substantive. Decision signals still outrank operational/test markers.
     """
-    del tags, source, source_file, project  # Reserved for future cheap signals.
+    del source, project  # Reserved for future cheap signals.
     text = (content or "").strip()
     type_key = (content_type or "").strip().lower()
 
+    if has_benchmark_signal(text, tags=tags, source_file=source_file):
+        return "benchmark"
     if type_key == "decision":
         return "decision"
     if type_key != "learning" and has_decision_language(text, content_type=content_type):
@@ -232,14 +258,18 @@ def classify_content_class(
         source_file=source_file,
         project=project,
     )
-    if proposed in DEFAULT_HIDDEN_CONTENT_CLASSES and keep_visible_signals(content, content_type=content_type):
-        return DEFAULT_CONTENT_CLASS
+    if proposed in DEFAULT_HIDDEN_CONTENT_CLASSES:
+        signals = keep_visible_signals(content, content_type=content_type)
+        if proposed == "benchmark":
+            signals = [signal for signal in signals if signal != "decision_language"]
+        if signals:
+            return DEFAULT_CONTENT_CLASS
     return proposed
 
 
 def query_signals_operational_intent(query: str | None) -> bool:
-    """Cheap opt-in for users explicitly searching operational/test material."""
-    return bool(query and _OPERATIONAL_INTENT_RE.search(query))
+    """Cheap opt-in for users explicitly searching operational/test/benchmark material."""
+    return bool(query and (_OPERATIONAL_INTENT_RE.search(query) or _BENCHMARK_INTENT_RE.search(query)))
 
 
 def content_class_is_default_hidden(value: Any) -> bool:

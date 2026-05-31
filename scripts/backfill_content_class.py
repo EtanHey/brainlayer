@@ -22,7 +22,7 @@ from brainlayer.content_class import (
 from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
-_CLASS_ORDER = ("decision", "knowledge", "operational", "test")
+_CLASS_ORDER = ("decision", "knowledge", "operational", "test", "benchmark")
 def _preview(content: str | None, limit: int = 260) -> str:
     return re.sub(r"\s+", " ", content or "").strip()[:limit]
 
@@ -123,10 +123,13 @@ def build_backfill_report(store: VectorStore, *, sample_limit: int = 30) -> dict
                 sample = _sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=signals)
                 sample["residual_after_marker_strip"] = _preview(strip_operational_markers(row.get("content")), 180)
                 operational_marker_kept_samples.append(sample)
-        if proposed in {"operational", "test"} and signals:
-            hidden_risk_rows.append(_sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=signals))
+        if proposed in {"operational", "test", "benchmark"}:
+            benchmark_signals = [signal for signal in signals if signal != "decision_language"]
+            risk_signals = benchmark_signals if proposed == "benchmark" else signals
+            if risk_signals:
+                hidden_risk_rows.append(_sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=risk_signals))
 
-    hidden_total = counts["operational"] + counts["test"]
+    hidden_total = counts["operational"] + counts["test"] + counts["benchmark"]
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "dry_run",
@@ -193,7 +196,7 @@ def main() -> int:
     if args.apply and not args.confirm_apply:
         parser.error("--apply requires --confirm-apply")
 
-    store = VectorStore(args.db_path)
+    store = VectorStore(args.db_path, readonly=not args.apply)
     try:
         report = apply_backfill(store, limit=args.limit) if args.apply else build_backfill_report(
             store,
