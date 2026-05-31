@@ -281,3 +281,176 @@ class TestMergeEntities:
 
         assert store.get_entity(merge_id) is None
         assert store.get_entity(keep_id) is not None
+
+    def test_merge_combines_duplicate_chunk_links_without_losing_stronger_support(self, store):
+        """Duplicate chunk links should keep the strongest support on the canonical entity."""
+        from brainlayer.pipeline.entity_resolution import merge_entities_preserving_links
+
+        keep_id = _upsert(store, "person", "Etan Heyman")
+        merge_id = _upsert(store, "person", "Etan")
+
+        store.link_entity_chunk(keep_id, "chunk-1", relevance=0.2, context="weak", mention_type="inferred")
+        store.link_entity_chunk(merge_id, "chunk-1", relevance=0.9, context="strong", mention_type="explicit")
+
+        stats = merge_entities_preserving_links(store, keep_id, merge_id)
+
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT entity_id, relevance, context, mention_type FROM kg_entity_chunks WHERE chunk_id = 'chunk-1'"
+            )
+            .fetchone()
+        )
+        assert row == (keep_id, 0.9, "strong", "explicit")
+        assert stats["chunk_conflicts_merged"] == 1
+        assert (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = ?", (merge_id,))
+            .fetchone()[0]
+            == 0
+        )
+
+    def test_merge_combines_duplicate_relations_without_losing_richer_fact(self, store):
+        """Relation conflicts should keep a single canonical edge with richer evidence."""
+        from brainlayer.pipeline.entity_resolution import merge_entities_preserving_links
+
+        keep_id = _upsert(store, "person", "Etan Heyman")
+        merge_id = _upsert(store, "person", "Etan")
+        company_id = _upsert(store, "company", "Domica")
+
+        store.add_relation("rel-weak", keep_id, company_id, "works_at", confidence=0.2, importance=0.1)
+        store.add_relation(
+            "rel-rich",
+            merge_id,
+            company_id,
+            "works_at",
+            confidence=0.9,
+            fact="Etan works at Domica",
+            importance=0.8,
+            source_chunk_id="chunk-rich",
+        )
+
+        stats = merge_entities_preserving_links(store, keep_id, merge_id)
+
+        rows = list(
+            store.conn.cursor().execute(
+                """
+                SELECT source_id, target_id, relation_type, confidence, fact, importance, source_chunk_id
+                FROM kg_relations
+                """
+            )
+        )
+        assert rows == [(keep_id, company_id, "works_at", 0.9, "Etan works at Domica", 0.8, "chunk-rich")]
+        assert stats["relation_conflicts_merged"] == 1
+        assert (
+            store.conn.cursor()
+            .execute("SELECT COUNT(*) FROM kg_relations WHERE source_id = ? OR target_id = ?", (merge_id, merge_id))
+            .fetchone()[0]
+            == 0
+        )
+
+    def test_merge_relation_conflict_keeps_later_expiration(self, store):
+        """When both conflicting relations are expired, keep the later expiration."""
+        from brainlayer.pipeline.entity_resolution import merge_entities_preserving_links
+
+        keep_id = _upsert(store, "person", "Etan Heyman")
+        merge_id = _upsert(store, "person", "Etan")
+        company_id = _upsert(store, "company", "Domica")
+
+        store.add_relation("rel-old", keep_id, company_id, "works_at")
+        store.add_relation("rel-new", merge_id, company_id, "works_at")
+        store.conn.cursor().execute(
+            "UPDATE kg_relations SET expired_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00Z", "rel-old"),
+        )
+        store.conn.cursor().execute(
+            "UPDATE kg_relations SET expired_at = ? WHERE id = ?",
+            ("2026-02-01T00:00:00Z", "rel-new"),
+        )
+
+        merge_entities_preserving_links(store, keep_id, merge_id)
+
+        rows = list(store.conn.cursor().execute("SELECT expired_at FROM kg_relations"))
+        assert len(rows) == 1
+        assert rows[0][0] == "2026-02-01T00:00:00Z"
+
+    def test_merge_relation_conflict_preserves_widest_validity_window(self, store):
+        """Relation conflicts should keep the earliest start and latest end dates."""
+        from brainlayer.pipeline.entity_resolution import merge_entities_preserving_links
+
+        keep_id = _upsert(store, "person", "Etan Heyman")
+        merge_id = _upsert(store, "person", "Etan")
+        company_id = _upsert(store, "company", "Domica")
+
+        store.add_relation(
+            "rel-short",
+            keep_id,
+            company_id,
+            "works_at",
+            valid_from="2026-05-01T00:00:00Z",
+            valid_until="2026-06-01T00:00:00Z",
+        )
+        store.add_relation(
+            "rel-wide",
+            merge_id,
+            company_id,
+            "works_at",
+            valid_from="2026-01-01T00:00:00Z",
+            valid_until="2026-12-01T00:00:00Z",
+        )
+
+        merge_entities_preserving_links(store, keep_id, merge_id)
+
+        rows = list(store.conn.cursor().execute("SELECT valid_from, valid_until FROM kg_relations"))
+        assert rows == [("2026-01-01T00:00:00Z", "2026-12-01T00:00:00Z")]
+
+
+# ── Archive Operation ──
+
+
+class TestArchiveEntity:
+    """Archive entity operation tests from kg_p2_safe_cleanup.py."""
+
+    def test_archive_nonexistent_entity_returns_false(self, store):
+        """Archiving a non-existent entity should return False."""
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        result = archive_entity(store, "nonexistent-id", "test", "2026-05-31T00:00:00.000000Z")
+        assert result is False
+
+    def test_archive_active_entity_returns_true(self, store):
+        """Archiving an active entity should return True."""
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        entity_id = _upsert(store, "person", "Test Person")
+        result = archive_entity(store, entity_id, "test-reason", "2026-05-31T00:00:00.000000Z")
+        assert result is True
+
+        row = store.conn.cursor().execute("SELECT status FROM kg_entities WHERE id = ?", (entity_id,)).fetchone()
+        assert row[0] == "archived"
+
+    def test_rearchive_archived_entity_returns_false(self, store):
+        """Re-archiving an already archived entity should return False."""
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from kg_p2_safe_cleanup import archive_entity
+
+        entity_id = _upsert(store, "person", "Test Person")
+
+        # Archive once
+        result1 = archive_entity(store, entity_id, "first-reason", "2026-05-31T00:00:00.000000Z")
+        assert result1 is True
+
+        # Try to archive again
+        result2 = archive_entity(store, entity_id, "second-reason", "2026-05-31T01:00:00.000000Z")
+        assert result2 is False, "Re-archiving should return False since entity is already archived"
