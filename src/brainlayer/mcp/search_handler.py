@@ -18,6 +18,7 @@ from mcp.types import TextContent
 from .. import search_profile, telemetry
 from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
+from ..content_class import content_class_is_default_hidden, normalize_content_class, query_signals_operational_intent
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 from ..search_repo import _is_audit_recursion_metadata
 
@@ -324,6 +325,8 @@ def _exact_chunk_lookup_result(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -357,6 +360,16 @@ def _exact_chunk_lookup_result(
     if tag is not None and tag not in (parsed_tags or []):
         return _empty_exact_chunk_lookup_result(query)
     if not include_audit and _is_audit_recursion_metadata({"tags": parsed_tags or []}, chunk.get("content")):
+        return _empty_exact_chunk_lookup_result(query)
+    chunk_class = normalize_content_class(chunk.get("content_class"))
+    if content_class_filter and chunk_class != normalize_content_class(content_class_filter):
+        return _empty_exact_chunk_lookup_result(query)
+    if (
+        not content_class_filter
+        and not include_operational
+        and not query_signals_operational_intent(query)
+        and content_class_is_default_hidden(chunk_class)
+    ):
         return _empty_exact_chunk_lookup_result(query)
     if importance_min is not None:
         chunk_importance = chunk.get("importance")
@@ -606,6 +619,8 @@ async def _brain_search(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     allow_helper_route: bool = True,
@@ -639,21 +654,28 @@ async def _brain_search(
                 helper_started = time.perf_counter()
                 try:
                     helper_project = _resolve_helper_project(project, entity_id=entity_id, source=source)
+                    helper_kwargs = {
+                        "project": helper_project,
+                        "source": source,
+                        "tag": tag,
+                        "importance_min": importance_min,
+                        "agent_id": agent_id,
+                        "num_results": num_results,
+                        "max_results": max_results,
+                        "detail": detail,
+                        "_profile_query_id": profile_query_id,
+                    }
+                    if include_operational:
+                        helper_kwargs["include_operational"] = True
+                    if content_class_filter:
+                        helper_kwargs["content_class"] = content_class_filter
                     loop = asyncio.get_running_loop()
                     response = await loop.run_in_executor(
                         None,
                         lambda: _forward_to_helper(
                             sock_path,
                             query,
-                            project=helper_project,
-                            source=source,
-                            tag=tag,
-                            importance_min=importance_min,
-                            agent_id=agent_id,
-                            num_results=num_results,
-                            max_results=max_results,
-                            detail=detail,
-                            _profile_query_id=profile_query_id,
+                            **helper_kwargs,
                         ),
                     )
                     latency_ms = (time.perf_counter() - helper_started) * 1000
@@ -684,6 +706,8 @@ async def _brain_search(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
@@ -716,6 +740,8 @@ async def _brain_search_dispatch(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     brainbar_helper_fast_profile: bool = False,
@@ -755,6 +781,8 @@ async def _brain_search_dispatch(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
@@ -780,6 +808,19 @@ async def _brain_search_dispatch(
         ):
             empty = {"query": query, "total": 0, "results": []}
             return ([TextContent(type="text", text="No results found.")], empty)
+        if isinstance(chunk, dict):
+            chunk_class = normalize_content_class(chunk.get("content_class"))
+            if content_class_filter and chunk_class != normalize_content_class(content_class_filter):
+                empty = {"query": query, "total": 0, "results": []}
+                return ([TextContent(type="text", text="No results found.")], empty)
+            if (
+                not content_class_filter
+                and not include_operational
+                and not query_signals_operational_intent(query)
+                and content_class_is_default_hidden(chunk_class)
+            ):
+                empty = {"query": query, "total": 0, "results": []}
+                return ([TextContent(type="text", text="No results found.")], empty)
         return await _context(
             chunk_id=chunk_id,
             before=before,
@@ -846,6 +887,8 @@ async def _brain_search_dispatch(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
@@ -908,6 +951,8 @@ async def _brain_search_dispatch(
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
+        include_operational=include_operational,
+        content_class_filter=content_class_filter,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -929,6 +974,7 @@ async def _brain_search_dispatch(
             sentiment,
             source_filter,
             correction_category,
+            content_class_filter,
         ]
     )
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
@@ -977,6 +1023,8 @@ async def _brain_search_dispatch(
                 project_filter=normalized_project,
                 include_checkpoints=include_checkpoints,
                 include_audit=include_audit,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
                 agent_id=agent_id,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
             )
@@ -1098,6 +1146,8 @@ async def _brain_search_dispatch(
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
+        include_operational=include_operational,
+        content_class_filter=content_class_filter,
         agent_id=agent_id,
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
@@ -1302,6 +1352,8 @@ async def _brain_recall(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
 ):
     """Unified recall dispatcher -- routes to session/context/search/entity handlers.
 
@@ -1362,6 +1414,8 @@ async def _brain_recall(
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
         )
 
     if resolved_mode == "entity":
@@ -1425,6 +1479,8 @@ async def _search(
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     brainbar_helper_fast_profile: bool = False,
@@ -1506,6 +1562,8 @@ async def _search(
                         correction_category=correction_category,
                         include_checkpoints=include_checkpoints,
                         include_audit=include_audit,
+                        include_operational=include_operational,
+                        content_class_filter=content_class_filter,
                         profile_query_id=profile_query_id,
                         profile_scope=profile_scope,
                         brainbar_helper_fast_profile=brainbar_helper_fast_profile,

@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional
 import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
+from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
 from .pipeline.classify import looks_like_system_prompt
@@ -151,6 +152,7 @@ def store_memory(
         meta["line_number"] = line_number
 
     chunk_origin = detect_chunk_origin(content)
+    content_class = classify_content_class(content, content_type=memory_type, tags=tags, source="manual")
     tags_json = json.dumps(tags) if tags else None
     incoming_chunk_id = chunk_id
     stored_chunk_id = chunk_id
@@ -160,6 +162,7 @@ def store_memory(
         "content": content,
         "tags": tags_json,
         "importance": float(importance) if importance is not None else None,
+        "content_class": content_class,
         "created_at": now,
         "last_seen_at": now,
     }
@@ -227,8 +230,9 @@ def store_memory(
                          value_type, char_count, source, created_at, enriched_at, enrich_status,
                          summary, tags, importance, chunk_origin, seen_count, last_seen_at,
                          dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                         ingested_at)
+                         content_class, ingested_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                ?,
                                 CAST(strftime('%s', 'now') AS INTEGER))
                     """,
                         (
@@ -256,6 +260,7 @@ def store_memory(
                             dedupe_fields.bands[1],
                             dedupe_fields.bands[2],
                             dedupe_fields.bands[3],
+                            content_class,
                         ),
                     )
                     if embedding is not None:

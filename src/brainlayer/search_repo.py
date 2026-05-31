@@ -19,6 +19,7 @@ from . import search_profile
 from ._helpers import _escape_fts5_query, _is_sqlite_busy_error, serialize_f32
 from .agent_profiles import boost_weight, source_weight, validate_agent_profile
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
+from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class, query_signals_operational_intent
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
 
@@ -135,6 +136,8 @@ def _hybrid_cache_key(
     include_archived: bool = False,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    include_operational: bool = False,
+    content_class_filter: Optional[str] = None,
 ) -> tuple:
     return (
         store_key,
@@ -158,7 +161,36 @@ def _hybrid_cache_key(
         include_archived,
         include_checkpoints,
         include_audit,
+        include_operational,
+        normalize_content_class(content_class_filter) if content_class_filter else None,
     )
+
+
+def _content_class_where(
+    column_expr: str,
+    *,
+    query_text: str | None = None,
+    include_operational: bool = False,
+    content_class_filter: str | None = None,
+) -> tuple[str | None, list[Any]]:
+    """Build SQL enforcing default operational/test exclusion.
+
+    NULL is treated as knowledge so pre-backfill rows remain visible.
+    """
+    if content_class_filter:
+        return f"COALESCE({column_expr}, ?) = ?", [
+            DEFAULT_CONTENT_CLASS,
+            normalize_content_class(content_class_filter),
+        ]
+    if include_operational or query_signals_operational_intent(query_text):
+        return None, []
+    return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test')", [DEFAULT_CONTENT_CLASS]
+
+
+def _content_class_expr(store: Any, alias: str | None = None) -> str:
+    if getattr(store, "_has_content_class", True):
+        return f"{alias}.content_class" if alias else "content_class"
+    return f"'{DEFAULT_CONTENT_CLASS}'"
 
 
 def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
@@ -715,6 +747,8 @@ class SearchMixin:
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         include_audit: bool = False,
+        include_operational: bool = False,
+        content_class_filter: Optional[str] = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
@@ -776,6 +810,15 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 filter_params.append(f"correction:{correction_category}%")
+            content_class_clause, content_class_params = _content_class_where(
+                _content_class_expr(self, "c"),
+                query_text=query_text,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+            )
+            if content_class_clause:
+                where_clauses.append(content_class_clause)
+                filter_params.extend(content_class_params)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
             if not include_checkpoints:
@@ -806,13 +849,14 @@ class SearchMixin:
             effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
             params = [query_bytes, effective_k] + filter_params
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+            content_class_expr = _content_class_expr(self, "c")
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
                        c.created_at, c.source, c.decay_score,
-                       {chunk_origin_expr}
+                       {chunk_origin_expr}, {content_class_expr} AS content_class
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -876,6 +920,15 @@ class SearchMixin:
             if correction_category:
                 where_clauses.append("id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 params.append(f"correction:{correction_category}%")
+            content_class_clause, content_class_params = _content_class_where(
+                _content_class_expr(self),
+                query_text=query_text,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+            )
+            if content_class_clause:
+                where_clauses.append(content_class_clause)
+                params.extend(content_class_params)
             if not include_audit:
                 where_clauses.append(self._audit_recursion_exclusion_sql("id", "tags", "content"))
             if not include_checkpoints:
@@ -892,13 +945,14 @@ class SearchMixin:
             params.append(n_results)
 
             chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+            content_class_expr = _content_class_expr(self)
             query = f"""
                 SELECT id, content, metadata, source_file, project,
                        content_type, value_type, char_count,
                        NULL as distance,
                        summary, tags, importance, intent,
                        created_at, source, decay_score,
-                       {chunk_origin_expr}
+                       {chunk_origin_expr}, {content_class_expr} AS content_class
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -952,6 +1006,8 @@ class SearchMixin:
                 metadata["decay_score"] = row[15]
             if len(row) > 16 and row[16]:
                 metadata["chunk_origin"] = row[16]
+            if len(row) > 17:
+                metadata["content_class"] = normalize_content_class(row[17])
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -1080,6 +1136,7 @@ class SearchMixin:
         self,
         query_embedding: List[float],
         n_results: int,
+        query_text: Optional[str] = None,
         project_filter: Optional[str] = None,
         content_type_filter: Optional[str] = None,
         source_filter: Optional[str] = None,
@@ -1097,6 +1154,8 @@ class SearchMixin:
         source_filter_like: Optional[str] = None,
         correction_category: Optional[str] = None,
         include_audit: bool = False,
+        include_operational: bool = False,
+        content_class_filter: Optional[str] = None,
         brainbar_helper_fast_profile: bool = False,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
@@ -1148,6 +1207,15 @@ class SearchMixin:
         if correction_category:
             where_clauses.append("c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
             filter_params.append(f"correction:{correction_category}%")
+        content_class_clause, content_class_params = _content_class_where(
+            _content_class_expr(self, "c"),
+            query_text=query_text,
+            include_operational=include_operational,
+            content_class_filter=content_class_filter,
+        )
+        if content_class_clause:
+            where_clauses.append(content_class_clause)
+            filter_params.extend(content_class_params)
         if not include_audit:
             where_clauses.append(self._audit_recursion_exclusion_sql("c.id", "c.tags", "c.content"))
         if not include_checkpoints:
@@ -1174,13 +1242,14 @@ class SearchMixin:
             effective_k = self._effective_knn_k(n_results, bool(needs_overfetch), include_checkpoints, include_audit)
         params = [query_bytes, effective_k] + filter_params
         chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+        content_class_expr = _content_class_expr(self, "c")
         query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
                        c.created_at, c.source, c.decay_score,
-                       {chunk_origin_expr}
+                       {chunk_origin_expr}, {content_class_expr} AS content_class
                 FROM chunk_vectors_binary v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
@@ -1239,6 +1308,8 @@ class SearchMixin:
                 metadata["decay_score"] = row[15]
             if row[16]:
                 metadata["chunk_origin"] = row[16]
+            if len(row) > 17:
+                metadata["content_class"] = normalize_content_class(row[17])
             metadatas.append(metadata)
             distances.append(row[8])
 
@@ -1329,6 +1400,8 @@ class SearchMixin:
         correction_category: Optional[str] = None,
         filter_meta_noise: bool = True,
         include_audit: bool = False,
+        include_operational: bool = False,
+        content_class_filter: Optional[str] = None,
         profile_query_id: str | None = None,
         profile_scope: str = "search.repo",
         brainbar_helper_fast_profile: bool = False,
@@ -1368,6 +1441,8 @@ class SearchMixin:
             include_archived,
             include_checkpoints,
             include_audit,
+            include_operational,
+            content_class_filter,
         ) + (
             fts_query_override,
             kg_boost,
@@ -1407,11 +1482,14 @@ class SearchMixin:
                 date_to=date_to,
                 sentiment_filter=sentiment_filter,
                 entity_id=entity_id,
+                query_text=query_text,
                 include_archived=include_archived,
                 include_checkpoints=include_checkpoints,
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
                 include_audit=include_audit,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
             )
             search_profile.emit(
@@ -1454,6 +1532,8 @@ class SearchMixin:
                 source_filter_like=source_filter_like,
                 correction_category=correction_category,
                 include_audit=include_audit,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
             )
             search_profile.emit(
                 profile_scope,
@@ -1524,6 +1604,15 @@ class SearchMixin:
             if correction_category:
                 fts_extra.append("AND c.id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 fts_filter_params.append(f"correction:{correction_category}%")
+            content_class_clause, content_class_params = _content_class_where(
+                _content_class_expr(self, "c"),
+                query_text=query_text,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+            )
+            if content_class_clause:
+                fts_extra.append(f"AND {content_class_clause}")
+                fts_filter_params.extend(content_class_params)
             if not include_audit:
                 fts_extra.append(f"AND {self._audit_recursion_exclusion_sql('c.id', 'c.tags', 'c.content')}")
             if not include_checkpoints:
@@ -1542,6 +1631,7 @@ class SearchMixin:
                 fts_extra.append("AND COALESCE(c.status, 'active') = 'active'")
 
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+            content_class_expr = _content_class_expr(self, "c")
 
             def _set_fts_progress_handler(timeout_ms: float):
                 connection = None
@@ -1577,7 +1667,7 @@ class SearchMixin:
                            c.content_type, c.value_type, c.char_count,
                            c.summary, c.tags, c.importance, c.intent,
                            c.created_at, c.source, c.sender, c.language, c.decay_score,
-                           {chunk_origin_expr}
+                           {chunk_origin_expr}, {content_class_expr} AS content_class
                     FROM {table_name} f
                     JOIN chunks c ON f.chunk_id = c.id
                     {entity_join}
@@ -1643,6 +1733,7 @@ class SearchMixin:
                         "language": row[16],
                         "decay_score": row[17],
                         "chunk_origin": row[18],
+                        "content_class": normalize_content_class(row[19] if len(row) > 19 else None),
                     },
                 )
 
@@ -1692,6 +1783,15 @@ class SearchMixin:
             if correction_category:
                 recent_extra.append("AND id IN (SELECT chunk_id FROM chunk_tags WHERE tag LIKE ?)")
                 recent_params.append(f"correction:{correction_category}%")
+            content_class_clause, content_class_params = _content_class_where(
+                _content_class_expr(self),
+                query_text=query_text,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+            )
+            if content_class_clause:
+                recent_extra.append(f"AND {content_class_clause}")
+                recent_params.extend(content_class_params)
             if not include_audit:
                 recent_extra.append(f"AND {self._audit_recursion_exclusion_sql('id', 'tags', 'content')}")
             if not include_checkpoints:
@@ -1710,12 +1810,13 @@ class SearchMixin:
                 recent_extra.append("AND COALESCE(status, 'active') = 'active'")
 
             chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
+            content_class_expr = _content_class_expr(self)
             recent_query = f"""
                     SELECT id, content, metadata, source_file, project,
                            content_type, value_type, char_count,
                            summary, tags, importance, intent,
                            created_at, source, sender, language, decay_score,
-                           {chunk_origin_expr}
+                           {chunk_origin_expr}, {content_class_expr} AS content_class
                     FROM chunks
                     WHERE datetime(created_at) >= datetime('now', '-7 days') {" ".join(recent_extra)}
                     ORDER BY created_at DESC
@@ -1756,6 +1857,7 @@ class SearchMixin:
                         "language": row[15],
                         "decay_score": row[16],
                         "chunk_origin": row[17],
+                        "content_class": normalize_content_class(row[18] if len(row) > 18 else None),
                     },
                 )
 
@@ -1831,6 +1933,7 @@ class SearchMixin:
                     meta["decay_score"] = data["decay_score"]
                 if data.get("chunk_origin"):
                     meta["chunk_origin"] = data["chunk_origin"]
+                meta["content_class"] = normalize_content_class(data.get("content_class"))
                 dist = None
             else:
                 continue

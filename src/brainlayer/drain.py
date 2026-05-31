@@ -20,6 +20,7 @@ import sqlite_vec
 
 from ._helpers import serialize_f32
 from .chunk_origin import detect_chunk_origin
+from .content_class import classify_content_class, normalize_content_class
 from .dedupe import (
     compute_dedupe_fields,
     ensure_dedupe_schema,
@@ -167,10 +168,21 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
         values = {**values, "preview_text": _preview_text(values)}
     if "content" in values:
         fields = compute_dedupe_fields(str(values["content"]), values.get("created_at"))
+        content_class = normalize_content_class(values.get("content_class"))
+        if "content_class" not in values:
+            content_class = classify_content_class(
+                str(values["content"]),
+                content_type=values.get("content_type"),
+                tags=values.get("tags"),
+                source=values.get("source"),
+                source_file=values.get("source_file"),
+                project=values.get("project"),
+            )
         values = {
             **values,
             "seen_count": values.get("seen_count") or 1,
             "last_seen_at": values.get("last_seen_at") or values.get("created_at"),
+            "content_class": content_class,
             "dedupe_hash": fields.dedupe_hash,
             "simhash": fields.simhash,
             "simhash_band_0": fields.bands[0],
@@ -191,6 +203,18 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
 
 def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
     ensure_dedupe_schema(conn)
+    if "content" in values and "content_class" not in values:
+        values = {
+            **values,
+            "content_class": classify_content_class(
+                str(values["content"]),
+                content_type=values.get("content_type"),
+                tags=values.get("tags"),
+                source=values.get("source"),
+                source_file=values.get("source_file"),
+                project=values.get("project"),
+            ),
+        }
     chunk_id = values["id"]
     duplicate, _ = find_duplicate(
         conn,

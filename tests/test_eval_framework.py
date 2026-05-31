@@ -61,7 +61,7 @@ def test_benchmark_runs_pipeline(qrels_file: Path):
 
 
 def test_benchmark_evaluates(qrels_file: Path):
-    from brainlayer.eval.benchmark import DEFAULT_QUERY_SUITE, SearchBenchmark
+    from brainlayer.eval.benchmark import DEFAULT_QUERY_SUITE, DEFAULT_RUN_METRICS, SearchBenchmark
 
     benchmark = SearchBenchmark(str(qrels_file))
     queries = [query for query in DEFAULT_QUERY_SUITE if query[0] in {"q1", "q2"}]
@@ -70,8 +70,12 @@ def test_benchmark_evaluates(qrels_file: Path):
         queries,
     )
 
-    scores = benchmark.evaluate_pipeline(run, metrics=["ndcg@10"])
+    scores = benchmark.evaluate_pipeline(run, metrics=["ndcg@3", "precision@3", "ndcg@10"])
 
+    assert "ndcg@3" in DEFAULT_RUN_METRICS
+    assert "precision@3" in DEFAULT_RUN_METRICS
+    assert "ndcg@3" in scores
+    assert "precision@3" in scores
     assert "ndcg@10" in scores
     assert 0.0 <= scores["ndcg@10"] <= 1.0
 
@@ -139,6 +143,43 @@ def test_manual_fallback_ndcg_uses_linear_gain(qrels_file: Path):
     expected_q1 = (1 / math.log2(2) + 3 / math.log2(3)) / (3 / math.log2(2) + 1 / math.log2(3))
     expected = (expected_q1 + 0.0) / 2
     assert scores["ndcg@10"] == pytest.approx(expected)
+
+
+def test_manual_fallback_precision_at_k(qrels_file: Path):
+    from brainlayer.eval.benchmark import SearchBenchmark
+
+    benchmark = SearchBenchmark(str(qrels_file))
+    run_dict = {"q1": {"doc-a": 3.0, "doc-z": 2.0, "doc-b": 1.0}}
+
+    scores = benchmark._evaluate_without_ranx(run_dict, ["precision@3", "p@3"])
+
+    expected = ((2 / 3) + 0.0) / 2
+    assert scores["precision@3"] == pytest.approx(expected)
+    assert scores["p@3"] == pytest.approx(expected)
+
+
+def test_pr3_relevance_suite_has_labeled_conceptual_queries():
+    from brainlayer.eval.benchmark import PR3_RELEVANCE_QUERY_SUITE, canonical_eval_doc_id
+
+    qrels_path = Path(__file__).parent / "eval_pr3_relevance_qrels.json"
+    qrels = json.loads(qrels_path.read_text())
+    suite_map = dict(PR3_RELEVANCE_QUERY_SUITE)
+
+    assert "pr3_knowledge_stale" in suite_map
+    assert "keep knowledge base from going stale" == suite_map["pr3_knowledge_stale"]
+    assert set(qrels) == set(suite_map)
+    for query_id, judgments in qrels.items():
+        assert judgments, f"{query_id} has no judgments"
+        assert all("/Users/" not in doc_id for doc_id in judgments)
+        assert all(grade in {0, 1, 2, 3} for grade in judgments.values())
+    assert (
+        canonical_eval_doc_id("/Users/example/.claude/projects/-Users-example-Gits-brainlayer/session.jsonl:7")
+        == "claude-project:Gits-brainlayer/session.jsonl:7"
+    )
+    assert (
+        canonical_eval_doc_id("/Users/john-smith/.claude/projects/-Users-john-smith-Gits-brainlayer/session.jsonl:7")
+        == "claude-project:Gits-brainlayer/session.jsonl:7"
+    )
 
 
 def test_benchmark_compares(qrels_file: Path):

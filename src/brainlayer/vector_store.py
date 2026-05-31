@@ -464,6 +464,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         }
         chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         self._has_chunk_origin = "chunk_origin" in chunk_columns
+        self._has_content_class = "content_class" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._chunk_tags_available = "chunk_tags" in existing_tables
@@ -556,7 +557,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 conversation_id TEXT,
                 position INTEGER,
                 context_summary TEXT,
-                chunk_origin TEXT DEFAULT 'unknown'
+                chunk_origin TEXT DEFAULT 'unknown',
+                content_class TEXT DEFAULT 'knowledge'
             )
         """)
 
@@ -626,6 +628,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("aggregated_into", "TEXT"),
             ("archived_at", "TEXT"),
             ("chunk_origin", "TEXT DEFAULT 'unknown'"),
+            ("content_class", "TEXT DEFAULT 'knowledge'"),
             ("seen_count", "INTEGER DEFAULT 1"),
             ("last_seen_at", "TEXT"),
             ("content_hash", "TEXT"),
@@ -647,6 +650,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             if col not in existing_cols:
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
         self._has_chunk_origin = True
+        self._has_content_class = True
         ensure_dedupe_schema(self.conn)
 
         migration_name = "2026_05_16_fm6_chunk_origin"
@@ -773,6 +777,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("idx_chunks_content_type", "content_type"),
             ("idx_chunks_language", "language"),
             ("idx_chunks_chunk_origin", "chunk_origin"),
+            ("idx_chunks_content_class", "content_class"),
             ("idx_chunks_source_uri", "source_uri"),
             ("idx_chunks_status", "status"),
             ("idx_chunks_ingested_at", "ingested_at"),
@@ -2251,7 +2256,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                       {col_or_null("archived_at")}, {archived_expr}, {status_expr},
                       {col_or_null("brick_id")}, {col_or_null("source_uri")},
                       {col_or_null("ingested_at")}, {col_or_null("topic_cluster")},
-                      {chunk_origin_expr}
+                      {chunk_origin_expr}, {col_or_null("content_class")}
                FROM chunks WHERE id = ?
                {lifecycle_filter}
             """,
@@ -2283,6 +2288,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             "ingested_at": r[18],
             "topic_cluster": r[19],
             "chunk_origin": r[20],
+            "content_class": r[21],
         }
 
     def resolve_chunk_id(self, chunk_id: str) -> str:

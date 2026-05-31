@@ -17,8 +17,9 @@ from brainlayer.vector_store import VectorStore
 
 
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, monkeypatch):
     """Create a fresh VectorStore for testing."""
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
     db_path = tmp_path / "test.db"
     s = VectorStore(db_path)
     yield s

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -17,9 +18,24 @@ from ranx import Qrels, Run, compare, evaluate
 
 from brainlayer._helpers import _escape_fts5_query
 
-DEFAULT_RUN_METRICS = ["ndcg@10", "recall@20", "map@10", "mrr"]
-DEFAULT_COMPARE_METRICS = ["ndcg@10", "recall@20"]
+DEFAULT_RUN_METRICS = ["ndcg@3", "precision@3", "ndcg@10", "recall@20", "map@10", "mrr"]
+DEFAULT_COMPARE_METRICS = ["ndcg@3", "precision@3", "ndcg@10", "recall@20"]
 _RANX_RUN_FALLBACK_PATCHED = False
+_CLAUDE_PROJECT_DOC_ID_RE = re.compile(r"^/Users/([^/]+)/\.claude/projects/(.+)$")
+
+
+def canonical_eval_doc_id(doc_id: str) -> str:
+    """Normalize machine-local doc ids into portable benchmark ids."""
+    match = _CLAUDE_PROJECT_DOC_ID_RE.match(doc_id)
+    if match:
+        username, project_doc_id = match.groups()
+        local_prefix = f"-Users-{username}-"
+        if project_doc_id.startswith(local_prefix):
+            project_doc_id = project_doc_id[len(local_prefix) :]
+        return f"claude-project:{project_doc_id}"
+    return doc_id
+
+
 MINED_FRUSTRATION_QUERY_SUITE: list[tuple[str, str]] = [
     (
         "frustration_001",
@@ -139,6 +155,17 @@ DEFAULT_QUERY_SUITE: list[tuple[str, str]] = [
     ("frustration_search_recall_miss", "search recall miss"),
     ("frustration_context_injection_failure", "context injection failure"),
 ]
+PR3_RELEVANCE_QUERY_SUITE: list[tuple[str, str]] = [
+    ("pr3_knowledge_stale", "keep knowledge base from going stale"),
+    ("pr3_memory_decay_refresh", "decay refresh stale memories"),
+    ("pr3_status_pollution", "status notes polluting search results"),
+    ("pr3_durable_decisions", "durable decisions over status updates"),
+    ("pr3_rrf_relevance_design", "BrainLayer search relevance RRF design"),
+    ("pr3_sqlite_vector_decision", "why did we choose sqlite vector storage"),
+    ("pr3_telegram_socket_research", "research telegram socket updates"),
+    ("pr3_operational_status_opt_in", "operational heartbeat status"),
+    ("pr3_test_eval_opt_in", "ad-hoc eval test query"),
+]
 
 
 class ReadOnlyBenchmarkStore:
@@ -207,7 +234,14 @@ class SearchBenchmark:
         payload = json.loads(qrels_path.read_text())
         if not isinstance(payload, dict):
             raise ValueError("Qrels JSON must be a dict of query_id -> {doc_id: grade}")
-        return payload
+        qrels: dict[str, dict[str, int]] = {}
+        for query_id, judgments in payload.items():
+            normalized: dict[str, int] = {}
+            for doc_id, grade in judgments.items():
+                normalized_id = canonical_eval_doc_id(str(doc_id))
+                normalized[normalized_id] = max(int(grade), normalized.get(normalized_id, 0))
+            qrels[query_id] = normalized
+        return qrels
 
     def _build_ranx_qrels(self) -> Qrels | None:
         try:
@@ -227,7 +261,10 @@ class SearchBenchmark:
         run_dict: dict[str, dict[str, float]] = {}
         for query_id, query_text in queries:
             results = pipeline_fn(query_text)
-            run_dict[query_id] = {chunk_id: float(score) for chunk_id, score in results}
+            run_dict[query_id] = {}
+            for chunk_id, score in results:
+                normalized_id = canonical_eval_doc_id(str(chunk_id))
+                run_dict[query_id][normalized_id] = max(float(score), run_dict[query_id].get(normalized_id, 0.0))
         return _run_from_dict(run_dict)
 
     def evaluate_pipeline(self, run: Run, metrics: list[str] | None = None) -> dict[str, float]:
@@ -275,6 +312,8 @@ class SearchBenchmark:
             return self._mean_query_score(run_dict, lambda qid: self._ndcg(run_dict.get(qid, {}), qid, cutoff))
         if name == "recall":
             return self._mean_query_score(run_dict, lambda qid: self._recall(run_dict.get(qid, {}), qid, cutoff))
+        if name in {"precision", "p"}:
+            return self._mean_query_score(run_dict, lambda qid: self._precision(run_dict.get(qid, {}), qid, cutoff))
         if name == "map":
             return self._mean_query_score(
                 run_dict, lambda qid: self._average_precision(run_dict.get(qid, {}), qid, cutoff)
@@ -323,6 +362,17 @@ class SearchBenchmark:
             return 0.0
         retrieved = set(self._ranked_docs(run, cutoff))
         return len(retrieved & set(relevant)) / len(relevant)
+
+    def _precision(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
+        if cutoff is None:
+            cutoff = len(run)
+        if cutoff <= 0:
+            return 0.0
+        relevant = set(self._relevant_docs(query_id))
+        if not relevant:
+            return 0.0
+        ranked = self._ranked_docs(run, cutoff)
+        return len(set(ranked) & relevant) / cutoff
 
     def _average_precision(self, run: dict[str, Any], query_id: str, cutoff: int | None) -> float:
         relevant = set(self._relevant_docs(query_id))
