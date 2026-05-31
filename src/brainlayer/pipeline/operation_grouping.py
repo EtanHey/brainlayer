@@ -88,8 +88,7 @@ def _extract_tool_info(chunk: Dict[str, Any]) -> Dict[str, Any]:
     import re
 
     file_match = re.search(
-        r'(?:file_path|path)[=:]\s*["\']?'
-        r'([^\s"\']+\.\w+)',
+        r'(?:file_path|path)[=:]\s*["\']?' r'([^\s"\']+\.\w+)',
         content,
     )
     if file_match:
