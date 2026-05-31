@@ -173,10 +173,7 @@ def strip_operational_markers(content: str | None) -> str:
     if not content:
         return ""
     without_blocks = _TASK_NOTIFICATION_BLOCK_RE.sub("\n", content)
-    residual_lines = [
-        "" if _OPERATIONAL_MARKER_LINE_RE.match(line) else line
-        for line in without_blocks.splitlines()
-    ]
+    residual_lines = ["" if _OPERATIONAL_MARKER_LINE_RE.match(line) else line for line in without_blocks.splitlines()]
     return "\n".join(residual_lines).strip()
 
 

@@ -23,6 +23,8 @@ from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
 _CLASS_ORDER = ("decision", "knowledge", "operational", "test", "benchmark")
+
+
 def _preview(content: str | None, limit: int = 260) -> str:
     return re.sub(r"\s+", " ", content or "").strip()[:limit]
 
@@ -127,7 +129,9 @@ def build_backfill_report(store: VectorStore, *, sample_limit: int = 30) -> dict
             benchmark_signals = [signal for signal in signals if signal != "decision_language"]
             risk_signals = benchmark_signals if proposed == "benchmark" else signals
             if risk_signals:
-                hidden_risk_rows.append(_sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=risk_signals))
+                hidden_risk_rows.append(
+                    _sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=risk_signals)
+                )
 
     hidden_total = counts["operational"] + counts["test"] + counts["benchmark"]
     return {
@@ -198,9 +202,13 @@ def main() -> int:
 
     store = VectorStore(args.db_path, readonly=not args.apply)
     try:
-        report = apply_backfill(store, limit=args.limit) if args.apply else build_backfill_report(
-            store,
-            sample_limit=args.sample_limit,
+        report = (
+            apply_backfill(store, limit=args.limit)
+            if args.apply
+            else build_backfill_report(
+                store,
+                sample_limit=args.sample_limit,
+            )
         )
     finally:
         store.close()
