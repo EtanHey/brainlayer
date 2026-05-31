@@ -14,6 +14,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import apsw
+
 from brainlayer.mcp.search_handler import _brain_recall, _brain_search
 
 
@@ -464,6 +466,39 @@ class TestKgDegradeObservability:
             and "entity=Etan" in message
             for message in messages
         )
+
+    def test_sqlite_vec_knn_sqLError_does_not_run_second_hybrid_search(self):
+        """sqlite-vec KNN errors must not pay KG hybrid and then full hybrid fallback."""
+        store = MagicMock(count=MagicMock(return_value=100))
+        store.kg_hybrid_search.side_effect = apsw.SQLError(
+            "k value in knn query too large, provided 4290 and the limit is 4096"
+        )
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
+            patch(
+                "brainlayer.mcp.search_handler._get_embedding_model",
+                return_value=MagicMock(embed_query=MagicMock(return_value=[0.1] * 1024)),
+            ),
+            patch(
+                "brainlayer.mcp.search_handler._detect_entities",
+                return_value=[{"id": "e1", "name": "Etan", "entity_type": "person"}],
+            ),
+            patch("brainlayer.mcp.search_handler._kg_facts_sql", return_value=[]),
+            patch(
+                "brainlayer.mcp.search_handler._search",
+                new_callable=AsyncMock,
+                return_value=([MagicMock(type="text", text="fallback")], {"total": 1}),
+            ) as mock_search,
+            patch("brainlayer.mcp.search_handler._normalize_project_name", return_value=None),
+        ):
+            _content, structured = asyncio.run(_brain_search(query="Etan BrainLayer context"))
+
+        store.kg_hybrid_search.assert_called_once()
+        mock_search.assert_not_awaited()
+        assert structured["kg_degraded"] is True
+        assert structured["kg_degrade_reason"] == "sqlite_vec_knn"
+        assert structured["total"] == 0
 
     def test_kg_degrade_axiom_emit_attempted(self, monkeypatch):
         """Axiom degrade telemetry is attempted when AXIOM_TOKEN is configured."""
