@@ -27,7 +27,16 @@ _QUEUE_MAX_SIZE = 100
 
 
 def _is_lock_error(exc: BaseException) -> bool:
-    return isinstance(exc, apsw.BusyError) or "locked" in str(exc).lower() or "busy" in str(exc).lower()
+    from ..vector_store import WriterInUseError
+
+    text = str(exc).lower()
+    return (
+        isinstance(exc, apsw.BusyError)
+        or isinstance(exc, WriterInUseError)
+        or "locked" in text
+        or "busy" in text
+        or "sqlite prepare failed" in text
+    )
 
 
 def _new_manual_chunk_id() -> str:

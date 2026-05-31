@@ -324,7 +324,7 @@ def run_enrich_supervisor(
 
     db_path = Path(db_path)
     stats = EnrichmentSupervisorResult()
-    store = vector_store_cls(db_path)
+    store = _open_enrich_supervisor_store(vector_store_cls, db_path)
     logger.info("VectorStore initialized for enrich supervisor: %s", db_path)
     try:
         while stop_event is None or not stop_event.is_set():
@@ -458,6 +458,16 @@ def _arbitrated_writes_enabled() -> bool:
     return os.environ.get("BRAINLAYER_ARBITRATED") == "1"
 
 
+def _open_enrich_supervisor_store(vector_store_cls, db_path: Path):
+    if not _arbitrated_writes_enabled():
+        return vector_store_cls(db_path)
+    try:
+        return vector_store_cls(db_path, readonly=True)
+    except TypeError:
+        logger.debug("VectorStore class does not accept readonly=True; opening with default constructor")
+        return vector_store_cls(db_path)
+
+
 def _current_max_commit_batch() -> int:
     return _bounded_positive_int(os.environ.get("BRAINLAYER_MAX_COMMIT_BATCH"), MAX_COMMIT_BATCH)
 
@@ -587,6 +597,9 @@ def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
 
 
 def _ensure_enrichment_columns(store, *, yield_after: bool = True) -> None:
+    if _arbitrated_writes_enabled():
+        return
+
     key = _store_queue_key(store)
     with _ENRICHMENT_COLUMN_LOCK:
         if key in _ENRICHMENT_COLUMN_READY:
@@ -1070,7 +1083,8 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 
     _begin_store_operation(store)
     try:
-        _ensure_enrichment_columns(store)
+        if not _arbitrated_writes_enabled():
+            _ensure_enrichment_columns(store)
 
         chunk = _get_chunk_readonly(store, chunk_id)
         if not chunk:
@@ -1228,7 +1242,8 @@ def enrich_realtime(
             _emit_enrichment_complete(result, 0)
             return result
 
-        _ensure_enrichment_columns(store, yield_after=rate_per_second > 0)
+        if not _arbitrated_writes_enabled():
+            _ensure_enrichment_columns(store, yield_after=rate_per_second > 0)
 
         client = _get_gemini_client()
         sanitizer = Sanitizer.from_env()
@@ -1333,7 +1348,8 @@ def enrich_batch(
             _emit_enrichment_complete(result, duration_ms)
             return result
 
-        _ensure_enrichment_columns(store)
+        if not _arbitrated_writes_enabled():
+            _ensure_enrichment_columns(store)
 
         try:
             client = _get_gemini_client()
