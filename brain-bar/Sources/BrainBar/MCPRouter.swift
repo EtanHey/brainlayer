@@ -32,8 +32,31 @@ final class MCPRouter: @unchecked Sendable {
         }
     }
 
+    private struct HybridSearchArgumentBox: @unchecked Sendable {
+        let arguments: [String: Any]
+    }
+
+    private final class HybridSearchResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Result<HybridSearchResponse, Error>?
+
+        func set(_ result: Result<HybridSearchResponse, Error>) {
+            lock.lock()
+            self.result = result
+            lock.unlock()
+        }
+
+        func get() -> Result<HybridSearchResponse, Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            return result
+        }
+    }
+
     private var database: BrainDatabase?
+    private var readDatabase: BrainDatabase?
     private let hybridSearchClient: HybridSearchClientProtocol?
+    private let hybridSearchBudget: TimeInterval
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
@@ -60,15 +83,37 @@ final class MCPRouter: @unchecked Sendable {
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
 
-    init(hybridSearchClient: HybridSearchClientProtocol? = nil) {
+    init(hybridSearchClient: HybridSearchClientProtocol? = nil, hybridSearchBudget: TimeInterval = 0.8) {
         self.hybridSearchClient = hybridSearchClient
+        self.hybridSearchBudget = max(0.001, hybridSearchBudget)
     }
 
     /// Inject database for tool handlers + load entity cache.
     func setDatabase(_ db: BrainDatabase) {
-        self.database = db
-        entityCache.load(from: db.dbHandle)
-        entityCache.startRefreshTimer(db: db.dbHandle)
+        setDatabases(write: db, read: db)
+    }
+
+    /// Inject separate write and read handles. Read tools use the read handle so
+    /// WAL readers do not inherit write-handle busy_timeout or transaction state.
+    func setDatabases(write writeDB: BrainDatabase, read readDB: BrainDatabase) {
+        database = writeDB
+        readDatabase = readDB
+        entityCache.load(from: readDB.dbHandle)
+        entityCache.startRefreshTimer(db: readDB.dbHandle)
+    }
+
+    private func readDB() throws -> BrainDatabase {
+        guard let db = readDatabase ?? database else {
+            throw ToolError.noDatabase
+        }
+        return db
+    }
+
+    private func writeDB() throws -> BrainDatabase {
+        guard let db = database else {
+            throw ToolError.noDatabase
+        }
+        return db
     }
 
     /// Handle a parsed JSON-RPC request and return a response.
@@ -262,9 +307,7 @@ final class MCPRouter: @unchecked Sendable {
         if unreadOnly && subscriberID == nil {
             throw ToolError.missingParameter("agent_id")
         }
-        guard let db = database else {
-            throw ToolError.noDatabase
-        }
+        let db = try readDB()
         SearchProfileLogger.log(
             scope: "search.brainbar",
             step: "router_dispatch",
@@ -309,9 +352,9 @@ final class MCPRouter: @unchecked Sendable {
         let textSection: String
         let metadata: [String: Any]
         let kgSection: String
-        if let hybridSearchClient, subscriberID == nil, !unreadOnly {
+        if hybridSearchClient != nil, subscriberID == nil, !unreadOnly {
             do {
-                let response = try hybridSearchClient.search(arguments: hybridSearchArguments(
+                let response = try hybridSearchWithinBudget(arguments: hybridSearchArguments(
                     query: query,
                     limit: limit,
                     project: project,
@@ -321,9 +364,17 @@ final class MCPRouter: @unchecked Sendable {
                     detail: args["detail"] as? String,
                     profileQueryID: profileQueryID
                 ))
-                textSection = response.text
-                metadata = sanitizedHybridMetadata(response.metadata)
-                kgSection = ""
+                if let response {
+                    textSection = response.text
+                    metadata = sanitizedHybridMetadata(response.metadata)
+                    kgSection = ""
+                } else {
+                    NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
+                    let fallback = try searchViaBrainBarDatabase()
+                    textSection = fallback.text
+                    metadata = fallback.metadata
+                    kgSection = localKGSection()
+                }
             } catch {
                 NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
                 let fallback = try searchViaBrainBarDatabase()
@@ -343,6 +394,27 @@ final class MCPRouter: @unchecked Sendable {
             return ToolOutput(text: textSection, metadata: metadata)
         }
         return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+    }
+
+    private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
+        guard let hybridSearchClient else { return nil }
+
+        let group = DispatchGroup()
+        let argumentBox = HybridSearchArgumentBox(arguments: arguments)
+        let resultBox = HybridSearchResultBox()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = Result { try hybridSearchClient.search(arguments: argumentBox.arguments) }
+            resultBox.set(outcome)
+            group.leave()
+        }
+
+        let timeout = DispatchTime.now() + .nanoseconds(Int(hybridSearchBudget * 1_000_000_000))
+        guard group.wait(timeout: timeout) == .success else {
+            return nil
+        }
+
+        return try resultBox.get()?.get()
     }
 
     private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
@@ -390,9 +462,7 @@ final class MCPRouter: @unchecked Sendable {
         }
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
-        guard let db = database else {
-            throw ToolError.noDatabase
-        }
+        let db = try writeDB()
         switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp") {
         case .stored(let stored):
             let flushedStores = db.flushPendingStores()
@@ -430,7 +500,7 @@ final class MCPRouter: @unchecked Sendable {
         }
         let context = args["context"] as? String
         let numMemories = min(args["num_memories"] as? Int ?? 10, 50)
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try readDB()
         guard let person = try db.getPersonContext(name: name, context: context, numMemories: numMemories) else {
             return ToolOutput(text: "No person entity found matching '\(name)'.")
         }
@@ -438,7 +508,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try readDB()
         let mode = args["mode"] as? String ?? "stats"
         if mode == "injections" {
             let sessionId = args["session_id"] as? String
@@ -476,7 +546,7 @@ final class MCPRouter: @unchecked Sendable {
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try readDB()
         guard let entity = try db.lookupEntity(query: query) else {
             return ToolOutput(text: "\u{2502} No entity found for \"\(query)\"")
         }
@@ -487,13 +557,13 @@ final class MCPRouter: @unchecked Sendable {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
         let result = try db.digest(content: content)
         return ToolOutput(text: TextFormatter.formatDigestResult(DigestResult(payload: result)))
     }
 
     private func handleBrainUpdate(_ args: [String: Any]) throws -> ToolOutput {
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
         let chunkId = args["chunk_id"] as? String ?? ""
         if chunkId.isEmpty {
             throw ToolError.missingParameter("chunk_id")
@@ -511,7 +581,7 @@ final class MCPRouter: @unchecked Sendable {
         guard let chunkId = args["chunk_id"] as? String else {
             throw ToolError.missingParameter("chunk_id")
         }
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try readDB()
         let before = args["before"] as? Int ?? 3
         let after = args["after"] as? Int ?? 3
         let expanded = try db.expandChunk(id: chunkId, before: before, after: after)
@@ -537,7 +607,7 @@ final class MCPRouter: @unchecked Sendable {
     }
 
     private func handleBrainTags(_ args: [String: Any]) throws -> ToolOutput {
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try readDB()
         let query = args["query"] as? String
         let limit = args["limit"] as? Int ?? 50
         let tags = try db.listTags(query: query, limit: limit)
@@ -564,7 +634,7 @@ final class MCPRouter: @unchecked Sendable {
         }
         let safetyCheck = args["safety_check"] as? String ?? "auto"
         let confirm = args["confirm"] as? Bool ?? false
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
 
         guard let oldChunk = try db.getChunk(id: oldChunkID) else {
             throw ToolError.notFound("Old chunk not found: \(oldChunkID)")
@@ -608,7 +678,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("chunk_id")
         }
         let reason = args["reason"] as? String
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
         guard try db.archiveChunk(id: chunkID, reason: reason) else {
             throw ToolError.notFound("Chunk not found: \(chunkID)")
         }
@@ -629,7 +699,7 @@ final class MCPRouter: @unchecked Sendable {
         let phase = args["phase"] as? String ?? "run"
         let chunkIDs = args["chunk_ids"] as? [String]
         let stats = args["stats"] as? Bool ?? false
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
 
         if stats {
             let summary = try db.enrichmentStats()
@@ -708,7 +778,7 @@ final class MCPRouter: @unchecked Sendable {
             )
         }
 
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
         let batchSize = args["batch_size"] as? Int ?? 1_000
         let maxReturnedEvents = 25
         var events: [BrainDatabase.TrigramMaintenanceProgress] = []
@@ -737,7 +807,7 @@ final class MCPRouter: @unchecked Sendable {
         guard let targetPath = args["target_path"] as? String else {
             throw ToolError.missingParameter("target_path")
         }
-        guard let db = database else { throw ToolError.noDatabase }
+        let db = try writeDB()
         let bytes = try db.vacuumInto(targetPath: targetPath)
         let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
         return ToolOutput(
