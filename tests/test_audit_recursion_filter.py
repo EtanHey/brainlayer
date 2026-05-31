@@ -266,6 +266,24 @@ def test_audit_overfetch_scales_with_filtered_row_count(tmp_path, monkeypatch):
         store.close()
 
 
+def test_uncapped_filtered_knn_retry_never_exceeds_sqlite_vec_limit(tmp_path, monkeypatch):
+    store = VectorStore(tmp_path / "audit-filter-overfetch-sqlite-vec-cap.db")
+    try:
+        monkeypatch.setattr(store, "_audit_recursion_count", lambda: 5000)
+
+        retry_k = store._effective_knn_k(
+            50,
+            needs_overfetch=True,
+            include_checkpoints=True,
+            include_audit=False,
+            cap_filtered=False,
+        )
+
+        assert retry_k == 4096
+    finally:
+        store.close()
+
+
 def test_audit_count_cache_invalidates_after_same_connection_upsert(tmp_path):
     store = VectorStore(tmp_path / "audit-filter-cache-invalidation.db")
     try:

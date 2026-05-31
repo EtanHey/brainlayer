@@ -42,6 +42,8 @@ try:
 except (TypeError, ValueError):
     _MMR_LAMBDA = 1.0
 _FILTERED_KNN_MAX = 2000
+# sqlite-vec rejects vec0 KNN queries above this hard limit.
+_SQLITE_VEC_MAX_K = 4096
 META_NOISE_PATTERNS = [
     "brain_search(",
     "brain_entity(",
@@ -528,7 +530,8 @@ class SearchMixin:
             include_checkpoints,
             cap_filtered=cap_filtered,
         )
-        return self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
+        effective_k = self._audit_filtered_knn_k(effective_k, include_audit, cap_filtered=cap_filtered)
+        return min(effective_k, _SQLITE_VEC_MAX_K)
 
     def _load_chunk_embeddings(self, chunk_ids: List[str]) -> Dict[str, np.ndarray]:
         """Fetch float embeddings for the provided chunk IDs."""

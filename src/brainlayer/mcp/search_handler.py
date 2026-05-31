@@ -55,6 +55,14 @@ def _get_vector_store():
     return _get_search_vector_store()
 
 
+def _is_sqlite_vec_knn_error(exc: Exception) -> bool:
+    """Return true for sqlite-vec KNN errors that should not trigger a second hybrid scan."""
+    if not isinstance(exc, apsw.SQLError):
+        return False
+    message = str(exc).lower()
+    return "sqlite-vec" in message or ("knn" in message and ("limit" in message or "too large" in message))
+
+
 def _helper_sentinel_path() -> Path:
     return Path("~/.local/share/brainlayer/use-helper-socket").expanduser()
 
@@ -931,6 +939,7 @@ async def _brain_search_dispatch(
         structured_results = []
         kg_degraded = False
         kg_degrade_reason = None
+        kg_fail_fast = False
 
         def _emit_kg_degrade(reason: str) -> None:
             if not os.environ.get("AXIOM_TOKEN"):
@@ -1009,7 +1018,11 @@ async def _brain_search_dispatch(
             kg_degrade_reason = reason
             _emit_kg_degrade(reason)
         except Exception as e:
-            reason = e.__class__.__name__
+            if _is_sqlite_vec_knn_error(e):
+                reason = "sqlite_vec_knn"
+                kg_fail_fast = True
+            else:
+                reason = e.__class__.__name__
             logger.warning(
                 "KG hybrid search degraded (unexpected): reason=%s entity=%s query=%r err=%s",
                 reason,
@@ -1037,6 +1050,20 @@ async def _brain_search_dispatch(
             formatted_text = format_kg_search(entity_name, structured_results, fact_items, query)
             if kg_degraded:
                 formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — showing SQL-only results"
+            return ([TextContent(type="text", text=formatted_text)], structured)
+
+        if kg_fail_fast:
+            structured = {
+                "query": query,
+                "entity": entity_name,
+                "total": 0,
+                "results": [],
+                "facts": fact_items,
+                "kg_degraded": True,
+                "kg_degrade_reason": kg_degrade_reason,
+            }
+            formatted_text = format_search_results(query, [], 0)
+            formatted_text += f"\n⚠ KG search degraded — reason={kg_degrade_reason} — skipping second hybrid search"
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         if kg_degraded:
