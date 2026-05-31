@@ -177,9 +177,7 @@ def test_pr3_relevance_suite_has_labeled_conceptual_queries():
         == "claude-project:Gits-brainlayer/session.jsonl:7"
     )
     assert (
-        canonical_eval_doc_id(
-            "/Users/john-smith/.claude/projects/-Users-john-smith-Gits-brainlayer/session.jsonl:7"
-        )
+        canonical_eval_doc_id("/Users/john-smith/.claude/projects/-Users-john-smith-Gits-brainlayer/session.jsonl:7")
         == "claude-project:Gits-brainlayer/session.jsonl:7"
     )
 
