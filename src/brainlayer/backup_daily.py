@@ -19,6 +19,7 @@ import sqlite3
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,21 @@ DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+DEFAULT_DAILY_KEEP = 7
+DEFAULT_WEEKLY_KEEP = 4
+
+
+@dataclass(frozen=True)
+class DriveRetentionPolicy:
+    keep_latest: int
+
+    def __post_init__(self) -> None:
+        if self.keep_latest < 1:
+            raise ValueError("keep_latest must be at least 1")
+
+
+DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DAILY_KEEP)
+WEEKLY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_WEEKLY_KEEP)
 
 
 def _today() -> str:
@@ -333,8 +349,28 @@ def _parse_snapshot_date(name: str) -> dt.date | None:
         return None
 
 
-def prune_drive_backups(service: Any, folder_parts: list[str] = DEFAULT_FOLDER_PARTS) -> list[str]:
-    """Keep 30 latest daily snapshots plus latest snapshot for each of 12 months."""
+def verify_drive_upload(service: Any, *, file_id: str, expected_name: str, expected_size: int) -> None:
+    """Verify that Drive can see the uploaded file with the expected name and byte size."""
+    metadata = service.files().get(fileId=file_id, fields="id,name,size,trashed", supportsAllDrives=True).execute()
+    if metadata.get("trashed"):
+        raise RuntimeError(f"Uploaded Drive backup is trashed: {file_id}")
+    if metadata.get("name") != expected_name:
+        raise RuntimeError(f"Uploaded Drive backup name mismatch: {metadata.get('name')!r} != {expected_name!r}")
+    try:
+        actual_size = int(metadata.get("size", -1))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Uploaded Drive backup size is not numeric: {metadata.get('size')!r}") from exc
+    if actual_size != expected_size:
+        raise RuntimeError(f"Uploaded Drive backup size mismatch: {actual_size} != {expected_size}")
+
+
+def prune_drive_backups(
+    service: Any,
+    *,
+    folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
+) -> list[str]:
+    """Keep only the latest N verified snapshots in the Drive backup folder."""
     folder_id = ensure_drive_folder_chain(service, folder_parts)
     files: list[dict[str, str]] = []
     page_token = None
@@ -362,17 +398,7 @@ def prune_drive_backups(service: Any, folder_parts: list[str] = DEFAULT_FOLDER_P
             dated.append((parsed, item))
 
     dated.sort(key=lambda pair: pair[0], reverse=True)
-    keep_ids = {item["id"] for _, item in dated[:30]}
-
-    months_seen: set[tuple[int, int]] = set()
-    for snapshot_date, item in dated:
-        month = (snapshot_date.year, snapshot_date.month)
-        if month in months_seen:
-            continue
-        if len(months_seen) >= 12:
-            continue
-        months_seen.add(month)
-        keep_ids.add(item["id"])
+    keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
 
     deleted: list[str] = []
     for _, item in dated:
@@ -389,20 +415,40 @@ def run_backup(
     folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
     date_stamp: str | None = None,
     upload: bool = True,
+    retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
+    remove_local_after_upload: bool = True,
 ) -> dict[str, Any]:
     snapshot = create_sqlite_backup_gzip(db_path or get_db_path(), staging_dir, date_stamp=date_stamp)
+    snapshot_size = snapshot.stat().st_size
     result: dict[str, Any] = {
         "db": str(db_path or get_db_path()),
         "snapshot": str(snapshot),
-        "bytes": snapshot.stat().st_size,
+        "bytes": snapshot_size,
         "uploaded": False,
+        "local_removed": False,
     }
     if upload:
         credentials = get_drive_credentials()
         service = build_drive_service()
         folder_id = ensure_drive_folder_chain(service, folder_parts)
         uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
-        deleted = prune_drive_backups(service, folder_parts=folder_parts)
+        file_id = uploaded.get("id")
+        if not file_id:
+            raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+        verify_drive_upload(
+            service,
+            file_id=file_id,
+            expected_name=snapshot.name,
+            expected_size=snapshot_size,
+        )
+        if remove_local_after_upload:
+            snapshot.unlink()
+            result["local_removed"] = True
+        deleted = prune_drive_backups(
+            service,
+            folder_parts=folder_parts,
+            retention_policy=retention_policy,
+        )
         result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
     return result
 

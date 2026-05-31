@@ -451,6 +451,112 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
     assert summaries == {"c0": "s0", "c1": "s1", "c2": None, "c3": None}
 
 
+def _create_burn_drain_db(path):
+    conn = apsw.Connection(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (id, content, summary, enriched_at, enrich_status, content_hash)
+        VALUES
+            ('already-done', 'content 1', 'old summary', '2026-05-30T00:00:00Z', 'success', 'h1'),
+            ('needs-update', 'content 2', NULL, NULL, NULL, 'h2')
+        """
+    )
+    conn.close()
+
+
+def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    stale = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "already-done",
+                "content_hash": "h1",
+                "enrichment": {"summary": "redundant summary"},
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+    real = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "real summary"},
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 1
+    assert result.skipped_verified_stale == 1
+    assert result.files_deleted == 2
+    assert result.checkpoints == 1
+    assert not stale.exists()
+    assert not real.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        rows = dict(conn.execute("SELECT id, summary FROM chunks ORDER BY id"))
+    finally:
+        conn.close()
+    assert rows == {"already-done": "old summary", "needs-update": "real summary"}
+
+
+def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "must not commit"},
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    def fail_apply(*_args, **_kwargs):
+        raise RuntimeError("synthetic batch failure")
+
+    monkeypatch.setattr(drain, "_apply_event", fail_apply)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 1
+    assert result.files_deleted == 0
+    assert queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        summary = conn.execute("SELECT summary FROM chunks WHERE id = 'needs-update'").fetchone()[0]
+    finally:
+        conn.close()
+    assert summary is None
+
+
 class TestBrainUpdateRetryOnLock:
     """brain_update should retry on BusyError before failing."""
 

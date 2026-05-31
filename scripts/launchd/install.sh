@@ -13,6 +13,7 @@
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
 #   ./scripts/launchd/install.sh repair-fts   # Install weekly explicit FTS repair
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
+#   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
 
@@ -173,6 +174,16 @@ case "${1:-all}" in
         install_backup_script
         install_plist backup-daily
         ;;
+    maintenance-nightly)
+        install_plist maintenance-nightly
+        ;;
+    maintenance-weekly)
+        install_plist maintenance-weekly
+        ;;
+    maintenance)
+        install_plist maintenance-nightly
+        install_plist maintenance-weekly
+        ;;
     all)
         install_plist index
         install_plist drain
@@ -183,6 +194,8 @@ case "${1:-all}" in
         install_plist repair-fts
         install_backup_script
         install_plist backup-daily
+        install_plist maintenance-nightly
+        install_plist maintenance-weekly
         # Remove old enrich plist if present
         remove_plist enrich 2>/dev/null || true
         ;;
@@ -196,10 +209,12 @@ case "${1:-all}" in
         remove_plist wal-checkpoint
         remove_plist repair-fts 2>/dev/null || true
         remove_plist backup-daily 2>/dev/null || true
+        remove_plist maintenance-nightly 2>/dev/null || true
+        remove_plist maintenance-weekly 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|maintenance|maintenance-nightly|maintenance-weekly|all|remove]"
         exit 1
         ;;
 esac
