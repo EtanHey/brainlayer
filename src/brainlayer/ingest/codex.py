@@ -278,9 +278,7 @@ def parse_codex_session(file_path: Path) -> Iterator[dict]:
 
 
 _STACK_TRACE_RE = re.compile(
-    r"Traceback \(most recent call last\)|"
-    r"at\s+[\w.]+\([\w.]+:\d+\)|"
-    r'File "[^"]+", line \d+',
+    r"Traceback \(most recent call last\)|" r"at\s+[\w.]+\([\w.]+:\d+\)|" r'File "[^"]+", line \d+',
     re.MULTILINE,
 )
 

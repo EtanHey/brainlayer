@@ -327,8 +327,7 @@ def _parse_gemini_html(activity_path: Path) -> Iterator[dict]:
     # Simple extraction: look for activity entries with title and time
     # HTML format varies; common pattern: div with data
     pattern = re.compile(
-        r'<[^>]+class="[^"]*content[^"]*"[^>]*>([^<]+)</[^>]+>.*?'
-        r"(\d{4}-\d{2}-\d{2}T[\d:.]+Z)?",
+        r'<[^>]+class="[^"]*content[^"]*"[^>]*>([^<]+)</[^>]+>.*?' r"(\d{4}-\d{2}-\d{2}T[\d:.]+Z)?",
         re.DOTALL | re.IGNORECASE,
     )
     # Fallback: generic title-like text
