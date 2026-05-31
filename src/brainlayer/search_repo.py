@@ -173,7 +173,7 @@ def _content_class_where(
     include_operational: bool = False,
     content_class_filter: str | None = None,
 ) -> tuple[str | None, list[Any]]:
-    """Build SQL enforcing default operational/test exclusion.
+    """Build SQL enforcing default operational/test/benchmark exclusion.
 
     NULL is treated as knowledge so pre-backfill rows remain visible.
     """
@@ -184,7 +184,7 @@ def _content_class_where(
         ]
     if include_operational or query_signals_operational_intent(query_text):
         return None, []
-    return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test')", [DEFAULT_CONTENT_CLASS]
+    return f"COALESCE({column_expr}, ?) NOT IN ('operational', 'test', 'benchmark')", [DEFAULT_CONTENT_CLASS]
 
 
 def _content_class_expr(store: Any, alias: str | None = None) -> str:

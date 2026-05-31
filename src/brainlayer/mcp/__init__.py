@@ -532,11 +532,11 @@ async def list_tools() -> list[Tool]:
                         "include_operational": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Opt in to operational/test chunks that default search hides to avoid status and eval pollution.",
+                            "description": "Opt in to operational/test/benchmark chunks that default search hides to avoid status and eval pollution.",
                         },
                         "content_class": {
                             "type": "string",
-                            "enum": ["knowledge", "decision", "operational", "test"],
+                            "enum": ["knowledge", "decision", "operational", "test", "benchmark"],
                             "description": "Restrict search to one content_class. Defaults to visible knowledge/decision classes.",
                         },
                         "detail": {
@@ -868,11 +868,11 @@ async def list_tools() -> list[Tool]:
                         "include_operational": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Opt in to operational/test chunks in mode=search.",
+                            "description": "Opt in to operational/test/benchmark chunks in mode=search.",
                         },
                         "content_class": {
                             "type": "string",
-                            "enum": ["knowledge", "decision", "operational", "test"],
+                            "enum": ["knowledge", "decision", "operational", "test", "benchmark"],
                             "description": "Restrict mode=search results to one content_class.",
                         },
                     },

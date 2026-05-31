@@ -6,8 +6,9 @@ import re
 from typing import Any
 
 DEFAULT_CONTENT_CLASS = "knowledge"
-CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test"})
-DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test"})
+CONTENT_CLASS_VALUES = frozenset({"knowledge", "decision", "operational", "test", "benchmark"})
+DEFAULT_HIDDEN_CONTENT_CLASSES = frozenset({"operational", "test", "benchmark"})
+_OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS = 20
 
 _DECISION_RE = re.compile(
     r"\b("
@@ -29,12 +30,33 @@ _BL_OPERATIONAL_RE = re.compile(
     r"\[bl-[^\]]*(?:tick|status|heartbeat|claude_counter|working|poll|surface|monitor|done)",
     re.IGNORECASE,
 )
+_TASK_NOTIFICATION_BLOCK_RE = re.compile(
+    r"<task-notification\b[^>]*>.*?</task-notification>",
+    re.IGNORECASE | re.DOTALL,
+)
+_OPERATIONAL_MARKER_LINE_RE = re.compile(
+    r"^\s*("
+    r"\[?\s*claude_counter\b(?:\s*:?\s*\d+)?\s*\]?|"
+    r"\[bl-[^\]]*(?:tick|status|heartbeat|claude_counter|working|poll|surface|monitor|done)[^\]]*\].*|"
+    r"(?:orc\s+)?tick\b.*|loop tick\b.*|(?:watcher\s+)?heartbeat\b.*|"
+    r"surface:\d+\b.*|bare status\b.*|status only\b.*|"
+    r"task[_ -]?notification\b.*|milestone\b.*|retraction\b.*|done_fixes\b.*|"
+    r"worker done\b.*|agent coordination\b.*"
+    r")\s*$",
+    re.IGNORECASE,
+)
 _TEST_RE = re.compile(
     r"("
     r"\bad[- ]?hoc\b.*\b(test|eval|query)\b|"
     r"\beval test query\b|\btest query\b|\bbenchmark query\b|\bsmoke test\b"
     r")",
     re.IGNORECASE,
+)
+_BENCHMARK_RE = re.compile(
+    r"("
+    r"^\W*(?:brainlayer search benchmark|bl quality bench(?:mark)?|eval (?:final )?results)\b"
+    r")",
+    re.IGNORECASE | re.DOTALL,
 )
 _PERSONAL_RE = re.compile(
     r"("
@@ -72,6 +94,25 @@ _OPERATIONAL_INTENT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_BENCHMARK_INTENT_RE = re.compile(
+    r"\b(?:benchmark|diagnostic prompt|qrels|search quality eval)\b",
+    re.IGNORECASE,
+)
+
+
+def has_benchmark_signal(content: str | None, *, tags: Any = None, source_file: str | None = None) -> bool:
+    """Return true for benchmark/diagnostic prompt chunks that should not pollute search."""
+    del tags, source_file
+    text = content or ""
+    compact_prefix = re.sub(r"\s+", "", text[:512]).casefold()
+    if compact_prefix.startswith("┌─brain_") or text.lstrip().casefold().startswith(
+        "mcp brainlayer memory: invalid json-rpc message"
+    ):
+        return True
+    text_head = text[:1200]
+    if _BENCHMARK_RE.search(text_head):
+        return True
+    return False
 
 
 def normalize_content_class(value: Any) -> str:
@@ -127,6 +168,42 @@ def keep_visible_signals(content: str | None, *, content_type: str | None = None
     return signals
 
 
+def strip_operational_markers(content: str | None) -> str:
+    """Remove operational-only marker lines/blocks while preserving substantive text."""
+    if not content:
+        return ""
+    without_blocks = _TASK_NOTIFICATION_BLOCK_RE.sub("\n", content)
+    residual_lines = ["" if _OPERATIONAL_MARKER_LINE_RE.match(line) else line for line in without_blocks.splitlines()]
+    return "\n".join(residual_lines).strip()
+
+
+def _residual_is_trivial(residual: str) -> bool:
+    compact = re.sub(r"\s+", " ", residual).strip()
+    if not compact:
+        return True
+    if len(compact) <= _OPERATIONAL_RESIDUAL_TRIVIAL_MAX_CHARS:
+        return True
+    return not any(char.isalnum() for char in compact)
+
+
+def has_operational_marker(content: str | None) -> bool:
+    """Return true when content contains operational markers, regardless of dominance."""
+    if not content:
+        return False
+    if _TASK_NOTIFICATION_BLOCK_RE.search(content):
+        return True
+    if _OPERATIONAL_RE.search(content) or _BL_OPERATIONAL_RE.search(content):
+        return True
+    return any(_OPERATIONAL_MARKER_LINE_RE.match(line) for line in content.splitlines())
+
+
+def has_dominant_operational_marker(content: str | None) -> bool:
+    """Return true only when operational markers dominate the chunk content."""
+    if not has_operational_marker(content):
+        return False
+    return _residual_is_trivial(strip_operational_markers(content))
+
+
 def classify_content_class_raw(
     content: str | None,
     *,
@@ -138,14 +215,15 @@ def classify_content_class_raw(
 ) -> str:
     """Classify a chunk before keep-visible safety overrides.
 
-    Decision signals are intentionally evaluated before operational/test signals:
-    durable "why we did X" records must stay visible even when they include
-    coordination prefixes like "[BL-LEAD]".
+    Benchmark signals are evaluated first because audit-recursion prompts often
+    look substantive. Decision signals still outrank operational/test markers.
     """
-    del tags, source, source_file, project  # Reserved for future cheap signals.
+    del source, project  # Reserved for future cheap signals.
     text = (content or "").strip()
     type_key = (content_type or "").strip().lower()
 
+    if has_benchmark_signal(text, tags=tags, source_file=source_file):
+        return "benchmark"
     if type_key == "decision":
         return "decision"
     if type_key != "learning" and has_decision_language(text, content_type=content_type):
@@ -153,7 +231,7 @@ def classify_content_class_raw(
 
     if _TEST_RE.search(text):
         return "test"
-    if _OPERATIONAL_RE.search(text) or _BL_OPERATIONAL_RE.search(text):
+    if has_dominant_operational_marker(text):
         return "operational"
 
     return DEFAULT_CONTENT_CLASS
@@ -177,14 +255,18 @@ def classify_content_class(
         source_file=source_file,
         project=project,
     )
-    if proposed in DEFAULT_HIDDEN_CONTENT_CLASSES and keep_visible_signals(content, content_type=content_type):
-        return DEFAULT_CONTENT_CLASS
+    if proposed in DEFAULT_HIDDEN_CONTENT_CLASSES:
+        signals = keep_visible_signals(content, content_type=content_type)
+        if proposed == "benchmark":
+            signals = [signal for signal in signals if signal != "decision_language"]
+        if signals:
+            return DEFAULT_CONTENT_CLASS
     return proposed
 
 
 def query_signals_operational_intent(query: str | None) -> bool:
-    """Cheap opt-in for users explicitly searching operational/test material."""
-    return bool(query and _OPERATIONAL_INTENT_RE.search(query))
+    """Cheap opt-in for users explicitly searching operational/test/benchmark material."""
+    return bool(query and (_OPERATIONAL_INTENT_RE.search(query) or _BENCHMARK_INTENT_RE.search(query)))
 
 
 def content_class_is_default_hidden(value: Any) -> bool:

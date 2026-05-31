@@ -14,13 +14,17 @@ from brainlayer.content_class import (
     CONTENT_CLASS_VALUES,
     classify_content_class,
     classify_content_class_raw,
+    has_operational_marker,
     keep_visible_signals,
     normalize_content_class,
+    strip_operational_markers,
 )
 from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
-_CLASS_ORDER = ("decision", "knowledge", "operational", "test")
+_CLASS_ORDER = ("decision", "knowledge", "operational", "test", "benchmark")
+
+
 def _preview(content: str | None, limit: int = 260) -> str:
     return re.sub(r"\s+", " ", content or "").strip()[:limit]
 
@@ -96,7 +100,9 @@ def build_backfill_report(store: VectorStore, *, sample_limit: int = 30) -> dict
     samples = {key: [] for key in _CLASS_ORDER}
     hidden_risk_rows: list[dict[str, Any]] = []
     keep_visible_override_samples: list[dict[str, Any]] = []
+    operational_marker_kept_samples: list[dict[str, Any]] = []
     keep_visible_override_total = 0
+    operational_marker_kept_total = 0
     updates_needed = 0
 
     for row, proposed_raw, proposed, signals in iter_classifications(store):
@@ -113,10 +119,21 @@ def build_backfill_report(store: VectorStore, *, sample_limit: int = 30) -> dict
                 keep_visible_override_samples.append(
                     _sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=signals)
                 )
-        if proposed in {"operational", "test"} and signals:
-            hidden_risk_rows.append(_sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=signals))
+        if proposed not in {"operational", "test"} and has_operational_marker(row.get("content")):
+            operational_marker_kept_total += 1
+            if len(operational_marker_kept_samples) < 8:
+                sample = _sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=signals)
+                sample["residual_after_marker_strip"] = _preview(strip_operational_markers(row.get("content")), 180)
+                operational_marker_kept_samples.append(sample)
+        if proposed in {"operational", "test", "benchmark"}:
+            benchmark_signals = [signal for signal in signals if signal != "decision_language"]
+            risk_signals = benchmark_signals if proposed == "benchmark" else signals
+            if risk_signals:
+                hidden_risk_rows.append(
+                    _sample_row(row, proposed, proposed_raw=proposed_raw, risk_signals=risk_signals)
+                )
 
-    hidden_total = counts["operational"] + counts["test"]
+    hidden_total = counts["operational"] + counts["test"] + counts["benchmark"]
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "dry_run",
@@ -125,6 +142,8 @@ def build_backfill_report(store: VectorStore, *, sample_limit: int = 30) -> dict
         "hidden_total": hidden_total,
         "keep_visible_override_total": keep_visible_override_total,
         "keep_visible_override_samples": keep_visible_override_samples,
+        "operational_marker_kept_total": operational_marker_kept_total,
+        "operational_marker_kept_samples": operational_marker_kept_samples,
         "personal_hidden": len(hidden_risk_rows),
         "hidden_decision_or_personal_risk_total": len(hidden_risk_rows),
         "samples": samples,
@@ -181,11 +200,15 @@ def main() -> int:
     if args.apply and not args.confirm_apply:
         parser.error("--apply requires --confirm-apply")
 
-    store = VectorStore(args.db_path)
+    store = VectorStore(args.db_path, readonly=not args.apply)
     try:
-        report = apply_backfill(store, limit=args.limit) if args.apply else build_backfill_report(
-            store,
-            sample_limit=args.sample_limit,
+        report = (
+            apply_backfill(store, limit=args.limit)
+            if args.apply
+            else build_backfill_report(
+                store,
+                sample_limit=args.sample_limit,
+            )
         )
     finally:
         store.close()
