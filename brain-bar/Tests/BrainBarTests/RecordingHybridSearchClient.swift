@@ -17,11 +17,19 @@ final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked 
     private let delay: TimeInterval
     private let lock = NSLock()
     private var recordedRequests: [[String: Any]] = []
+    private var recordedWarmStarts = 0
+    var ready = true
 
     var requests: [[String: Any]] {
         lock.lock()
         defer { lock.unlock() }
         return recordedRequests
+    }
+
+    var warmStarts: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedWarmStarts
     }
 
     init(response: HybridSearchResponse, delay: TimeInterval = 0) {
@@ -44,5 +52,17 @@ final class RecordingHybridSearchClient: HybridSearchClientProtocol, @unchecked 
             Thread.sleep(forTimeInterval: delay)
         }
         return try result.get()
+    }
+}
+
+extension RecordingHybridSearchClient: HybridSearchReadinessProviding {
+    var isReady: Bool {
+        ready
+    }
+
+    func startWarming() {
+        lock.lock()
+        recordedWarmStarts += 1
+        lock.unlock()
     }
 }

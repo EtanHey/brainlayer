@@ -1,3 +1,8 @@
+import threading
+import time
+import uuid
+from pathlib import Path
+
 import pytest
 from mcp.types import CallToolResult, TextContent
 
@@ -24,6 +29,49 @@ def test_warm_preloads_embedding_without_running_hybrid_search(monkeypatch, tmp_
     helper.warm()
 
     assert calls == [("embed_query", "brainbar hybrid helper warmup")]
+
+
+def test_status_reports_helper_readiness(tmp_path):
+    helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "brain.db")
+
+    assert helper._handle_request({"method": "status"}) == {"ok": True, "ready": False}
+
+    helper._ready = True
+
+    assert helper._handle_request({"method": "status"}) == {"ok": True, "ready": True}
+
+
+def test_helper_does_not_bind_socket_until_warm_finishes(tmp_path):
+    socket_path = Path(f"/tmp/bl-hh-{uuid.uuid4().hex[:8]}.sock")
+    try:
+        socket_path.unlink()
+    except FileNotFoundError:
+        pass
+    helper = HybridSearchHelper(socket_path=socket_path, db_path=tmp_path / "brain.db")
+    warm_started = threading.Event()
+    allow_warm_to_finish = threading.Event()
+
+    def slow_warm():
+        warm_started.set()
+        assert not socket_path.exists()
+        allow_warm_to_finish.wait(timeout=2)
+        helper.stop()
+
+    helper.warm = slow_warm  # type: ignore[method-assign]
+    thread = threading.Thread(target=helper.serve_forever)
+    thread.start()
+    try:
+        assert warm_started.wait(timeout=1)
+        time.sleep(0.05)
+        assert not socket_path.exists()
+    finally:
+        allow_warm_to_finish.set()
+        thread.join(timeout=2)
+        helper.stop()
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def test_warm_does_not_sleep_for_hybrid_search_retries(monkeypatch, tmp_path):

@@ -404,6 +404,11 @@ final class MCPRouter: @unchecked Sendable {
 
     private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
         guard let hybridSearchClient else { return nil }
+        if let readinessProvider = hybridSearchClient as? HybridSearchReadinessProviding,
+           !readinessProvider.isReady {
+            readinessProvider.startWarming()
+            return nil
+        }
 
         let group = DispatchGroup()
         let argumentBox = HybridSearchArgumentBox(arguments: arguments)

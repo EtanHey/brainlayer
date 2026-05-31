@@ -137,4 +137,203 @@ final class HybridSearchHelperClientTests: XCTestCase {
         XCTAssertEqual(getsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &value, &length), 0)
         XCTAssertEqual(value, 1)
     }
+
+    func testBrainBarHelperSocketTimeoutIsDecoupledFromSearchBudget() {
+        XCTAssertGreaterThan(
+            BrainBarServer.hybridHelperSocketIOTimeoutSeconds,
+            BrainBarServer.hybridSearchBudgetSeconds * 10
+        )
+    }
+
+    func testStartWarmingMarksHelperReadyAfterStatusHandshake() throws {
+        let fixture = try makeFakeHybridHelperFixture(searchDelay: 0.01, warmDelay: 0.15)
+        defer { fixture.cleanup() }
+
+        let client = HybridSearchHelperClient(
+            socketPath: fixture.socketPath,
+            dbPath: fixture.dbPath,
+            pythonExecutable: fixture.executablePath,
+            environment: [:],
+            socketIOTimeout: 2.0,
+            readinessTimeout: 2.0,
+            readinessProbeInterval: 0.02
+        )
+        defer { client.stop() }
+
+        client.startWarming()
+
+        XCTAssertTrue(waitUntil(timeout: 2.0) { client.isReady })
+        XCTAssertTrue(client.isRunning)
+
+        let response = try client.search(arguments: ["query": "ready helper"])
+        XCTAssertEqual(response.text, "fake hybrid result")
+    }
+
+    func testRouterBudgetMissDoesNotStopReadyHelperProcess() throws {
+        let fixture = try makeFakeHybridHelperFixture(searchDelay: 0.25, warmDelay: 0.0)
+        defer { fixture.cleanup() }
+        let tempDB = fixture.dbPath
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "budget-miss-fallback",
+            content: "Budget miss fallback content from Swift database",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+
+        let client = HybridSearchHelperClient(
+            socketPath: fixture.socketPath,
+            dbPath: fixture.dbPath,
+            pythonExecutable: fixture.executablePath,
+            environment: [:],
+            socketIOTimeout: 2.0,
+            readinessTimeout: 2.0,
+            readinessProbeInterval: 0.02
+        )
+        defer { client.stop() }
+        client.startWarming()
+        XCTAssertTrue(waitUntil(timeout: 2.0) { client.isReady })
+
+        let router = MCPRouter(hybridSearchClient: client, hybridSearchBudget: 0.05)
+        router.setDatabase(db)
+
+        let started = Date()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "budget miss fallback", "num_results": 5]
+            ] as [String: Any]
+        ])
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 0.20)
+        let text = try toolText(response)
+        XCTAssertTrue(text.contains("Budget miss fallback content"), text)
+        XCTAssertTrue(waitUntil(timeout: 1.0) { client.isRunning && client.isReady })
+    }
+
+    func testStopDoesNotWaitForeverWhenHelperIgnoresTerminate() throws {
+        let fixture = try makeFakeHybridHelperFixture(
+            searchDelay: 0.01,
+            warmDelay: 0.0,
+            ignoreTerminate: true
+        )
+        defer { fixture.cleanup() }
+
+        let client = HybridSearchHelperClient(
+            socketPath: fixture.socketPath,
+            dbPath: fixture.dbPath,
+            pythonExecutable: fixture.executablePath,
+            environment: [:],
+            socketIOTimeout: 2.0,
+            readinessTimeout: 2.0,
+            readinessProbeInterval: 0.02
+        )
+        client.startWarming()
+        XCTAssertTrue(waitUntil(timeout: 2.0) { client.isReady })
+
+        let started = Date()
+        client.stop()
+
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3.5)
+        XCTAssertFalse(client.isRunning)
+    }
+
+    private struct FakeHybridHelperFixture {
+        let directory: URL
+        let executablePath: String
+        let socketPath: String
+        let dbPath: String
+
+        func cleanup() {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(atPath: socketPath)
+        }
+    }
+
+    private func makeFakeHybridHelperFixture(
+        searchDelay: TimeInterval,
+        warmDelay: TimeInterval,
+        ignoreTerminate: Bool = false
+    ) throws -> FakeHybridHelperFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-fake-helper-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let scriptURL = directory.appendingPathComponent("fake-helper.py")
+        let socketPath = "/tmp/bb-fake-\(UUID().uuidString.prefix(8)).sock"
+        try? FileManager.default.removeItem(atPath: socketPath)
+        let dbPath = directory.appendingPathComponent("brain.db").path
+        let script = """
+#!/usr/bin/env python3
+import json
+import os
+import signal
+import socket
+import sys
+import time
+
+socket_path = sys.argv[sys.argv.index("--socket-path") + 1]
+if \(ignoreTerminate ? "True" : "False"):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+try:
+    os.unlink(socket_path)
+except FileNotFoundError:
+    pass
+time.sleep(\(warmDelay))
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(socket_path)
+server.listen(8)
+while True:
+    conn, _ = server.accept()
+    with conn:
+        data = b""
+        while b"\\n" not in data:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        if not data:
+            continue
+        request = json.loads(data.split(b"\\n", 1)[0].decode("utf-8"))
+        if request.get("method") == "status":
+            response = {"ok": True, "ready": True}
+        elif request.get("method") == "brain_search":
+            time.sleep(\(searchDelay))
+            response = {"ok": True, "text": "fake hybrid result", "metadata": {}}
+        else:
+            response = {"ok": False, "error": "unsupported"}
+        conn.sendall(json.dumps(response).encode("utf-8") + b"\\n")
+"""
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        chmod(scriptURL.path, 0o755)
+        return FakeHybridHelperFixture(
+            directory: directory,
+            executablePath: scriptURL.path,
+            socketPath: socketPath,
+            dbPath: dbPath
+        )
+    }
+
+    private func waitUntil(timeout: TimeInterval, predicate: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return predicate()
+    }
+
+    private func toolText(_ response: [String: Any]) throws -> String {
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        return content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+    }
 }
