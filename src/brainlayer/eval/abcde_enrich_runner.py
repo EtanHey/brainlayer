@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from brainlayer.eval.abcde_variants import ABCDEVariant
-from brainlayer.pipeline.enrichment import build_external_prompt, parse_enrichment
+from brainlayer.pipeline.enrichment import build_external_prompt
 
 DEFAULT_BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
@@ -64,6 +64,7 @@ class CallResult:
     raw_text: Optional[str]
     usage: Usage
     error: Optional[str] = None
+    backend_model: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -114,6 +115,49 @@ def _is_safety_block(status: int, body: Mapping[str, Any]) -> bool:
     return "safety_check" in text or "usage guidelines" in text or "safety" in text
 
 
+def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Extract the first balanced top-level JSON object embedded in text."""
+    if not text:
+        return None
+
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for end in range(start, len(text)):
+            current = text[end]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+
+            if current == '"':
+                in_string = True
+            elif current == "{":
+                depth += 1
+            elif current == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(text[start : end + 1])
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(parsed, dict):
+                        return parsed
+                    break
+                if depth < 0:
+                    break
+
+    return None
+
+
 def _error_message(body: Mapping[str, Any]) -> str:
     err = body.get("error") if isinstance(body, Mapping) else None
     if isinstance(err, Mapping):
@@ -143,13 +187,29 @@ def enrich_one(
     if extra_params:
         params.update(extra_params)
 
+    backend_model = getattr(chat_fn, "backend_model", None) or variant.model
+
     try:
         status, body = chat_fn(variant.model, prompt, params)
     except Exception as exc:  # noqa: BLE001 — surface transport errors as a result row
-        return CallResult(STATUS_ERROR, None, None, Usage(), f"transport_error: {exc}")
+        return CallResult(
+            STATUS_ERROR,
+            None,
+            None,
+            Usage(),
+            f"transport_error: {exc}",
+            backend_model=backend_model,
+        )
 
     if not isinstance(body, Mapping):
-        return CallResult(STATUS_ERROR, None, None, Usage(), f"non_json_response (http {status})")
+        return CallResult(
+            STATUS_ERROR,
+            None,
+            None,
+            Usage(),
+            f"non_json_response (http {status})",
+            backend_model=backend_model,
+        )
 
     usage = _extract_usage(body)
 
@@ -157,16 +217,44 @@ def enrich_one(
         try:
             text = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
-            return CallResult(STATUS_ERROR, None, None, usage, "malformed_choices")
-        enrichment = parse_enrichment(text)
-        if enrichment:
-            return CallResult(STATUS_OK, enrichment, text, usage)
-        return CallResult(STATUS_ERROR, None, text, usage, "invalid_enrichment")
+            return CallResult(
+                STATUS_ERROR,
+                None,
+                None,
+                usage,
+                "malformed_choices",
+                backend_model=backend_model,
+            )
+        enrichment = _extract_json_object(text)
+        if enrichment is None:
+            return CallResult(
+                STATUS_ERROR,
+                None,
+                text,
+                usage,
+                "invalid_json",
+                backend_model=backend_model,
+            )
+        return CallResult(STATUS_OK, enrichment, text, usage, backend_model=backend_model)
 
     if _is_safety_block(status, body):
-        return CallResult(STATUS_SAFETY_BLOCKED, None, None, usage, _error_message(body))
+        return CallResult(
+            STATUS_SAFETY_BLOCKED,
+            None,
+            None,
+            usage,
+            _error_message(body),
+            backend_model=backend_model,
+        )
 
-    return CallResult(STATUS_ERROR, None, None, usage, f"http_{status}: {_error_message(body)}")
+    return CallResult(
+        STATUS_ERROR,
+        None,
+        None,
+        usage,
+        f"http_{status}: {_error_message(body)}",
+        backend_model=backend_model,
+    )
 
 
 def usage_to_usd(usage: Usage, *, tick_usd: float = DEFAULT_TICK_USD,
@@ -200,6 +288,7 @@ def judge_row(
         "generation": {
             "status": result.status,
             "error": result.error,
+            "backend_model": result.backend_model,
             "usage": {
                 "prompt_tokens": result.usage.prompt_tokens,
                 "completion_tokens": result.usage.completion_tokens,
@@ -297,7 +386,13 @@ def run_batch(
     return stats
 
 
-def make_http_chat_fn(*, base_url: str, api_key: str, timeout: int = 60) -> ChatFn:
+def make_http_chat_fn(
+    *,
+    base_url: str,
+    api_key: str,
+    timeout: int = 60,
+    model_override: Optional[str] = None,
+) -> ChatFn:
     """Build a ChatFn backed by a live OpenAI-compatible endpoint.
 
     No response_format is forced: the variant prompts already instruct "Return
@@ -310,7 +405,8 @@ def make_http_chat_fn(*, base_url: str, api_key: str, timeout: int = 60) -> Chat
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     def _chat(model: str, prompt: str, params: Mapping[str, Any]) -> tuple[int, dict]:
-        payload = {"model": model, "messages": [{"role": "user", "content": prompt}], **params}
+        payload_model = model_override or model
+        payload = {"model": payload_model, "messages": [{"role": "user", "content": prompt}], **params}
         for attempt in range(3):
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
@@ -322,4 +418,6 @@ def make_http_chat_fn(*, base_url: str, api_key: str, timeout: int = 60) -> Chat
                 return resp.status_code, {"error": {"message": resp.text[:300]}}
         return resp.status_code, {"error": {"message": "retries_exhausted"}}
 
+    if model_override is not None:
+        _chat.backend_model = model_override  # type: ignore[attr-defined]
     return _chat
