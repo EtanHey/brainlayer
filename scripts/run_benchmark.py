@@ -14,6 +14,7 @@ from brainlayer.eval.benchmark import (
     pipeline_fts5_only,
     pipeline_hybrid_entity,
     pipeline_hybrid_rrf,
+    prewarm_benchmark_embedder,
 )
 from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
@@ -40,9 +41,16 @@ def main() -> None:
     }
 
     store_factory = ReadOnlyBenchmarkStore if pipeline_name == "fts5" else VectorStore
+    hybrid_embed_fn = prewarm_benchmark_embedder() if pipeline_name == "hybrid_rrf" else None
     with store_factory(Path(args.db_path)) as store:
         run = benchmark.run_pipeline(
-            lambda query_text: pipeline_fn_map[pipeline_name](store, query_text, n_results=args.n_results), queries
+            lambda query_text: pipeline_fn_map[pipeline_name](
+                store,
+                query_text,
+                n_results=args.n_results,
+                **({"embed_fn": hybrid_embed_fn} if hybrid_embed_fn is not None else {}),
+            ),
+            queries,
         )
 
     scores = benchmark.evaluate_pipeline(run)

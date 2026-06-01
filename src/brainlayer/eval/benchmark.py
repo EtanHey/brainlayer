@@ -439,6 +439,15 @@ def pipeline_hybrid_rrf(
     return [(chunk_id, 1.0 / (rank + 1)) for rank, chunk_id in enumerate(chunk_ids)]
 
 
+def prewarm_benchmark_embedder(model_name: str | None = None) -> Callable[[str], list[float]]:
+    """Create one warmed query embedder for an entire benchmark run."""
+    from brainlayer.embeddings import DEFAULT_MODEL, get_embedding_model
+
+    model = get_embedding_model(model_name or DEFAULT_MODEL)
+    model._load_model()
+    return model.embed_query
+
+
 def pipeline_hybrid_entity(store, query: str, n_results: int = 20) -> list[tuple[str, float]]:
     """Future hybrid + entity benchmark placeholder."""
     raise NotImplementedError("Entity-boosted benchmark pipeline is reserved for future search work.")
