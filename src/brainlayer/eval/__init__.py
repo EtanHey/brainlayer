@@ -13,6 +13,15 @@ from .benchmark import (
     prewarm_benchmark_embedder,
 )
 from .enrichment_gold import sample_enrichment_gold
+from .enrichment_graders import (
+    check_meta_research_forced_importance,
+    find_banned_summary_pattern,
+    grade_candidate,
+    score_entities,
+    score_importance_calibration,
+    score_key_facts_recall,
+    validate_schema_gate,
+)
 
 __all__ = [
     "DEFAULT_COMPARE_METRICS",
@@ -26,4 +35,11 @@ __all__ = [
     "pipeline_hybrid_rrf",
     "prewarm_benchmark_embedder",
     "sample_enrichment_gold",
+    "check_meta_research_forced_importance",
+    "find_banned_summary_pattern",
+    "grade_candidate",
+    "score_entities",
+    "score_importance_calibration",
+    "score_key_facts_recall",
+    "validate_schema_gate",
 ]
