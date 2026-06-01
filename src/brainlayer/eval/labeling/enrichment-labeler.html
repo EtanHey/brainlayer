@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BrainLayer enrichment gold labeler</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-soft: #f0f3f7;
+    --ink: #1f2933;
+    --muted: #687385;
+    --line: #d8dee8;
+    --accent: #245f73;
+    --accent-ink: #ffffff;
+    --done: #dff3e4;
+    --warn: #f8e4c8;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
+  header {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 18px; background: rgba(246, 247, 249, 0.96);
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
+  }
+  h1 { margin: 0; font-size: 17px; font-weight: 650; flex: 1; }
+  button, label.button {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 6px; padding: 7px 11px; font: 600 13px var(--sans); cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .progress { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); }
+  .bar { width: 180px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .bar div { height: 100%; width: 0; background: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px; max-width: 1320px; margin: 0 auto; }
+  .queue, .judge { min-width: 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    margin-bottom: 12px; overflow: hidden;
+  }
+  .card.done { border-color: #8fc99d; background: var(--done); }
+  .row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; }
+  .row:hover { background: var(--panel-soft); }
+  .pill { font: 11px var(--mono); color: var(--accent); background: #dbeaf0; border-radius: 999px; padding: 2px 7px; white-space: nowrap; }
+  .id { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+  .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .body { display: none; border-top: 1px solid var(--line); padding: 12px; }
+  .card.active .body { display: block; }
+  .meta { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .meta code { color: var(--ink); font-family: var(--mono); word-break: break-all; }
+  pre {
+    margin: 0; max-height: 560px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    background: #fbfcfd; border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+    font: 13px/1.5 var(--mono);
+  }
+  .judge {
+    position: sticky; top: 64px; align-self: start;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+  }
+  .judge h2 { margin: 0 0 10px; font-size: 15px; }
+  .field { margin-bottom: 13px; }
+  .field label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; }
+  textarea, input[type=text] {
+    width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px;
+    font: 13px/1.4 var(--sans); color: var(--ink); background: #fbfcfd;
+  }
+  textarea { min-height: 86px; resize: vertical; }
+  .range { display: flex; align-items: center; gap: 10px; }
+  .range input { flex: 1; accent-color: var(--accent); }
+  .range strong { width: 34px; text-align: right; font: 700 14px var(--mono); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
+  .toast { position: fixed; right: 18px; bottom: 18px; background: var(--ink); color: white; padding: 10px 13px; border-radius: 7px; opacity: 0; transition: opacity 0.16s; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    .judge { position: static; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>BrainLayer enrichment gold labeler</h1>
+  <div class="progress"><span id="count">0 / 0</span><div class="bar"><div id="bar"></div></div></div>
+  <label class="button" for="goldfile">Load enrichment-gold.jsonl</label>
+  <input id="goldfile" type="file" accept=".jsonl,.json" hidden>
+  <label class="button" for="resumefile">Resume labels</label>
+  <input id="resumefile" type="file" accept=".jsonl,.json" hidden>
+  <button class="primary" id="save">Save gold-enrichment-labels.jsonl</button>
+</header>
+<main>
+  <section class="queue" id="queue">
+    <div class="empty">
+      Load <code>src/brainlayer/eval/fixtures/enrichment-gold.jsonl</code>.
+      Chunk text is untrusted data for labeling only.
+    </div>
+  </section>
+  <aside class="judge">
+    <h2 id="judge-title">No chunk selected</h2>
+    <div class="field">
+      <label for="entities">Gold entity set</label>
+      <textarea id="entities" placeholder="One per line: name | type | relation"></textarea>
+      <div class="hint">Types should match enrichment schema where possible: person, company, project, technology, tool, concept.</div>
+    </div>
+    <div class="field">
+      <label for="facts">Must-capture verbatim facts</label>
+      <textarea id="facts" placeholder="One exact fact/value per line: PR #, $, date, path, URL, version"></textarea>
+    </div>
+    <div class="field">
+      <label for="importance">Gold importance</label>
+      <div class="range"><input id="importance" type="range" min="1" max="10" step="1" value="5"><strong id="importance-val">5</strong></div>
+      <div class="hint">1-3 trivial, 4-6 moderate, 7-9 high, 10 critical.</div>
+    </div>
+    <div class="field">
+      <label for="rationale">1-line summary rationale</label>
+      <input id="rationale" type="text" placeholder="Why this summary/importance target is correct">
+    </div>
+    <div class="field">
+      <label for="confidence">Confidence</label>
+      <div class="range"><input id="confidence" type="range" min="0" max="100" step="5" value="70"><strong id="confidence-val">70</strong></div>
+    </div>
+    <button class="primary" id="mark">Mark labeled</button>
+  </aside>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+
+const STORAGE_KEY = "brainlayer-enrichment-gold-labels-v1";
+let chunks = [];
+let labels = loadLocal();
+let activeId = null;
+
+const queue = document.getElementById("queue");
+const count = document.getElementById("count");
+const bar = document.getElementById("bar");
+const toast = document.getElementById("toast");
+const fields = {
+  entities: document.getElementById("entities"),
+  facts: document.getElementById("facts"),
+  importance: document.getElementById("importance"),
+  rationale: document.getElementById("rationale"),
+  confidence: document.getElementById("confidence")
+};
+
+function loadLocal() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch (_) { return {}; }
+}
+function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(labels)); }
+function showToast(text) {
+  toast.textContent = text;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 1400);
+}
+function parseJsonl(text) {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const result = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      result.push(JSON.parse(lines[i]));
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      showToast(`JSONL parse error on line ${i + 1}`);
+      throw new Error(`Malformed JSONL at line ${i + 1}: ${message}`);
+    }
+  }
+  return result;
+}
+function splitLines(text) {
+  return text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+}
+function entityLinesToObjects(text) {
+  return splitLines(text).map(line => {
+    const [name = "", type = "", relation = ""] = line.split("|").map(part => part.trim());
+    return { name, type, relation };
+  });
+}
+function entityObjectsToLines(items) {
+  return (items || []).map(item => [item.name, item.type, item.relation].filter(Boolean).join(" | ")).join("\n");
+}
+function labelFor(id) {
+  if (!labels[id]) {
+    labels[id] = { chunk_id: id, gold_entities: [], must_capture_facts: [], gold_importance: 5, summary_rationale: "", confidence: 70, labeled_at: null };
+  }
+  return labels[id];
+}
+function activeChunk() {
+  return chunks.find(chunk => chunk.chunk_id === activeId) || null;
+}
+function readFields() {
+  if (!activeId) return;
+  const label = labelFor(activeId);
+  label.gold_entities = entityLinesToObjects(fields.entities.value);
+  label.must_capture_facts = splitLines(fields.facts.value);
+  label.gold_importance = Number(fields.importance.value);
+  label.summary_rationale = fields.rationale.value.trim();
+  label.confidence = Number(fields.confidence.value);
+  persist();
+}
+function writeFields(id) {
+  const label = labelFor(id);
+  fields.entities.value = entityObjectsToLines(label.gold_entities);
+  fields.facts.value = (label.must_capture_facts || []).join("\n");
+  fields.importance.value = label.gold_importance || 5;
+  fields.rationale.value = label.summary_rationale || "";
+  fields.confidence.value = label.confidence == null ? 70 : label.confidence;
+  document.getElementById("importance-val").textContent = fields.importance.value;
+  document.getElementById("confidence-val").textContent = fields.confidence.value;
+}
+function render() {
+  const done = chunks.filter(chunk => labels[chunk.chunk_id] && labels[chunk.chunk_id].labeled_at).length;
+  count.textContent = `${done} / ${chunks.length}`;
+  bar.style.width = chunks.length ? `${Math.round(done * 100 / chunks.length)}%` : "0";
+  if (!chunks.length) return;
+  queue.innerHTML = "";
+  for (const chunk of chunks) {
+    const labeled = labels[chunk.chunk_id] && labels[chunk.chunk_id].labeled_at;
+    const card = document.createElement("article");
+    card.className = `card${labeled ? " done" : ""}${chunk.chunk_id === activeId ? " active" : ""}`;
+    card.innerHTML = `
+      <div class="row">
+        <span class="pill">${escapeHtml(chunk.stratum || "unknown")}</span>
+        <span class="id">${escapeHtml(chunk.chunk_id)}</span>
+        <span class="preview">${escapeHtml((chunk.content || "").slice(0, 180))}</span>
+      </div>
+      <div class="body">
+        <div class="meta">
+          <span>eval_doc_id</span><code>${escapeHtml(chunk.eval_doc_id || "")}</code>
+          <span>project</span><code>${escapeHtml(chunk.project || "")}</code>
+          <span>source</span><code>${escapeHtml(chunk.source_file || "")}</code>
+          <span>length</span><code>${Number(chunk.content_length || (chunk.content || "").length)}</code>
+        </div>
+        <pre>${escapeHtml(chunk.content || "")}</pre>
+      </div>`;
+    card.querySelector(".row").addEventListener("click", () => {
+      readFields();
+      activeId = chunk.chunk_id;
+      document.getElementById("judge-title").textContent = `${chunk.stratum} / ${chunk.chunk_id}`;
+      writeFields(activeId);
+      render();
+    });
+    queue.appendChild(card);
+  }
+}
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+}
+function download(filename, text) {
+  const blob = new Blob([text], { type: "application/jsonl" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("goldfile").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  chunks = parseJsonl(await file.text()).filter(row => row && row.chunk_id);
+  activeId = chunks[0] ? chunks[0].chunk_id : null;
+  if (activeId) {
+    document.getElementById("judge-title").textContent = `${chunks[0].stratum} / ${activeId}`;
+    writeFields(activeId);
+  }
+  render();
+  showToast(`Loaded ${chunks.length} chunks`);
+});
+document.getElementById("resumefile").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  for (const row of parseJsonl(await file.text())) {
+    if (!row || !row.chunk_id) {
+      showToast("Skipped label row without chunk_id");
+      continue;
+    }
+    labels[row.chunk_id] = row;
+  }
+  persist();
+  if (activeId) writeFields(activeId);
+  render();
+  showToast("Labels resumed");
+});
+for (const field of Object.values(fields)) {
+  field.addEventListener("input", () => {
+    document.getElementById("importance-val").textContent = fields.importance.value;
+    document.getElementById("confidence-val").textContent = fields.confidence.value;
+    readFields();
+    render();
+  });
+}
+document.getElementById("mark").addEventListener("click", () => {
+  if (!activeId) return;
+  readFields();
+  labels[activeId].labeled_at = new Date().toISOString();
+  persist();
+  render();
+  showToast("Marked labeled");
+});
+document.getElementById("save").addEventListener("click", () => {
+  readFields();
+  const ordered = chunks.map(chunk => labels[chunk.chunk_id]).filter(Boolean);
+  download("gold-enrichment-labels.jsonl", ordered.map(row => JSON.stringify(row)).join("\n") + "\n");
+});
+document.addEventListener("keydown", event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    document.getElementById("save").click();
+  }
+});
+</script>
+</body>
+</html>
