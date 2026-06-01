@@ -11,6 +11,7 @@ from .benchmark import (
     pipeline_hybrid_entity,
     pipeline_hybrid_rrf,
 )
+from .enrichment_gold import sample_enrichment_gold
 
 __all__ = [
     "DEFAULT_COMPARE_METRICS",
@@ -22,4 +23,5 @@ __all__ = [
     "pipeline_fts5_only",
     "pipeline_hybrid_entity",
     "pipeline_hybrid_rrf",
+    "sample_enrichment_gold",
 ]
