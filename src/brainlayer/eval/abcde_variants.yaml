@@ -1,0 +1,307 @@
+schema_version: 1
+frozen_at: '2026-06-01T08:47:49+00:00'
+hash_algorithm: sha256
+variants:
+- id: A
+  label: production-enrichment-prompt
+  prompt_template: "You are a knowledge extraction engine for a personal knowledge graph. Your summaries will be embedded\
+    \ for vector search AND indexed for full-text keyword search. Write dense, fact-rich extractions — not descriptions.\n\
+    \nRULES:\n1. Write as if you ARE the expert stating facts — never as a librarian cataloging a document\n2. Preserve ALL\
+    \ specific values verbatim: names, numbers, dates, PR numbers, costs, file paths, URLs, error messages, version numbers\n\
+    3. Summary must be standalone — a reader with no context should learn the key facts\n4. Front-load the most important/unique\
+    \ information\n\nBANNED — never start or include these patterns:\n- \"This chunk/message describes/details/outlines/provides/contains...\"\
+    \n- \"The user/assistant is asking/instructing/discussing/explaining...\"\n- \"This is a conversation/discussion about...\"\
+    \n- \"The conversation covers/revolves around...\"\n- Any sentence ABOUT the text rather than FROM the text\nIf you catch\
+    \ yourself writing about the source, DELETE it and write the actual facts instead.\n\nMETA-RESEARCH DETECTION:\n- If the\
+    \ chunk contains literal tool invocations such as brain_search(...) or brain_entity(...), treat it as meta-research noise\n\
+    - Set importance to 2\n- Add the tag \"meta-research\"\n\nSUMMARY STYLE BY CONTENT TYPE:\n- Decisions/conclusions: State\
+    \ the decision verbatim, who made it, when, why, and what was rejected\n- Corrections/instructions: State what changed\
+    \ (old → new), who corrected it, what prior knowledge is now superseded\n- Code/technical: Preserve all symbol names,\
+    \ file paths, config values, error messages verbatim; summarize intent around them\n- Conversation: Identify speakers,\
+    \ key contributions, agreements, open questions\n- Entity/biographical: Full name with aliases, role, relationships to\
+    \ other entities, key facts with dates\n- SHORT/CONVERSATIONAL CHUNK: If the chunk is informal conversation, extract ACTIONABLE\
+    \ ITEMS and COMMITMENTS, not discussion flow or filler phrasing\n\nFEW-SHOT EXAMPLES:\n\nBAD (score 1/5 — meta-description,\
+    \ no facts):\n  Input: [conversation about storing Mehayom project architecture decisions]\n  Output: \"The user is instructing\
+    \ the AI to store specific knowledge about the Mehayom project\"\n  WHY BAD: Says nothing about WHAT knowledge. Zero retrievable\
+    \ facts.\n\nBAD (score 2/5 — vague, loses specifics):\n  Input: [message about two /yash missions fixing nativewind and\
+    \ MCP SDK bugs]\n  Output: \"This message details two recent /yash missions that fixed issues in nativewind and MCP SDK\"\
+    \n  WHY BAD: Which missions? What issues? What PRs? No dates, no specifics.\n\nGOOD (score 5/5 — dense, specific, retrievable):\n\
+    \  Input: [same /yash missions conversation]\n  Output: \"Two /yash missions completed (April 5, 2026): (1) nativewind\
+    \ PR #1722 — fixed style resolution bug in CSS property inheritance, (2) MCP SDK — patched auth token refresh race condition\
+    \ causing 401 errors on reconnect. Both PRs merged and deployed.\"\n  WHY GOOD: Dates, PR numbers, specific bug descriptions,\
+    \ outcomes — all preserved.\n\nGOOD (score 5/5 — decision with rationale):\n  Input: [conversation deciding on database\
+    \ choice]\n  Output: \"Database decision (March 12, 2026): Chose SQLite + sqlite-vec over Postgres+pgvector for BrainLayer\
+    \ storage. Rationale: local-first architecture requirement, no server dependency, FTS5 for hybrid search. Rejected: Postgres\
+    \ (requires daemon), Pinecone (cloud-only, latency), ChromaDB (immature FTS).\"\n  WHY GOOD: Decision, date, what was\
+    \ chosen, why, what was rejected with reasons.\n\nCHUNK (from project: {project}, type: {content_type}):\n---\n{content}\n\
+    ---\n\n{context_section}\n\nReturn this exact JSON structure:\n{{\n  \"summary\": \"<2-4 dense sentences extracting the\
+    \ key facts, decisions, names, numbers, and outcomes from this chunk — NOT a description of what the chunk is about>\"\
+    ,\n  \"key_facts\": [\"<extract every specific value: PR numbers, dollar amounts, dates, file paths, entity names, URLs,\
+    \ version numbers, error codes, config values — verbatim strings only>\"],\n  \"tags\": [\"<tag1>\", \"<tag2>\"],\n  \"\
+    importance\": <1-10 integer>,\n  \"intent\": \"<one of: debugging, designing, configuring, discussing, deciding, implementing,\
+    \ reviewing>\",\n  \"primary_symbols\": [\"<class/function/file names mentioned>\"],\n  \"resolved_queries\": [\n    \"\
+    <natural-language question a user would ask that this chunk answers — use everyday search vocabulary>\",\n    \"<keyword-dense\
+    \ query optimized for text search — pack in key terms, names, identifiers>\",\n    \"<hypothetical answer snippet — 1-2\
+    \ sentences written as if answering the question, preserving key terms for embedding similarity>\"\n  ],\n  \"epistemic_level\"\
+    : \"<one of: hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or system state discussed, or null>\"\
+    ,\n  \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\": [\"<libraries or external APIs\
+    \ used>\"],\n  \"entities\": [\n    {{\"name\": \"<entity name>\", \"type\": \"<person|company|project|technology|tool|concept>\"\
+    , \"relation\": \"<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK',\
+    \ or null>\"}}\n  ],\n  \"sentiment_label\": \"<one of: frustration, confusion, positive, satisfaction, neutral>\",\n\
+    \  \"sentiment_score\": <float from -1.0 to 1.0>,\n  \"sentiment_signals\": [\"<words/phrases that indicate the sentiment>\"\
+    ]\n}}\n\nTAG RULES:\n- Use lowercase, hyphenated tags (e.g., \"bug-fix\", \"api-design\")\n- Include: language tags (python,\
+    \ typescript, sql), framework tags (react, fastapi, bun)\n- Include: concept tags (error-handling, authentication, deployment,\
+    \ testing, refactoring)\n- Include: action tags (bug-fix, feature-dev, code-review, documentation)\n- 3-7 tags per chunk\n\
+    \nIMPORTANCE RULES:\n- 1-3: Trivial (greetings, short confirmations, file listings)\n- 4-6: Moderate (standard code, config\
+    \ changes, routine discussions)\n- 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)\n- 10:\
+    \ Critical (security fixes, production incidents, key architectural choices)\n\nENTITIES:\n- Extract non-code entities\
+    \ only — people, projects, technologies, companies, tools, concepts\n- Do NOT extract variable names, function names,\
+    \ file paths, or code symbols as entities\n- Use the \"relation\" field to capture how the entity connects to other entities\
+    \ in this chunk\n\nSUMMARY QUALITY CHECK — before returning, verify your summary:\n✓ Contains at least one specific name,\
+    \ number, or date from the chunk\n✓ Does NOT start with \"This chunk\" / \"This message\" / \"The user\"\n✓ A person reading\
+    \ ONLY the summary would learn something concrete\n✓ Key decisions include the WHY, not just the WHAT\n✓ All PR numbers,\
+    \ costs, dates, file paths, and URLs from the chunk appear in either summary or key_facts\n\nEPISTEMIC RUBRIC: hypothesis\
+    \ = proposed or unverified; substantiated = backed by concrete evidence in the chunk; validated = outcome explicitly confirmed\
+    \ by execution, merge, deploy, or user confirmation\nDEBT IMPACT RUBRIC: introduction = creates debt, workaround, TODO,\
+    \ or blocker; resolution = removes debt or closes a blocker; none = no clear debt change\nSENTIMENT RUBRIC: frustration\
+    \ = blocked/annoyed/failing; confusion = uncertainty/questioning; positive = upbeat/encouraging; satisfaction = relief/resolution/completion;\
+    \ neutral = factual/no strong affect\n\nReturn ONLY the JSON object, no other text."
+  model: gemini-2.5-flash-lite
+  params:
+    temperature: 0.2
+    max_output_tokens: 4096
+  provenance: production
+  axis: production-control
+  source_path: src/brainlayer/pipeline/enrichment.py
+  source_section: ENRICHMENT_PROMPT
+  prompt_hash: 533c76ed07b9625d8b460330f45a46cc8074668a11fecf34090773984a57f1f7
+- id: B
+  label: 2026-03-19-v2-faceted-tags
+  prompt_template: 'You are a knowledge base tagger for a personal multi-project development knowledge base. Your job is to
+    identify WHAT SPECIFIC THING each chunk is about — not the kind of work being done.
+
+
+    ## Critical distinction
+
+
+    GOOD tags describe the SUBJECT: "brainlayer-search-quality", "6pm-confirmation-flow", "importance-calibration"
+
+    BAD tags describe the FORMAT: "typescript", "debugging", "code-review", "feature-dev"
+
+
+    Ask yourself: "If someone searches for this topic in 6 months, what words would they use?" Tag with THOSE words.
+
+
+    ## Output schema (JSON)
+
+
+    Return a JSON object with these fields in this exact order:
+
+
+    - **a_reasoning** (string): 1-2 sentences explaining what specific subject this chunk discusses. Think before tagging.
+
+    - **b_topics** (string[]): 1-3 object tags — specific, hyphenated, 2-4 words. Use existing tags when they fit: brainlayer-search-quality,
+    importance-calibration, enrichment-pipeline, auto-context-hooks, cmux-terminal-orchestration, voicelayer-tts-stt, coachclaude-scheduling,
+    sprint-planning-methodology, skill-ecosystem, eval-runner, 6pm-confirmation-flow, knowledge-graph-rebuild, dedup-strategy,
+    tag-taxonomy-redesign, compaction-survival, rate-limit-coordination, pr-loop-workflow, brain-digest-stub, golems-monorepo,
+    etanheyman-portfolio. Create new tags following the same pattern when needed. Use ["_noise"] for system noise with no
+    informational content.
+
+    - **c_activity** (string): Exactly one of: act:debugging, act:implementing, act:designing, act:reviewing, act:researching,
+    act:planning, act:configuring, act:refactoring, act:testing, act:learning
+
+    - **d_domain** (string[]): 0-3 technology domains from: dom:typescript, dom:python, dom:swift, dom:sql, dom:react, dom:convex,
+    dom:supabase, dom:mcp, dom:vertex-ai, dom:ollama, dom:mlx, dom:git, dom:telegram, dom:whatsapp, dom:macos, dom:cli, dom:css,
+    dom:html, dom:docker, dom:railway, dom:linear, dom:obsidian. Empty array if no specific technology.
+
+    - **e_confidence** (number): 0.0-1.0 confidence in your tagging. Below 0.5 = low-content chunk.
+
+
+    ## Examples
+
+
+    Chunk: "Phase 1 importance calibration implemented (PR #93). Heuristic SQL fix deflates importance inflation from 40.8%
+    >= 7 to 7.6%."
+
+    Output: {{"a_reasoning": "Completed milestone for BrainLayer importance scoring. Quantified SQL fix results.", "b_topics":
+    ["importance-calibration", "brainlayer-search-quality"], "c_activity": "act:implementing", "d_domain": ["dom:sql"], "e_confidence":
+    0.95}}
+
+
+    Chunk: "Found the double-message bug in 6pm-mini: flexibility message sent before fail check."
+
+    Output: {{"a_reasoning": "Bug fix in 6pm dating app messaging flow.", "b_topics": ["6pm-confirmation-flow"], "c_activity":
+    "act:debugging", "d_domain": ["dom:typescript", "dom:convex"], "e_confidence": 0.92}}
+
+
+    Chunk: "R18 cmux event-driven patterns: tmux control mode (-CC) provides structured event streams."
+
+    Output: {{"a_reasoning": "Research on cmux terminal architecture using tmux control mode.", "b_topics": ["cmux-terminal-orchestration"],
+    "c_activity": "act:researching", "d_domain": ["dom:cli", "dom:mcp"], "e_confidence": 0.93}}
+
+
+    Chunk: "[Request interrupted by user]"
+
+    Output: {{"a_reasoning": "System noise, no content.", "b_topics": ["_noise"], "c_activity": "act:configuring", "d_domain":
+    [], "e_confidence": 0.99}}
+
+
+    Chunk: "כן אחי, אני בדרך"
+
+    Output: {{"a_reasoning": "Short Hebrew acknowledgment, no technical content.", "b_topics": [], "c_activity": "act:planning",
+    "d_domain": ["dom:whatsapp"], "e_confidence": 0.30}}
+
+
+    Chunk: "OK so the coach should check WHOOP recovery score first thing in the morning, then adjust the workout plan."
+
+    Output: {{"a_reasoning": "Voice discussion about coachClaude morning health workflow with WHOOP thresholds.", "b_topics":
+    ["coachclaude-scheduling"], "c_activity": "act:designing", "d_domain": [], "e_confidence": 0.91}}
+
+
+    ## Now tag this chunk:
+
+
+    CHUNK (from project: {project}, type: {content_type}):
+
+    ---
+
+    {content}
+
+    ---
+
+
+    {context_section}'
+  model: gemini-2.5-flash-lite
+  params:
+    temperature: 0.2
+    max_output_tokens: 4096
+  provenance: shelf
+  axis: faceted-tag-taxonomy
+  source_path: orchestrator/docs.local/plans/enrichment-prompt-v2.md
+  source_section: Enrichment Prompt (copy-paste into pipeline)
+  prompt_hash: df3ee7a5768f735ea90c557d3bf22dba0a5cc7b4ae36b374ba1643ba6960091e
+- id: C
+  label: inline-density-max-recall
+  prompt_template: "You are a recall-maximizing knowledge extraction engine for BrainLayer. Your output will be embedded for\
+    \ vector search and indexed for full-text search. Extract dense, fact-rich metadata from the chunk; do not describe the\
+    \ chunk.\n\nAXIS: density-max-recall. Prefer preserving too many concrete facts over producing a tidy short abstraction.\
+    \ The summary, key_facts, tags, and resolved_queries should make the chunk findable by names, numbers, paths, errors,\
+    \ projects, dates, and decisions.\n\nRULES:\n1. Write as the expert stating facts, not as a cataloger describing source\
+    \ text.\n2. Preserve every concrete value verbatim: people, projects, PRs, issue numbers, commit hashes, dates, file paths,\
+    \ URLs, versions, costs, command names, config keys, model names, errors, ports, and metrics.\n3. Summary must be standalone\
+    \ and front-loaded with the most unique facts.\n4. key_facts is the recall ledger: include every retrievable atomic fact,\
+    \ even when the summary already mentions it.\n5. If the chunk is short or conversational, extract commitments, decisions,\
+    \ blockers, and actionable facts; ignore filler.\n\nBANNED PATTERNS:\n- \"This chunk/message describes/details/outlines/provides/contains...\"\
+    \n- \"The user/assistant is asking/instructing/discussing/explaining...\"\n- \"This is a conversation/discussion about...\"\
+    \n- \"The conversation covers/revolves around...\"\nRewrite any meta-description into the actual facts.\n\nMETA-RESEARCH\
+    \ DETECTION:\nIf the chunk contains literal BrainLayer tool calls such as brain_search(...) or brain_entity(...), treat\
+    \ it as meta-research noise, set importance to 2, and add tag \"meta-research\".\n\nCHUNK (from project: {project}, type:\
+    \ {content_type}):\n---\n{content}\n---\n\n{context_section}\n\nReturn this exact JSON object and populate every key:\n\
+    {{\n  \"summary\": \"<3-5 dense sentences containing the main facts, decisions, names, numbers, dates, outcomes, and why\
+    \ they matter>\",\n  \"key_facts\": [\"<atomic verbatim fact 1>\", \"<atomic verbatim fact 2>\"],\n  \"tags\": [\"<3-7\
+    \ lowercase hyphenated search tags>\"],\n  \"importance\": <1-10 integer>,\n  \"intent\": \"<one of: debugging, designing,\
+    \ configuring, discussing, deciding, implementing, reviewing>\",\n  \"primary_symbols\": [\"<class/function/file names\
+    \ mentioned>\"],\n  \"resolved_query\": \"<natural-language question this chunk answers; same as resolved_queries[0]>\"\
+    ,\n  \"resolved_queries\": [\n    \"<natural-language question a future user would ask>\",\n    \"<keyword-dense query\
+    \ packed with exact anchors from the chunk>\",\n    \"<HyDE answer snippet preserving key terms for embedding similarity>\"\
+    \n  ],\n  \"epistemic_level\": \"<one of: hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or\
+    \ system state discussed, or null>\",\n  \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\"\
+    : [\"<libraries or external APIs used>\"],\n  \"entities\": [{{\"name\": \"<entity name>\", \"type\": \"<person|company|project|technology|tool|concept>\"\
+    , \"relation\": \"<relationship to other entities in this chunk, or null>\"}}],\n  \"sentiment_label\": \"<one of: frustration,\
+    \ confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n  \"sentiment_signals\"\
+    : [\"<words/phrases that indicate sentiment>\"]\n}}\n\nQUALITY GATE:\n- resolved_query must equal resolved_queries[0].\n\
+    - key_facts must include all PR numbers, dates, file paths, URLs, versions, model names, and error strings from the chunk.\n\
+    - Summary must not begin with \"This chunk\", \"This message\", \"The user\", or \"The assistant\".\n- Tags must be 3-7\
+    \ lowercase hyphenated strings unless the chunk is true noise.\nReturn ONLY the JSON object, no markdown."
+  model: gemini-2.5-flash-lite
+  params:
+    temperature: 0.2
+    max_output_tokens: 4096
+  provenance: llm-proposed
+  axis: density-max-recall
+  source_path: inline-llm-reasoning:abcde_inline_proposals.json
+  source_section: llm-proposed-C
+  prompt_hash: f0f4f5f77f9d09d59d5714ee9b4e632b7ad57dba73b93a9cf6a079611eb381ad
+- id: D
+  label: inline-entity-relation-first
+  prompt_template: "You are an entity/relation-first enrichment engine for BrainLayer. Build the chunk's knowledge graph first,\
+    \ then write search metadata that reflects that graph. Your output is used for retrieval and offline evaluation, so it\
+    \ must be concrete, faithful, and schema-complete.\n\nAXIS: entity-relation-first. Prioritize named entities, their types,\
+    \ their relations, and the factual edges connecting them. Summary and queries should reuse the same entity names and relation\
+    \ language.\n\nPROCESS:\n1. Identify every non-code entity: person, company, project, technology, tool, or concept.\n\
+    2. Identify code symbols separately as primary_symbols: files, functions, classes, methods, commands, tables.\n3. For\
+    \ every entity, write a relation to another entity or to the chunk's main event when available.\n4. Write the summary\
+    \ as facts about those entities: who did what, to which system, when, why, with what result.\n5. Use key_facts for evidence:\
+    \ exact dates, paths, PRs, errors, configs, metrics, and quoted values.\n\nBANNED PATTERNS:\n- \"This chunk/message describes/details/outlines/provides/contains...\"\
+    \n- \"The user/assistant is asking/instructing/discussing/explaining...\"\n- \"This is a conversation/discussion about...\"\
+    \n- \"The conversation covers/revolves around...\"\nFacts only; never describe the text as text.\n\nMETA-RESEARCH DETECTION:\n\
+    Literal brain_search(...), brain_entity(...), brain_expand(...), or similar tool calls mean meta-research noise: importance\
+    \ 2 and tag \"meta-research\", unless the chunk records a durable decision or result from that research.\n\nCHUNK (from\
+    \ project: {project}, type: {content_type}):\n---\n{content}\n---\n\n{context_section}\n\nReturn this exact JSON object\
+    \ and populate every key:\n{{\n  \"summary\": \"<2-4 dense sentences naming entities and their relations, preserving concrete\
+    \ values and outcomes>\",\n  \"key_facts\": [\"<verbatim evidence for the entity graph>\"],\n  \"tags\": [\"<3-7 lowercase\
+    \ hyphenated tags, including subject/entity tags when useful>\"],\n  \"importance\": <1-10 integer>,\n  \"intent\": \"\
+    <one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing>\",\n  \"primary_symbols\":\
+    \ [\"<code symbols, file paths, commands, tables, or APIs mentioned>\"],\n  \"resolved_query\": \"<question about the\
+    \ primary entity/relation; same as resolved_queries[0]>\",\n  \"resolved_queries\": [\n    \"<natural-language question\
+    \ naming the primary subject>\",\n    \"<keyword-dense query with entity names, relation terms, and exact anchors>\",\n\
+    \    \"<HyDE answer snippet that names the entities, relation, and outcome>\"\n  ],\n  \"epistemic_level\": \"<one of:\
+    \ hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or system state discussed, or null>\",\n \
+    \ \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\": [\"<external libraries or APIs\
+    \ used>\"],\n  \"entities\": [{{\"name\": \"<canonical entity name>\", \"type\": \"<person|company|project|technology|tool|concept>\"\
+    , \"relation\": \"<how this entity connects to another entity or event, or null>\"}}],\n  \"sentiment_label\": \"<one\
+    \ of: frustration, confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n\
+    \  \"sentiment_signals\": [\"<phrases showing sentiment>\"]\n}}\n\nQUALITY GATE:\n- Entities must not include code symbols,\
+    \ file paths, variables, or functions. Put those in primary_symbols.\n- If two entities are connected, relation must say\
+    \ how; avoid null relation when a relation is evident.\n- resolved_query must equal resolved_queries[0].\n- Summary must\
+    \ use entity names from entities[].name when entities exist.\nReturn ONLY the JSON object, no markdown."
+  model: gemini-2.5-flash-lite
+  params:
+    temperature: 0.2
+    max_output_tokens: 4096
+  provenance: llm-proposed
+  axis: entity-relation-first
+  source_path: inline-llm-reasoning:abcde_inline_proposals.json
+  source_section: llm-proposed-D
+  prompt_hash: 4ccdd1d080546423db0f4f166b4ed73908c6e0eacca78875992235b8ead27166
+- id: E
+  label: inline-hyde-structure-faithfulness
+  prompt_template: "You are a schema-faithful HyDE/structure enrichment engine for BrainLayer. Your job is to produce exact\
+    \ JSON metadata that improves both vector search and keyword search without hallucinating beyond the chunk.\n\nAXIS: structure-HyDE-faithfulness.\
+    \ Design the retrieval surface first: resolved_query and resolved_queries must be precise, faithful, and aligned with\
+    \ summary/key_facts. Every field must satisfy the runtime schema exactly.\n\nFIELD DISCIPLINE:\n1. resolved_queries[0]\
+    \ is the everyday question this chunk answers. resolved_query must be an exact copy.\n2. resolved_queries[1] is the keyword-dense\
+    \ query: exact names, paths, PRs, errors, tools, and tags; minimal filler.\n3. resolved_queries[2] is a HyDE answer snippet:\
+    \ 1-2 factual sentences that sound like the answer a searcher wants.\n4. summary must align with resolved_queries[2] and\
+    \ must not add unsupported claims.\n5. key_facts must provide verbatim anchors supporting the queries and summary.\n\n\
+    BANNED PATTERNS:\n- \"This chunk/message describes/details/outlines/provides/contains...\"\n- \"The user/assistant is\
+    \ asking/instructing/discussing/explaining...\"\n- \"This is a conversation/discussion about...\"\n- \"The conversation\
+    \ covers/revolves around...\"\nIf you write meta-description, delete it and write the actual fact.\n\nMETA-RESEARCH DETECTION:\n\
+    If the chunk is mainly raw BrainLayer tool invocation text like brain_search(...) or brain_entity(...), set importance\
+    \ to 2 and tag \"meta-research\" unless it records a durable result, decision, or benchmark.\n\nCHUNK (from project: {project},\
+    \ type: {content_type}):\n---\n{content}\n---\n\n{context_section}\n\nReturn this exact JSON object and populate every\
+    \ key:\n{{\n  \"summary\": \"<2-4 dense, faithful sentences aligned with the HyDE answer and grounded only in the chunk>\"\
+    ,\n  \"key_facts\": [\"<verbatim anchors that support summary and queries>\"],\n  \"tags\": [\"<3-7 lowercase hyphenated\
+    \ tags>\"],\n  \"importance\": <1-10 integer>,\n  \"intent\": \"<one of: debugging, designing, configuring, discussing,\
+    \ deciding, implementing, reviewing>\",\n  \"primary_symbols\": [\"<class/function/file names mentioned>\"],\n  \"resolved_query\"\
+    : \"<exact copy of resolved_queries[0]>\",\n  \"resolved_queries\": [\n    \"<natural-language question this chunk answers>\"\
+    ,\n    \"<keyword-dense exact-anchor query>\",\n    \"<1-2 sentence HyDE answer snippet using only chunk-supported facts>\"\
+    \n  ],\n  \"epistemic_level\": \"<one of: hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or\
+    \ system state discussed, or null>\",\n  \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\"\
+    : [\"<libraries or external APIs used>\"],\n  \"entities\": [{{\"name\": \"<entity name>\", \"type\": \"<person|company|project|technology|tool|concept>\"\
+    , \"relation\": \"<relationship to other entities in this chunk, or null>\"}}],\n  \"sentiment_label\": \"<one of: frustration,\
+    \ confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n  \"sentiment_signals\"\
+    : [\"<phrases that indicate sentiment>\"]\n}}\n\nSTRICT VALIDATION BEFORE RETURN:\n- JSON object only; no markdown, no\
+    \ trailing prose.\n- resolved_queries has exactly 3 strings.\n- resolved_query is byte-identical to resolved_queries[0].\n\
+    - importance is an integer 1-10, sentiment_score is a finite float -1.0 to 1.0.\n- summary contains at least one concrete\
+    \ anchor when the chunk has any concrete anchor.\n- No unsupported extrapolation beyond chunk/context_section.\nReturn\
+    \ ONLY the JSON object."
+  model: gemini-2.5-flash-lite
+  params:
+    temperature: 0.2
+    max_output_tokens: 4096
+  provenance: llm-proposed
+  axis: structure-hyde-faithfulness
+  source_path: inline-llm-reasoning:abcde_inline_proposals.json
+  source_section: llm-proposed-E
+  prompt_hash: d9c3fc764c2e72bad7994ee1e9562a518de826a03f7dd3bb929479fcb20b5a23
