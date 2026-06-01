@@ -4,6 +4,8 @@ import importlib.util
 import json
 import math
 import os
+import sys
+import types
 from pathlib import Path
 
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
@@ -335,3 +337,100 @@ def test_pipeline_hybrid_rrf_returns_rank_scores():
     results = pipeline_hybrid_rrf(FakeStore(), "hybrid query", n_results=3, embed_fn=lambda query: [0.1, 0.2])
 
     assert results == [("chunk-a", 1.0), ("chunk-b", 0.5), ("chunk-c", 1.0 / 3.0)]
+
+
+def test_prewarm_benchmark_embedder_loads_model_once(monkeypatch):
+    from brainlayer.eval.benchmark import prewarm_benchmark_embedder
+
+    class FakeModel:
+        def __init__(self):
+            self.load_count = 0
+            self.queries = []
+
+        def _load_model(self):
+            self.load_count += 1
+            return object()
+
+        def embed_query(self, query):
+            self.queries.append(query)
+            return [float(len(query))]
+
+    fake_model = FakeModel()
+    fake_embeddings = types.SimpleNamespace(
+        DEFAULT_MODEL="fake-model",
+        get_embedding_model=lambda model_name: fake_model,
+    )
+    monkeypatch.setitem(sys.modules, "brainlayer.embeddings", fake_embeddings)
+
+    embed_fn = prewarm_benchmark_embedder()
+
+    assert fake_model.load_count == 1
+    assert embed_fn("alpha") == [5.0]
+    assert embed_fn("beta") == [4.0]
+    assert fake_model.load_count == 1
+    assert fake_model.queries == ["alpha", "beta"]
+
+
+def test_run_benchmark_reuses_prewarmed_embedder_for_hybrid_rrf(monkeypatch, tmp_path: Path):
+    module_path = Path(__file__).resolve().parents[1] / "scripts" / "run_benchmark.py"
+    spec = importlib.util.spec_from_file_location("run_benchmark_module", module_path)
+    assert spec and spec.loader
+    run_benchmark_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_benchmark_module)
+
+    prewarm_calls = []
+    embedded_queries = []
+
+    def fake_prewarm_benchmark_embedder():
+        prewarm_calls.append("prewarm")
+
+        def embed(query):
+            embedded_queries.append(query)
+            return [0.1, 0.2]
+
+        return embed
+
+    class FakeStore:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    class FakeRun:
+        pass
+
+    class FakeBenchmark:
+        def __init__(self, qrels_path):
+            self.qrels_path = qrels_path
+
+        def queries_in_qrels(self, queries):
+            return [("q1", "first query"), ("q2", "second query")]
+
+        def run_pipeline(self, pipeline_fn, queries):
+            for _query_id, query_text in queries:
+                pipeline_fn(query_text)
+            return FakeRun()
+
+        def evaluate_pipeline(self, run):
+            return {"ndcg@3": 1.0, "precision@3": 1.0, "recall@20": 1.0}
+
+    def fake_pipeline_hybrid_rrf(store, query, n_results=20, *, embed_fn=None):
+        assert embed_fn is not None
+        assert embed_fn(query) == [0.1, 0.2]
+        return [(f"doc-{query}", 1.0)]
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_benchmark.py", "--pipeline", "hybrid_rrf"])
+    monkeypatch.setattr(run_benchmark_module, "SearchBenchmark", FakeBenchmark)
+    monkeypatch.setattr(run_benchmark_module, "VectorStore", FakeStore)
+    monkeypatch.setattr(run_benchmark_module, "prewarm_benchmark_embedder", fake_prewarm_benchmark_embedder)
+    monkeypatch.setattr(run_benchmark_module, "pipeline_hybrid_rrf", fake_pipeline_hybrid_rrf)
+
+    run_benchmark_module.main()
+
+    assert prewarm_calls == ["prewarm"]
+    assert embedded_queries == ["first query", "second query"]
