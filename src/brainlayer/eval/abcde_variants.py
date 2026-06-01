@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Any, Literal, Mapping
 
 import yaml
 
@@ -23,7 +24,7 @@ class ABCDEVariant:
     label: str
     prompt_template: str
     model: str
-    params: dict[str, Any]
+    params: Mapping[str, Any]
     provenance: VariantProvenance
     prompt_hash: str
     axis: str | None = None
@@ -111,7 +112,7 @@ def _variant_from_mapping(raw: dict[str, Any]) -> ABCDEVariant:
         label=label,
         prompt_template=prompt_template,
         model=model,
-        params=params,
+        params=MappingProxyType(params),
         provenance=provenance,
         prompt_hash=prompt_hash,
         axis=_optional_string(raw, "axis"),

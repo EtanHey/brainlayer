@@ -123,45 +123,54 @@ variants:
     Chunk: "Phase 1 importance calibration implemented (PR #93). Heuristic SQL fix deflates importance inflation from 40.8%
     >= 7 to 7.6%."
 
-    Output: {"a_reasoning": "Completed milestone for BrainLayer importance scoring. Quantified SQL fix results.", "b_topics":
+    Output: {{"a_reasoning": "Completed milestone for BrainLayer importance scoring. Quantified SQL fix results.", "b_topics":
     ["importance-calibration", "brainlayer-search-quality"], "c_activity": "act:implementing", "d_domain": ["dom:sql"], "e_confidence":
-    0.95}
+    0.95}}
 
 
     Chunk: "Found the double-message bug in 6pm-mini: flexibility message sent before fail check."
 
-    Output: {"a_reasoning": "Bug fix in 6pm dating app messaging flow.", "b_topics": ["6pm-confirmation-flow"], "c_activity":
-    "act:debugging", "d_domain": ["dom:typescript", "dom:convex"], "e_confidence": 0.92}
+    Output: {{"a_reasoning": "Bug fix in 6pm dating app messaging flow.", "b_topics": ["6pm-confirmation-flow"], "c_activity":
+    "act:debugging", "d_domain": ["dom:typescript", "dom:convex"], "e_confidence": 0.92}}
 
 
     Chunk: "R18 cmux event-driven patterns: tmux control mode (-CC) provides structured event streams."
 
-    Output: {"a_reasoning": "Research on cmux terminal architecture using tmux control mode.", "b_topics": ["cmux-terminal-orchestration"],
-    "c_activity": "act:researching", "d_domain": ["dom:cli", "dom:mcp"], "e_confidence": 0.93}
+    Output: {{"a_reasoning": "Research on cmux terminal architecture using tmux control mode.", "b_topics": ["cmux-terminal-orchestration"],
+    "c_activity": "act:researching", "d_domain": ["dom:cli", "dom:mcp"], "e_confidence": 0.93}}
 
 
     Chunk: "[Request interrupted by user]"
 
-    Output: {"a_reasoning": "System noise, no content.", "b_topics": ["_noise"], "c_activity": "act:configuring", "d_domain":
-    [], "e_confidence": 0.99}
+    Output: {{"a_reasoning": "System noise, no content.", "b_topics": ["_noise"], "c_activity": "act:configuring", "d_domain":
+    [], "e_confidence": 0.99}}
 
 
     Chunk: "כן אחי, אני בדרך"
 
-    Output: {"a_reasoning": "Short Hebrew acknowledgment, no technical content.", "b_topics": [], "c_activity": "act:planning",
-    "d_domain": ["dom:whatsapp"], "e_confidence": 0.30}
+    Output: {{"a_reasoning": "Short Hebrew acknowledgment, no technical content.", "b_topics": [], "c_activity": "act:planning",
+    "d_domain": ["dom:whatsapp"], "e_confidence": 0.30}}
 
 
     Chunk: "OK so the coach should check WHOOP recovery score first thing in the morning, then adjust the workout plan."
 
-    Output: {"a_reasoning": "Voice discussion about coachClaude morning health workflow with WHOOP thresholds.", "b_topics":
-    ["coachclaude-scheduling"], "c_activity": "act:designing", "d_domain": [], "e_confidence": 0.91}
+    Output: {{"a_reasoning": "Voice discussion about coachClaude morning health workflow with WHOOP thresholds.", "b_topics":
+    ["coachclaude-scheduling"], "c_activity": "act:designing", "d_domain": [], "e_confidence": 0.91}}
 
 
     ## Now tag this chunk:
 
 
-    {chunk_content}'
+    CHUNK (from project: {project}, type: {content_type}):
+
+    ---
+
+    {content}
+
+    ---
+
+
+    {context_section}'
   model: gemini-2.5-flash-lite
   params:
     temperature: 0.2
@@ -170,7 +179,7 @@ variants:
   axis: faceted-tag-taxonomy
   source_path: orchestrator/docs.local/plans/enrichment-prompt-v2.md
   source_section: Enrichment Prompt (copy-paste into pipeline)
-  prompt_hash: 44ee15b9accf5dcd61fca7a82bb19f30c557178f820faeacf97f4113d5b2d381
+  prompt_hash: df3ee7a5768f735ea90c557d3bf22dba0a5cc7b4ae36b374ba1643ba6960091e
 - id: C
   label: inline-density-max-recall
   prompt_template: "You are a recall-maximizing knowledge extraction engine for BrainLayer. Your output will be embedded for\
