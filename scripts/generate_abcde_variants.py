@@ -79,13 +79,14 @@ def main() -> None:
                 "params": dict(EXPERIMENT_PARAMS),
                 "provenance": "llm-proposed",
                 "axis": proposal["axis"],
-                "source_path": f"subscription-cli-agent:{args.proposals_json.name}",
+                "source_path": f"inline-llm-reasoning:{args.proposals_json.name}",
                 "source_section": f"llm-proposed-{proposal['id']}",
             }
         )
 
     for variant in variants:
         variant["prompt_hash"] = compute_prompt_hash(variant["prompt_template"])
+    assert_freeze_integrity(variants, production_prompt, shelf_prompt)
 
     registry = {
         "schema_version": 1,
@@ -153,6 +154,25 @@ def load_proposals(path: Path) -> list[dict[str, str]]:
             }
         )
     return normalized
+
+
+def assert_freeze_integrity(variants: list[dict[str, Any]], production_prompt: str, shelf_prompt: str) -> None:
+    hashes = {variant["id"]: variant["prompt_hash"] for variant in variants}
+    if tuple(hashes) != ("A", "B", "C", "D", "E"):
+        raise ValueError(f"freeze must contain A-E in order, got {tuple(hashes)}")
+    if len(set(hashes.values())) != len(hashes):
+        collisions: dict[str, list[str]] = {}
+        for variant_id, prompt_hash in hashes.items():
+            collisions.setdefault(prompt_hash, []).append(variant_id)
+        duplicates = {prompt_hash: ids for prompt_hash, ids in collisions.items() if len(ids) > 1}
+        raise ValueError(f"freeze prompt_hash collision detected: {duplicates}")
+
+    expected_a = compute_prompt_hash(production_prompt)
+    if hashes["A"] != expected_a:
+        raise ValueError(f"variant A hash does not match live ENRICHMENT_PROMPT hash: {hashes['A']} != {expected_a}")
+    expected_b = compute_prompt_hash(shelf_prompt)
+    if hashes["B"] != expected_b:
+        raise ValueError(f"variant B hash does not match shelved v2 prompt hash: {hashes['B']} != {expected_b}")
 
 
 def compute_prompt_hash(prompt_template: str) -> str:

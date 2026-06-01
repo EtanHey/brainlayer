@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from pathlib import Path
+
+import pytest
 
 from brainlayer.eval.abcde_variants import (
     ABCDE_VARIANTS,
@@ -10,6 +13,14 @@ from brainlayer.eval.abcde_variants import (
     load_abcde_variants,
 )
 from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+from scripts.generate_abcde_variants import (
+    SHELF_SECTION,
+    assert_freeze_integrity,
+    compute_prompt_hash,
+    extract_markdown_fenced_section,
+)
+
+V2_PROMPT_PATH = Path("/Users/etanheyman/Gits/orchestrator/docs.local/plans/enrichment-prompt-v2.md")
 
 
 def test_load_abcde_variants_freezes_all_five_ids_and_provenance() -> None:
@@ -35,19 +46,45 @@ def test_prompt_hashes_are_sha256_of_frozen_templates() -> None:
         assert len(variant.prompt_hash) == 64
 
 
+def test_freeze_hashes_are_pairwise_distinct_and_match_anchors() -> None:
+    variants = [
+        {"id": variant.id, "prompt_hash": variant.prompt_hash, "prompt_template": variant.prompt_template}
+        for variant in load_abcde_variants()
+    ]
+    v2_prompt = extract_markdown_fenced_section(V2_PROMPT_PATH, SHELF_SECTION)
+
+    assert_freeze_integrity(variants, ENRICHMENT_PROMPT, v2_prompt)
+
+
+def test_freeze_integrity_fails_loud_on_prompt_hash_collision() -> None:
+    variants = [
+        {"id": variant.id, "prompt_hash": variant.prompt_hash, "prompt_template": variant.prompt_template}
+        for variant in load_abcde_variants()
+    ]
+    variants[2]["prompt_hash"] = variants[0]["prompt_hash"]
+    v2_prompt = extract_markdown_fenced_section(V2_PROMPT_PATH, SHELF_SECTION)
+
+    with pytest.raises(ValueError, match="collision"):
+        assert_freeze_integrity(variants, ENRICHMENT_PROMPT, v2_prompt)
+
+
 def test_variant_a_is_current_production_enrichment_prompt() -> None:
     variant_a = ABCDE_VARIANTS_BY_ID["A"]
 
     assert variant_a.prompt_template == ENRICHMENT_PROMPT
+    assert variant_a.prompt_hash == compute_prompt_hash(ENRICHMENT_PROMPT)
 
 
 def test_variant_b_is_located_2026_03_19_faceted_prompt() -> None:
     variant_b = ABCDE_VARIANTS_BY_ID["B"]
+    v2_prompt = extract_markdown_fenced_section(V2_PROMPT_PATH, SHELF_SECTION)
     unique_domains = set(re.findall(r"\bdom:[a-z0-9-]+\b", variant_b.prompt_template))
     unique_activities = set(re.findall(r"\bact:[a-z0-9-]+\b", variant_b.prompt_template))
 
     assert variant_b.source_path == "orchestrator/docs.local/plans/enrichment-prompt-v2.md"
     assert variant_b.source_section == "Enrichment Prompt (copy-paste into pipeline)"
+    assert variant_b.prompt_template == v2_prompt
+    assert variant_b.prompt_hash == compute_prompt_hash(v2_prompt)
     for field in ("a_reasoning", "b_topics", "c_activity", "d_domain", "e_confidence"):
         assert field in variant_b.prompt_template
     assert len(unique_domains) == 22
