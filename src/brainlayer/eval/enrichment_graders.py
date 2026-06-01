@@ -295,7 +295,9 @@ def grade_candidate(candidate: str | Mapping[str, Any], gold: Mapping[str, Any],
     empty_meta = MetaResearchCheck(True, None, None)
 
     if not schema.passed:
-        return EnrichmentGrade(True, 0.0, schema, False, None, empty_key_facts, empty_entities, empty_importance, empty_meta)
+        return EnrichmentGrade(
+            True, 0.0, schema, False, None, empty_key_facts, empty_entities, empty_importance, empty_meta
+        )
 
     banned_pattern = find_banned_summary_pattern(value.get("summary", ""))
     if banned_pattern is not None:
@@ -316,8 +318,10 @@ def grade_candidate(candidate: str | Mapping[str, Any], gold: Mapping[str, Any],
         # Deterministic PR-2 composite: weight band calibration higher than exact MAE.
         importance_component = (importance.band_accuracy * 0.8) + ((1.0 - min(importance.mae, 9.0) / 9.0) * 0.2)
         valid_entity_count = len(_entity_entries(value.get("entities", ())))
-        hallucination_penalty = 1.0 if not entities.hallucinated_entities else max(
-            0.0, 1.0 - (len(entities.hallucinated_entities) / max(1, valid_entity_count))
+        hallucination_penalty = (
+            1.0
+            if not entities.hallucinated_entities
+            else max(0.0, 1.0 - (len(entities.hallucinated_entities) / max(1, valid_entity_count)))
         )
         overall = (
             key_facts.recall * 0.35
@@ -362,7 +366,12 @@ def _entity_entries(raw_entities: Any) -> tuple[dict[str, str], ...]:
             continue
         name = entity.get("name")
         entity_type = entity.get("type")
-        if isinstance(name, str) and name.strip() and isinstance(entity_type, str) and entity_type in VALID_ENTITY_TYPES:
+        if (
+            isinstance(name, str)
+            and name.strip()
+            and isinstance(entity_type, str)
+            and entity_type in VALID_ENTITY_TYPES
+        ):
             entries.append({"name": name.strip(), "type": entity_type})
     return tuple(entries)
 

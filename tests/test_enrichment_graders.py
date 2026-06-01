@@ -90,7 +90,10 @@ def test_banned_pattern_hard_fails_meta_descriptions():
     payload = _candidate(summary="The user is discussing BrainLayer PR #423 and eval harness work.")
     gold = {"must_capture_facts": ["PR #423"], "gold_entities": [], "gold_importance": 8}
 
-    assert find_banned_summary_pattern(payload["summary"]) == "the user/assistant is asking/instructing/discussing/explaining"
+    assert (
+        find_banned_summary_pattern(payload["summary"])
+        == "the user/assistant is asking/instructing/discussing/explaining"
+    )
     grade = grade_candidate(payload, gold, chunk_text="BrainLayer PR #423 added eval harness work.")
     assert grade.disqualified is True
     assert grade.overall_score == 0.0
@@ -164,7 +167,10 @@ def test_meta_research_forced_two_check_is_literal_and_deterministic():
     assert failed.passed is False
     assert failed.expected_importance == 2
     assert failed.actual_importance == 4
-    assert check_meta_research_forced_importance("Plain text mentioning brain search", _candidate(importance=8)).passed is True
+    assert (
+        check_meta_research_forced_importance("Plain text mentioning brain search", _candidate(importance=8)).passed
+        is True
+    )
 
 
 def test_grade_candidate_combines_pure_deterministic_metrics():
