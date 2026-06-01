@@ -23,6 +23,20 @@ from .enrichment_graders import (
     score_key_facts_recall,
     validate_schema_gate,
 )
+from .enrichment_judge import (
+    DEFAULT_TEMPERATURE,
+    JUDGE_KAPPA_FLOOR,
+    JUDGE_PROMPT_HASH,
+    JUDGE_SPEARMAN_FLOOR,
+    CalibrationResult,
+    JudgeQuarantinedError,
+    JudgeResponseError,
+    build_judge_request,
+    calibrate_judge,
+    deterministic_pre_signals,
+    prepare_batch_jsonl,
+    score_jsonl_inline,
+)
 
 __all__ = [
     "DEFAULT_COMPARE_METRICS",
@@ -48,4 +62,16 @@ __all__ = [
     "VARIANT_IDS",
     "ABCDEVariant",
     "load_abcde_variants",
+    "DEFAULT_TEMPERATURE",
+    "JUDGE_KAPPA_FLOOR",
+    "JUDGE_PROMPT_HASH",
+    "JUDGE_SPEARMAN_FLOOR",
+    "CalibrationResult",
+    "JudgeQuarantinedError",
+    "JudgeResponseError",
+    "build_judge_request",
+    "calibrate_judge",
+    "deterministic_pre_signals",
+    "prepare_batch_jsonl",
+    "score_jsonl_inline",
 ]
