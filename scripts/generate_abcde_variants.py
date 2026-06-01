@@ -41,7 +41,9 @@ def main() -> None:
     args = parser.parse_args()
 
     production_prompt = extract_python_string_constant(PRODUCTION_PROMPT_PATH, "ENRICHMENT_PROMPT")
-    shelf_prompt = extract_markdown_fenced_section(args.shelf_prompt_path, SHELF_SECTION)
+    shelf_prompt = prepare_shelf_prompt_for_registry(
+        extract_markdown_fenced_section(args.shelf_prompt_path, SHELF_SECTION)
+    )
     proposals = load_proposals(args.proposals_json)
 
     variants = [
@@ -128,6 +130,16 @@ def extract_markdown_fenced_section(path: Path, heading: str) -> str:
     if not match:
         raise ValueError(f"Could not find fenced section {heading!r} in {path}")
     return match.group("prompt")
+
+
+def prepare_shelf_prompt_for_registry(prompt: str) -> str:
+    """Make the shelved v2 prompt safe for str.format() and standard runner placeholders."""
+
+    escaped = prompt.replace("{", "{{").replace("}", "}}")
+    return escaped.replace(
+        "{{chunk_content}}",
+        "CHUNK (from project: {project}, type: {content_type}):\n---\n{content}\n---\n\n{context_section}",
+    )
 
 
 def load_proposals(path: Path) -> list[dict[str, str]]:
