@@ -1,5 +1,6 @@
 """BrainLayer search quality evaluation framework using Ranx."""
 
+from .abcde_variants import ABCDE_VARIANTS, ABCDE_VARIANTS_BY_ID, VARIANT_IDS, ABCDEVariant, load_abcde_variants
 from .benchmark import (
     DEFAULT_COMPARE_METRICS,
     DEFAULT_QUERY_SUITE,
@@ -42,4 +43,9 @@ __all__ = [
     "score_importance_calibration",
     "score_key_facts_recall",
     "validate_schema_gate",
+    "ABCDE_VARIANTS",
+    "ABCDE_VARIANTS_BY_ID",
+    "VARIANT_IDS",
+    "ABCDEVariant",
+    "load_abcde_variants",
 ]
