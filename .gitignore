@@ -71,6 +71,10 @@ claude.scratchpad.md
 # Local eval outputs (tracked baselines remain tracked)
 tests/eval_results/
 
+# Raw enriched eval rows contain PERSONAL chunk content — NEVER commit (privacy).
+# Aggregate metrics go in results/ instead; raw rows archived to Brain Drive.
+eval_results/*.jsonl
+
 # Progress trackers (ephemeral)
 scripts/.kg_rebuild_progress.json
 

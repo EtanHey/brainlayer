@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "n_chunks": 893,
+    "method": "pure-python term-overlap\u00d7idf; queries=top-12 raw-content tokens (variant-agnostic); gold=source chunk; FULL run n=893 (Nebius Llama-3.3-70B re-enrich); self-retrieval \u2014 favors verbatim-copying variants (caveat)",
+    "generated": "2026-06-02",
+    "source": "eval_results/abcde_enrich_nebius.jsonl (2624 ok / 2679, $0.99)"
+  },
+  "per_variant": {
+    "A": {
+      "ok_chunks": 880,
+      "scored_queries": 879,
+      "indexed_coverage": 0.99,
+      "recall@1": 0.62,
+      "recall@5": 0.849,
+      "recall@10": 0.917,
+      "mrr": 0.726,
+      "ndcg@10": 0.769
+    },
+    "B": {
+      "ok_chunks": 0,
+      "scored_queries": 0,
+      "indexed_coverage": 0,
+      "recall@1": 0.0,
+      "recall@5": 0.0,
+      "recall@10": 0.0,
+      "mrr": 0,
+      "ndcg@10": 0
+    },
+    "C": {
+      "ok_chunks": 868,
+      "scored_queries": 867,
+      "indexed_coverage": 0.97,
+      "recall@1": 0.625,
+      "recall@5": 0.858,
+      "recall@10": 0.934,
+      "mrr": 0.731,
+      "ndcg@10": 0.778
+    },
+    "D": {
+      "ok_chunks": 0,
+      "scored_queries": 0,
+      "indexed_coverage": 0,
+      "recall@1": 0.0,
+      "recall@5": 0.0,
+      "recall@10": 0.0,
+      "mrr": 0,
+      "ndcg@10": 0
+    },
+    "E": {
+      "ok_chunks": 876,
+      "scored_queries": 875,
+      "indexed_coverage": 1.0,
+      "recall@1": 0.638,
+      "recall@5": 0.874,
+      "recall@10": 0.93,
+      "mrr": 0.741,
+      "ndcg@10": 0.784
+    }
+  }
+}
