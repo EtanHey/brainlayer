@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from brainlayer.eval.abcde_enrich_runner import (  # noqa: E402
+    DEFAULT_FALLBACK_USD_PER_1M,
     DEFAULT_MODEL,
     DEFAULT_TICK_USD,
     make_http_chat_fn,
@@ -67,8 +68,28 @@ def sample_chunks(n: int, *, min_chars: int = 80, seed: int | None = None) -> li
     ]
 
 
+def select_variants(variant_filter: str | None = None) -> list:
+    """Filter ABCDE variants by comma-separated ids while preserving registry order."""
+    if not variant_filter:
+        return list(ABCDE_VARIANTS)
+
+    requested = {item.strip().upper() for item in variant_filter.split(",") if item.strip()}
+    if not requested:
+        return list(ABCDE_VARIANTS)
+
+    available = {variant.id for variant in ABCDE_VARIANTS}
+    unknown = sorted(requested - available)
+    if unknown:
+        raise SystemExit(f"Unknown variant id(s): {','.join(unknown)}")
+
+    selected = [variant for variant in ABCDE_VARIANTS if variant.id in requested]
+    if not selected:
+        raise SystemExit("No variants selected.")
+    return selected
+
+
 def resolve_api_key() -> str:
-    key = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
+    key = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     if key:
         return key.strip()
     # Read piped stdin (op read "...| python ...").
@@ -76,7 +97,10 @@ def resolve_api_key() -> str:
         piped = sys.stdin.read().strip()
         if piped:
             return piped
-    raise SystemExit("No API key. Pipe `op read op://Private/grok-content-golem/credential` or set XAI_API_KEY.")
+    raise SystemExit(
+        "No API key. Pipe `op read op://Private/grok-content-golem/credential` "
+        "or set XAI_API_KEY, GROK_API_KEY, or DEEPSEEK_API_KEY."
+    )
 
 
 def main() -> None:
@@ -87,14 +111,20 @@ def main() -> None:
     ap.add_argument("--max-usd", type=float, default=4.20, help="Hard cumulative spend ceiling (USD).")
     ap.add_argument("--avg-usd-per-call", type=float, default=0.0,
                     help="Measured avg $/call from smoke; used to auto-size N for --run.")
+    ap.add_argument("--variants", default="", help="Comma-separated variant ids to run, e.g. A,C,E (default: all).")
+    ap.add_argument("--concurrency", type=int, default=1, help="Concurrent backend calls (default: 1).")
+    ap.add_argument("--max-calls", type=int, default=0, help="Hard cap on successful+failed backend calls (0 = unlimited).")
     ap.add_argument("--base-url", default="https://api.x.ai/v1")
     ap.add_argument("--model", default=DEFAULT_MODEL, help="Backend model sent to the OpenAI-compatible API.")
     ap.add_argument("--tick-usd", type=float, default=DEFAULT_TICK_USD)
+    ap.add_argument("--fallback-usd-per-1m", type=float, default=DEFAULT_FALLBACK_USD_PER_1M,
+                    help="Fallback blended USD per 1M tokens when backend omits cost ticks.")
     ap.add_argument("--min-chars", type=int, default=80)
     ap.add_argument("--out", default="/tmp/abcde_enrich.jsonl")
     args = ap.parse_args()
 
-    variants = list(ABCDE_VARIANTS)
+    variants = select_variants(args.variants)
+    max_calls = args.max_calls if args.max_calls > 0 else None
     key = resolve_api_key()
     chat_fn = make_http_chat_fn(base_url=args.base_url, api_key=key, model_override=args.model)
     sanitizer = Sanitizer.from_env()
@@ -104,7 +134,8 @@ def main() -> None:
         print(f"SMOKE: {len(chunks)} chunks × {len(variants)} variants = {len(chunks)*len(variants)} calls", file=sys.stderr)
         t0 = time.time()
         stats = run_batch(chunks, variants, sanitizer, chat_fn, output_path=args.out,
-                          max_usd=args.max_usd, tick_usd=args.tick_usd)
+                          max_usd=args.max_usd, max_calls=max_calls, tick_usd=args.tick_usd,
+                          fallback_usd_per_1m=args.fallback_usd_per_1m, concurrency=args.concurrency)
         out = stats.as_dict()
         out["wall_seconds"] = round(time.time() - t0, 1)
         out["per_variant"] = {}  # filled below
@@ -121,10 +152,11 @@ def main() -> None:
             raise SystemExit("--run needs --n or --avg-usd-per-call")
         chunks = sample_chunks(n, min_chars=args.min_chars)
         print(f"RUN: N={len(chunks)} chunks × {len(variants)} variants = {len(chunks)*len(variants)} calls "
-              f"(max_usd={args.max_usd})", file=sys.stderr)
+              f"(max_usd={args.max_usd}, max_calls={max_calls or 'unlimited'})", file=sys.stderr)
         t0 = time.time()
         stats = run_batch(chunks, variants, sanitizer, chat_fn, output_path=args.out,
-                          max_usd=args.max_usd, tick_usd=args.tick_usd)
+                          max_usd=args.max_usd, max_calls=max_calls, tick_usd=args.tick_usd,
+                          fallback_usd_per_1m=args.fallback_usd_per_1m, concurrency=args.concurrency)
         out = stats.as_dict()
         out["wall_seconds"] = round(time.time() - t0, 1)
         out["output_jsonl"] = args.out
