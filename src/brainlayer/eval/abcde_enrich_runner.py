@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from brainlayer.eval.abcde_variants import ABCDEVariant
@@ -349,8 +351,10 @@ def run_batch(
     *,
     output_path: Optional[str] = None,
     max_usd: Optional[float] = None,
+    max_calls: Optional[int] = None,
     tick_usd: float = DEFAULT_TICK_USD,
     fallback_usd_per_1m: float = DEFAULT_FALLBACK_USD_PER_1M,
+    concurrency: int = 1,
     on_row: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> RunStats:
     """Run every (chunk, variant) pair, writing judge-ready rows.
@@ -358,28 +362,81 @@ def run_batch(
     Hard budget stop: before each call, if the next call could push cumulative
     spend past ``max_usd``, stop cleanly (rows written so far are preserved).
     """
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    if max_calls is not None and max_calls < 0:
+        raise ValueError("max_calls must be >= 0")
+
     stats = RunStats()
+    lock = Lock()
     sink = None
     if output_path is not None:
         sink = open(output_path, "w", encoding="utf-8")  # noqa: SIM115 — closed in finally
+
+    def should_stop_locked(pending_calls: int = 0) -> bool:
+        if max_calls is not None and stats.calls + pending_calls >= max_calls:
+            return True
+        if max_usd is None:
+            return False
+        if stats.usd_spent >= max_usd:
+            return True
+        if stats.calls == 0:
+            # Submit one call to learn the backend's token/cost shape before
+            # fanning out under a hard spend ceiling.
+            return pending_calls > 0
+        avg_usd = stats.usd_spent / stats.calls
+        projected = stats.usd_spent + (avg_usd * (pending_calls + 1))
+        return projected >= max_usd
+
+    def record_result(variant: ABCDEVariant, chunk: Mapping[str, Any], result: CallResult) -> None:
+        usd = usage_to_usd(result.usage, tick_usd=tick_usd, fallback_usd_per_1m=fallback_usd_per_1m)
+        row = judge_row(variant, chunk, result)
+        with lock:
+            stats.record(result, usd)
+            if sink is not None:
+                sink.write(json.dumps(row, sort_keys=True) + "\n")
+                sink.flush()
+            if on_row is not None:
+                on_row(row)
+
     try:
-        for chunk in chunks:
-            for variant in variants:
-                if max_usd is not None and stats.calls > 0:
-                    projected = stats.usd_spent + (stats.usd_spent / stats.calls)
-                    if projected > max_usd:
+        work_items = ((chunk, variant) for chunk in chunks for variant in variants)
+        if concurrency == 1:
+            for chunk, variant in work_items:
+                with lock:
+                    if should_stop_locked():
                         return stats
                 result = enrich_one(variant, chunk, sanitizer, chat_fn)
-                usd = usage_to_usd(result.usage, tick_usd=tick_usd, fallback_usd_per_1m=fallback_usd_per_1m)
-                stats.record(result, usd)
-                row = judge_row(variant, chunk, result)
-                if sink is not None:
-                    sink.write(json.dumps(row, sort_keys=True) + "\n")
-                    sink.flush()
-                if on_row is not None:
-                    on_row(row)
-                if max_usd is not None and stats.usd_spent >= max_usd:
-                    return stats
+                record_result(variant, chunk, result)
+                with lock:
+                    if should_stop_locked():
+                        return stats
+            return stats
+
+        pending: dict[Future[CallResult], tuple[Mapping[str, Any], ABCDEVariant]] = {}
+
+        def submit_next(executor: ThreadPoolExecutor) -> bool:
+            with lock:
+                if should_stop_locked(pending_calls=len(pending)):
+                    return False
+            try:
+                chunk, variant = next(work_items)
+            except StopIteration:
+                return False
+            pending[executor.submit(enrich_one, variant, chunk, sanitizer, chat_fn)] = (chunk, variant)
+            return True
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            while len(pending) < concurrency and submit_next(executor):
+                pass
+
+            while pending:
+                done, _not_done = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    chunk, variant = pending.pop(future)
+                    record_result(variant, chunk, future.result())
+                while len(pending) < concurrency and submit_next(executor):
+                    pass
     finally:
         if sink is not None:
             sink.close()

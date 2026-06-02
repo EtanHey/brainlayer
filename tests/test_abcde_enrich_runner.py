@@ -21,6 +21,7 @@ from brainlayer.eval.abcde_enrich_runner import (
 from brainlayer.eval.abcde_variants import ABCDE_VARIANTS_BY_ID
 from brainlayer.eval.enrichment_graders import REQUIRED_ENRICHMENT_KEYS, validate_schema_gate
 from brainlayer.eval.enrichment_judge import build_judge_request
+from scripts import run_abcde_enrich as abcde_driver
 
 
 class FakeSanitizer:
@@ -211,6 +212,49 @@ def test_make_http_chat_fn_model_override_ignores_variant_model(monkeypatch):
     assert captured["payload"]["model"] == "grok-x"
 
 
+def test_make_http_chat_fn_deepseek_base_url_and_model(monkeypatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["payload"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    chat_fn = make_http_chat_fn(
+        base_url="https://api.deepseek.com",
+        api_key="test-key",
+        model_override="deepseek-v4-flash",
+    )
+
+    status, _body = chat_fn("ignored-variant-model", "prompt", {"temperature": 0})
+
+    assert status == 200
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"
+    assert captured["payload"]["model"] == "deepseek-v4-flash"
+
+
+def test_driver_variants_filter_selects_requested_ids_in_registry_order():
+    selected = abcde_driver.select_variants("E,A,C")
+
+    assert [variant.id for variant in selected] == ["A", "C", "E"]
+
+
+def test_driver_resolve_api_key_reads_deepseek_env(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "  deepseek-test-key  ")
+
+    assert abcde_driver.resolve_api_key() == "deepseek-test-key"
+
+
 def test_run_batch_writes_rows_and_aggregates(tmp_path):
     chunks = [_chunk(), {**_chunk(), "id": "chunk-2"}]
     variants = [ABCDE_VARIANTS_BY_ID["C"], ABCDE_VARIANTS_BY_ID["D"]]
@@ -224,6 +268,48 @@ def test_run_batch_writes_rows_and_aggregates(tmp_path):
     assert stats.cost_in_usd_ticks == 4 * 12000
 
 
+def test_run_batch_concurrency_writes_all_rows(tmp_path):
+    chunks = [{**_chunk(), "id": f"chunk-{i}"} for i in range(5)]
+    variants = [ABCDE_VARIANTS_BY_ID["A"], ABCDE_VARIANTS_BY_ID["C"]]
+    out = tmp_path / "rows.jsonl"
+
+    stats = run_batch(
+        chunks,
+        variants,
+        FakeSanitizer(),
+        _ok_chat_fn(ticks=0, ptok=100, ctok=100),
+        output_path=str(out),
+        concurrency=4,
+        fallback_usd_per_1m=0.3,
+    )
+
+    lines = out.read_text().strip().splitlines()
+    assert stats.calls == 10
+    assert stats.ok == 10
+    assert len(lines) == 10
+    assert {json.loads(line)["variant_id"] for line in lines} == {"A", "C"}
+
+
+def test_run_batch_concurrency_respects_max_calls(tmp_path):
+    chunks = [{**_chunk(), "id": f"chunk-{i}"} for i in range(10)]
+    variants = [ABCDE_VARIANTS_BY_ID["A"], ABCDE_VARIANTS_BY_ID["C"]]
+    out = tmp_path / "rows.jsonl"
+
+    stats = run_batch(
+        chunks,
+        variants,
+        FakeSanitizer(),
+        _ok_chat_fn(ticks=0, ptok=100, ctok=100),
+        output_path=str(out),
+        concurrency=4,
+        max_calls=7,
+        fallback_usd_per_1m=0.3,
+    )
+
+    assert stats.calls == 7
+    assert len(out.read_text().strip().splitlines()) == 7
+
+
 def test_run_batch_hard_budget_stop():
     # Each call costs 0.001 USD (1e6 ticks * 1e-9). Ceiling 0.0025 → stop after ~2 calls.
     chunks = [{**_chunk(), "id": f"c{i}"} for i in range(10)]
@@ -235,3 +321,24 @@ def test_run_batch_hard_budget_stop():
     )
     assert stats.usd_spent <= 0.0025 + 1e-9
     assert stats.calls < 10  # stopped early, did not run all 10
+
+
+def test_run_batch_concurrency_respects_max_usd_with_fallback_tokens(tmp_path):
+    chunks = [{**_chunk(), "id": f"chunk-{i}"} for i in range(10)]
+    variants = [ABCDE_VARIANTS_BY_ID["C"]]
+    out = tmp_path / "rows.jsonl"
+
+    stats = run_batch(
+        chunks,
+        variants,
+        FakeSanitizer(),
+        _ok_chat_fn(ticks=0, ptok=500, ctok=500),
+        output_path=str(out),
+        concurrency=4,
+        max_usd=0.00075,
+        fallback_usd_per_1m=0.3,
+    )
+
+    assert stats.calls == 2
+    assert stats.usd_spent == pytest.approx(0.0006)
+    assert len(out.read_text().strip().splitlines()) == 2
