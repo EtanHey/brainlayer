@@ -182,9 +182,7 @@ def enrich_one(
     The chunk's content is sanitized inside ``build_external_prompt`` before the
     prompt is sent to ``chat_fn``.
     """
-    prompt, _sanitize_result = build_external_prompt(
-        dict(chunk), sanitizer, prompt_template=variant.prompt_template
-    )
+    prompt, _sanitize_result = build_external_prompt(dict(chunk), sanitizer, prompt_template=variant.prompt_template)
     params = _to_openai_params(variant.params)
     if extra_params:
         params.update(extra_params)
@@ -259,8 +257,9 @@ def enrich_one(
     )
 
 
-def usage_to_usd(usage: Usage, *, tick_usd: float = DEFAULT_TICK_USD,
-                 fallback_usd_per_1m: float = DEFAULT_FALLBACK_USD_PER_1M) -> float:
+def usage_to_usd(
+    usage: Usage, *, tick_usd: float = DEFAULT_TICK_USD, fallback_usd_per_1m: float = DEFAULT_FALLBACK_USD_PER_1M
+) -> float:
     """Cost of one call in USD. Prefer authoritative cost_in_usd_ticks; else fall
     back to a pessimistic blended per-token rate so the budget meter never
     under-counts an unknown backend."""
@@ -467,7 +466,7 @@ def make_http_chat_fn(
         for attempt in range(3):
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 continue
             try:
                 return resp.status_code, resp.json()

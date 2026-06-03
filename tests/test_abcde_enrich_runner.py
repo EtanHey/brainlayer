@@ -77,9 +77,14 @@ def _ok_chat_fn(captured=None, *, ticks=12000, ptok=1200, ctok=400):
             captured["params"] = params
         return 200, {
             "choices": [{"message": {"content": json.dumps(_good_enrichment())}}],
-            "usage": {"prompt_tokens": ptok, "completion_tokens": ctok,
-                      "total_tokens": ptok + ctok, "cost_in_usd_ticks": ticks},
+            "usage": {
+                "prompt_tokens": ptok,
+                "completion_tokens": ctok,
+                "total_tokens": ptok + ctok,
+                "cost_in_usd_ticks": ticks,
+            },
         }
+
     return fn
 
 
@@ -315,9 +320,12 @@ def test_run_batch_hard_budget_stop():
     chunks = [{**_chunk(), "id": f"c{i}"} for i in range(10)]
     variants = [ABCDE_VARIANTS_BY_ID["C"]]
     stats = run_batch(
-        chunks, variants, FakeSanitizer(),
+        chunks,
+        variants,
+        FakeSanitizer(),
         _ok_chat_fn(ticks=1_000_000),
-        max_usd=0.0025, tick_usd=1e-9,
+        max_usd=0.0025,
+        tick_usd=1e-9,
     )
     assert stats.usd_spent <= 0.0025 + 1e-9
     assert stats.calls < 10  # stopped early, did not run all 10
