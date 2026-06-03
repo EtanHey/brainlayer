@@ -129,7 +129,9 @@ class JsonBaselineStore:
                     record.key.catalog_context == key.catalog_context,
                 )
             )
-            mean_score = sum(record.evaluator_means.values()) / len(record.evaluator_means) if record.evaluator_means else 0.0
+            mean_score = (
+                sum(record.evaluator_means.values()) / len(record.evaluator_means) if record.evaluator_means else 0.0
+            )
             return (comparable_matches, mean_score, record.created_at)
 
         return max(candidates, key=rank)
