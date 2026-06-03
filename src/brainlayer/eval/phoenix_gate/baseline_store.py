@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,7 +73,17 @@ class JsonBaselineStore:
         ordered = sorted(records, key=lambda record: record.identity)
         payload = {"baselines": [record.to_dict() for record in ordered]}
         try:
-            self.path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            fd, temp_path = tempfile.mkstemp(dir=self.path.parent, prefix=f".{self.path.name}.", text=True)
+            try:
+                os.write(fd, content.encode("utf-8"))
+                os.fsync(fd)
+                os.close(fd)
+                os.replace(temp_path, self.path)
+            except Exception:
+                os.close(fd) if fd >= 0 else None
+                Path(temp_path).unlink(missing_ok=True)
+                raise
         except OSError as exc:
             raise HarnessFault(f"Failed to write baseline store {self.path}: {exc}") from exc
 
@@ -109,7 +121,7 @@ class JsonBaselineStore:
         if not candidates:
             return None
 
-        def rank(record: BaselineRecord) -> tuple[int, str]:
+        def rank(record: BaselineRecord) -> tuple[int, float, str]:
             comparable_matches = sum(
                 (
                     record.key.condition == key.condition,
@@ -117,7 +129,8 @@ class JsonBaselineStore:
                     record.key.catalog_context == key.catalog_context,
                 )
             )
-            return (comparable_matches, record.created_at)
+            mean_score = sum(record.evaluator_means.values()) / len(record.evaluator_means) if record.evaluator_means else 0.0
+            return (comparable_matches, mean_score, record.created_at)
 
         return max(candidates, key=rank)
 

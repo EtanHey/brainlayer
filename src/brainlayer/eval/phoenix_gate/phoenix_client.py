@@ -94,6 +94,11 @@ def aggregate_evaluator_means(payload: Any, *, expected_evaluators: set[str] | f
         raise HarnessFault("Phoenix experiment missing expected evaluator(s): " + ", ".join(missing))
 
     scored_expected = {name: means[name] for name in expected_evaluators}
+    # Fail-loud on all-zero to catch Phoenix evaluator setup bugs (e.g. list instead of dict)
+    # where harness silently produces zero scores. While this prevents detecting legitimate
+    # all-zero regressions, the Phoenix list→dict coercion gotcha is caught earlier by
+    # validate_evaluators_for_run, so in practice this guard catches missing annotations
+    # or broken evaluator runs that would otherwise appear as silent SHIP verdicts.
     if scored_expected and all(value == 0.0 for value in scored_expected.values()):
         raise HarnessFault("Phoenix experiment evaluator output is all-zero; likely harness fault")
     return means
