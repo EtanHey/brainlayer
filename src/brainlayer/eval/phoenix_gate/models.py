@@ -44,9 +44,7 @@ class BaselineKey:
             if not isinstance(metadata.get(field), str) or not str(metadata.get(field)).strip()
         ]
         if missing:
-            raise HarnessFault(
-                "Experiment metadata missing canonical baseline tuple fields: " + ", ".join(missing)
-            )
+            raise HarnessFault("Experiment metadata missing canonical baseline tuple fields: " + ", ".join(missing))
         return cls(**{field: str(metadata[field]).strip() for field in BASELINE_KEY_FIELDS})
 
     def as_tuple(self) -> tuple[str, str, str, str, str, str]:

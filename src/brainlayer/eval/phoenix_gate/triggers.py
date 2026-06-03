@@ -49,8 +49,6 @@ def diff_rerun_triggers(previous: Mapping[str, Any], current: Mapping[str, Any])
     _require_manifest_fields("current", current)
 
     reasons = tuple(
-        FIELD_REASONS[field]
-        for field in TRIGGER_FIELDS
-        if str(previous[field]).strip() != str(current[field]).strip()
+        FIELD_REASONS[field] for field in TRIGGER_FIELDS if str(previous[field]).strip() != str(current[field]).strip()
     )
     return TriggerDiff(rerun_required=bool(reasons), reasons=reasons)
