@@ -110,6 +110,15 @@ def test_all_script_launchd_plists_have_common_hygiene():
         _assert_common_hygiene(plistlib.loads(path.read_bytes()))
 
 
+def test_index_launchagent_runs_nightly_without_keepalive_or_run_at_load():
+    index = _load("scripts/launchd/com.brainlayer.index.plist")
+
+    assert "KeepAlive" not in index
+    assert "RunAtLoad" not in index
+    assert "StartInterval" not in index
+    assert index["StartCalendarInterval"] == {"Hour": 3, "Minute": 15}
+
+
 def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
     plist_paths = [
         *sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")),

@@ -18,7 +18,7 @@ from typing import Any, Callable
 import apsw
 import sqlite_vec
 
-from ._helpers import serialize_f32
+from ._helpers import _is_sqlite_busy_error, serialize_f32
 from .chunk_origin import detect_chunk_origin
 from .content_class import classify_content_class, normalize_content_class
 from .dedupe import (
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+_DEFAULT_DRAIN_OPEN_MAX_RETRIES = 12
+_DEFAULT_DRAIN_OPEN_RETRY_BASE_DELAY_MS = 250.0
+_DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS = 5000.0
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 5000
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
@@ -91,6 +94,22 @@ def _post_commit_yield_seconds() -> float:
     return _nonnegative_float_env("BRAINLAYER_DRAIN_POST_COMMIT_YIELD_MS", _DEFAULT_POST_COMMIT_YIELD_MS) / 1000.0
 
 
+def _drain_open_max_retries() -> int:
+    return _positive_int_env("BRAINLAYER_DRAIN_OPEN_MAX_RETRIES", _DEFAULT_DRAIN_OPEN_MAX_RETRIES)
+
+
+def _drain_open_retry_delay_seconds(attempt: int) -> float:
+    base_ms = _nonnegative_float_env(
+        "BRAINLAYER_DRAIN_OPEN_RETRY_BASE_DELAY_MS",
+        _DEFAULT_DRAIN_OPEN_RETRY_BASE_DELAY_MS,
+    )
+    max_ms = _nonnegative_float_env(
+        "BRAINLAYER_DRAIN_OPEN_RETRY_MAX_DELAY_MS",
+        _DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS,
+    )
+    return min(base_ms * (2**attempt), max_ms) / 1000.0
+
+
 @dataclass
 class ApplyResult:
     chunk_id: str | None = None
@@ -129,7 +148,24 @@ def _log(path: Path, message: str) -> None:
 
 
 def _open_connection(db_path: Path) -> apsw.Connection:
-    conn = apsw.Connection(str(db_path))
+    max_retries = _drain_open_max_retries()
+    for attempt in range(max_retries + 1):
+        try:
+            conn = apsw.Connection(str(db_path))
+            break
+        except Exception as exc:
+            if not _is_busy_error(exc) or attempt >= max_retries:
+                raise
+            delay = _drain_open_retry_delay_seconds(attempt)
+            logger.warning(
+                "Drain DB open hit SQLITE_BUSY (attempt %d/%d); retrying in %.2fs",
+                attempt + 1,
+                max_retries + 1,
+                delay,
+            )
+            time.sleep(delay)
+    else:
+        raise RuntimeError("unreachable drain open retry state")
     conn.setbusytimeout(_drain_busy_timeout_ms())
     conn.enableloadextension(True)
     conn.loadextension(sqlite_vec.loadable_path())
@@ -533,7 +569,7 @@ def _table_names(conn: apsw.Connection) -> set[str]:
 
 
 def _is_busy_error(exc: BaseException) -> bool:
-    return isinstance(exc, apsw.BusyError)
+    return _is_sqlite_busy_error(exc)
 
 
 def _default_embed_fn() -> Callable[[str], list[float]]:
@@ -806,11 +842,12 @@ def drain_once(
             remaining_events = events[len(events_to_apply) :]
 
             for attempt in range(5):
-                conn = _open_connection(db_path)
+                conn: apsw.Connection | None = None
                 attempt_drained = 0
                 collision_ids: list[str] = []
                 store_chunk_ids: list[str] = []
                 try:
+                    conn = _open_connection(db_path)
                     conn.execute("BEGIN IMMEDIATE")
                     ensure_dedupe_schema(conn)
                     for event in events_to_apply:
@@ -852,10 +889,11 @@ def drain_once(
                         time.sleep(yield_seconds)
                     break
                 except Exception as exc:
-                    try:
-                        conn.execute("ROLLBACK")
-                    except Exception:
-                        pass
+                    if conn is not None:
+                        try:
+                            conn.execute("ROLLBACK")
+                        except Exception:
+                            pass
                     if _is_busy_error(exc) and attempt < 4:
                         delay = 0.05 * (2**attempt)
                         _log(log_path, f"drain busy; retrying in {delay:.2f}s")
@@ -864,7 +902,8 @@ def drain_once(
                     _log(log_path, f"drain failed for {path.name}: {exc}")
                     break
                 finally:
-                    conn.close()
+                    if conn is not None:
+                        conn.close()
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
