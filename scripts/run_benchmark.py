@@ -20,12 +20,25 @@ from brainlayer.paths import get_db_path
 from brainlayer.vector_store import VectorStore
 
 
+def _open_readonly_vector_store(db_path: Path):
+    try:
+        return VectorStore(db_path, readonly=True)
+    except TypeError:
+        return VectorStore(db_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default=str(get_db_path()), help="Path to the BrainLayer SQLite DB")
     parser.add_argument("--qrels-path", default="tests/eval_qrels.json", help="Path to the qrels JSON file")
     parser.add_argument("--pipeline", default="fts5", choices=["fts5", "hybrid_rrf", "hybrid_entity"])
     parser.add_argument("--n-results", type=int, default=20)
+    parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=None,
+        help="Metrics to evaluate, e.g. --metrics recall@5 precision@5",
+    )
     args = parser.parse_args()
 
     benchmark = SearchBenchmark(args.qrels_path)
@@ -40,8 +53,8 @@ def main() -> None:
         "hybrid_entity": pipeline_hybrid_entity,
     }
 
-    store_factory = ReadOnlyBenchmarkStore if pipeline_name == "fts5" else VectorStore
-    hybrid_embed_fn = prewarm_benchmark_embedder() if pipeline_name == "hybrid_rrf" else None
+    store_factory = ReadOnlyBenchmarkStore if pipeline_name == "fts5" else _open_readonly_vector_store
+    hybrid_embed_fn = prewarm_benchmark_embedder() if pipeline_name in {"hybrid_rrf", "hybrid_entity"} else None
     with store_factory(Path(args.db_path)) as store:
         run = benchmark.run_pipeline(
             lambda query_text: pipeline_fn_map[pipeline_name](
@@ -53,7 +66,10 @@ def main() -> None:
             queries,
         )
 
-    scores = benchmark.evaluate_pipeline(run)
+    if args.metrics:
+        scores = benchmark.evaluate_pipeline(run, metrics=args.metrics)
+    else:
+        scores = benchmark.evaluate_pipeline(run)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     result_payload = {
         "pipeline": pipeline_name,

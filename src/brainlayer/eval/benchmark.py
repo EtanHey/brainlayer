@@ -423,6 +423,7 @@ def pipeline_hybrid_rrf(
     n_results: int = 20,
     *,
     embed_fn: Callable[[str], list[float]] | None = None,
+    kg_boost: bool = False,
 ) -> list[tuple[str, float]]:
     """Hybrid search benchmark using rank-based scores from RRF ordering."""
     if not hasattr(store, "hybrid_search"):
@@ -434,7 +435,16 @@ def pipeline_hybrid_rrf(
         embed_fn = embed_query
 
     query_embedding = embed_fn(query)
-    results = store.hybrid_search(query_embedding=query_embedding, query_text=query, n_results=n_results)
+    search_kwargs = {
+        "query_embedding": query_embedding,
+        "query_text": query,
+        "n_results": n_results,
+    }
+    if kg_boost:
+        search_kwargs["kg_boost"] = True
+    results = store.hybrid_search(
+        **search_kwargs,
+    )
     chunk_ids = results.get("ids", [[]])[0]
     return [(chunk_id, 1.0 / (rank + 1)) for rank, chunk_id in enumerate(chunk_ids)]
 
@@ -448,6 +458,12 @@ def prewarm_benchmark_embedder(model_name: str | None = None) -> Callable[[str],
     return model.embed_query
 
 
-def pipeline_hybrid_entity(store, query: str, n_results: int = 20) -> list[tuple[str, float]]:
-    """Future hybrid + entity benchmark placeholder."""
-    raise NotImplementedError("Entity-boosted benchmark pipeline is reserved for future search work.")
+def pipeline_hybrid_entity(
+    store,
+    query: str,
+    n_results: int = 20,
+    *,
+    embed_fn: Callable[[str], list[float]] | None = None,
+) -> list[tuple[str, float]]:
+    """Hybrid RRF search with KG entity-linked chunk boosting enabled."""
+    return pipeline_hybrid_rrf(store, query, n_results=n_results, embed_fn=embed_fn, kg_boost=True)

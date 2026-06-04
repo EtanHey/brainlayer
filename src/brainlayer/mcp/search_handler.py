@@ -72,6 +72,10 @@ def _helper_route_enabled() -> bool:
     return os.environ.get("BRAINLAYER_MCP_USE_HELPER") == "1" or _helper_sentinel_path().exists()
 
 
+def _kg_boost_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_KG_BOOST", "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
 def _warm_helper_socket_candidates() -> list[str]:
     candidates: list[tuple[float, str]] = []
     for path in glob.glob(_HELPER_SOCKET_GLOB):
@@ -1564,6 +1568,7 @@ async def _search(
                         include_audit=include_audit,
                         include_operational=include_operational,
                         content_class_filter=content_class_filter,
+                        kg_boost=_kg_boost_enabled(),
                         profile_query_id=profile_query_id,
                         profile_scope=profile_scope,
                         brainbar_helper_fast_profile=brainbar_helper_fast_profile,
