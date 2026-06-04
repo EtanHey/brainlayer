@@ -76,6 +76,35 @@ _NOISE_CONTENT_PATTERNS = (
 _NOISE_RERANK_DEMOTION = 0.05
 _RECENCY_SINGLE_TERM_RE = re.compile(r"\b(?:current|latest|recent|today)\b", re.IGNORECASE)
 _RECENCY_THIS_WEEK_RE = re.compile(r"\bthis\s+week\b", re.IGNORECASE)
+_ENTITY_SURFACE_TOKEN_RE = re.compile(r"[/@]?[A-Za-z0-9][A-Za-z0-9_.@/-]*")
+_ENTITY_SURFACE_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "before",
+        "current",
+        "decide",
+        "decided",
+        "detail",
+        "details",
+        "does",
+        "from",
+        "have",
+        "implementation",
+        "latest",
+        "recent",
+        "search",
+        "that",
+        "this",
+        "today",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "work",
+    }
+)
 AUDIT_RECURSION_TAG_PATTERNS = (
     "{tag_expr} = 'audit'",
     "{tag_expr} = 'audit-recursion'",
@@ -93,6 +122,141 @@ _hybrid_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
 def _has_recency_intent(query_text: str) -> bool:
     """Return true when recency words appear as terms, not substrings."""
     return bool(_RECENCY_SINGLE_TERM_RE.search(query_text) or _RECENCY_THIS_WEEK_RE.search(query_text))
+
+
+def _normalize_entity_surface(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _entity_single_token_signal(token: str) -> bool:
+    value = token.strip()
+    if not value:
+        return False
+    lowered = value.casefold()
+    if lowered in _ENTITY_SURFACE_STOPWORDS:
+        return False
+    return (
+        value.startswith(("/", "@"))
+        or "." in value
+        or any(character.isdigit() for character in value)
+        or any(character.isupper() for character in value)
+    )
+
+
+def _kg_boost_query_surface_keys(query_text: str) -> tuple[set[str], set[str]]:
+    tokens = _ENTITY_SURFACE_TOKEN_RE.findall(query_text or "")
+    if not tokens:
+        return set(), set()
+
+    alias_keys: set[str] = set()
+    fts_name_keys: set[str] = set()
+    max_ngram = min(4, len(tokens))
+    for size in range(1, max_ngram + 1):
+        for start in range(0, len(tokens) - size + 1):
+            surface = " ".join(tokens[start : start + size])
+            key = _normalize_entity_surface(surface)
+            if not key:
+                continue
+            alias_keys.add(key)
+            if size > 1 or _entity_single_token_signal(tokens[start]):
+                fts_name_keys.add(key)
+    return alias_keys, fts_name_keys
+
+
+def _kg_boost_entity_matches(store: Any, query_text: str, *, limit: int = 8) -> list[dict[str, str]]:
+    """Resolve query-mentioned entities through kg_entities_fts plus exact aliases.
+
+    The FTS query is a shortlist only; rows must still match a normalized query
+    surface exactly so generic lower-case topic words do not trigger KG boosts.
+    """
+    alias_keys, fts_name_keys = _kg_boost_query_surface_keys(query_text)
+    if not alias_keys and not fts_name_keys:
+        return []
+
+    fts_query = _escape_fts5_query(query_text, match_mode="or")
+    if not fts_query:
+        return []
+
+    cursor = store._read_cursor()
+    alias_values = sorted(alias_keys)
+    alias_placeholders = ", ".join("?" for _ in alias_values)
+    alias_normalizer = """
+        LOWER(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(a.alias, '-', ''),
+                            '_', ''),
+                        '.', ''),
+                    ' ', ''),
+                '/', ''),
+            '@', '')
+        )
+    """
+    rows = list(
+        cursor.execute(
+            f"""
+            WITH fts_matches AS (
+                SELECT e.id, e.name, e.entity_type, NULL AS matched_alias, f.rank
+                FROM kg_entities_fts f
+                JOIN kg_entities e ON f.entity_id = e.id
+                WHERE kg_entities_fts MATCH ?
+                ORDER BY f.rank
+                LIMIT ?
+            ),
+            alias_matches AS (
+                SELECT e.id, e.name, e.entity_type, a.alias AS matched_alias, NULL AS rank
+                FROM kg_entity_aliases a
+                JOIN kg_entities e ON a.entity_id = e.id
+                WHERE {alias_normalizer} IN ({alias_placeholders})
+                ORDER BY e.name, e.id
+                LIMIT ?
+            )
+            SELECT id, name, entity_type, matched_alias, rank FROM fts_matches
+            UNION ALL
+            SELECT id, name, entity_type, matched_alias, rank FROM alias_matches
+            """,
+            (fts_query, max(limit * 5, 20), *alias_values, max(limit * 5, 20)),
+        )
+    )
+
+    matches: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for entity_id, name, entity_type, matched_alias, _rank in rows:
+        name_key = _normalize_entity_surface(str(name))
+        alias_key = _normalize_entity_surface(str(matched_alias)) if matched_alias else ""
+        if not ((matched_alias and alias_key in alias_keys) or name_key in fts_name_keys):
+            continue
+        if entity_id in seen_ids:
+            continue
+        seen_ids.add(str(entity_id))
+        matches.append({"id": str(entity_id), "name": str(name), "entity_type": str(entity_type)})
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _kg_linked_chunk_ids_for_query(store: Any, query_text: str, *, entity_limit: int = 8) -> set[str]:
+    matches = _kg_boost_entity_matches(store, query_text, limit=entity_limit)
+    entity_ids = [match["id"] for match in matches]
+    if not entity_ids:
+        return set()
+
+    cursor = store._read_cursor()
+    placeholders = ", ".join("?" for _ in entity_ids)
+    rows = list(
+        cursor.execute(
+            f"""
+            SELECT DISTINCT chunk_id
+            FROM kg_entity_chunks
+            WHERE entity_id IN ({placeholders})
+            """,
+            entity_ids,
+        )
+    )
+    return {str(row[0]) for row in rows}
 
 
 def clear_hybrid_search_cache(store_key: Any = None) -> None:
@@ -2040,29 +2204,7 @@ class SearchMixin:
         # KG boost: chunks linked to entities detected in the query get a score bump
         if kg_boost and query_text:
             try:
-                cursor = self._read_cursor()
-                # Find entity IDs that match words in the query
-                kg_linked_ids: set = set()
-                words = query_text.split()
-                for w in words:
-                    if len(w) < 3:
-                        continue
-                    rows = list(
-                        cursor.execute(
-                            "SELECT id FROM kg_entities WHERE LOWER(name) LIKE ?",
-                            (f"%{w.lower()}%",),
-                        )
-                    )
-                    for row in rows:
-                        linked = list(
-                            cursor.execute(
-                                "SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?",
-                                (row[0],),
-                            )
-                        )
-                        for lrow in linked:
-                            kg_linked_ids.add(lrow[0])
-
+                kg_linked_ids = _kg_linked_chunk_ids_for_query(self, query_text)
                 if kg_linked_ids:
                     KG_BOOST_FACTOR = 1.3
                     for i, (score, cid, doc, meta, dist) in enumerate(scored):
