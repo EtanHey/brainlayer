@@ -9,8 +9,13 @@
 		<string>__BRAINLAYER_BIN__</string>
 		<string>index</string>
 	</array>
-	<key>StartInterval</key>
-	<integer>1800</integer>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
 	<key>StandardOutPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/index.out.log</string>
 	<key>StandardErrorPath</key>
@@ -24,8 +29,6 @@
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
 	</dict>
-	<key>RunAtLoad</key>
-	<true/>
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
