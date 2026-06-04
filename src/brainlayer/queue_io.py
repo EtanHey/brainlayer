@@ -154,6 +154,7 @@ def enqueue_enrichment_update(
     enrichment: dict[str, Any],
     content_hash: str | None = None,
     entities: list[Any] | None = None,
+    chunk_origin: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
     return enqueue_enrichment_updates(
@@ -163,6 +164,7 @@ def enqueue_enrichment_update(
                 "enrichment": enrichment,
                 "content_hash": content_hash,
                 "entities": entities,
+                "chunk_origin": chunk_origin,
             }
         ],
         queue_dir=queue_dir,
@@ -181,6 +183,7 @@ def enqueue_enrichment_updates(
             "enrichment": update["enrichment"],
             "content_hash": update.get("content_hash"),
             "entities": update.get("entities"),
+            "chunk_origin": update.get("chunk_origin"),
         }
         for update in updates
     ]

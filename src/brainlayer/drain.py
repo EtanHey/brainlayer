@@ -524,6 +524,9 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["raw_entities_json"] = json.dumps(event["entities"])
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
+    chunk_origin = str(event.get("chunk_origin") or "").strip()
+    if "chunk_origin" in cols and chunk_origin:
+        updates["chunk_origin"] = chunk_origin
     if "enriched_at" in cols:
         updates["enriched_at"] = datetime.now(timezone.utc).isoformat()
     if "enrich_status" in cols:

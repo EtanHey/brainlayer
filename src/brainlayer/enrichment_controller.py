@@ -482,6 +482,10 @@ def _current_post_write_yield_seconds() -> float:
     )
 
 
+def _current_enrichment_chunk_origin() -> str:
+    return str(GEMINI_REALTIME_MODEL).strip() or "gemini"
+
+
 def _enrichment_update_payload(chunk: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
     content = chunk.get("content", "")
     return {
@@ -489,6 +493,7 @@ def _enrichment_update_payload(chunk: dict[str, Any], enrichment: dict[str, Any]
         "enrichment": enrichment,
         "content_hash": _content_hash(content) if content else None,
         "entities": enrichment.get("entities", []),
+        "chunk_origin": _current_enrichment_chunk_origin(),
     }
 
 
