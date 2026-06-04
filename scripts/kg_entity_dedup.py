@@ -83,6 +83,7 @@ PATH_EXTENSION_RE = re.compile(
     r"\.(md|json|py|pyi|ts|tsx|js|jsx|swift|toml|ya?ml|sh|sql|db|sqlite|txt|html|css|plist)$",
     re.IGNORECASE,
 )
+SINGLE_SEGMENT_SLASH_COMMAND_RE = re.compile(r"^/[A-Za-z][\w-]*( [\w-]+)*$")
 
 
 class MergeStoreAdapter:
@@ -396,9 +397,15 @@ def apply_reviewed_name_mapping(conn: Any, mapping: list[dict[str, Any]]) -> Cou
     return stats
 
 
+def is_single_segment_slash_command(name: str) -> bool:
+    return bool(SINGLE_SEGMENT_SLASH_COMMAND_RE.fullmatch(name.strip()))
+
+
 def path_pseudo_entity_reason(name: str) -> str | None:
     value = name.strip()
     if not value:
+        return None
+    if is_single_segment_slash_command(value):
         return None
     if value.startswith("/"):
         return "absolute-path"
@@ -440,6 +447,39 @@ def find_path_pseudo_entities(conn: Any) -> list[dict[str, Any]]:
             row["reason"] = reason
             candidates.append(row)
     return candidates
+
+
+def find_slash_command_entities(conn: Any) -> list[dict[str, Any]]:
+    rows = fetch_dicts(
+        conn,
+        """
+        SELECT id, name, entity_type
+        FROM kg_entities
+        WHERE name LIKE '/%'
+        ORDER BY lower(name), id
+        """,
+    )
+    commands = []
+    for row in rows:
+        if is_single_segment_slash_command(str(row["name"])) and row["entity_type"] != "tool":
+            commands.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "old_type": row["entity_type"],
+                    "new_type": "tool",
+                }
+            )
+    return commands
+
+
+def reclassify_slash_commands(conn: Any) -> Counter[str]:
+    commands = find_slash_command_entities(conn)
+    stats: Counter[str] = Counter()
+    for command in commands:
+        execute(conn, "UPDATE kg_entities SET entity_type = 'tool' WHERE id = ?", (command["id"],))
+        stats["reclassified_commands"] += 1
+    return stats
 
 
 def _entity_ids(rows_or_ids: list[dict[str, Any]] | list[str]) -> list[str]:
@@ -687,15 +727,22 @@ def preview_merge_groups(conn: Any, mapping: list[dict[str, Any]]) -> list[dict[
 
 
 def build_dry_run_diff(
-    conn: Any, mapping: list[dict[str, Any]], name_mapping: list[dict[str, Any]] | None = None
+    conn: Any,
+    mapping: list[dict[str, Any]],
+    name_mapping: list[dict[str, Any]] | None = None,
+    *,
+    reclassify_commands: bool = False,
+    skip_path_purge: bool = False,
 ) -> dict[str, Any]:
     name_mapping = name_mapping or []
     before = table_counts(conn)
-    purge_candidates = find_path_pseudo_entities(conn)
+    purge_candidates = [] if skip_path_purge else find_path_pseudo_entities(conn)
+    command_reclassifications = find_slash_command_entities(conn) if reclassify_commands else []
     clone = clone_kg_subset(conn)
     merge_stats = apply_approved_mapping(clone, mapping)
     name_merge_stats = apply_reviewed_name_mapping(clone, name_mapping)
-    purge_stats = purge_entities(clone, find_path_pseudo_entities(clone))
+    command_stats = reclassify_slash_commands(clone) if reclassify_commands else Counter()
+    purge_stats = Counter() if skip_path_purge else purge_entities(clone, find_path_pseudo_entities(clone))
     after = table_counts(clone)
     clone.close()
     return {
@@ -704,7 +751,10 @@ def build_dry_run_diff(
         "merge_previews": preview_merge_groups(conn, mapping)
         + preview_merge_groups(conn, reviewed_name_mapping_to_id_mapping(conn, name_mapping)),
         "purge_candidates": purge_candidates,
-        "merge_stats": dict(merge_stats + name_merge_stats),
+        "command_reclassifications": command_reclassifications,
+        "reclassify_commands_requested": reclassify_commands,
+        "skip_path_purge": skip_path_purge,
+        "merge_stats": dict(merge_stats + name_merge_stats + command_stats),
         "purge_stats": dict(purge_stats),
     }
 
@@ -734,8 +784,17 @@ def print_diff(diff: dict[str, Any]) -> None:
                 f"chunks={source.get('chunks', 0)} relations={source.get('relations', 0)}"
             )
 
+    if diff.get("reclassify_commands_requested"):
+        print("Slash-command reclassifications:")
+        if not diff["command_reclassifications"]:
+            print("  (none)")
+        for row in diff["command_reclassifications"]:
+            print(f"  reclassify {row['id']} name={row['name']!r} type={row['old_type']} -> {row['new_type']}")
+
     print("Path pseudo-entity purges:")
-    if not diff["purge_candidates"]:
+    if diff.get("skip_path_purge"):
+        print("  (skipped by --skip-path-purge)")
+    elif not diff["purge_candidates"]:
         print("  (none)")
     for row in diff["purge_candidates"]:
         print(
@@ -790,6 +849,8 @@ def apply_with_safety(
     name_mapping: list[dict[str, Any]] | None = None,
     batch_size: int,
     checkpoint_every: int,
+    reclassify_commands: bool = False,
+    skip_path_purge: bool = False,
 ) -> Counter[str]:
     name_mapping = name_mapping or []
     stats: Counter[str] = Counter()
@@ -814,17 +875,27 @@ def apply_with_safety(
             execute(conn, "ROLLBACK")
             raise
 
-    purge_candidates = find_path_pseudo_entities(conn)
-    for batch_number, batch in enumerate(_batches(purge_candidates, batch_size), start=1):
+    if reclassify_commands:
         execute(conn, "BEGIN IMMEDIATE")
         try:
-            stats.update(purge_entities(conn, batch))
+            stats.update(reclassify_slash_commands(conn))
             execute(conn, "COMMIT")
         except Exception:
             execute(conn, "ROLLBACK")
             raise
-        if checkpoint_every > 0 and batch_number % checkpoint_every == 0:
-            checkpoint_wal(conn, "PASSIVE")
+
+    if not skip_path_purge:
+        purge_candidates = find_path_pseudo_entities(conn)
+        for batch_number, batch in enumerate(_batches(purge_candidates, batch_size), start=1):
+            execute(conn, "BEGIN IMMEDIATE")
+            try:
+                stats.update(purge_entities(conn, batch))
+                execute(conn, "COMMIT")
+            except Exception:
+                execute(conn, "ROLLBACK")
+                raise
+            if checkpoint_every > 0 and batch_number % checkpoint_every == 0:
+                checkpoint_wal(conn, "PASSIVE")
 
     checkpoint_wal(conn, "FULL")
     return stats
@@ -853,6 +924,12 @@ def main() -> int:
     parser.add_argument("--mapping", type=Path, help="Reviewed JSON mapping; defaults to APPROVED_MERGES in this file")
     parser.add_argument("--apply", action="store_true", help="Apply approved mapping and path purge")
     parser.add_argument("--suggest", action="store_true", help="Suggest candidate clusters only; never applies")
+    parser.add_argument(
+        "--reclassify-commands",
+        action="store_true",
+        help="Review or apply single-segment slash-command entity_type changes to tool",
+    )
+    parser.add_argument("--skip-path-purge", action="store_true", help="Apply/dry-run merges without path purges")
     parser.add_argument("--min-shared-chunks", type=int, default=2, help="Minimum shared chunks for --suggest pairs")
     parser.add_argument("--batch-size", type=int, default=5000, help="Entities to purge per write batch")
     parser.add_argument(
@@ -872,7 +949,13 @@ def main() -> int:
             print_suggestions(suggest_candidate_clusters(store.conn, min_shared_chunks=args.min_shared_chunks))
             return 0
 
-        diff = build_dry_run_diff(store.conn, mapping, name_mapping)
+        diff = build_dry_run_diff(
+            store.conn,
+            mapping,
+            name_mapping,
+            reclassify_commands=args.reclassify_commands,
+            skip_path_purge=args.skip_path_purge,
+        )
         print_diff(diff)
         if not args.apply:
             print("To apply: review the mapping, stop enrichment, then rerun with --apply")
@@ -884,6 +967,8 @@ def main() -> int:
             name_mapping=name_mapping,
             batch_size=args.batch_size,
             checkpoint_every=args.checkpoint_every,
+            reclassify_commands=args.reclassify_commands,
+            skip_path_purge=args.skip_path_purge,
         )
         print("APPLIED")
         for key, value in sorted(stats.items()):

@@ -77,7 +77,7 @@ def _connect_fixture(tmp_path):
 
 def _connect_apsw_fixture(tmp_path):
     conn = apsw.Connection(str(tmp_path / "kg-apsw.db"))
-    conn.execute(
+    for sql in [
         """
         CREATE TABLE kg_entities (
             id TEXT PRIMARY KEY,
@@ -91,9 +91,25 @@ def _connect_apsw_fixture(tmp_path):
             expired_at TEXT,
             UNIQUE(entity_type, name)
         )
+        """,
         """
-    )
-    conn.execute(
+        CREATE TABLE kg_relations (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            properties TEXT DEFAULT '{}',
+            confidence REAL DEFAULT 1.0,
+            user_verified INTEGER DEFAULT 0,
+            fact TEXT,
+            importance REAL DEFAULT 0.5,
+            valid_from TEXT,
+            valid_until TEXT,
+            expired_at TEXT,
+            source_chunk_id TEXT,
+            UNIQUE(source_id, target_id, relation_type)
+        )
+        """,
         """
         CREATE TABLE kg_entity_chunks (
             entity_id TEXT NOT NULL,
@@ -105,8 +121,26 @@ def _connect_apsw_fixture(tmp_path):
             weight REAL DEFAULT 0.25,
             PRIMARY KEY (entity_id, chunk_id)
         )
+        """,
         """
-    )
+        CREATE TABLE kg_entity_aliases (
+            alias TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            alias_type TEXT DEFAULT 'name',
+            created_at TEXT,
+            valid_from TEXT,
+            valid_to TEXT,
+            PRIMARY KEY (alias, entity_id)
+        )
+        """,
+        """
+        CREATE TABLE kg_vec_entities (
+            entity_id TEXT PRIMARY KEY,
+            embedding BLOB
+        )
+        """,
+    ]:
+        conn.execute(sql)
     return conn
 
 
@@ -329,6 +363,120 @@ def test_cursor_description_only_swallows_apsw_completed_execution():
 
     with pytest.raises(ExecutionCompleteError, match="not APSW"):
         dedup._cursor_description(FakeCursor())
+
+
+def _assert_path_detector_spares_slash_commands(dedup, conn):
+    _entity(conn, "cmd-code-review", "concept", "/code-review")
+    _entity(conn, "cmd-batch-subagents", "project", "/batch sub-agents")
+    _entity(conn, "path-absolute", "concept", "/Users/etanheyman/Gits/brainlayer/README.md")
+    _entity(conn, "path-dotdir", "concept", ".claude/settings.json")
+    _entity(conn, "path-relative-dot", "concept", "./rel")
+    _entity(conn, "path-repo", "concept", "src/brainlayer/vector_store.py")
+    _entity(conn, "normal", "concept", "AC/DC")
+
+    candidates = dedup.find_path_pseudo_entities(conn)
+
+    assert {row["id"] for row in candidates} == {
+        "path-absolute",
+        "path-dotdir",
+        "path-relative-dot",
+        "path-repo",
+    }
+    assert dedup.path_pseudo_entity_reason("/agent-routing") is None
+    assert dedup.path_pseudo_entity_reason("/batch sub-agents") is None
+    assert dedup.path_pseudo_entity_reason("/Users/etanheyman/file.md") == "absolute-path"
+    assert dedup.path_pseudo_entity_reason(".claude/settings.json") == "file-path"
+
+
+def test_path_detector_spares_single_segment_slash_commands_sqlite(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+
+    _assert_path_detector_spares_slash_commands(dedup, conn)
+
+
+def test_path_detector_spares_single_segment_slash_commands_apsw(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    _assert_path_detector_spares_slash_commands(dedup, conn)
+
+
+def _assert_reclassify_slash_commands(dedup, conn):
+    _entity(conn, "cmd-code-review", "concept", "/code-review")
+    _entity(conn, "cmd-batch-subagents", "project", "/batch sub-agents")
+    _entity(conn, "path-absolute", "concept", "/Users/etanheyman/Gits/brainlayer/README.md")
+    _entity(conn, "normal", "concept", "AC/DC")
+
+    stats = dedup.reclassify_slash_commands(conn)
+
+    assert stats["reclassified_commands"] == 2
+    assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'cmd-code-review'").fetchone()[0] == "tool"
+    assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'cmd-batch-subagents'").fetchone()[0] == "tool"
+    assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'path-absolute'").fetchone()[0] == "concept"
+    assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'normal'").fetchone()[0] == "concept"
+
+
+def test_reclassify_slash_commands_sets_tool_only_for_commands_sqlite(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+
+    _assert_reclassify_slash_commands(dedup, conn)
+
+
+def test_reclassify_slash_commands_sets_tool_only_for_commands_apsw(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    _assert_reclassify_slash_commands(dedup, conn)
+
+
+def test_reclassify_commands_dry_run_previews_without_mutating(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+    _entity(conn, "cmd-code-review", "concept", "/code-review")
+    _entity(conn, "path-absolute", "concept", "/Users/etanheyman/Gits/brainlayer/README.md")
+
+    diff = dedup.build_dry_run_diff(conn, [], reclassify_commands=True)
+
+    assert diff["command_reclassifications"] == [
+        {"id": "cmd-code-review", "name": "/code-review", "old_type": "concept", "new_type": "tool"}
+    ]
+    assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'cmd-code-review'").fetchone()[0] == "concept"
+
+
+def test_apply_with_safety_skip_path_purge_keeps_paths_but_applies_merges(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+    _entity(conn, "person-etan", "person", "Etan Heyman")
+    _entity(conn, "person-fragment", "person", "Etan")
+    _entity(conn, "path-absolute", "concept", "/Users/etanheyman/Gits/brainlayer/README.md")
+    conn.execute(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context)
+        VALUES ('person-fragment', 'chunk-person', 0.9, 'Etan context')
+        """
+    )
+    conn.commit()
+
+    stats = dedup.apply_with_safety(
+        conn,
+        [
+            {
+                "label": "Etan only",
+                "canonical": {"id": "person-etan", "entity_type": "person", "name": "Etan Heyman"},
+                "sources": ["person-fragment"],
+            }
+        ],
+        batch_size=5000,
+        checkpoint_every=0,
+        skip_path_purge=True,
+    )
+
+    assert stats["merge_sources"] == 1
+    assert stats["purged_entities"] == 0
+    assert conn.execute("SELECT id FROM kg_entities WHERE id = 'person-fragment'").fetchone() is None
+    assert conn.execute("SELECT id FROM kg_entities WHERE id = 'path-absolute'").fetchone()[0] == "path-absolute"
 
 
 def test_path_purge_deletes_only_path_shaped_entities(tmp_path):
