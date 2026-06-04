@@ -2,6 +2,7 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
+import apsw
 import pytest
 
 
@@ -69,6 +70,41 @@ def _connect_fixture(tmp_path):
             entity_id TEXT PRIMARY KEY,
             embedding BLOB
         );
+        """
+    )
+    return conn
+
+
+def _connect_apsw_fixture(tmp_path):
+    conn = apsw.Connection(str(tmp_path / "kg-apsw.db"))
+    conn.execute(
+        """
+        CREATE TABLE kg_entities (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            metadata TEXT DEFAULT '{}',
+            canonical_name TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT,
+            updated_at TEXT,
+            expired_at TEXT,
+            UNIQUE(entity_type, name)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE kg_entity_chunks (
+            entity_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            relevance REAL DEFAULT 1.0,
+            context TEXT,
+            mention_type TEXT,
+            relation_tier INTEGER DEFAULT 4,
+            weight REAL DEFAULT 0.25,
+            PRIMARY KEY (entity_id, chunk_id)
+        )
         """
     )
     return conn
@@ -270,6 +306,29 @@ def test_suggest_lists_cross_type_domain_fragments_without_applying_them(tmp_pat
     assert cross_type
     assert {row["id"] for row in cross_type[0]["entities"]} == {"domain-project", "domain-tool", "domain-concept"}
     assert _scalar(conn, "SELECT count(*) FROM kg_entities") == 3
+
+
+def test_apsw_fetch_dicts_handles_completed_zero_row_selects(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    assert dedup.fetch_dicts(conn, "SELECT id, name FROM kg_entities WHERE name = ?", ("missing",)) == []
+    assert dedup.suggest_candidate_clusters(conn) == []
+
+
+def test_cursor_description_only_swallows_apsw_completed_execution():
+    dedup = _load_script()
+
+    class ExecutionCompleteError(Exception):
+        pass
+
+    class FakeCursor:
+        @property
+        def description(self):
+            raise ExecutionCompleteError("not APSW")
+
+    with pytest.raises(ExecutionCompleteError, match="not APSW"):
+        dedup._cursor_description(FakeCursor())
 
 
 def test_path_purge_deletes_only_path_shaped_entities(tmp_path):
