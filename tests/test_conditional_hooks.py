@@ -568,7 +568,9 @@ class TestPromptSearchConditional:
 
     def test_main_emits_degraded_notice_on_db_connect_error(self, prompt_search, monkeypatch, capsys):
         monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
-        monkeypatch.setattr(prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
         monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
         monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: None)
         monkeypatch.setattr(
@@ -594,7 +596,9 @@ class TestPromptSearchConditional:
         fake_conn = QueryErrorConn()
 
         monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
-        monkeypatch.setattr(prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
         monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
         monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: None)
         monkeypatch.setattr(
@@ -619,7 +623,9 @@ class TestPromptSearchConditional:
 
     def test_main_emits_degraded_notice_when_db_path_missing(self, prompt_search, monkeypatch, capsys):
         monkeypatch.setattr(prompt_search, "get_db_path", lambda: None)
-        monkeypatch.setattr(prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
         monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
         monkeypatch.setattr(
             prompt_search.sys,
