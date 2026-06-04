@@ -1000,6 +1000,7 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
         sentiment_label="frustration",
         sentiment_score=-0.6,
         sentiment_signals=["damn", "broken"],
+        chunk_origin="gemini-2.5-flash-lite",
     )
 
 

@@ -19,7 +19,7 @@ import apsw
 import sqlite_vec
 
 from ._helpers import _is_sqlite_busy_error, serialize_f32
-from .chunk_origin import detect_chunk_origin
+from .chunk_origin import CHUNK_ORIGIN_UNKNOWN, detect_chunk_origin
 from .content_class import classify_content_class, normalize_content_class
 from .dedupe import (
     compute_dedupe_fields,
@@ -524,6 +524,14 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["raw_entities_json"] = json.dumps(event["entities"])
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
+    chunk_origin = str(event.get("chunk_origin") or "").strip()
+    if "chunk_origin" in cols and chunk_origin:
+        row = conn.execute("SELECT chunk_origin FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        if not row:
+            return
+        current_origin = str(row[0] or "").strip()
+        if current_origin in {"", CHUNK_ORIGIN_UNKNOWN}:
+            updates["chunk_origin"] = chunk_origin
     if "enriched_at" in cols:
         updates["enriched_at"] = datetime.now(timezone.utc).isoformat()
     if "enrich_status" in cols:

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import apsw
 
 from ._helpers import _safe_json_loads, source_aware_min_chars
+from .chunk_origin import CHUNK_ORIGIN_UNKNOWN
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ class SessionMixin:
         sentiment_label: Optional[str] = None,
         sentiment_score: Optional[float] = None,
         sentiment_signals: Optional[List[str]] = None,
+        chunk_origin: Optional[str] = None,
     ) -> None:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
@@ -176,6 +178,16 @@ class SessionMixin:
         if sentiment_signals is not None:
             sets.append("sentiment_signals = ?")
             params.append(json.dumps(sentiment_signals))
+        normalized_origin = str(chunk_origin or "").strip()
+        if (
+            normalized_origin
+            and normalized_origin != CHUNK_ORIGIN_UNKNOWN
+            and getattr(self, "_has_chunk_origin", False)
+        ):
+            sets.append(
+                "chunk_origin = CASE WHEN chunk_origin IS NULL OR chunk_origin = ? THEN ? ELSE chunk_origin END"
+            )
+            params.extend([CHUNK_ORIGIN_UNKNOWN, normalized_origin])
 
         params.append(chunk_id)
         for attempt in range(3):
