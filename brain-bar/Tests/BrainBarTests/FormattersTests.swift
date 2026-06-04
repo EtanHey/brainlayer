@@ -73,6 +73,26 @@ final class FormattersTests: XCTestCase {
         XCTAssertTrue(out.contains("rt-abc123-xyz"))
     }
 
+    func testFormatStoreResultPlainOutputOmitsANSIWhenColorDisabled() {
+        let out = Formatters.formatStoreResult(chunkId: "brainbar-abc123", useColor: false)
+        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-abc123")
+        XCTAssertFalse(out.contains("\u{1b}["))
+    }
+
+    func testFormatStoreResultIncludesTagsWhenProvided() {
+        let out = Formatters.formatStoreResult(
+            chunkId: "brainbar-tags123",
+            tags: ["correction", "orc", "phoenix"],
+            useColor: false
+        )
+        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-tags123 [tags: correction, orc, phoenix]")
+    }
+
+    func testFormatStoreResultOmitsEmptyTags() {
+        let out = Formatters.formatStoreResult(chunkId: "brainbar-notags", tags: [], useColor: false)
+        XCTAssertEqual(out, "\u{2714} Stored \u{2192} brainbar-notags")
+    }
+
     func testFormatStoreResultWithSuperseded() {
         let out = Formatters.formatStoreResult(chunkId: "new-1", superseded: "old-1")
         XCTAssertTrue(out.contains("new-1"))
@@ -81,9 +101,14 @@ final class FormattersTests: XCTestCase {
     }
 
     func testFormatStoreResultQueued() {
-        let out = Formatters.formatStoreResult(chunkId: "", queued: true)
+        let out = Formatters.formatStoreResult(chunkId: "brainbar-queued123", queued: true, useColor: false)
         XCTAssertTrue(out.contains("\u{23f3}"))  // ⏳
         XCTAssertTrue(out.contains("queued"))
+        XCTAssertEqual(
+            out,
+            "\u{23f3} Memory queued (DB busy) \u{2192} brainbar-queued123 \u{2014} will flush on next successful store."
+        )
+        XCTAssertFalse(out.contains("\u{1b}["))
     }
 
     // MARK: - Entity Card

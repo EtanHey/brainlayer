@@ -405,16 +405,82 @@ final class DatabaseTests: XCTestCase {
             busyTimeoutMillis: 1
         )
 
-        guard case .queued(let queueID, let queuedAt) = outcome else {
+        guard case .queued(let queueID, let queuedAt, let chunkID) = outcome else {
             XCTFail("Expected queued outcome, got \(outcome)")
             return
         }
         XCTAssertFalse(queueID.isEmpty)
+        XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
         let queuedPayload = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertTrue(queuedPayload.contains("Queued because the BrainBar DB handle is read-only"))
         XCTAssertTrue(queuedPayload.contains(queueID))
         XCTAssertTrue(queuedPayload.contains(queuedAt))
+        XCTAssertTrue(queuedPayload.contains(chunkID))
+    }
+
+    func testQueuedStorePreassignsChunkIDAndFlushReusesIt() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-preassigned-queue-\(UUID().uuidString).jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(tempDBPath, &lockDB, flags, nil), SQLITE_OK)
+        guard let lockDB else {
+            XCTFail("Failed to open secondary lock connection")
+            return
+        }
+        defer { sqlite3_close(lockDB) }
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        var lockHeld = true
+        defer {
+            if lockHeld {
+                sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil)
+            }
+        }
+
+        let queuedContent = "Queued store should preserve its preassigned chunk id"
+        let outcome = try db.storeOrQueueWithinBudget(
+            content: queuedContent,
+            tags: ["queue-id-reuse"],
+            importance: 6,
+            source: "mcp",
+            busyTimeoutMillis: 1
+        )
+
+        guard case .queued(let queueID, let queuedAt, let chunkID) = outcome else {
+            XCTFail("Expected queued outcome, got \(outcome)")
+            return
+        }
+        XCTAssertFalse(queueID.isEmpty)
+        XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+
+        let queuedLines = try String(contentsOf: queuePath, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+        let firstQueuedLine = try XCTUnwrap(queuedLines.first)
+        let queuedData = Data(firstQueuedLine.utf8)
+        let queuedPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: queuedData) as? [String: Any])
+        XCTAssertEqual(queuedPayload["content"] as? String, queuedContent)
+        XCTAssertEqual(queuedPayload["queue_id"] as? String, queueID)
+        XCTAssertEqual(queuedPayload["chunk_id"] as? String, chunkID)
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil), SQLITE_OK)
+        lockHeld = false
+
+        let flushed = db.flushPendingStores()
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertEqual(flushed.first?.storedChunk.chunkID, chunkID)
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT id FROM chunks WHERE content = '\(queuedContent)'"),
+            chunkID
+        )
     }
 
     func testInjectionEventsTableExists() throws {

@@ -481,7 +481,7 @@ final class MCPRouter: @unchecked Sendable {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
                 return ToolOutput(
-                    text: Formatters.formatStoreResult(chunkId: stored.chunkID),
+                    text: Formatters.formatStoreResult(chunkId: stored.chunkID, tags: tags, useColor: false),
                     metadata: [
                         "queued": false,
                         "flushed_count": flushedStores.count,
@@ -500,8 +500,8 @@ final class MCPRouter: @unchecked Sendable {
                         }
                     ]
                 )
-            case .queued(let queueID, let queuedAt):
-                return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt)
+            case .queued(let queueID, let queuedAt, let chunkID):
+                return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
             }
         } catch BrainDatabase.DBError.notOpen {
             return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp")
@@ -519,16 +519,17 @@ final class MCPRouter: @unchecked Sendable {
             importance: importance,
             source: source
         )
-        return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt)
+        return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
     }
 
-    private func queuedBrainStoreOutput(queueID: String, queuedAt: String) -> ToolOutput {
+    private func queuedBrainStoreOutput(queueID: String, queuedAt: String, chunkID: String) -> ToolOutput {
         ToolOutput(
-            text: Formatters.formatStoreResult(chunkId: "", queued: true),
+            text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
             metadata: [
                 "queued": true,
                 "queue_id": queueID,
-                "queued_at": queuedAt
+                "queued_at": queuedAt,
+                "chunk_id": chunkID
             ]
         )
     }

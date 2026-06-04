@@ -167,13 +167,18 @@ enum Formatters {
     static func formatStoreResult(
         chunkId: String,
         superseded: String? = nil,
+        tags: [String] = [],
         queued: Bool = false,
         useColor: Bool = true
     ) -> String {
         if queued {
-            return "\u{2502} \u{23f3} Memory queued (DB busy) \u{2500} will flush on next successful store."
+            let idSuffix = chunkId.isEmpty ? "" : " \u{2192} \(val(chunkId, useColor))"
+            return "\u{23f3} Memory queued (DB busy)\(idSuffix) \u{2014} will flush on next successful store."
         }
         var parts = ["\u{2714} Stored \u{2192} \(val(chunkId, useColor))"]
+        if !tags.isEmpty {
+            parts.append(" [tags: \(tags.joined(separator: ", "))]")
+        }
         if let superseded {
             parts.append(" (superseded \(val(superseded, useColor)))")
         }
