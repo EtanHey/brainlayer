@@ -6,7 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "reembed_bgem3.py"
+HF_MODEL_UNAVAILABLE_SKIP_REASON = "HF BGE-M3 model unavailable in CI/offline — infra, not a regression"
 
 
 def _create_test_db(tmp_path):
@@ -32,6 +35,49 @@ def _create_test_db(tmp_path):
     conn.commit()
     conn.close()
     return db_path
+
+
+def _assert_script_succeeded_or_skip_hf_unavailable(result: subprocess.CompletedProcess[str]) -> None:
+    if result.returncode == 0:
+        return
+
+    output = f"{result.stdout}\n{result.stderr}"
+    is_hf_model_unavailable = (
+        "huggingface_hub.errors.LocalEntryNotFoundError" in output
+        or "couldn't connect to 'https://huggingface.co'" in output
+        or "Cannot find the requested files in the disk cache and outgoing traffic has been disabled" in output
+    )
+    if is_hf_model_unavailable:
+        pytest.skip(HF_MODEL_UNAVAILABLE_SKIP_REASON)
+
+    assert result.returncode == 0, f"Script failed: {result.stderr}"
+
+
+def test_script_success_assertion_skips_offline_hf_model_unavailable() -> None:
+    result = subprocess.CompletedProcess(
+        args=["scripts/reembed_bgem3.py", "--test"],
+        returncode=1,
+        stdout="Loading BAAI/bge-m3 on cpu...\n",
+        stderr=(
+            "huggingface_hub.errors.LocalEntryNotFoundError: Cannot find the requested files in the disk cache "
+            "and outgoing traffic has been disabled."
+        ),
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="HF BGE-M3 model unavailable"):
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
+
+
+def test_script_success_assertion_preserves_real_failures() -> None:
+    result = subprocess.CompletedProcess(
+        args=["scripts/reembed_bgem3.py", "--test"],
+        returncode=1,
+        stdout="",
+        stderr="sqlite write failed",
+    )
+
+    with pytest.raises(AssertionError, match="sqlite write failed"):
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
 
 
 class TestReembedScript:
@@ -88,7 +134,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
-        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
         assert "Processed" in result.stdout or "processed" in result.stdout.lower()
 
         # Verify embeddings were updated (not all zeros anymore)
@@ -119,7 +165,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
-        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
         assert checkpoint_path.exists(), "Checkpoint file should be created"
 
         import json
@@ -159,7 +205,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
-        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
         # Should mention skipping or resuming
         output = result.stdout.lower()
         assert "skip" in output or "resum" in output or "already" in output
@@ -187,7 +233,7 @@ class TestReembedScript:
             text=True,
             timeout=300,
         )
-        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        _assert_script_succeeded_or_skip_hf_unavailable(result)
 
         conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT embedding FROM chunk_vectors_binary WHERE chunk_id = 'chunk_0'").fetchone()
