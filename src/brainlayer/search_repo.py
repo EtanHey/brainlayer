@@ -35,13 +35,14 @@ from .ingest_guard import recursive_mcp_output_reason
 _HYBRID_CACHE_TTL = 60.0  # seconds
 _HYBRID_CACHE_MAX = 128  # max entries (LRU eviction)
 _MMR_CANDIDATE_LIMIT = 50
+_DEFAULT_MMR_LAMBDA = 0.7
 try:
-    _MMR_LAMBDA = float(os.environ.get("BRAINLAYER_MMR_LAMBDA", "1.0"))
+    _MMR_LAMBDA = float(os.environ.get("BRAINLAYER_MMR_LAMBDA", str(_DEFAULT_MMR_LAMBDA)))
     if not math.isfinite(_MMR_LAMBDA):
         raise ValueError
     _MMR_LAMBDA = max(0.0, min(1.0, _MMR_LAMBDA))
 except (TypeError, ValueError):
-    _MMR_LAMBDA = 1.0
+    _MMR_LAMBDA = _DEFAULT_MMR_LAMBDA
 _FILTERED_KNN_MAX = 2000
 # BrainBar helper requests need a bounded candidate scan so semantic results
 # can beat the Swift fallback budget even when checkpoint/audit filters are large.
@@ -603,7 +604,19 @@ class SearchMixin:
         top_candidates = scored[:candidate_limit]
         tail_candidates = scored[candidate_limit:]
 
-        embeddings_by_id = self._load_chunk_embeddings([candidate[1] for candidate in top_candidates])
+        raw_embeddings_by_id = self._load_chunk_embeddings([candidate[1] for candidate in top_candidates])
+        embeddings_by_id: dict[str, np.ndarray] = {}
+        expected_shape: tuple[int, ...] | None = None
+        for chunk_id, embedding in raw_embeddings_by_id.items():
+            vector = np.asarray(embedding, dtype=np.float32)
+            if vector.ndim != 1 or vector.size == 0 or not np.isfinite(vector).all():
+                continue
+            if expected_shape is None:
+                expected_shape = vector.shape
+            if vector.shape != expected_shape:
+                continue
+            embeddings_by_id[chunk_id] = vector
+
         mmr_candidates = [candidate for candidate in top_candidates if candidate[1] in embeddings_by_id]
         if len(mmr_candidates) < 2:
             return scored
@@ -616,11 +629,25 @@ class SearchMixin:
             normalized_relevance = np.ones_like(relevance)
 
         matrix = np.stack([embeddings_by_id[candidate[1]] for candidate in mmr_candidates]).astype(
-            np.float32, copy=False
+            np.float64, copy=False
         )
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-12)
-        cosine = np.clip((matrix / norms) @ (matrix / norms).T, -1.0, 1.0)
+        usable_rows = np.isfinite(norms[:, 0]) & (norms[:, 0] > 0.0)
+        if not np.all(usable_rows):
+            mmr_candidates = [candidate for candidate, usable in zip(mmr_candidates, usable_rows) if usable]
+            matrix = matrix[usable_rows]
+            norms = norms[usable_rows]
+            normalized_relevance = normalized_relevance[usable_rows]
+        if len(mmr_candidates) < 2:
+            return scored
+
+        normalized_matrix = matrix / np.maximum(norms, 1e-12)
+        normalized_matrix = np.nan_to_num(normalized_matrix, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        normalized_matrix = np.clip(normalized_matrix, -1.0, 1.0)
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            cosine = normalized_matrix @ normalized_matrix.T
+        cosine = np.nan_to_num(cosine, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+        cosine = np.clip(cosine, -1.0, 1.0)
         np.fill_diagonal(cosine, 0.0)
 
         selected: list[int] = [int(np.argmax(normalized_relevance))]
@@ -641,9 +668,10 @@ class SearchMixin:
         reranked = [mmr_candidates[idx] for idx in selected]
         reranked.extend(candidate for candidate in mmr_candidates if candidate[1] not in reranked_ids)
 
+        mmr_candidate_ids = {candidate[1] for candidate in mmr_candidates}
         reranked_iter = iter(reranked)
         recombined = [
-            next(reranked_iter) if candidate[1] in embeddings_by_id else candidate for candidate in top_candidates
+            next(reranked_iter) if candidate[1] in mmr_candidate_ids else candidate for candidate in top_candidates
         ]
         return recombined + tail_candidates
 
