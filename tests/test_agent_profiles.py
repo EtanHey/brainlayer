@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -13,6 +14,10 @@ from brainlayer.vector_store import VectorStore
 
 def _embed(seed: float) -> list[float]:
     return [seed + (i / 10000.0) for i in range(1024)]
+
+
+def _created_at_days_ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _insert_chunk(
@@ -194,7 +199,7 @@ def test_hybrid_search_agent_profile_scales_recency_intent_neutral_point(monkeyp
             content="needle phrase archive result",
             importance=1.0,
             embedding=query_embedding,
-            created_at="2026-01-01T00:00:00Z",
+            created_at=_created_at_days_ago(150),
         )
         _insert_chunk(
             store,
@@ -202,7 +207,7 @@ def test_hybrid_search_agent_profile_scales_recency_intent_neutral_point(monkeyp
             content="needle phrase recent result",
             importance=1.0,
             embedding=_embed(0.3),
-            created_at="2026-05-28T00:00:00Z",
+            created_at=_created_at_days_ago(2),
         )
         store.build_binary_index()
         store._trigram_fts_available = False
