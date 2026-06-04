@@ -44,6 +44,48 @@ def test_writer_init_sets_wal_autocheckpoint(tmp_path, monkeypatch):
         store.close()
 
 
+def test_readonly_primary_connection_uses_bounded_reader_pragmas(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_READ_BUSY_TIMEOUT_MS", raising=False)
+    store = VectorStore(tmp_path / "pragma-readonly-primary.db")
+    store.close()
+
+    reader = VectorStore(tmp_path / "pragma-readonly-primary.db", readonly=True)
+    try:
+        assert _pragma_value(reader.conn, "busy_timeout") == 5000
+        assert _pragma_value(reader.conn, "query_only") == 1
+        assert _pragma_value(reader.conn, "wal_autocheckpoint") == 0
+    finally:
+        reader.close()
+
+
+def test_threadlocal_read_connection_uses_bounded_reader_pragmas(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_READ_BUSY_TIMEOUT_MS", raising=False)
+    store = VectorStore(tmp_path / "pragma-threadlocal-read.db")
+    store.close()
+
+    reader = VectorStore(tmp_path / "pragma-threadlocal-read.db", readonly=True)
+    try:
+        conn = reader._get_read_conn()
+        assert _pragma_value(conn, "busy_timeout") == 5000
+        assert _pragma_value(conn, "query_only") == 1
+        assert _pragma_value(conn, "wal_autocheckpoint") == 0
+    finally:
+        reader.close()
+
+
+def test_read_busy_timeout_env_override_applies_to_read_connections(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_READ_BUSY_TIMEOUT_MS", "750")
+    store = VectorStore(tmp_path / "pragma-read-busy-env.db")
+    store.close()
+
+    reader = VectorStore(tmp_path / "pragma-read-busy-env.db", readonly=True)
+    try:
+        assert _pragma_value(reader.conn, "busy_timeout") == 750
+        assert _pragma_value(reader._get_read_conn(), "busy_timeout") == 750
+    finally:
+        reader.close()
+
+
 def test_pragma_env_overrides_apply_to_new_connections(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_WAL_AUTOCHECKPOINT", "2222")
     monkeypatch.setenv("BRAINLAYER_READ_MMAP_BYTES", "0")

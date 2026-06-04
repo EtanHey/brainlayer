@@ -59,6 +59,24 @@ from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
 
+_DEFAULT_BUSY_TIMEOUT_MS = 30_000
+_DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
+_MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if value <= 0 or value > _MAX_APSW_BUSY_TIMEOUT_MS:
+        return default
+    return value
+
+
+def _read_busy_timeout_ms() -> int:
+    return _positive_int_env("BRAINLAYER_READ_BUSY_TIMEOUT_MS", _DEFAULT_READ_BUSY_TIMEOUT_MS)
+
 
 def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     """Set busy_timeout on every new connection before any other hooks.
@@ -67,7 +85,8 @@ def _set_busy_timeout_hook(conn: apsw.Connection) -> None:
     the Connection() constructor. Without busy_timeout set first, this PRAGMA
     fails with BusyError when other processes hold the DB lock.
     """
-    conn.setbusytimeout(30_000)  # 30 seconds — needed for parallel enrichment workers + MCP
+    timeout_ms = _read_busy_timeout_ms() if conn.readonly("main") else _DEFAULT_BUSY_TIMEOUT_MS
+    conn.setbusytimeout(timeout_ms)
 
 
 # Register busy_timeout hook BEFORE bestpractice hooks so it fires first.
@@ -86,6 +105,15 @@ def _int_env(name: str, default: int) -> int:
 
 def _read_mmap_bytes() -> int:
     return max(_int_env("BRAINLAYER_READ_MMAP_BYTES", 30_000_000_000), 0)
+
+
+def _configure_reader_pragmas(conn: apsw.Connection) -> None:
+    conn.setbusytimeout(_read_busy_timeout_ms())
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA wal_autocheckpoint = 0")
+    cursor.execute(f"PRAGMA mmap_size = {_read_mmap_bytes()}")
+    cursor.execute(f"PRAGMA cache_size = {_read_cache_size_kb()}")
+    cursor.execute("PRAGMA query_only = ON")
 
 
 def _is_retryable_init_error(exc: BaseException) -> bool:
@@ -453,10 +481,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
     def _init_readonly_db(self) -> None:
         """Open an existing DB in readonly mode without running migrations."""
         self.conn = apsw.Connection(str(self.db_path), flags=apsw.SQLITE_OPEN_READONLY)
-        self.conn.setbusytimeout(10_000)
         self.conn.enableloadextension(True)
         self.conn.loadextension(sqlite_vec.loadable_path())
         self.conn.enableloadextension(False)
+        _configure_reader_pragmas(self.conn)
 
         cursor = self.conn.cursor()
         existing_tables = {
@@ -1646,10 +1674,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             conn.enableloadextension(True)
             conn.loadextension(sqlite_vec.loadable_path())
             conn.enableloadextension(False)
-            conn.setbusytimeout(30_000)
-            cursor = conn.cursor()
-            cursor.execute(f"PRAGMA mmap_size = {_read_mmap_bytes()}")
-            cursor.execute(f"PRAGMA cache_size = {_read_cache_size_kb()}")
+            _configure_reader_pragmas(conn)
             self._local.read_conn = conn
         return conn
 
