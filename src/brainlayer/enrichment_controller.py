@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from .chunk_origin import CHUNK_ORIGIN_GEMINI_FLASH_LITE
 from .pipeline.enrichment import build_external_prompt, parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
@@ -40,6 +41,7 @@ DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600
 DEFAULT_ENRICH_IDLE_POLL_SECONDS = 30.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
+_DEFAULT_CHUNK_ORIGIN = object()
 
 # Gemini Developer API paid-tier text prices per 1M tokens for gemini-2.5-flash-lite.
 GEMINI_FLASH_LITE_TEXT_PRICES_USD_PER_1M = {
@@ -483,40 +485,63 @@ def _current_post_write_yield_seconds() -> float:
 
 
 def _current_enrichment_chunk_origin() -> str:
-    return str(GEMINI_REALTIME_MODEL).strip() or "gemini"
+    return str(GEMINI_REALTIME_MODEL).strip() or CHUNK_ORIGIN_GEMINI_FLASH_LITE
 
 
-def _enrichment_update_payload(chunk: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
+def _enrichment_update_payload(
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None | object = _DEFAULT_CHUNK_ORIGIN,
+) -> dict[str, Any]:
     content = chunk.get("content", "")
+    if chunk_origin is _DEFAULT_CHUNK_ORIGIN:
+        normalized_origin = _current_enrichment_chunk_origin()
+    else:
+        normalized_origin = str(chunk_origin or "").strip() or None
     return {
         "chunk_id": chunk["id"],
         "enrichment": enrichment,
         "content_hash": _content_hash(content) if content else None,
         "entities": enrichment.get("entities", []),
-        "chunk_origin": _current_enrichment_chunk_origin(),
+        "chunk_origin": normalized_origin,
     }
 
 
-def _enqueue_enrichment_write(chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+def _enqueue_enrichment_write(
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None | object = _DEFAULT_CHUNK_ORIGIN,
+) -> None:
     from .queue_io import enqueue_enrichment_updates
 
     try:
-        enqueue_enrichment_updates([_enrichment_update_payload(chunk, enrichment)])
+        enqueue_enrichment_updates([_enrichment_update_payload(chunk, enrichment, chunk_origin=chunk_origin)])
     except Exception:
         logger.exception("Failed to enqueue enrichment update for chunk %s", chunk.get("id"))
         raise
 
 
-def _enqueue_enrichment_write_batch(items: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
+def _enqueue_enrichment_write_batch(items: list[tuple[dict[str, Any], dict[str, Any], str | None]]) -> None:
     if not items:
         return
 
     from .queue_io import enqueue_enrichment_updates
 
     try:
-        enqueue_enrichment_updates([_enrichment_update_payload(chunk, enrichment) for chunk, enrichment in items])
+        enqueue_enrichment_updates(
+            [
+                _enrichment_update_payload(
+                    chunk,
+                    enrichment,
+                    chunk_origin=None if counted_as == "skipped" else _DEFAULT_CHUNK_ORIGIN,
+                )
+                for chunk, enrichment, counted_as in items
+            ]
+        )
     except Exception:
-        chunk_ids = ",".join(str(chunk.get("id")) for chunk, _ in items)
+        chunk_ids = ",".join(str(chunk.get("id")) for chunk, _, _ in items)
         logger.exception("Failed to enqueue enrichment update batch for chunks %s", chunk_ids)
         raise
 
@@ -557,7 +582,7 @@ class _EnrichmentWriteBatcher:
         if not self._pending:
             return
         pending = self._pending
-        _enqueue_enrichment_write_batch([(chunk, enrichment) for chunk, enrichment, _ in pending])
+        _enqueue_enrichment_write_batch(pending)
         self._pending = []
         self._last_flush = None
 
@@ -598,7 +623,7 @@ def _meta_research_enrichment(chunk: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
-    _enqueue_enrichment_write(chunk, _meta_research_enrichment(chunk))
+    _enqueue_enrichment_write(chunk, _meta_research_enrichment(chunk), chunk_origin=None)
 
 
 def _ensure_enrichment_columns(store, *, yield_after: bool = True) -> None:
@@ -976,11 +1001,18 @@ def _generate_content_with_rate_limit(
     return response
 
 
-def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) -> None:
+def _apply_enrichment(
+    store,
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None = None,
+) -> None:
     resolved_queries = enrichment.get("resolved_queries")
     legacy_resolved_query = enrichment.get("resolved_query")
     if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
         legacy_resolved_query = resolved_queries[0]
+    normalized_origin = str(chunk_origin or _current_enrichment_chunk_origin()).strip()
 
     store.update_enrichment(
         chunk_id=chunk["id"],
@@ -999,6 +1031,7 @@ def _apply_enrichment(store, chunk: dict[str, Any], enrichment: dict[str, Any]) 
         sentiment_label=enrichment.get("sentiment_label"),
         sentiment_score=enrichment.get("sentiment_score"),
         sentiment_signals=enrichment.get("sentiment_signals"),
+        chunk_origin=normalized_origin or None,
     )
     entities = enrichment.get("entities", [])
     # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;

@@ -74,11 +74,11 @@ def test_enrichment_batcher_flushes_overdue_single_pending_item(monkeypatch):
     batcher.enqueue(_candidate("c0"), {"summary": "s0", "tags": []})
     batcher.enqueue(_candidate("c1"), {"summary": "s1", "tags": []})
 
-    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"]]
+    assert [[chunk["id"] for chunk, _, _ in batch] for batch in flushed_batches] == [["c0"]]
 
     batcher.flush()
 
-    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"], ["c1"]]
+    assert [[chunk["id"] for chunk, _, _ in batch] for batch in flushed_batches] == [["c0"], ["c1"]]
 
 
 def test_enrichment_batcher_retains_pending_items_when_flush_fails(monkeypatch):
@@ -107,7 +107,7 @@ def test_enrichment_batcher_retains_pending_items_when_flush_fails(monkeypatch):
     batcher.flush()
 
     assert batcher._pending == []
-    assert [[chunk["id"] for chunk, _ in batch] for batch in flushed_batches] == [["c0"]]
+    assert [[chunk["id"] for chunk, _, _ in batch] for batch in flushed_batches] == [["c0"]]
 
 
 def test_enrichment_batcher_retains_current_item_when_overdue_flush_fails(monkeypatch):

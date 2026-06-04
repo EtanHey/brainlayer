@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
 
+from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
 from ..vector_store import VectorStore
 
 # Thread-local storage for per-thread VectorStore connections.
@@ -83,6 +84,19 @@ def _detect_default_backend() -> str:
 
 
 ENRICH_BACKEND = _detect_default_backend()
+
+
+def _chunk_origin_for_backend(backend: Optional[str] = None) -> str:
+    effective = str(backend or ENRICH_BACKEND or "ollama").strip().lower()
+    if _fallback_active and effective != "groq":
+        effective = "ollama" if effective == "mlx" else "mlx"
+    if effective == "groq":
+        return CHUNK_ORIGIN_GROQ
+    if effective == "mlx":
+        return CHUNK_ORIGIN_MLX
+    return CHUNK_ORIGIN_OLLAMA
+
+
 OLLAMA_URL = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 OLLAMA_BASE_URL = OLLAMA_URL.rsplit("/api/", 1)[0] if "/api/" in OLLAMA_URL else OLLAMA_URL.rstrip("/")
 # MLX URL: scripts also check MLX_URL for health, so accept both env vars
@@ -993,6 +1007,7 @@ def _enrich_one(
             sentiment_label=sentiment_label,
             sentiment_score=sentiment_score,
             sentiment_signals=sentiment_signals,
+            chunk_origin=_chunk_origin_for_backend(backend),
         )
 
         # KG extraction: extract entities from enriched chunk into KG tables
