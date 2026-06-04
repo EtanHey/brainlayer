@@ -2,6 +2,8 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 
 def _load_script():
     path = Path(__file__).resolve().parent.parent / "scripts" / "kg_entity_dedup.py"
@@ -166,6 +168,81 @@ def test_mapping_driven_merge_does_not_fuzzy_merge_david_heyman(tmp_path):
     assert _scalar(conn, "SELECT count(*) FROM kg_entity_chunks WHERE entity_id = 'person-david'") == 1
 
 
+def test_reviewed_name_mapping_merges_exact_etan_fragments_without_company_or_david(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+    _entity(conn, "person-etan", "person", "Etan Heyman")
+    _entity(conn, "person-etan-short", "person", "Etan")
+    _entity(conn, "person-eitan", "person", "Eitan")
+    _entity(conn, "person-typo", "person", "Eitan Heysman")
+    _entity(conn, "person-david", "person", "David Heyman")
+    _entity(conn, "company-eitan", "company", "Eitan Heyman Development")
+    conn.execute(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context)
+        VALUES ('person-eitan', 'chunk-person', 0.9, 'Eitan context')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type)
+        VALUES ('rel-person', 'person-typo', 'company-eitan', 'mentions')
+        """
+    )
+
+    stats = dedup.apply_reviewed_name_mapping(
+        conn,
+        [
+            {
+                "label": "Etan exact reviewed fragments",
+                "canonical": {"entity_type": "person", "name": "Etan Heyman"},
+                "source_names": [
+                    {"entity_type": "person", "name": "Etan"},
+                    {"entity_type": "person", "name": "Eitan"},
+                    {"entity_type": "person", "name": "Eitan Heysman"},
+                ],
+                "aliases": ["EHeyman", "ETAN HEYMAN"],
+            }
+        ],
+    )
+
+    assert stats["name_merge_groups"] == 1
+    assert stats["merge_sources"] == 3
+    assert (
+        _scalar(
+            conn, "SELECT count(*) FROM kg_entities WHERE id IN ('person-etan-short', 'person-eitan', 'person-typo')"
+        )
+        == 0
+    )
+    assert conn.execute("SELECT name FROM kg_entities WHERE id = 'person-david'").fetchone()[0] == "David Heyman"
+    assert (
+        conn.execute("SELECT name FROM kg_entities WHERE id = 'company-eitan'").fetchone()[0]
+        == "Eitan Heyman Development"
+    )
+    assert conn.execute("SELECT source_id FROM kg_relations WHERE id = 'rel-person'").fetchone()[0] == "person-etan"
+    aliases = {row[0] for row in conn.execute("SELECT alias FROM kg_entity_aliases WHERE entity_id = 'person-etan'")}
+    assert {"Etan", "Eitan", "Eitan Heysman", "EHeyman", "ETAN HEYMAN"}.issubset(aliases)
+
+
+def test_reviewed_name_mapping_rejects_david_heyman_even_if_requested(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+    _entity(conn, "person-etan", "person", "Etan Heyman")
+    _entity(conn, "person-david", "person", "David Heyman")
+
+    with pytest.raises(RuntimeError, match="blocked never-merge name"):
+        dedup.apply_reviewed_name_mapping(
+            conn,
+            [
+                {
+                    "label": "bad person merge",
+                    "canonical": {"entity_type": "person", "name": "Etan Heyman"},
+                    "source_names": [{"entity_type": "person", "name": "David Heyman"}],
+                }
+            ],
+        )
+
+
 def test_suggest_lists_candidates_without_applying_them(tmp_path):
     dedup = _load_script()
     conn = _connect_fixture(tmp_path)
@@ -178,6 +255,21 @@ def test_suggest_lists_candidates_without_applying_them(tmp_path):
     assert normalized_clusters
     assert {row["id"] for row in normalized_clusters[0]["entities"]} == {"project-brainlayer", "project-brain-layer"}
     assert _scalar(conn, "SELECT count(*) FROM kg_entities") == 2
+
+
+def test_suggest_lists_cross_type_domain_fragments_without_applying_them(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+    _entity(conn, "domain-project", "project", "brainlayer.etanheyman.com")
+    _entity(conn, "domain-tool", "tool", "brainlayer.etanheyman.com")
+    _entity(conn, "domain-concept", "concept", "brainlayer.etanheyman.com")
+
+    suggestions = dedup.suggest_candidate_clusters(conn)
+
+    cross_type = [cluster for cluster in suggestions if cluster["reason"] == "normalized-name-cross-type"]
+    assert cross_type
+    assert {row["id"] for row in cross_type[0]["entities"]} == {"domain-project", "domain-tool", "domain-concept"}
+    assert _scalar(conn, "SELECT count(*) FROM kg_entities") == 3
 
 
 def test_path_purge_deletes_only_path_shaped_entities(tmp_path):

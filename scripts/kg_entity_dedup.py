@@ -9,14 +9,24 @@ Approved merges are deliberately explicit. Do not turn --suggest output into
 automatic apply behavior.
 
 Optional mapping JSON:
-[
-  {
-    "label": "Etan canonical",
-    "canonical": {"id": "person-etan", "entity_type": "person", "name": "Etan Heyman"},
-    "sources": ["person-etan-fragment"],
-    "aliases": ["Etan"]
-  }
-]
+{
+  "merges": [
+    {
+      "label": "canonical by id",
+      "canonical": {"id": "person-etan", "entity_type": "person", "name": "Etan Heyman"},
+      "sources": ["person-etan-fragment"],
+      "aliases": ["Etan"]
+    }
+  ],
+  "name_merges": [
+    {
+      "label": "canonical by exact reviewed names",
+      "canonical": {"entity_type": "person", "name": "Etan Heyman"},
+      "source_names": [{"entity_type": "person", "name": "Etan"}],
+      "aliases": ["Etan"]
+    }
+  ]
+}
 """
 
 from __future__ import annotations
@@ -50,6 +60,12 @@ except Exception:  # pragma: no cover - fallback only if the sibling script is u
 # Human-approved merge section. Keep this empty unless BL-LEAD has reviewed the
 # exact canonical/source mapping. --apply never consumes --suggest output.
 APPROVED_MERGES: list[dict[str, Any]] = []
+APPROVED_NAME_MERGES: list[dict[str, Any]] = []
+
+# Explicit hard stop for names that must never be merged by this tooling, even if
+# a later mapping accidentally includes them.
+NEVER_MERGE_NAMES = {"David Heyman"}
+NEVER_MERGE_NAME_KEYS = {name.casefold() for name in NEVER_MERGE_NAMES}
 
 KG_TABLES = ("kg_entities", "kg_relations", "kg_entity_chunks", "kg_entity_aliases")
 FILE_PATH_PREFIXES = (
@@ -168,6 +184,15 @@ def _aliases(group: dict[str, Any]) -> list[str]:
     return raw_aliases
 
 
+def _blocked_name(name: str | None) -> bool:
+    return isinstance(name, str) and name.casefold() in NEVER_MERGE_NAME_KEYS
+
+
+def _raise_if_blocked_name(name: str | None) -> None:
+    if _blocked_name(name):
+        raise RuntimeError(f"blocked never-merge name in reviewed mapping: {name}")
+
+
 def ensure_canonical_entity(conn: Any, group: dict[str, Any]) -> str:
     canonical_id = _canonical_id(group)
     adapter = MergeStoreAdapter(conn)
@@ -223,6 +248,7 @@ def apply_approved_mapping(conn: Any, mapping: list[dict[str, Any]]) -> Counter[
         canonical = adapter.get_entity(canonical_id)
         if not canonical:
             raise RuntimeError(f"canonical entity unavailable after ensure: {canonical_id}")
+        _raise_if_blocked_name(canonical.get("name"))
 
         adapter.add_entity_alias(canonical["name"], canonical_id, alias_type="canonical")
         for alias in _aliases(group):
@@ -234,11 +260,125 @@ def apply_approved_mapping(conn: Any, mapping: list[dict[str, Any]]) -> Counter[
             if not source:
                 stats["missing_sources"] += 1
                 continue
+            _raise_if_blocked_name(source.get("name"))
             adapter.add_entity_alias(source["name"], canonical_id, alias_type="approved_merge")
             merge_stats = merge_entities_preserving_links(adapter, canonical_id, source_id)
             stats.update({f"merge_{key}": value for key, value in merge_stats.items()})
             stats["merge_sources"] += 1
         stats["merge_groups"] += 1
+    return stats
+
+
+def _source_name_specs(group: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_specs = group.get("source_names", [])
+    if raw_specs is None:
+        return []
+    if not isinstance(raw_specs, list):
+        raise ValueError(f"merge group {group.get('label', '<unnamed>')} source_names must be a list")
+    specs = []
+    for raw_spec in raw_specs:
+        if isinstance(raw_spec, str):
+            specs.append({"name": raw_spec})
+            continue
+        if not isinstance(raw_spec, dict) or not isinstance(raw_spec.get("name"), str):
+            raise ValueError("source_names entries must be strings or objects with a string name")
+        specs.append(dict(raw_spec))
+    return specs
+
+
+def _entity_type_filter(spec: dict[str, Any]) -> list[str]:
+    if isinstance(spec.get("entity_type"), str):
+        return [spec["entity_type"]]
+    entity_types = spec.get("entity_types")
+    if entity_types is None:
+        return []
+    if not isinstance(entity_types, list) or not all(isinstance(entity_type, str) for entity_type in entity_types):
+        raise ValueError("entity_types must be a list of strings")
+    return entity_types
+
+
+def _resolve_canonical_by_name(conn: Any, group: dict[str, Any]) -> dict[str, Any]:
+    canonical = group.get("canonical") or {}
+    if not isinstance(canonical, dict):
+        raise ValueError(f"merge group {group.get('label', '<unnamed>')} canonical must be an object")
+    if isinstance(canonical.get("id"), str):
+        rows = fetch_dicts(conn, "SELECT id, name, entity_type FROM kg_entities WHERE id = ?", (canonical["id"],))
+    else:
+        name = canonical.get("name")
+        entity_type = canonical.get("entity_type")
+        if not isinstance(name, str) or not isinstance(entity_type, str):
+            raise ValueError("name-based canonical must define canonical.name and canonical.entity_type")
+        _raise_if_blocked_name(name)
+        rows = fetch_dicts(
+            conn,
+            "SELECT id, name, entity_type FROM kg_entities WHERE entity_type = ? AND name = ?",
+            (entity_type, name),
+        )
+    if len(rows) != 1:
+        raise RuntimeError(f"canonical exact-name lookup returned {len(rows)} rows for {canonical!r}")
+    _raise_if_blocked_name(rows[0]["name"])
+    return rows[0]
+
+
+def _resolve_source_name_spec(conn: Any, spec: dict[str, Any], canonical_id: str) -> list[dict[str, Any]]:
+    name = spec["name"]
+    _raise_if_blocked_name(name)
+    entity_types = _entity_type_filter(spec)
+    params: list[Any] = [name]
+    type_clause = ""
+    if entity_types:
+        type_clause = f" AND entity_type IN ({_placeholders(entity_types)})"
+        params.extend(entity_types)
+    rows = fetch_dicts(
+        conn,
+        f"""
+        SELECT id, name, entity_type
+        FROM kg_entities
+        WHERE name = ?{type_clause}
+        ORDER BY entity_type, id
+        """,
+        params,
+    )
+    resolved = []
+    for row in rows:
+        _raise_if_blocked_name(row["name"])
+        if row["id"] != canonical_id:
+            resolved.append(row)
+    if not resolved and spec.get("required", True):
+        raise RuntimeError(f"source exact-name lookup returned no mergeable rows for {spec!r}")
+    return resolved
+
+
+def reviewed_name_mapping_to_id_mapping(conn: Any, mapping: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    id_mapping = []
+    for group in mapping:
+        canonical = _resolve_canonical_by_name(conn, group)
+        source_ids: list[str] = []
+        for spec in _source_name_specs(group):
+            for source in _resolve_source_name_spec(conn, spec, canonical["id"]):
+                if source["id"] not in source_ids:
+                    source_ids.append(source["id"])
+        id_mapping.append(
+            {
+                "label": group.get("label", canonical["id"]),
+                "canonical": {
+                    "id": canonical["id"],
+                    "entity_type": canonical["entity_type"],
+                    "name": canonical["name"],
+                },
+                "sources": source_ids,
+                "aliases": _aliases(group)
+                + [spec["name"] for spec in _source_name_specs(group) if not _blocked_name(spec["name"])],
+            }
+        )
+    return id_mapping
+
+
+def apply_reviewed_name_mapping(conn: Any, mapping: list[dict[str, Any]]) -> Counter[str]:
+    """Resolve exact reviewed source_names, then apply the same ID merge path."""
+    stats = apply_approved_mapping(conn, reviewed_name_mapping_to_id_mapping(conn, mapping))
+    if mapping:
+        stats["name_merge_groups"] += len(mapping)
     return stats
 
 
@@ -353,10 +493,12 @@ def suggest_candidate_clusters(conn: Any, *, min_shared_chunks: int = 2) -> list
     )
     suggestions: list[dict[str, Any]] = []
     by_normalized: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    by_normalized_all: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         key = normalize_entity_name(str(row["name"]))
         if key and not path_pseudo_entity_reason(str(row["name"])):
             by_normalized[(str(row["entity_type"]), key)].append(row)
+            by_normalized_all[key].append(row)
     for (entity_type, key), family in sorted(by_normalized.items()):
         if len(family) > 1:
             suggestions.append(
@@ -364,6 +506,17 @@ def suggest_candidate_clusters(conn: Any, *, min_shared_chunks: int = 2) -> list
                     "reason": "normalized-name",
                     "key": key,
                     "entity_type": entity_type,
+                    "entities": family,
+                }
+            )
+    for key, family in sorted(by_normalized_all.items()):
+        entity_types = {str(row["entity_type"]) for row in family}
+        if len(family) > 1 and len(entity_types) > 1:
+            suggestions.append(
+                {
+                    "reason": "normalized-name-cross-type",
+                    "key": key,
+                    "entity_types": sorted(entity_types),
                     "entities": family,
                 }
             )
@@ -519,20 +672,25 @@ def preview_merge_groups(conn: Any, mapping: list[dict[str, Any]]) -> list[dict[
     return previews
 
 
-def build_dry_run_diff(conn: Any, mapping: list[dict[str, Any]]) -> dict[str, Any]:
+def build_dry_run_diff(
+    conn: Any, mapping: list[dict[str, Any]], name_mapping: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    name_mapping = name_mapping or []
     before = table_counts(conn)
     purge_candidates = find_path_pseudo_entities(conn)
     clone = clone_kg_subset(conn)
     merge_stats = apply_approved_mapping(clone, mapping)
+    name_merge_stats = apply_reviewed_name_mapping(clone, name_mapping)
     purge_stats = purge_entities(clone, find_path_pseudo_entities(clone))
     after = table_counts(clone)
     clone.close()
     return {
         "before": before,
         "after": after,
-        "merge_previews": preview_merge_groups(conn, mapping),
+        "merge_previews": preview_merge_groups(conn, mapping)
+        + preview_merge_groups(conn, reviewed_name_mapping_to_id_mapping(conn, name_mapping)),
         "purge_candidates": purge_candidates,
-        "merge_stats": dict(merge_stats),
+        "merge_stats": dict(merge_stats + name_merge_stats),
         "purge_stats": dict(purge_stats),
     }
 
@@ -587,6 +745,11 @@ def print_suggestions(suggestions: list[dict[str, Any]]) -> None:
                 f"  {index}. normalized-name key={suggestion['key']!r} "
                 f"type={suggestion['entity_type']} entities={len(suggestion['entities'])}"
             )
+        elif suggestion["reason"] == "normalized-name-cross-type":
+            print(
+                f"  {index}. normalized-name-cross-type key={suggestion['key']!r} "
+                f"types={','.join(suggestion['entity_types'])} entities={len(suggestion['entities'])}"
+            )
         else:
             print(f"  {index}. shared-chunks count={suggestion['shared_chunks']}")
         for entity in suggestion["entities"]:
@@ -607,8 +770,14 @@ def _batches(values: list[dict[str, Any]], batch_size: int) -> list[list[dict[st
 
 
 def apply_with_safety(
-    conn: Any, mapping: list[dict[str, Any]], *, batch_size: int, checkpoint_every: int
+    conn: Any,
+    mapping: list[dict[str, Any]],
+    *,
+    name_mapping: list[dict[str, Any]] | None = None,
+    batch_size: int,
+    checkpoint_every: int,
 ) -> Counter[str]:
+    name_mapping = name_mapping or []
     stats: Counter[str] = Counter()
     print("Safety: verify enrichment workers are stopped before running this bulk operation.")
     print("Safety: script checkpoints WAL before apply, after configured batches, and after apply.")
@@ -618,6 +787,14 @@ def apply_with_safety(
         execute(conn, "BEGIN IMMEDIATE")
         try:
             stats.update(apply_approved_mapping(conn, [group]))
+            execute(conn, "COMMIT")
+        except Exception:
+            execute(conn, "ROLLBACK")
+            raise
+    for group in name_mapping:
+        execute(conn, "BEGIN IMMEDIATE")
+        try:
+            stats.update(apply_reviewed_name_mapping(conn, [group]))
             execute(conn, "COMMIT")
         except Exception:
             execute(conn, "ROLLBACK")
@@ -639,15 +816,21 @@ def apply_with_safety(
     return stats
 
 
-def load_mapping(path: Path | None) -> list[dict[str, Any]]:
+def load_mapping(path: Path | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if path is None:
-        return list(APPROVED_MERGES)
+        return list(APPROVED_MERGES), list(APPROVED_NAME_MERGES)
     data = json.loads(path.read_text())
     if isinstance(data, dict):
-        data = data.get("merges", [])
-    if not isinstance(data, list) or not all(isinstance(group, dict) for group in data):
-        raise ValueError("--mapping must be a JSON list, or an object with a 'merges' list")
-    return data
+        id_mapping = data.get("merges", data.get("id_merges", []))
+        name_mapping = data.get("name_merges", [])
+    else:
+        id_mapping = data
+        name_mapping = []
+    if not isinstance(id_mapping, list) or not all(isinstance(group, dict) for group in id_mapping):
+        raise ValueError("--mapping merges must be a JSON list")
+    if not isinstance(name_mapping, list) or not all(isinstance(group, dict) for group in name_mapping):
+        raise ValueError("--mapping name_merges must be a JSON list")
+    return id_mapping, name_mapping
 
 
 def main() -> int:
@@ -668,14 +851,14 @@ def main() -> int:
     if args.batch_size <= 0:
         parser.error("--batch-size must be positive")
 
-    mapping = load_mapping(args.mapping)
+    mapping, name_mapping = load_mapping(args.mapping)
     store = VectorStore(args.db, readonly=not args.apply)
     try:
         if args.suggest:
             print_suggestions(suggest_candidate_clusters(store.conn, min_shared_chunks=args.min_shared_chunks))
             return 0
 
-        diff = build_dry_run_diff(store.conn, mapping)
+        diff = build_dry_run_diff(store.conn, mapping, name_mapping)
         print_diff(diff)
         if not args.apply:
             print("To apply: review the mapping, stop enrichment, then rerun with --apply")
@@ -684,6 +867,7 @@ def main() -> int:
         stats = apply_with_safety(
             store.conn,
             mapping,
+            name_mapping=name_mapping,
             batch_size=args.batch_size,
             checkpoint_every=args.checkpoint_every,
         )
