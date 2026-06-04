@@ -473,11 +473,39 @@ def find_slash_command_entities(conn: Any) -> list[dict[str, Any]]:
     return commands
 
 
+def _same_name_tool(conn: Any, name: str, exclude_id: str) -> dict[str, Any] | None:
+    rows = fetch_dicts(
+        conn,
+        """
+        SELECT id, name, entity_type
+        FROM kg_entities
+        WHERE entity_type = 'tool'
+          AND name = ?
+          AND id != ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (name, exclude_id),
+    )
+    return rows[0] if rows else None
+
+
 def reclassify_slash_commands(conn: Any) -> Counter[str]:
     commands = find_slash_command_entities(conn)
     stats: Counter[str] = Counter()
+    adapter = MergeStoreAdapter(conn)
     for command in commands:
-        execute(conn, "UPDATE kg_entities SET entity_type = 'tool' WHERE id = ?", (command["id"],))
+        source = adapter.get_entity(command["id"])
+        if not source or source["entity_type"] == "tool":
+            continue
+        tool = _same_name_tool(conn, source["name"], source["id"])
+        if tool:
+            merge_stats = merge_entities_preserving_links(adapter, tool["id"], source["id"])
+            stats.update(merge_stats)
+            stats["reclassified_via_merge"] += 1
+        else:
+            execute(conn, "UPDATE kg_entities SET entity_type = 'tool' WHERE id = ?", (source["id"],))
+            stats["reclassified_via_update"] += 1
         stats["reclassified_commands"] += 1
     return stats
 

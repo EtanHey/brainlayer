@@ -411,10 +411,188 @@ def _assert_reclassify_slash_commands(dedup, conn):
     stats = dedup.reclassify_slash_commands(conn)
 
     assert stats["reclassified_commands"] == 2
+    assert stats["reclassified_via_update"] == 2
+    assert stats["reclassified_via_merge"] == 0
     assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'cmd-code-review'").fetchone()[0] == "tool"
     assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'cmd-batch-subagents'").fetchone()[0] == "tool"
     assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'path-absolute'").fetchone()[0] == "concept"
     assert conn.execute("SELECT entity_type FROM kg_entities WHERE id = 'normal'").fetchone()[0] == "concept"
+
+
+def _assert_reclassify_slash_command_merges_into_existing_tool(dedup, conn):
+    _entity(conn, "tool-yash", "tool", "/yash")
+    _entity(conn, "concept-yash", "concept", "/yash")
+    _entity(conn, "other-target", "concept", "Target")
+    conn.execute(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context, mention_type, relation_tier, weight)
+        VALUES ('tool-yash', 'shared-chunk', 0.3, 'tool context', 'implicit', 4, 0.25)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context, mention_type, relation_tier, weight)
+        VALUES ('concept-yash', 'shared-chunk', 0.9, 'concept context', 'explicit', 2, 0.8)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, relevance, context, mention_type)
+        VALUES ('concept-yash', 'concept-only-chunk', 0.7, 'concept only', 'explicit')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type, fact, importance)
+        VALUES ('rel-tool-target', 'tool-yash', 'other-target', 'invoked_by', 'tool fact', 0.2)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type, fact, importance)
+        VALUES ('rel-concept-target', 'concept-yash', 'other-target', 'invoked_by', 'concept fact', 0.9)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type, fact)
+        VALUES ('rel-target-concept', 'other-target', 'concept-yash', 'mentions', 'target mentions command')
+        """
+    )
+    conn.execute(
+        "INSERT INTO kg_entity_aliases (alias, entity_id, alias_type) VALUES ('old-yash', 'concept-yash', 'name')"
+    )
+    conn.execute("INSERT INTO kg_vec_entities (entity_id, embedding) VALUES ('concept-yash', x'0102')")
+
+    stats = dedup.reclassify_slash_commands(conn)
+
+    assert stats["reclassified_commands"] == 1
+    assert stats["reclassified_via_merge"] == 1
+    assert stats["entities_deleted"] == 1
+    assert stats["chunk_links_moved"] == 1
+    assert stats["chunk_conflicts_merged"] == 1
+    assert stats["relations_moved"] == 1
+    assert stats["relation_conflicts_merged"] == 1
+    assert conn.execute("SELECT id, entity_type FROM kg_entities WHERE name = '/yash'").fetchall() == [
+        ("tool-yash", "tool")
+    ]
+    assert conn.execute("SELECT id FROM kg_entities WHERE id = 'concept-yash'").fetchone() is None
+    assert _scalar(conn, "SELECT count(*) FROM kg_vec_entities WHERE entity_id = 'concept-yash'") == 0
+    assert _scalar(conn, "SELECT count(*) FROM kg_entity_chunks WHERE entity_id = 'concept-yash'") == 0
+    assert _scalar(conn, "SELECT count(*) FROM kg_entity_chunks WHERE entity_id = 'tool-yash'") == 2
+    merged_chunk = conn.execute(
+        """
+        SELECT relevance, context, mention_type, relation_tier, weight
+        FROM kg_entity_chunks
+        WHERE entity_id = 'tool-yash' AND chunk_id = 'shared-chunk'
+        """
+    ).fetchone()
+    assert merged_chunk == (0.9, "concept context", "explicit", 2, 0.8)
+    assert (
+        conn.execute("SELECT target_id FROM kg_relations WHERE id = 'rel-target-concept'").fetchone()[0] == "tool-yash"
+    )
+    assert _scalar(conn, "SELECT count(*) FROM kg_relations WHERE relation_type = 'invoked_by'") == 1
+    assert conn.execute("SELECT importance FROM kg_relations WHERE id = 'rel-tool-target'").fetchone()[0] == 0.9
+    aliases = {row[0] for row in conn.execute("SELECT alias FROM kg_entity_aliases WHERE entity_id = 'tool-yash'")}
+    assert {"old-yash", "/yash"}.issubset(aliases)
+
+
+def test_reclassify_slash_command_merges_into_existing_tool_sqlite(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+
+    _assert_reclassify_slash_command_merges_into_existing_tool(dedup, conn)
+
+
+def test_reclassify_slash_command_merges_into_existing_tool_apsw(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    _assert_reclassify_slash_command_merges_into_existing_tool(dedup, conn)
+
+
+def _assert_reclassify_slash_command_merges_multiple_types(dedup, conn):
+    _entity(conn, "tool-loop", "tool", "/loop")
+    _entity(conn, "concept-loop", "concept", "/loop")
+    _entity(conn, "person-loop", "person", "/loop")
+    _entity(conn, "project-loop", "project", "/loop")
+    for entity_id in ("concept-loop", "person-loop", "project-loop"):
+        conn.execute(
+            "INSERT INTO kg_entity_chunks (entity_id, chunk_id, context) VALUES (?, ?, ?)",
+            (entity_id, f"chunk-{entity_id}", f"context {entity_id}"),
+        )
+
+    stats = dedup.reclassify_slash_commands(conn)
+
+    assert stats["reclassified_commands"] == 3
+    assert stats["reclassified_via_merge"] == 3
+    assert stats["entities_deleted"] == 3
+    assert conn.execute("SELECT id, entity_type FROM kg_entities WHERE name = '/loop'").fetchall() == [
+        ("tool-loop", "tool")
+    ]
+    assert _scalar(conn, "SELECT count(*) FROM kg_entity_chunks WHERE entity_id = 'tool-loop'") == 3
+    assert (
+        _scalar(
+            conn,
+            "SELECT count(*) FROM kg_entities WHERE id IN ('concept-loop', 'person-loop', 'project-loop')",
+        )
+        == 0
+    )
+
+
+def test_reclassify_slash_command_merges_multiple_types_sqlite(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+
+    _assert_reclassify_slash_command_merges_multiple_types(dedup, conn)
+
+
+def test_reclassify_slash_command_merges_multiple_types_apsw(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    _assert_reclassify_slash_command_merges_multiple_types(dedup, conn)
+
+
+def _assert_reclassify_commands_dry_run_merges_collision_without_mutating(dedup, conn):
+    _entity(conn, "tool-orc", "tool", "/orc")
+    _entity(conn, "concept-orc", "concept", "/orc")
+    _entity(conn, "target", "concept", "Target")
+    conn.execute(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id, context) VALUES ('concept-orc', 'chunk-orc', 'orc')"
+    )
+    conn.execute(
+        """
+        INSERT INTO kg_relations (id, source_id, target_id, relation_type)
+        VALUES ('rel-orc', 'concept-orc', 'target', 'mentions')
+        """
+    )
+
+    diff = dedup.build_dry_run_diff(conn, [], reclassify_commands=True, skip_path_purge=True)
+
+    assert diff["before"]["kg_entities"] == 3
+    assert diff["after"]["kg_entities"] == 2
+    assert diff["merge_stats"]["reclassified_via_merge"] == 1
+    assert diff["merge_stats"]["entities_deleted"] == 1
+    assert diff["merge_stats"]["chunk_links_moved"] == 1
+    assert diff["merge_stats"]["relations_moved"] == 1
+    assert _scalar(conn, "SELECT count(*) FROM kg_entities WHERE name = '/orc'") == 2
+    assert conn.execute("SELECT source_id FROM kg_relations WHERE id = 'rel-orc'").fetchone()[0] == "concept-orc"
+    assert _scalar(conn, "SELECT count(*) FROM kg_entity_chunks WHERE entity_id = 'concept-orc'") == 1
+
+
+def test_reclassify_commands_dry_run_merges_collision_without_mutating_sqlite(tmp_path):
+    dedup = _load_script()
+    conn = _connect_fixture(tmp_path)
+
+    _assert_reclassify_commands_dry_run_merges_collision_without_mutating(dedup, conn)
+
+
+def test_reclassify_commands_dry_run_merges_collision_without_mutating_apsw(tmp_path):
+    dedup = _load_script()
+    conn = _connect_apsw_fixture(tmp_path)
+
+    _assert_reclassify_commands_dry_run_merges_collision_without_mutating(dedup, conn)
 
 
 def test_reclassify_slash_commands_sets_tool_only_for_commands_sqlite(tmp_path):
