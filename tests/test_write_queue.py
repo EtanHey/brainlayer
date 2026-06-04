@@ -8,6 +8,7 @@ All tests use tmp_path fixtures (no real DB contention).
 
 import json
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import apsw
@@ -519,6 +520,129 @@ def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_
     finally:
         conn.close()
     assert rows == {"already-done": "old summary", "needs-update": "real summary"}
+
+
+def test_burn_drain_default_write_batch_is_bounded(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        with conn:
+            for idx in range(150):
+                conn.execute(
+                    "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+                    (f"burst-{idx}", f"content {idx}", f"hash-{idx}"),
+                )
+    finally:
+        conn.close()
+
+    for idx in range(150):
+        enqueue_enrichment_updates(
+            [
+                {
+                    "chunk_id": f"burst-{idx}",
+                    "content_hash": f"hash-{idx}",
+                    "enrichment": {"summary": f"summary {idx}"},
+                }
+            ],
+            queue_dir=queue_dir,
+        )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, log_path=log_path)
+
+    assert result.files_deleted <= 100
+    assert result.applied_events <= 100
+    assert len(list(queue_dir.glob("*.jsonl"))) >= 50
+
+
+def test_readonly_vector_store_reads_during_burn_drain_writer_burst(tmp_path, monkeypatch):
+    from brainlayer import drain
+    from brainlayer.vector_store import VectorStore
+
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setenv("BRAINLAYER_READ_BUSY_TIMEOUT_MS", "250")
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        with conn:
+            for idx in range(25):
+                conn.execute(
+                    "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+                    (f"burst-{idx}", f"content {idx}", f"hash-{idx}"),
+                )
+    finally:
+        conn.close()
+
+    for idx in range(25):
+        enqueue_enrichment_updates(
+            [
+                {
+                    "chunk_id": f"burst-{idx}",
+                    "content_hash": f"hash-{idx}",
+                    "enrichment": {"summary": f"summary {idx}"},
+                }
+            ],
+            queue_dir=queue_dir,
+        )
+
+    entered_transaction = threading.Event()
+    release_transaction = threading.Event()
+    drain_result = []
+    drain_errors = []
+    real_apply_event = drain._apply_event
+
+    def wait_inside_writer_transaction(conn, event):
+        entered_transaction.set()
+        release_transaction.wait(timeout=2)
+        return real_apply_event(conn, event)
+
+    monkeypatch.setattr(drain, "_apply_event", wait_inside_writer_transaction)
+
+    def run_drain():
+        try:
+            drain_result.append(
+                drain.burn_drain_once(
+                    db_path=db_path,
+                    queue_dir=queue_dir,
+                    log_path=log_path,
+                    max_events_per_transaction=25,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            drain_errors.append(exc)
+
+    thread = threading.Thread(target=run_drain)
+    thread.start()
+    try:
+        assert entered_transaction.wait(timeout=2), "drain did not enter its write transaction"
+
+        started_at = time.monotonic()
+        store = VectorStore(db_path, readonly=True)
+        try:
+            assert store.count() == 27
+        finally:
+            store.close()
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 0.5
+    finally:
+        release_transaction.set()
+        thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    if drain_errors:
+        raise drain_errors[0]
+    assert drain_result[0].applied_events == 25
 
 
 def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeypatch):
