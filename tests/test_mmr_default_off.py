@@ -1,4 +1,7 @@
 import importlib
+import warnings
+
+import numpy as np
 
 
 def _scored_candidates():
@@ -18,7 +21,25 @@ class _SpyStore:
         return {}
 
 
-def test_mmr_default_is_off_and_does_not_load_embeddings(monkeypatch):
+class _EmbeddingStore:
+    def _load_chunk_embeddings(self, chunk_ids):
+        return {
+            "a": np.array([1.0, 0.0], dtype=np.float32),
+            "b": np.array([np.finfo(np.float32).max, np.finfo(np.float32).max], dtype=np.float32),
+            "c": np.array([0.0, 1.0], dtype=np.float32),
+        }
+
+
+class _ZeroNormEmbeddingStore:
+    def _load_chunk_embeddings(self, chunk_ids):
+        return {
+            "a": np.array([1.0, 0.0], dtype=np.float32),
+            "b": np.array([0.0, 0.0], dtype=np.float32),
+            "c": np.array([0.0, 1.0], dtype=np.float32),
+        }
+
+
+def test_mmr_default_enables_diversity_and_loads_embeddings(monkeypatch):
     monkeypatch.delenv("BRAINLAYER_MMR_LAMBDA", raising=False)
     import brainlayer.search_repo as search_repo
 
@@ -28,9 +49,9 @@ def test_mmr_default_is_off_and_does_not_load_embeddings(monkeypatch):
 
     reranked = search_repo.SearchMixin._mmr_rerank_scored_results(store, scored, n_results=2)
 
-    assert search_repo._MMR_LAMBDA == 1.0
+    assert search_repo._MMR_LAMBDA == 0.7
     assert reranked == scored
-    assert store.embedding_load_calls == 0
+    assert store.embedding_load_calls == 1
 
 
 def test_mmr_env_override_reenables_embedding_load(monkeypatch):
@@ -46,22 +67,22 @@ def test_mmr_env_override_reenables_embedding_load(monkeypatch):
     assert store.embedding_load_calls == 1
 
 
-def test_invalid_mmr_env_override_falls_back_to_default_off(monkeypatch):
+def test_invalid_mmr_env_override_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "not-a-float")
     import brainlayer.search_repo as search_repo
 
     search_repo = importlib.reload(search_repo)
 
-    assert search_repo._MMR_LAMBDA == 1.0
+    assert search_repo._MMR_LAMBDA == 0.7
 
 
-def test_nonfinite_mmr_env_override_falls_back_to_default_off(monkeypatch):
+def test_nonfinite_mmr_env_override_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "nan")
     import brainlayer.search_repo as search_repo
 
     search_repo = importlib.reload(search_repo)
 
-    assert search_repo._MMR_LAMBDA == 1.0
+    assert search_repo._MMR_LAMBDA == 0.7
 
 
 def test_out_of_range_mmr_env_override_is_clamped(monkeypatch):
@@ -76,3 +97,37 @@ def test_out_of_range_mmr_env_override_is_clamped(monkeypatch):
     search_repo = importlib.reload(search_repo)
 
     assert search_repo._MMR_LAMBDA == 1.0
+
+
+def test_mmr_ignores_pathological_embeddings_without_warning(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "0.7")
+    import brainlayer.search_repo as search_repo
+
+    search_repo = importlib.reload(search_repo)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        reranked = search_repo.SearchMixin._mmr_rerank_scored_results(
+            _EmbeddingStore(),
+            _scored_candidates(),
+            n_results=2,
+        )
+
+    assert len(reranked) == 3
+    assert {candidate[1] for candidate in reranked} == {"a", "b", "c"}
+
+
+def test_mmr_keeps_zero_norm_candidates_without_exhausting_rerank(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_MMR_LAMBDA", "0.7")
+    import brainlayer.search_repo as search_repo
+
+    search_repo = importlib.reload(search_repo)
+
+    reranked = search_repo.SearchMixin._mmr_rerank_scored_results(
+        _ZeroNormEmbeddingStore(),
+        _scored_candidates(),
+        n_results=3,
+    )
+
+    assert len(reranked) == 3
+    assert {candidate[1] for candidate in reranked} == {"a", "b", "c"}
