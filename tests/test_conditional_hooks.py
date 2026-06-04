@@ -90,6 +90,14 @@ class FakeConn:
         self.closed = True
 
 
+class QueryErrorConn(FakeConn):
+    def execute(self, query, params=()):
+        self.executed.append((query, params))
+        if "chunks_fts" in query:
+            raise sqlite3.OperationalError("database is locked")
+        return FakeCursor([])
+
+
 class TestSessionStartConditional:
     def test_default_activates(self, session_start):
         hook_input = {"session_id": "abc123", "cwd": "/tmp/test"}
@@ -151,6 +159,83 @@ class TestSessionStartConditional:
         assert "[Hebrew Style]" in output
         assert ("PRAGMA busy_timeout=1000", ()) in fake_conn.executed
         assert ("PRAGMA query_only=true", ()) in fake_conn.executed
+
+    def test_main_emits_degraded_notice_on_db_connect_error(self, session_start, monkeypatch, capsys):
+        monkeypatch.setattr(session_start, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            session_start.sqlite3,
+            "connect",
+            lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+        )
+        monkeypatch.setattr(
+            session_start.sys,
+            "stdin",
+            io.StringIO('{"cwd":"/tmp/brainlayer","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            session_start.main()
+
+        output = capsys.readouterr().out
+        assert "DEGRADED" in output
+        assert "BrainLayer memory unavailable" in output
+        assert "DB error" in output
+
+    def test_main_emits_degraded_notice_on_db_query_error(self, session_start, monkeypatch, capsys):
+        fake_conn = QueryErrorConn()
+
+        monkeypatch.setattr(session_start, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(session_start, "load_scoped_projects", lambda: {})
+        monkeypatch.setattr(
+            session_start.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            session_start.sys,
+            "stdin",
+            io.StringIO('{"cwd":"/tmp/brainlayer","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            session_start.main()
+
+        output = capsys.readouterr().out
+        assert exc_info.value.code == 0
+        assert "⚠️ DEGRADED: BrainLayer" in output
+        assert "DB error" in output
+        assert fake_conn.closed is True
+
+    def test_main_emits_degraded_notice_when_db_path_missing(self, session_start, monkeypatch, capsys):
+        monkeypatch.setattr(session_start, "get_db_path", lambda: None)
+        monkeypatch.setattr(
+            session_start.sys,
+            "stdin",
+            io.StringIO('{"cwd":"/tmp/brainlayer","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            session_start.main()
+
+        output = capsys.readouterr().out
+        assert exc_info.value.code == 0
+        assert "⚠️ DEGRADED: BrainLayer" in output
+        assert "DB not found" in output
+
+    def test_main_disabled_mode_stays_silent(self, session_start, monkeypatch, capsys):
+        os.environ["BRAINLAYER_HOOKS_DISABLED"] = "1"
+        monkeypatch.setattr(session_start, "get_db_path", lambda: None)
+        monkeypatch.setattr(
+            session_start.sys,
+            "stdin",
+            io.StringIO('{"cwd":"/tmp/brainlayer","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            session_start.main()
+
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out == ""
 
 
 class TestPromptSearchConditional:
@@ -480,6 +565,96 @@ class TestPromptSearchConditional:
         assert "SEARCH-BEFORE-ASSUME" in output
         assert ("PRAGMA busy_timeout=1000", ()) in fake_conn.executed
         assert ("PRAGMA query_only=true", ()) in fake_conn.executed
+
+    def test_main_emits_degraded_notice_on_db_connect_error(self, prompt_search, monkeypatch, capsys):
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
+        monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
+        monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"What did we decide about BrainLayer startup hooks?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert exc_info.value.code == 0
+        assert "⚠️ DEGRADED: BrainLayer" in output
+        assert "DB error" in output
+
+    def test_main_emits_degraded_notice_on_db_query_error(self, prompt_search, monkeypatch, capsys):
+        fake_conn = QueryErrorConn()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
+        monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
+        monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"What did we decide about BrainLayer startup hooks?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert exc_info.value.code == 0
+        assert "⚠️ DEGRADED: BrainLayer" in output
+        assert "DB error" in output
+        assert fake_conn.closed is True
+
+    def test_main_emits_degraded_notice_when_db_path_missing(self, prompt_search, monkeypatch, capsys):
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: None)
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
+        monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"What did we decide about BrainLayer startup hooks?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert exc_info.value.code == 0
+        assert "⚠️ DEGRADED: BrainLayer" in output
+        assert "DB not found" in output
+
+    def test_main_disabled_mode_stays_silent(self, prompt_search, monkeypatch, capsys):
+        os.environ["BRAINLAYER_HOOKS_DISABLED"] = "1"
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: None)
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":"What did we decide about BrainLayer startup hooks?","session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out == ""
 
     def test_detect_correction_categorizes_common_prompts(self, prompt_search):
         assert prompt_search.detect_correction("No, that's wrong. Avi works at Lightricks.") == "factual"

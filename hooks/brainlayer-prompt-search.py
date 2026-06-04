@@ -33,6 +33,15 @@ MODERATE_CONFIDENCE_THRESHOLD = 0.010
 LIGHT_CONFIDENCE_THRESHOLD = 0.005
 MAX_ADAPTIVE_INJECTION = 3
 MAX_HYBRID_CANDIDATES = 8
+DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
+
+
+def degraded_notice(reason):
+    return f"{DEGRADED_PREFIX} memory unavailable this session ({reason}) - operating without long-term memory."
+
+
+def emit_degraded(reason):
+    print(degraded_notice(reason))
 
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
@@ -1111,7 +1120,8 @@ def main():
         pass
 
     if not db_path:
-        finalize_and_exit(mode="skip")
+        emit_degraded("DB not found")
+        finalize_and_exit(mode="degraded")
 
     # Load already-injected chunk IDs from coordination file
     already_injected = set()
@@ -1130,7 +1140,8 @@ def main():
         conn.execute("PRAGMA busy_timeout=1000")
         conn.execute("PRAGMA query_only=true")
     except sqlite3.Error:
-        finalize_and_exit(mode="skip")
+        emit_degraded("DB error")
+        finalize_and_exit(mode="degraded")
 
     detected_entities = []
     context_keywords = []
@@ -1230,7 +1241,8 @@ def main():
             ]
             new_chunk_ids, new_briefs = inject_search_results(lines, filtered_rows, deep, label=label)
     except sqlite3.Error:
-        pass
+        lines.append(degraded_notice("DB error"))
+        telemetry_mode = "degraded"
     finally:
         conn.close()
 

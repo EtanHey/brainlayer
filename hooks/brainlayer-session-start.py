@@ -18,6 +18,15 @@ import time
 
 # Budget: abort if we're taking too long
 DEADLINE_MS = 450
+DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
+
+
+def degraded_notice(reason):
+    return f"{DEGRADED_PREFIX} memory unavailable this session ({reason}) - operating without long-term memory."
+
+
+def emit_degraded(reason):
+    print(degraded_notice(reason))
 
 
 def should_activate(hook_input):
@@ -219,6 +228,7 @@ def main():
 
     db_path = get_db_path()
     if not db_path:
+        emit_degraded("DB not found")
         sys.exit(0)
 
     try:
@@ -227,6 +237,7 @@ def main():
         conn.execute("PRAGMA busy_timeout=1000")
         conn.execute("PRAGMA query_only=true")
     except sqlite3.Error:
+        emit_degraded("DB error")
         sys.exit(0)
 
     lines = []
@@ -284,7 +295,7 @@ def main():
                     injected_briefs.append(truncate(content, max_chars=80))
 
     except sqlite3.Error:
-        pass
+        lines.append(degraded_notice("DB error"))
     finally:
         conn.close()
 
