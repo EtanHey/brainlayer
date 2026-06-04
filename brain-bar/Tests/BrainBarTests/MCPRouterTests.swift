@@ -448,6 +448,41 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNil(result["structuredContent"])
     }
 
+    func testBrainStoreMCPResultIsPlainAndShowsTagsWithoutContent() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-store-output-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let fullContent = "Sensitive full content must not be echoed in the MCP store response"
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 178,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": fullContent,
+                    "tags": ["correction", "orc", "phoenix"],
+                    "importance": 8
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+        let storedChunk = try XCTUnwrap(result["_brainbarStoredChunk"] as? [String: Any])
+        let chunkID = try XCTUnwrap(storedChunk["chunk_id"] as? String)
+
+        XCTAssertEqual(text, "\u{2714} Stored \u{2192} \(chunkID) [tags: correction, orc, phoenix]")
+        XCTAssertFalse(text.contains("\u{1b}["))
+        XCTAssertFalse(text.contains(fullContent))
+    }
+
     func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -1438,13 +1473,22 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result["queued"] as? Bool, true)
         let queueID = try XCTUnwrap(result["queue_id"] as? String)
         let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let text = try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
         XCTAssertFalse(queueID.isEmpty)
+        XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        XCTAssertEqual(
+            text,
+            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+        )
+        XCTAssertFalse(text.contains("\u{1b}["))
 
         let queuedPayload = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
         XCTAssertEqual(queuedPayload["content"] as? String, "Store should queue even before the database opens")
         XCTAssertEqual(queuedPayload["queue_id"] as? String, queueID)
         XCTAssertEqual(queuedPayload["queued_at"] as? String, queuedAt)
+        XCTAssertEqual(queuedPayload["chunk_id"] as? String, chunkID)
     }
 
     func testBrainStoreQueuesWhenDatabaseHandleIsNotOpen() throws {
@@ -1478,9 +1522,17 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result["queued"] as? Bool, true)
         XCTAssertFalse((result["queue_id"] as? String ?? "").isEmpty)
         XCTAssertFalse((result["queued_at"] as? String ?? "").isEmpty)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let text = try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+        XCTAssertEqual(
+            text,
+            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+        )
+        XCTAssertFalse(text.contains("\u{1b}["))
 
         let queuedPayload = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
         XCTAssertEqual(queuedPayload["content"] as? String, "Store should queue when the database handle is not open")
+        XCTAssertEqual(queuedPayload["chunk_id"] as? String, chunkID)
     }
 
     func testBrainStoreQueuesWhenWriteHitsTransientSQLiteLock() throws {
@@ -1525,14 +1577,22 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.localizedCaseInsensitiveContains("queued"))
         let queueID = try XCTUnwrap(result?["queue_id"] as? String)
         let queuedAt = try XCTUnwrap(result?["queued_at"] as? String)
+        let chunkID = try XCTUnwrap(result?["chunk_id"] as? String)
         XCTAssertFalse(queueID.isEmpty)
+        XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        XCTAssertEqual(
+            text,
+            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+        )
+        XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
 
         let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertTrue(queuedText.contains("Store should queue after transient SQLite lock"))
         XCTAssertTrue(queuedText.contains(queueID))
         XCTAssertTrue(queuedText.contains(queuedAt))
+        XCTAssertTrue(queuedText.contains(chunkID))
     }
 
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {

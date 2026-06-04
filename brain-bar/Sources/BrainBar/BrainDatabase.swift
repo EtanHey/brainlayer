@@ -216,7 +216,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     enum StoreWriteOutcome: Sendable, Equatable {
         case stored(StoredChunk)
-        case queued(queueID: String, queuedAt: String)
+        case queued(queueID: String, queuedAt: String, chunkID: String)
     }
 
     struct PendingStoreItem: Codable, Sendable {
@@ -226,6 +226,7 @@ final class BrainDatabase: @unchecked Sendable {
         let source: String
         let queueID: String?
         let queuedAt: String?
+        let chunkID: String?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -234,6 +235,7 @@ final class BrainDatabase: @unchecked Sendable {
             case source
             case queueID = "queue_id"
             case queuedAt = "queued_at"
+            case chunkID = "chunk_id"
         }
 
         init(
@@ -242,7 +244,8 @@ final class BrainDatabase: @unchecked Sendable {
             importance: Int,
             source: String,
             queueID: String? = nil,
-            queuedAt: String? = nil
+            queuedAt: String? = nil,
+            chunkID: String? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -250,6 +253,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.source = source
             self.queueID = queueID
             self.queuedAt = queuedAt
+            self.chunkID = chunkID
         }
 
         init(from decoder: Decoder) throws {
@@ -260,6 +264,7 @@ final class BrainDatabase: @unchecked Sendable {
             source = try container.decodeIfPresent(String.self, forKey: .source) ?? "mcp"
             queueID = try container.decodeIfPresent(String.self, forKey: .queueID)
             queuedAt = try container.decodeIfPresent(String.self, forKey: .queuedAt)
+            chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
         }
     }
 
@@ -866,18 +871,23 @@ final class BrainDatabase: @unchecked Sendable {
         return (results, maxRowID)
     }
 
+    private static func makeChunkID() -> String {
+        "brainbar-\(UUID().uuidString.lowercased().prefix(12))"
+    }
+
     func store(
         content: String,
         tags: [String],
         importance: Int,
         source: String,
+        chunkID: String? = nil,
         queueID: String? = nil,
         refreshStatistics: Bool = true,
         retries: Int = 3,
         busyTimeoutMillis: Int32? = nil
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
-        let chunkID = "brainbar-\(UUID().uuidString.lowercased().prefix(12))"
+        let chunkID = chunkID ?? Self.makeChunkID()
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
@@ -926,12 +936,14 @@ final class BrainDatabase: @unchecked Sendable {
         source: String,
         busyTimeoutMillis: Int32 = 50
     ) throws -> StoreWriteOutcome {
+        let chunkID = Self.makeChunkID()
         do {
             let stored = try store(
                 content: content,
                 tags: tags,
                 importance: importance,
                 source: source,
+                chunkID: chunkID,
                 refreshStatistics: true,
                 retries: 0,
                 busyTimeoutMillis: busyTimeoutMillis
@@ -941,8 +953,14 @@ final class BrainDatabase: @unchecked Sendable {
             guard shouldQueueStoreError(error) else {
                 throw error
             }
-            let queued = try queuePendingStore(content: content, tags: tags, importance: importance, source: source)
-            return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt)
+            let queued = try queuePendingStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: source,
+                chunkID: chunkID
+            )
+            return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
         }
     }
 
@@ -973,12 +991,32 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     @discardableResult
-    func queuePendingStore(content: String, tags: [String], importance: Int, source: String) throws -> (queueID: String, queuedAt: String) {
-        try Self.queuePendingStore(dbPath: path, content: content, tags: tags, importance: importance, source: source)
+    func queuePendingStore(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        chunkID: String? = nil
+    ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
+        try Self.queuePendingStore(
+            dbPath: path,
+            content: content,
+            tags: tags,
+            importance: importance,
+            source: source,
+            chunkID: chunkID
+        )
     }
 
     @discardableResult
-    static func queuePendingStore(dbPath: String, content: String, tags: [String], importance: Int, source: String) throws -> (queueID: String, queuedAt: String) {
+    static func queuePendingStore(
+        dbPath: String,
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        chunkID: String? = nil
+    ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
@@ -989,18 +1027,20 @@ final class BrainDatabase: @unchecked Sendable {
         )
         let queueID = UUID().uuidString.lowercased()
         let queuedAt = Self.timestamp()
+        let chunkID = chunkID ?? Self.makeChunkID()
         let item = PendingStoreItem(
             content: content,
             tags: tags,
             importance: importance,
             source: source,
             queueID: queueID,
-            queuedAt: queuedAt
+            queuedAt: queuedAt,
+            chunkID: chunkID
         )
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
         try appendPendingStoreLine(line, to: path)
-        return (queueID: queueID, queuedAt: queuedAt)
+        return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
     func flushPendingStores() -> [FlushedPendingStore] {
@@ -1033,7 +1073,8 @@ final class BrainDatabase: @unchecked Sendable {
                     }
 
                     let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
-                    let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID) ?? line
+                    let chunkID = item.chunkID ?? Self.makeChunkID()
+                    let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID, chunkID: chunkID) ?? line
                     do {
                         if try hasStoredQueuedItem(queueID: queueID) {
                             continue
@@ -1050,6 +1091,7 @@ final class BrainDatabase: @unchecked Sendable {
                             tags: item.tags,
                             importance: item.importance,
                             source: item.source,
+                            chunkID: chunkID,
                             queueID: queueID,
                             refreshStatistics: false
                         )
@@ -3133,14 +3175,15 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
-    private static func pendingStoreReplayLine(for item: PendingStoreItem, queueID: String) -> Data? {
+    private static func pendingStoreReplayLine(for item: PendingStoreItem, queueID: String, chunkID: String) -> Data? {
         let replayItem = PendingStoreItem(
             content: item.content,
             tags: item.tags,
             importance: item.importance,
             source: item.source,
             queueID: queueID,
-            queuedAt: item.queuedAt
+            queuedAt: item.queuedAt,
+            chunkID: chunkID
         )
         return try? JSONEncoder().encode(replayItem)
     }
