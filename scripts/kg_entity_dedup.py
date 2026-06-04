@@ -121,10 +121,24 @@ def execute(conn: Any, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> An
     return conn.cursor().execute(sql, params)
 
 
+def _cursor_description(cursor: Any) -> list[Any]:
+    try:
+        getdescription = getattr(cursor, "getdescription", None)
+        if callable(getdescription):
+            return list(getdescription() or [])
+        return list(getattr(cursor, "description", None) or [])
+    except Exception as exc:
+        if exc.__class__.__name__ == "ExecutionCompleteError" and exc.__class__.__module__ == "apsw":
+            return []
+        raise
+
+
 def fetch_dicts(conn: Any, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> list[dict[str, Any]]:
     cursor = conn.cursor()
-    rows = list(cursor.execute(sql, params))
-    columns = [description[0] for description in cursor.description or []]
+    rows = cursor.execute(sql, params)
+    columns = [description[0] for description in _cursor_description(cursor)]
+    if not columns:
+        return []
     return [dict(zip(columns, row)) for row in rows]
 
 
