@@ -541,6 +541,7 @@ async def _store(
     The chunk is stored immediately without waiting for embedding generation.
     A background task embeds pending chunks after the response is sent.
     """
+    promised_chunk_id = _new_manual_chunk_id()
     try:
         if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
             from ..ingest_guard import reject_recursive_mcp_output
@@ -556,10 +557,9 @@ async def _store(
             reject_recursive_mcp_output(content)
             if looks_like_system_prompt(content):
                 raise ValueError("system prompt content is not stored in BrainLayer")
-            queued_chunk_id = _new_manual_chunk_id()
             _queue_store(
                 {
-                    "chunk_id": queued_chunk_id,
+                    "chunk_id": promised_chunk_id,
                     "content": content,
                     "memory_type": memory_type,
                     "project": _normalize_project_name(project),
@@ -579,8 +579,8 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = {"chunk_id": queued_chunk_id, "queued": True, "related": []}
-            return ([TextContent(type="text", text=format_store_result(queued_chunk_id, queued=True))], structured)
+            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_pending_chunks, store_memory
 
@@ -607,6 +607,7 @@ async def _store(
             file_path=file_path,
             function_name=function_name,
             line_number=line_number,
+            chunk_id=promised_chunk_id,
         )
 
         chunk_id = result["id"]
@@ -671,10 +672,9 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if _is_lock_error(e):
-            queued_chunk_id = _new_manual_chunk_id()
             _queue_store(
                 {
-                    "chunk_id": queued_chunk_id,
+                    "chunk_id": promised_chunk_id,
                     "content": content,
                     "memory_type": memory_type,
                     "project": _normalize_project_name(project),
@@ -693,8 +693,8 @@ async def _store(
                     "supersedes": supersedes,
                 }
             )
-            structured = {"chunk_id": queued_chunk_id, "queued": True, "related": []}
-            formatted = format_store_result(queued_chunk_id, queued=True)
+            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            formatted = format_store_result(promised_chunk_id, queued=True)
             return (
                 [TextContent(type="text", text=formatted)],
                 structured,
