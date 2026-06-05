@@ -57,9 +57,47 @@ def categorize(stem: str, names: list[str]) -> str:
     return "sep-variants"
 
 
+def load_keep_separate_decisions(con: sqlite3.Connection) -> set[tuple[str, str]]:
+    try:
+        rows = con.execute(
+            "SELECT entity_id, evidence, payload_json FROM kg_cleanup_log WHERE action='keep_separate'"
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return set()
+        raise
+
+    out = set()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        decision = payload.get("decision", payload)
+        stem = str(decision.get("stem") or "").strip()
+        category = str(decision.get("category") or row["evidence"] or "").strip()
+        if not stem and row["entity_id"]:
+            entity_id = str(row["entity_id"])
+            if entity_id.startswith("cat:") and ":stem:" in entity_id:
+                stem = entity_id.split(":stem:", 1)[1]
+            elif entity_id.startswith(("stem:", "id:", "decision:")):
+                stem = entity_id.split(":", 1)[1]
+            else:
+                stem = entity_id.split(":", 1)[-1]
+        if stem:
+            out.add((category, normalize_stem(stem)))
+    return out
+
+
+def should_skip_keep_separate(category: str, stem: str, keep_decisions: set[tuple[str, str]]) -> bool:
+    normalized = normalize_stem(stem)
+    return (category, normalized) in keep_decisions or ("", normalized) in keep_decisions
+
+
 def main() -> None:
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
+    keep_decisions = load_keep_separate_decisions(con)
     rows = con.execute(
         """SELECT e.id, e.entity_type, e.name,
                   (SELECT COUNT(*) FROM kg_entity_chunks c
@@ -76,6 +114,9 @@ def main() -> None:
         if len(members) < 2 or not stem:
             continue
         names = [m["name"] for m in members]
+        category = categorize(stem, names)
+        if should_skip_keep_separate(category, stem, keep_decisions):
+            continue
         cluster = {
             "stem": stem,
             "size": len(members),
@@ -84,7 +125,7 @@ def main() -> None:
                 for m in sorted(members, key=lambda m: -m["n_chunks"])
             ],
         }
-        cats[categorize(stem, names)].append(cluster)
+        cats[category].append(cluster)
 
     out_json = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("eval_results/kg-phase1-flag-batch-2026-06-05.json")
     out_json.write_text(json.dumps(dict(cats), indent=2))
