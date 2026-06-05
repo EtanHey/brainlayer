@@ -325,6 +325,13 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         assert "env=_clean_git_env()" in text or "env=_clean_test_git_env()" in text
 
 
+def test_working_branch_history_has_no_fixture_git_identity():
+    repo_root = Path(__file__).resolve().parents[1]
+    authors = _test_git(repo_root, "log", "--format=%an%n%cn").stdout.splitlines()
+
+    assert "Fixture User" not in authors
+
+
 def test_gathers_decisive_evidence_for_required_fixture_clusters(judge_fixture: dict[str, Path]):
     from brainlayer.kg_judge import gather_evidence_for_cluster
 
