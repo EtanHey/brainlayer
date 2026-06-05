@@ -119,6 +119,8 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     if not _table_exists(conn, table):
         return set()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        return set()
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 

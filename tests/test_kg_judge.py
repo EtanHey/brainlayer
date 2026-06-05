@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -171,13 +170,8 @@ def _create_repo(root: Path, name: str, readme: str, commit_messages: list[str])
     repo = root / name
     repo.mkdir(parents=True)
     (repo / "README.md").write_text(readme, encoding="utf-8")
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "fixture@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Fixture User"], cwd=repo, check=True)
     for index, message in enumerate(commit_messages):
         (repo / f"note-{index}.txt").write_text(message, encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-m", message], cwd=repo, check=True, stdout=subprocess.DEVNULL)
 
 
 def _cluster(stem: str, members: list[dict]) -> dict:
