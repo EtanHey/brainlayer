@@ -1,0 +1,116 @@
+{
+  "after": {
+    "fts5": {
+      "metrics": {
+        "map@10": 0.1607754814494109,
+        "mrr": 0.6841836734693877,
+        "ndcg@10": 0.5262024270927425,
+        "ndcg@3": 0.5888992169720909,
+        "precision@3": 0.6054421768707483,
+        "recall@20": 0.31571284374957126
+      },
+      "query_count": 49,
+      "query_timeout_ms": 10000,
+      "timed_out_queries": [
+        "frustration_001",
+        "frustration_007",
+        "frustration_014",
+        "frustration_015",
+        "frustration_022",
+        "frustration_023",
+        "frustration_024"
+      ]
+    }
+  },
+  "after_bytes": 6620393472,
+  "after_db": "/private/tmp/brainlayer-db-shrink/after.db",
+  "before": {
+    "fts5": {
+      "metrics": {
+        "map@10": 0.16458297362080643,
+        "mrr": 0.6258503401360543,
+        "ndcg@10": 0.5159834653232883,
+        "ndcg@3": 0.5351326443056971,
+        "precision@3": 0.5578231292517006,
+        "recall@20": 0.3493554919872343
+      },
+      "query_count": 49,
+      "query_timeout_ms": 10000,
+      "timed_out_queries": [
+        "frustration_001",
+        "frustration_007",
+        "frustration_011",
+        "frustration_014",
+        "frustration_015",
+        "frustration_021",
+        "frustration_022",
+        "frustration_023",
+        "frustration_024"
+      ]
+    }
+  },
+  "before_bytes": 9213992960,
+  "before_db": "/private/tmp/brainlayer-db-shrink/baseline.db",
+  "dbstat_top_after": {
+    "chunk_clusters": 149237760,
+    "chunk_fts_rowids": 36392960,
+    "chunk_tags": 228278272,
+    "chunk_vectors_binary_vector_chunks00": 37900288,
+    "chunk_vectors_vector_chunks00": 1284874240,
+    "chunks": 1009987584,
+    "chunks_fts_content": 579264512,
+    "chunks_fts_data": 179687424,
+    "chunks_fts_trigram_content": 579264512,
+    "chunks_fts_trigram_data": 1272573952,
+    "dedupe_audit": 36532224,
+    "idx_chunk_tags_tag": 39600128,
+    "idx_chunks_source_uri": 38014976,
+    "idx_kg_ec_chunk": 69763072,
+    "kg_entity_chunks": 100982784,
+    "sqlite_autoindex_chunk_clusters_1": 100126720,
+    "sqlite_autoindex_chunk_fts_rowids_1": 34091008,
+    "sqlite_autoindex_chunk_tags_1": 228630528,
+    "sqlite_autoindex_chunks_1": 34103296,
+    "sqlite_autoindex_kg_entity_chunks_1": 82911232
+  },
+  "dbstat_top_before": {
+    "chunk_clusters": 152559616,
+    "chunk_fts_rowids": 43556864,
+    "chunk_tags": 230883328,
+    "chunk_vectors_binary_vector_chunks00": 37900288,
+    "chunk_vectors_vector_chunks00": 1284874240,
+    "chunks": 1226002432,
+    "chunks_fts_content": 698257408,
+    "chunks_fts_data": 1542946816,
+    "chunks_fts_trigram_content": 684785664,
+    "chunks_fts_trigram_data": 1998745600,
+    "idx_chunk_tags_tag": 42602496,
+    "idx_chunks_brick_id": 39485440,
+    "idx_chunks_source_uri": 47558656,
+    "idx_kg_ec_chunk": 73641984,
+    "kg_entity_chunks": 107634688,
+    "sqlite_autoindex_chunk_clusters_1": 101654528,
+    "sqlite_autoindex_chunk_fts_rowids_1": 40595456,
+    "sqlite_autoindex_chunk_tags_1": 231227392,
+    "sqlite_autoindex_chunks_1": 40591360,
+    "sqlite_autoindex_kg_entity_chunks_1": 87932928
+  },
+  "gate": {
+    "max_regression": 0.005,
+    "regressions": [
+      {
+        "after": 0.31571284374957126,
+        "before": 0.3493554919872343,
+        "delta": -0.03364264823766305,
+        "metric": "recall@20",
+        "pipeline": "fts5"
+      }
+    ],
+    "verdict": "fail"
+  },
+  "pipelines": [
+    "fts5"
+  ],
+  "reclaimed_bytes": 2593599488,
+  "timestamp": "20260601T121715Z"
+}
