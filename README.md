@@ -131,7 +131,7 @@ graph LR
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta |
 |---|:---:|:---:|:---:|:---:|
-| **MCP tools** | 12 | 1 | 1 | 0 |
+| **MCP tools** | 13 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
 | **Real-time indexing** | ~1s | No | No | No |
@@ -201,6 +201,14 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - **Diagnostic + PreCompact noise rejection at ingest** ([#289](https://github.com/EtanHey/brainlayer/pull/289)) — `recursive_mcp_output_reason` now detects BrainLayer-MCP-unavailable diagnostics and PreCompact checkpoint payloads, rejecting them at the watcher / drain / store ingestion heads so tooling failures do not become durable memory. The hybrid reranker *demotes* (not removes) any chunk tagged with precompact/quarantine signals so explicit `include_checkpoints` callers still see them. Pre-push gate: `1995 passed, 9 skipped, 75 deselected, 1 xfailed`. A dry-run-first `scripts/quarantine_noise.py` is available for back-filling existing infra noise — live DB mutation requires explicit `--apply`.
 - **Persist digest LLM entities** ([#290](https://github.com/EtanHey/brainlayer/pull/290)) — fixes a KG persistence regression where `brain_digest` silently skipped Gemini entity extraction because `process_chunk` passed `use_llm=llm_caller is not None` and the MCP/CLI path never sets `llm_caller`. Non-seed person entities were never materialized into `kg_entities` / `kg_entity_chunks`. The 2026-04-06 entity-recall recurrence root-caused to this code path. RED-first regression test (`test_digest_content_persists_llm_people_entities_for_lookup`) now guards the fix.
 - **Enrichment LaunchAgent recovered** — `com.brainlayer.enrichment` was silently unloaded since 2026-05-15 11:50 IDT (no entity extraction running). Bootstrapped back on 2026-05-17 against the 56K-chunk backfill; throttled by Gemini 503s on flex tier but actively draining (verified via `launchctl list | grep enrichment` returning a live PID).
+
+**June 2026 search & KG hardening** ([#433](https://github.com/EtanHey/brainlayer/pull/433)–[#445](https://github.com/EtanHey/brainlayer/pull/445))
+- **Hook failures are now loud** ([#433](https://github.com/EtanHey/brainlayer/pull/433)) — BrainLayer hook DB failures raise clearly instead of silently swallowing errors.
+- **Drain hardening** ([#435](https://github.com/EtanHey/brainlayer/pull/435)) — drain is now resilient to DB open locks under writer contention.
+- **chunk_origin provenance** ([#436](https://github.com/EtanHey/brainlayer/pull/436)) — enrichment stamps `chunk_origin` on every processed chunk; a backfill pass covers existing unknowns, making provenance queryable across the full corpus.
+- **MMR diversity is now on by default** ([#439](https://github.com/EtanHey/brainlayer/pull/439)) — `brain_search` applies Maximal Marginal Relevance post-retrieval dedup automatically; pass `mmr=false` to opt out.
+- **KG entity dedup tooling** ([#441](https://github.com/EtanHey/brainlayer/pull/441)–[#443](https://github.com/EtanHey/brainlayer/pull/443)) — new path-detector and APSW-safe dedup suggestions for cleaning duplicate KG entities; slash-command reclassify collisions also resolved ([#444](https://github.com/EtanHey/brainlayer/pull/444)).
+- **KG boost reconnected to entity FTS** ([#445](https://github.com/EtanHey/brainlayer/pull/445)) — entity-aware ranking is now wired end-to-end through the FTS path.
 
 ## Data Sources
 
