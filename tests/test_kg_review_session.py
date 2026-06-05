@@ -181,6 +181,50 @@ def test_apply_rule_bulk_decides_matching_undecided(batch_file, decisions_file):
     assert n2 == 0
 
 
+def test_apply_rule_rejects_mixed_and_invalid_actions(batch_file, decisions_file):
+    # mixed cannot be bulk-applied: it requires a per-member map per cluster
+    with pytest.raises(ValueError):
+        apply_rule(
+            batch_file,
+            decisions_file,
+            rule={"match": {"category": "case-only"}, "action": "mixed", "source": "voice"},
+        )
+    with pytest.raises(ValueError):
+        apply_rule(
+            batch_file,
+            decisions_file,
+            rule={"match": {"category": "case-only"}, "action": "explode", "source": "voice"},
+        )
+    # nothing persisted by rejected rules
+    assert not decisions_file.exists() or json.loads(decisions_file.read_text())["decisions"] == {}
+
+
+def test_cli_runs_from_plain_checkout_without_pythonpath(batch_file, decisions_file):
+    import os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "kg_review_session.py"
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    result = subprocess.run(
+        [
+            _sys.executable,
+            str(script),
+            "stats",
+            "--batch",
+            str(batch_file),
+            "--decisions",
+            str(decisions_file),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "case-only" in result.stdout
+
+
 def test_stats_reports_progress(batch_file, decisions_file):
     record_decision(
         decisions_file,

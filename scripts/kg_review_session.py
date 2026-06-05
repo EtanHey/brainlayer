@@ -14,8 +14,10 @@ See brainlayer/kg_review_session.py for the decisions-file contract.
 import argparse
 import json
 import sys
+from pathlib import Path
 
-from brainlayer.kg_review_session import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from brainlayer.kg_review_session import (  # noqa: E402
     apply_rule,
     next_undecided,
     record_decision,

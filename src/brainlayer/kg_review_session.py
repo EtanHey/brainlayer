@@ -157,9 +157,15 @@ def apply_rule(
 
     rule = {match: {category?, stem_contains?}, action, canonical?, note?, source}
     Returns number of clusters decided.
+
+    `mixed` is rejected for rules: it needs a per-member map, which a bulk
+    rule cannot supply for arbitrary clusters.
     """
-    if rule.get("action") not in VALID_ACTIONS:
-        raise ValueError(f"invalid rule action {rule.get('action')!r}")
+    if rule.get("action") not in VALID_ACTIONS - {"mixed"}:
+        raise ValueError(
+            f"invalid rule action {rule.get('action')!r}; "
+            f"rules accept {sorted(VALID_ACTIONS - {'mixed'})} (mixed is per-cluster only)"
+        )
     match = rule.get("match", {})
     clusters = load_flag_batch(batch_path)
 
