@@ -258,13 +258,35 @@ def request_brainbar_vacuum_into(
             if not target_path.exists():
                 raise RuntimeError(f"BrainBar backup did not create snapshot: {target_path}")
             return
+        except BackupTimeoutError:
+            raise
         except Exception as exc:
             last_error = exc
+            existing_target_note = ""
+            if target_path.exists():
+                try:
+                    pragma = _sqlite_pragma_check(target_path, "quick_check")
+                except Exception as check_exc:
+                    target_path.unlink(missing_ok=True)
+                    existing_target_note = f"; removing invalid existing target after quick_check error: {check_exc}"
+                else:
+                    if pragma == "ok":
+                        print(
+                            f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
+                            "target exists and passed quick_check",
+                            flush=True,
+                        )
+                        return
+                    target_path.unlink(missing_ok=True)
+                    existing_target_note = f"; removing invalid existing target after quick_check={pragma!r}"
             if attempt >= max_attempts:
-                print(f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}", flush=True)
+                print(
+                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",
+                    flush=True,
+                )
                 break
             print(
-                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}; "
+                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}; "
                 f"retrying in {retry_backoff_seconds}s",
                 flush=True,
             )
