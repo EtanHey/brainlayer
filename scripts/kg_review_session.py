@@ -3,7 +3,7 @@
 
 Usage:
     python3 scripts/kg_review_session.py next --batch B.json --decisions D.json [--category C]
-    python3 scripts/kg_review_session.py record --decisions D.json --cluster-id ID --decision-json '{...}'
+    python3 scripts/kg_review_session.py record --batch B.json --decisions D.json --cluster-id ID --decision-json '{...}'
     python3 scripts/kg_review_session.py rule --batch B.json --decisions D.json --rule-json '{...}'
     python3 scripts/kg_review_session.py stats --batch B.json --decisions D.json
 
@@ -36,6 +36,7 @@ def main() -> int:
     p_next.add_argument("--category")
 
     p_rec = sub.add_parser("record")
+    p_rec.add_argument("--batch", required=True)
     p_rec.add_argument("--decisions", required=True)
     p_rec.add_argument("--cluster-id", required=True)
     p_rec.add_argument("--decision-json", required=True)
@@ -58,7 +59,7 @@ def main() -> int:
             out["speak"] = speak_text(cluster)
         print(json.dumps(out, ensure_ascii=False, indent=2))
     elif args.cmd == "record":
-        stamped = record_decision(args.decisions, args.cluster_id, json.loads(args.decision_json))
+        stamped = record_decision(args.batch, args.decisions, args.cluster_id, json.loads(args.decision_json))
         print(json.dumps({"recorded": args.cluster_id, "decision": stamped}, ensure_ascii=False))
     elif args.cmd == "rule":
         n = apply_rule(args.batch, args.decisions, json.loads(args.rule_json))
