@@ -769,17 +769,28 @@ class SearchMixin:
         tail_candidates = scored[candidate_limit:]
 
         raw_embeddings_by_id = self._load_chunk_embeddings([candidate[1] for candidate in top_candidates])
-        embeddings_by_id: dict[str, np.ndarray] = {}
-        expected_shape: tuple[int, ...] | None = None
-        for chunk_id, embedding in raw_embeddings_by_id.items():
+        candidate_vectors: list[tuple[tuple[float, str, str, Dict[str, Any], Any], np.ndarray]] = []
+        shape_counts: dict[tuple[int, ...], int] = {}
+        shape_first_index: dict[tuple[int, ...], int] = {}
+        for candidate_index, candidate in enumerate(top_candidates):
+            embedding = raw_embeddings_by_id.get(candidate[1])
+            if embedding is None:
+                continue
             vector = np.asarray(embedding, dtype=np.float32)
             if vector.ndim != 1 or vector.size == 0 or not np.isfinite(vector).all():
                 continue
-            if expected_shape is None:
-                expected_shape = vector.shape
-            if vector.shape != expected_shape:
-                continue
-            embeddings_by_id[chunk_id] = vector
+            shape = vector.shape
+            candidate_vectors.append((candidate, vector))
+            shape_counts[shape] = shape_counts.get(shape, 0) + 1
+            shape_first_index.setdefault(shape, candidate_index)
+
+        if not shape_counts:
+            return scored
+
+        expected_shape = max(shape_counts, key=lambda shape: (shape_counts[shape], -shape_first_index[shape]))
+        embeddings_by_id = {
+            candidate[1]: vector for candidate, vector in candidate_vectors if vector.shape == expected_shape
+        }
 
         mmr_candidates = [candidate for candidate in top_candidates if candidate[1] in embeddings_by_id]
         if len(mmr_candidates) < 2:
