@@ -47,7 +47,12 @@ def main() -> None:
         raise SystemExit("Choose exactly one mode: --emit-prompts DIR, --collect DIR, or --judge groq")
 
     if args.collect is not None:
-        verdicts = collect_worker_verdicts(args.collect)
+        clusters = (
+            load_flag_batch_clusters(args.flag_batch, categories=args.categories, limit=args.limit)
+            if args.flag_batch is not None
+            else None
+        )
+        verdicts = collect_worker_verdicts(args.collect, clusters=clusters)
         out_path = write_verdict_outputs(verdicts, out_json=args.out, markdown_path=args.markdown, mode="collect")
         print(f"COLLECTED {len(verdicts)} verdicts to {out_path}")
         return

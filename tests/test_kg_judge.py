@@ -534,6 +534,7 @@ def test_collect_rejects_invalid_worker_json(tmp_path: Path):
                 "confidence": "high",
                 "evidence_cited": [],
                 "reasoning": "Missing evidence.",
+                "evidence_degraded": False,
             }
         ),
         encoding="utf-8",
@@ -541,3 +542,111 @@ def test_collect_rejects_invalid_worker_json(tmp_path: Path):
 
     with pytest.raises(JudgeSchemaError, match="evidence_cited"):
         collect_worker_verdicts(verdict_dir)
+
+
+def test_collect_rejects_canonical_suggestion_outside_cluster_members(tmp_path: Path):
+    from brainlayer.kg_judge import JudgeSchemaError, collect_worker_verdicts
+
+    verdict_dir = tmp_path / "worker-verdicts"
+    verdict_dir.mkdir()
+    (verdict_dir / "001-easysend.json").write_text(
+        json.dumps(
+            {
+                "stem": "EasySend",
+                "proposed_type": "Organization",
+                "identity": "EasySend is a company/product Etan used.",
+                "merge_disposition": "merge",
+                "canonical_suggestion": "Not In Cluster",
+                "confidence": "high",
+                "evidence_cited": ["linked-1"],
+                "reasoning": "Usage evidence supports Organization.",
+                "evidence_degraded": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    clusters = [
+        _cluster(
+            "EasySend",
+            [
+                {"id": "easysend-org", "name": "EasySend", "type": "organization", "chunks": 1},
+                {"id": "easysend-project", "name": "EasySend Notes", "type": "project", "chunks": 1},
+            ],
+        )
+    ]
+
+    with pytest.raises(JudgeSchemaError, match="canonical_suggestion"):
+        collect_worker_verdicts(verdict_dir, clusters=clusters)
+
+
+def test_validate_verdict_requires_evidence_degraded_bool():
+    from brainlayer.kg_judge import JudgeSchemaError, validate_verdict
+
+    verdict = {
+        "stem": "EasySend",
+        "proposed_type": "Organization",
+        "identity": "EasySend is a company/product Etan used.",
+        "merge_disposition": "merge",
+        "canonical_suggestion": "EasySend",
+        "confidence": "high",
+        "evidence_cited": ["linked-1"],
+        "reasoning": "Usage evidence supports Organization.",
+    }
+
+    with pytest.raises(JudgeSchemaError, match="evidence_degraded"):
+        validate_verdict(verdict, cluster_member_names=["EasySend", "EasySend Notes"])
+
+    verdict["evidence_degraded"] = "false"
+    with pytest.raises(JudgeSchemaError, match="evidence_degraded"):
+        validate_verdict(verdict, cluster_member_names=["EasySend", "EasySend Notes"])
+
+
+def test_validate_verdict_restricts_canonical_suggestion_to_member_names():
+    from brainlayer.kg_judge import JudgeSchemaError, validate_verdict
+
+    base_verdict = {
+        "stem": "EasySend",
+        "proposed_type": "Organization",
+        "identity": "EasySend is a company/product Etan used.",
+        "merge_disposition": "merge",
+        "canonical_suggestion": "Not In Cluster",
+        "confidence": "high",
+        "evidence_cited": ["linked-1"],
+        "reasoning": "Usage evidence supports Organization.",
+        "evidence_degraded": False,
+    }
+
+    with pytest.raises(JudgeSchemaError, match="canonical_suggestion"):
+        validate_verdict(base_verdict, cluster_member_names=["EasySend", "EasySend Notes"])
+
+    base_verdict["canonical_suggestion"] = ""
+    with pytest.raises(JudgeSchemaError, match="canonical_suggestion"):
+        validate_verdict(base_verdict, cluster_member_names=["EasySend", "EasySend Notes"])
+
+    base_verdict["canonical_suggestion"] = None
+    with pytest.raises(JudgeSchemaError, match="canonical_suggestion"):
+        validate_verdict(base_verdict, cluster_member_names=["EasySend", "EasySend Notes"])
+
+
+def test_validate_verdict_allows_null_canonical_for_d1_d2_and_split():
+    from brainlayer.kg_judge import validate_verdict
+
+    base_verdict = {
+        "stem": "fuzzy",
+        "proposed_type": "D1 Concept→tag",
+        "identity": "A concept tag, not a rigid entity.",
+        "merge_disposition": "keep",
+        "canonical_suggestion": None,
+        "confidence": "medium",
+        "evidence_cited": ["linked-1"],
+        "reasoning": "The supplied context reads naturally as a concept.",
+        "evidence_degraded": False,
+    }
+
+    assert validate_verdict(base_verdict, cluster_member_names=["fuzzy"])["canonical_suggestion"] is None
+
+    transient = {**base_verdict, "proposed_type": "D2 Transient→drop"}
+    assert validate_verdict(transient, cluster_member_names=["fuzzy"])["canonical_suggestion"] is None
+
+    split = {**base_verdict, "proposed_type": "Organization", "merge_disposition": "split"}
+    assert validate_verdict(split, cluster_member_names=["fuzzy"])["canonical_suggestion"] is None

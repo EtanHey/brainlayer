@@ -54,7 +54,7 @@ REQUIRED_SCHEMA_TEXT = """Required verdict JSON schema:
   "proposed_type": "Person|Organization|Place|Event|Project|Tool|Technology|D1 Concept→tag|D2 Transient→drop",
   "identity": "one line: what this ACTUALLY is",
   "merge_disposition": "merge|keep|split",
-  "canonical_suggestion": "canonical name or null",
+  "canonical_suggestion": "non-empty cluster member name, or null only for D1/D2/split verdicts",
   "confidence": "high|medium|low",
   "evidence_cited": ["refs to supplied packet evidence and/or worker-found evidence"],
   "reasoning": "3 sentences max",
@@ -389,6 +389,7 @@ def build_judge_prompt(packet: EvidencePacket, *, worker_mode: bool = False) -> 
         "Rules:\n"
         "- proposed_type must be exactly one closed-enum label.\n"
         "- split means the cluster contains 2+ real referents.\n"
+        "- canonical_suggestion must be a non-empty cluster member name, or null only for D1/D2/split verdicts.\n"
         "- evidence_cited must cite supplied evidence refs and any worker-found evidence refs.\n"
         "- reasoning must be 3 sentences or fewer.\n"
         f"{worker_instruction}\n"
@@ -425,6 +426,7 @@ def validate_verdict(
     verdict: dict[str, Any],
     *,
     allowed_evidence_refs: Iterable[str] | None = None,
+    cluster_member_names: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     required = (
         "stem",
@@ -435,6 +437,7 @@ def validate_verdict(
         "confidence",
         "evidence_cited",
         "reasoning",
+        "evidence_degraded",
     )
     missing = [key for key in required if key not in verdict]
     if missing:
@@ -463,10 +466,9 @@ def validate_verdict(
         raise JudgeSchemaError("identity must be one line")
     if _sentence_count(cleaned["reasoning"]) > 3:
         raise JudgeSchemaError("reasoning must be 3 sentences or fewer")
-    evidence_degraded = cleaned.get("evidence_degraded", False)
-    if not isinstance(evidence_degraded, bool):
+    if not isinstance(cleaned["evidence_degraded"], bool):
         raise JudgeSchemaError("evidence_degraded must be boolean")
-    cleaned["evidence_degraded"] = evidence_degraded
+    _validate_canonical_suggestion(cleaned, cluster_member_names=cluster_member_names)
     return cleaned
 
 
@@ -474,8 +476,43 @@ def parse_verdict_json(
     raw: str,
     *,
     allowed_evidence_refs: Iterable[str] | None = None,
+    cluster_member_names: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    return validate_verdict(_extract_json_object(raw), allowed_evidence_refs=allowed_evidence_refs)
+    return validate_verdict(
+        _extract_json_object(raw),
+        allowed_evidence_refs=allowed_evidence_refs,
+        cluster_member_names=cluster_member_names,
+    )
+
+
+def _null_canonical_allowed(verdict: dict[str, Any]) -> bool:
+    return verdict["merge_disposition"] == "split" or verdict["proposed_type"] in {
+        "D1 Concept→tag",
+        "D2 Transient→drop",
+    }
+
+
+def _validate_canonical_suggestion(
+    verdict: dict[str, Any],
+    *,
+    cluster_member_names: Iterable[str] | None,
+) -> None:
+    canonical = verdict["canonical_suggestion"]
+    if canonical is None:
+        if not _null_canonical_allowed(verdict):
+            raise JudgeSchemaError("canonical_suggestion can be null only for D1/D2/split verdicts")
+        return
+    if not isinstance(canonical, str) or not canonical.strip():
+        raise JudgeSchemaError("canonical_suggestion must be a non-empty string")
+    canonical = canonical.strip()
+    member_names = {name.strip() for name in cluster_member_names or [] if isinstance(name, str) and name.strip()}
+    if member_names and canonical not in member_names:
+        raise JudgeSchemaError("canonical_suggestion must match one of the cluster member names")
+    verdict["canonical_suggestion"] = canonical
+
+
+def _packet_member_names(packet: EvidencePacket) -> list[str]:
+    return [str(member["name"]) for member in packet.members if isinstance(member.get("name"), str) and member["name"]]
 
 
 def judge_cluster_with_llm(
@@ -495,7 +532,11 @@ def judge_cluster_with_llm(
             )
         raw = llm(prompt + retry_note)
         try:
-            return parse_verdict_json(raw, allowed_evidence_refs=packet.evidence_refs())
+            return parse_verdict_json(
+                raw,
+                allowed_evidence_refs=packet.evidence_refs(),
+                cluster_member_names=_packet_member_names(packet),
+            )
         except JudgeSchemaError as exc:
             last_error = exc
             if attempt == max_attempts:
@@ -539,6 +580,26 @@ def load_flag_batch_clusters(
     else:
         parsed_categories = categories
     return _load_clusters_from_flag_batch(Path(flag_batch), categories=parsed_categories, limit=limit)
+
+
+def _cluster_member_names(cluster: dict[str, Any]) -> list[str]:
+    names = []
+    for member in cluster.get("members", []):
+        name = member.get("name")
+        if isinstance(name, str) and name.strip():
+            names.append(name)
+    return names
+
+
+def _member_names_by_stem(clusters: Iterable[dict[str, Any]] | None) -> dict[str, list[str]]:
+    if clusters is None:
+        return {}
+    names_by_stem: dict[str, list[str]] = {}
+    for cluster in clusters:
+        stem = cluster.get("stem")
+        if isinstance(stem, str) and stem.strip():
+            names_by_stem.setdefault(stem, []).extend(_cluster_member_names(cluster))
+    return names_by_stem
 
 
 def emit_prompt_files(
@@ -636,15 +697,19 @@ def collect_worker_verdicts(
     *,
     out_json: str | Path | None = None,
     markdown_path: str | Path | None = None,
+    clusters: Iterable[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     root = Path(verdict_dir)
     if not root.exists():
         raise FileNotFoundError(root)
     files = sorted([*root.glob("*.json"), *root.glob("*.jsonl")])
+    names_by_stem = _member_names_by_stem(clusters)
     verdicts = []
     for path in files:
         for payload in _read_verdict_payloads(path):
-            verdicts.append(validate_verdict(payload))
+            stem = payload.get("stem")
+            member_names = names_by_stem.get(stem) if isinstance(stem, str) else None
+            verdicts.append(validate_verdict(payload, cluster_member_names=member_names))
     if out_json is not None or markdown_path is not None:
         write_verdict_outputs(verdicts, out_json=out_json, markdown_path=markdown_path, mode="collect")
     return verdicts
