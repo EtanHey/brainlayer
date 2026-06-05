@@ -157,6 +157,10 @@ def _normalize_repo_match(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
     return slug or "cluster"
@@ -313,6 +317,7 @@ def _read_repo_evidence(stem: str, gits_root: Path) -> list[EvidenceItem]:
             git_log = subprocess.run(
                 ["git", "log", "--oneline", "-3"],
                 cwd=repo,
+                env=_clean_git_env(),
                 check=False,
                 capture_output=True,
                 text=True,

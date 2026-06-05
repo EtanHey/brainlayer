@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -169,9 +171,36 @@ def _create_judge_fixture_db(path: Path) -> None:
 def _create_repo(root: Path, name: str, readme: str, commit_messages: list[str]) -> None:
     repo = root / name
     repo.mkdir(parents=True)
+    _test_git(repo, "init", "-b", "main")
+    _test_git(repo, "config", "user.name", "Fixture User")
+    _test_git(repo, "config", "user.email", "fixture@example.com")
     (repo / "README.md").write_text(readme, encoding="utf-8")
     for index, message in enumerate(commit_messages):
         (repo / f"note-{index}.txt").write_text(message, encoding="utf-8")
+        _test_git(repo, "add", "README.md", f"note-{index}.txt")
+        _assert_no_github_remote(repo)
+        _test_git(repo, "commit", "-m", message)
+
+
+def _clean_test_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+def _test_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=_clean_test_git_env(),
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _assert_no_github_remote(repo: Path) -> None:
+    result = _test_git(repo, "remote", "-v", check=False)
+    remote_text = f"{result.stdout}\n{result.stderr}"
+    assert "github.com" not in remote_text, remote_text
 
 
 def _cluster(stem: str, members: list[dict]) -> dict:
@@ -196,6 +225,104 @@ def judge_fixture(tmp_path: Path) -> dict[str, Path]:
         ["record claude.ai container behavior"],
     )
     return {"db_path": db_path, "gits_root": gits_root}
+
+
+def test_fixture_repo_helper_ignores_parent_git_env_and_has_no_github_remote(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    parent_repo = tmp_path / "parent"
+    parent_repo.mkdir()
+    _test_git(parent_repo, "init", "-b", "main")
+    (parent_repo / "README.md").write_text("# parent\n", encoding="utf-8")
+    _test_git(parent_repo, "add", "README.md")
+    _test_git(parent_repo, "config", "user.name", "Parent User")
+    _test_git(parent_repo, "config", "user.email", "parent@example.com")
+    _test_git(parent_repo, "commit", "-m", "parent poison commit")
+    _test_git(parent_repo, "remote", "add", "origin", "https://github.com/EtanHey/brainlayer.git")
+
+    monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
+
+    gits_root = tmp_path / "Gits"
+    _create_repo(
+        gits_root,
+        "EasySend",
+        "# EasySend\n\nVendor integration notes.\n",
+        ["vendor import"],
+    )
+
+    fixture_repo = gits_root / "EasySend"
+    fixture_log = _test_git(fixture_repo, "log", "--oneline", "-1")
+    parent_log = _test_git(parent_repo, "log", "--oneline", "--all")
+
+    assert "vendor import" in fixture_log.stdout
+    assert "vendor import" not in parent_log.stdout
+    _assert_no_github_remote(fixture_repo)
+
+
+def test_fixture_remote_guard_rejects_github_remote(tmp_path: Path):
+    gits_root = tmp_path / "Gits"
+    _create_repo(gits_root, "EasySend", "# EasySend\n", ["vendor import"])
+    fixture_repo = gits_root / "EasySend"
+    _test_git(fixture_repo, "remote", "add", "origin", "https://github.com/EtanHey/brainlayer.git")
+
+    with pytest.raises(AssertionError, match="github.com"):
+        _assert_no_github_remote(fixture_repo)
+
+
+def test_local_repo_evidence_ignores_parent_git_hook_env(
+    judge_fixture: dict[str, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from brainlayer.kg_judge import gather_evidence_for_cluster
+
+    parent_repo = tmp_path / "parent"
+    parent_repo.mkdir()
+    _test_git(parent_repo, "init", "-b", "main")
+    (parent_repo / "README.md").write_text("# parent\n", encoding="utf-8")
+    _test_git(parent_repo, "add", "README.md")
+    _test_git(parent_repo, "config", "user.name", "Parent User")
+    _test_git(parent_repo, "config", "user.email", "parent@example.com")
+    _test_git(parent_repo, "commit", "-m", "parent poison commit")
+
+    monkeypatch.setenv("GIT_DIR", str(parent_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(parent_repo))
+
+    packet = gather_evidence_for_cluster(
+        _cluster(
+            "EasySend",
+            [
+                {"id": "easysend-org", "name": "EasySend", "type": "organization", "chunks": 1},
+                {"id": "easysend-project", "name": "EasySend", "type": "project", "chunks": 1},
+            ],
+        ),
+        db_path=judge_fixture["db_path"],
+        gits_root=judge_fixture["gits_root"],
+    )
+
+    packet_text = packet.to_prompt_text()
+    assert "parent poison commit" not in packet_text
+    assert "vendor import" in packet_text
+
+
+def test_git_shellout_tests_scrub_inherited_git_env():
+    test_root = Path(__file__).parent
+    git_shellout_files = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in test_root.glob("test_*.py")
+        if '["git",' in path.read_text(encoding="utf-8")
+    }
+
+    assert set(git_shellout_files) == {
+        "test_brainbar_build_app_guards.py",
+        "test_git_learning.py",
+        "test_kg_judge.py",
+    }
+    for text in git_shellout_files.values():
+        assert 'if not key.startswith("GIT_")' in text
+        assert "env=_clean_git_env()" in text or "env=_clean_test_git_env()" in text
 
 
 def test_gathers_decisive_evidence_for_required_fixture_clusters(judge_fixture: dict[str, Path]):
