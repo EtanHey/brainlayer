@@ -198,6 +198,8 @@ def create_sqlite_backup_artifact(
     deleted = (
         prune_local_uncompressed_snapshots(output_dir, keep_latest=local_uncompressed_keep) if keep_uncompressed else []
     )
+    if uncompressed_path is not None and uncompressed_path.name in deleted:
+        uncompressed_path = None
     return SQLiteBackupArtifact(
         gzip_path=final_gz,
         uncompressed_path=uncompressed_path,

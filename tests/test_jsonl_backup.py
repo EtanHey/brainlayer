@@ -125,6 +125,70 @@ def test_run_jsonl_backup_second_run_noops_when_state_covers_files(tmp_path, mon
     assert len((tmp_path / "jsonl-backup.log").read_text().strip().splitlines()) == 2
 
 
+def test_local_only_jsonl_bundle_does_not_advance_upload_state(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "changed.jsonl", mtime=now - 3600)
+    state_path = tmp_path / "state.json"
+    uploads: list[Path] = []
+
+    local = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-06-05",
+        now=now,
+        upload=False,
+    )
+
+    assert local["status"] == "created"
+    assert local["verified"] is True
+    assert not state_path.exists()
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        jsonl_backup.backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id"
+    )
+    monkeypatch.setattr(jsonl_backup.backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+        uploads.append(Path(file_path))
+        return {"id": "drive-jsonl-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
+
+    monkeypatch.setattr(jsonl_backup.backup_daily, "upload_file_to_drive_raw", fake_upload)
+
+    uploaded = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "jsonl-backup.log",
+        queue_dir=tmp_path / "queue",
+        date_stamp="2026-06-05",
+        now=now,
+        upload=True,
+    )
+
+    assert uploaded["status"] == "uploaded"
+    assert uploaded["bundled_file_count"] == 1
+    assert len(uploads) == 1
+    assert source_root.joinpath("changed.jsonl").as_posix() in state_path.read_text()
+
+
+def test_load_jsonl_backup_state_ignores_non_dict_json(tmp_path):
+    from brainlayer import jsonl_backup
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text("[]", encoding="utf-8")
+
+    assert jsonl_backup._load_state(state_path) == {"files": {}}
+
+
 def test_run_jsonl_backup_upload_failure_is_loud(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
@@ -180,17 +244,41 @@ def test_corrupt_jsonl_bundle_verifies_false_and_main_returns_nonzero(tmp_path, 
 def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     module_path = Path("src/brainlayer/jsonl_backup.py")
     plist_path = Path("launchd/com.brainlayer.jsonl-backup.plist")
+    script_plist_path = Path("scripts/launchd/com.brainlayer.jsonl-backup.plist")
+    wrapper_path = Path("scripts/launchd/jsonl-backup.sh")
+    install_path = Path("scripts/launchd/install.sh")
 
     assert module_path.is_file()
     assert plist_path.is_file()
+    assert script_plist_path.is_file()
+    assert wrapper_path.is_file()
 
     module = module_path.read_text()
     plist = plist_path.read_text()
+    script_plist = script_plist_path.read_text()
+    wrapper = wrapper_path.read_text()
+    install = install_path.read_text()
 
     assert "Install note" in module
     assert "com.brainlayer.jsonl-backup" in plist
+    assert "com.brainlayer.jsonl-backup" in script_plist
     assert "<integer>5</integer>" in plist
+    assert "<integer>5</integer>" in script_plist
     assert "<integer>0</integer>" in plist
+    assert "<integer>0</integer>" in script_plist
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS" in plist
+    assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS" in wrapper
     assert "1800" in plist
+    assert "1800" in wrapper
     assert ".local/share/brainlayer/logs/jsonl-backup.log" in plist
+    assert "jsonl-backup" in install
+    assert "install_jsonl_backup_script" in install
+    assert "__BRAINLAYER_DIR_VALUE__" in wrapper
+    assert "PYTHONPATH" in wrapper
+    assert "__HOME__/.local/lib/brainlayer/jsonl-backup.sh" in script_plist
+    assert "<key>SoftResourceLimits</key>" in plist
+    assert "<key>SoftResourceLimits</key>" in script_plist
+    assert "<key>NumberOfFiles</key>" in plist
+    assert "<key>NumberOfFiles</key>" in script_plist
+    assert "<integer>4096</integer>" in plist
+    assert "<integer>4096</integer>" in script_plist

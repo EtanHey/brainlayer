@@ -193,6 +193,36 @@ def test_prune_local_uncompressed_snapshots_keeps_two_newest(tmp_path):
     assert (tmp_path / "not-a-snapshot.db").exists()
 
 
+def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "2026-06-05.db").write_bytes(b"newer")
+    (out_dir / "2026-06-04.db").write_bytes(b"also-newer")
+
+    def fake_vacuum_into(target_path, **kwargs):  # noqa: ARG001
+        with sqlite3.connect(source) as db:
+            db.execute("VACUUM INTO ?", (str(target_path),))
+
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", fake_vacuum_into)
+
+    artifact = backup_daily.create_sqlite_backup_artifact(
+        source,
+        out_dir,
+        date_stamp="2026-06-03",
+        keep_uncompressed=True,
+        local_uncompressed_keep=2,
+    )
+
+    assert artifact.uncompressed_path is None
+    assert artifact.local_retention_deleted == ["2026-06-03.db"]
+    assert not (out_dir / "2026-06-03.db").exists()
+    assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
+
+
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 

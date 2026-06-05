@@ -70,6 +70,8 @@ def _load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"files": {}}
     data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    if not isinstance(data, dict):
+        return {"files": {}}
     files = data.get("files")
     if not isinstance(files, dict):
         data["files"] = {}
@@ -293,15 +295,14 @@ def run_backup(
         result.update({"uploaded": True, "drive_file": uploaded})
 
     result.update(verify_jsonl_bundle(archive_path, expected_file_count=len(changed)))
-    if result["verified"]:
+    if result["verified"] and upload:
         _atomic_write_json(state_path, _update_state_for_uploaded(state, changed))
-        if upload:
-            deleted = backup_daily.prune_drive_backups(
-                service,
-                folder_parts=folder_parts,
-                retention_policy=JSONL_RETENTION,
-            )
-            result["retention_deleted"] = deleted
+        deleted = backup_daily.prune_drive_backups(
+            service,
+            folder_parts=folder_parts,
+            retention_policy=JSONL_RETENTION,
+        )
+        result["retention_deleted"] = deleted
 
     _append_json_log(log_path, result)
     _enqueue_run_summary(result, queue_dir=queue_dir)
