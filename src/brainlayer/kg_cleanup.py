@@ -10,6 +10,7 @@ Everything reversible:
 No ``DELETE FROM kg_entities`` anywhere.
 """
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -224,6 +225,51 @@ def apply_merges(con: sqlite3.Connection, clusters: list[dict], run_id: str) -> 
     return {"clusters": len(clusters), "rows_merged_away": merged_away}
 
 
+def _keep_separate_entity_id(decision: dict) -> str:
+    stem = str(decision.get("stem") or "").strip()
+    category = str(decision.get("category") or "").strip()
+    if stem and category:
+        return f"cat:{category}:stem:{stem}"
+    if stem:
+        return f"stem:{stem}"
+    if decision.get("id"):
+        return f"id:{decision['id']}"
+    digest = hashlib.sha256(json.dumps(decision, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"decision:{digest[:16]}"
+
+
+def apply_keep_separate(
+    con: sqlite3.Connection,
+    decisions: list[dict],
+    run_id: str,
+    batch_size: int = 5000,
+) -> int:
+    """Persist human keep-separate decisions as log-only rows."""
+    ts = _now()
+    logged = 0
+    for i in range(0, len(decisions), batch_size):
+        batch = decisions[i : i + batch_size]
+        for decision in batch:
+            con.execute(
+                "INSERT INTO kg_cleanup_log (run_id, action, entity_id,"
+                " canonical_id, mechanism, evidence, payload_json, ts)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    "keep_separate",
+                    _keep_separate_entity_id(decision),
+                    None,
+                    "flag_decision_keep_separate",
+                    str(decision.get("category") or decision.get("source") or ""),
+                    json.dumps({"decision": decision}, sort_keys=True),
+                    ts,
+                ),
+            )
+            logged += 1
+        con.commit()
+    return logged
+
+
 def rollback(con: sqlite3.Connection, run_id: str) -> dict:
     """Reverse-replay the log for ``run_id`` (newest first)."""
     entries = con.execute(
@@ -265,7 +311,11 @@ def rollback(con: sqlite3.Connection, run_id: str) -> dict:
                     "UPDATE kg_relations SET source_id=?, target_id=? WHERE id=?",
                     (rel["source_id"], rel["target_id"], rel["id"]),
                 )
-        counts[e["action"]] += 1
+        elif e["action"] == "keep_separate":
+            pass
+        else:
+            raise RuntimeError(f"unknown kg cleanup action: {e['action']}")
+        counts[e["action"]] = counts.get(e["action"], 0) + 1
         con.execute("DELETE FROM kg_cleanup_log WHERE rowid=?", (e["rowid"],))
     con.commit()
     return counts
