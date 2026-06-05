@@ -1,0 +1,2883 @@
+{
+  "db": "/Users/etanheyman/.local/share/brainlayer/brainlayer.db",
+  "total_active": 11874,
+  "auto_prune": {
+    "total": 3186,
+    "by_family": {
+      "anonymizer_placeholder": 2794,
+      "filename": 16,
+      "transient_ref_id": 250,
+      "surface_artifact": 113,
+      "acompact": 2,
+      "bare_hex_or_uuid": 10,
+      "env_var": 1
+    },
+    "protected_rows_skipped": 0,
+    "samples": {
+      "anonymizer_placeholder": [
+        "[PERSON_c6278be6]",
+        "[PERSON_425b28b0]",
+        "PERSON_9c53c074",
+        "PERSON_4b5af442",
+        "PERSON_84833393",
+        "[PERSON_ccc0e8da]",
+        "PERSON_b3140286",
+        "[PERSON_e5b02d4b]"
+      ],
+      "filename": [
+        "SKILL.md",
+        "CLAUDE.md",
+        "wispr-vocabulary-update.csv",
+        "wispr-replacements.csv",
+        "docs.local/research/wispr-vocabulary-update.csv",
+        "docs.local/research/wispr-replacements.csv",
+        ".mcp.json",
+        "MEMORY.md"
+      ],
+      "transient_ref_id": [
+        "R81",
+        "R28",
+        "R81",
+        "PR #224",
+        "R28",
+        "PR #224",
+        "Task #13",
+        "R82"
+      ],
+      "surface_artifact": [
+        "surface:69",
+        "surface:76",
+        "surface:49",
+        "surface:70",
+        "surface:75",
+        "surface:74",
+        "surface:77",
+        "surface:73"
+      ],
+      "acompact": [
+        "acompact-34f3b0f3e4c9d0b6",
+        "acompact-b4bb7c6ddba93d63"
+      ],
+      "bare_hex_or_uuid": [
+        "9d32ae4e-a95c-4b6f-8ef1-62a3b78ef4f0",
+        "6ceb037b-b3f1-4079-a1c1-502cdc8c3373",
+        "c8bbc4aa-df99-40ff-a7a9-6855771ea904",
+        "02a13012-5943-47a0-90ce-bbb6fba14900",
+        "1f7d83a5-22a4-42f5-8745-edec70214b56",
+        "3697b635-83b8-431b-bd9d-4feab5c4bc8e",
+        "d1813f13-45ad-40d2-944d-e06800cc87b5",
+        "d6293539-f7bf-401f-8c48-47c9d18fe78d"
+      ],
+      "env_var": [
+        "CLAUDE_CODE_NO_FLICKER=1"
+      ]
+    },
+    "protected_skip_samples": []
+  },
+  "auto_merge": {
+    "tier1_diagnosis_named": {
+      "clusters": 35,
+      "rows_merged_away": 136,
+      "all_clusters": [
+        {
+          "stem": "entity grill",
+          "canonical": {
+            "id": "4c0de96d-2075-5da1-b04e-ff10c4b4958f",
+            "type": "tool",
+            "name": "entity-grill",
+            "chunks": 33
+          },
+          "members": [
+            {
+              "id": "8057ff44-5b5a-5f83-a642-67dad24e157a",
+              "type": "concept",
+              "name": "entity grill",
+              "chunks": 25
+            },
+            {
+              "id": "5c82808b-5370-574a-ae2f-f5ec51f04f81",
+              "type": "tool",
+              "name": "entity grill",
+              "chunks": 28
+            },
+            {
+              "id": "6b37e1ea-1dbd-5c25-aedd-0066861a607f",
+              "type": "project",
+              "name": "entity-grill",
+              "chunks": 29
+            },
+            {
+              "id": "bd2b0b35-8084-5d05-8da6-27aad60098c9",
+              "type": "project",
+              "name": "entity grill",
+              "chunks": 15
+            },
+            {
+              "id": "8643a902-e672-5977-8ed5-636e759c8133",
+              "type": "concept",
+              "name": "entity-grill",
+              "chunks": 16
+            },
+            {
+              "id": "5d4c9d7e-494a-5b9e-b41c-47a5fb4b0c03",
+              "type": "person",
+              "name": "entity-grill",
+              "chunks": 1
+            },
+            {
+              "id": "97bd7fbd-1ee1-5693-a05c-b743f4a64215",
+              "type": "concept",
+              "name": "@entity-grill",
+              "chunks": 1
+            },
+            {
+              "id": "dc1a6dd1-74bd-5a9c-af32-f99f55432c7e",
+              "type": "company",
+              "name": "Entity-grill",
+              "chunks": 1
+            },
+            {
+              "id": "875e14e4-17c7-5bdd-b37c-6f9252b326b6",
+              "type": "tool",
+              "name": "/entity-grill",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 10,
+          "tier": 1
+        },
+        {
+          "stem": "skill creator",
+          "canonical": {
+            "id": "4997aab3-a653-5b92-bbc7-b368831a1838",
+            "type": "tool",
+            "name": "skill-creator",
+            "chunks": 169
+          },
+          "members": [
+            {
+              "id": "9383b84f-1922-59b2-9e4b-b2b3ed24dd24",
+              "type": "project",
+              "name": "skill-creator",
+              "chunks": 42
+            },
+            {
+              "id": "c576ebbc-94f7-5140-b73b-76c833b00339",
+              "type": "concept",
+              "name": "skill-creator",
+              "chunks": 52
+            },
+            {
+              "id": "a28b8936-6f74-5161-8741-5866d0f8909c",
+              "type": "tool",
+              "name": "skill creator",
+              "chunks": 1
+            },
+            {
+              "id": "d106ae8f-2bfa-5997-ba94-85ecb9d7d8c3",
+              "type": "concept",
+              "name": "skill creator",
+              "chunks": 2
+            },
+            {
+              "id": "f07ec330-2557-5ecd-8158-3528427d6681",
+              "type": "person",
+              "name": "skill-creator",
+              "chunks": 7
+            },
+            {
+              "id": "e946ab85-be4c-5b47-af64-cde81eac2e5e",
+              "type": "person",
+              "name": "skill creator",
+              "chunks": 1
+            },
+            {
+              "id": "7fb3da30-9108-5bc9-b99d-c31bbb7d4905",
+              "type": "project",
+              "name": "Skill Creator",
+              "chunks": 1
+            },
+            {
+              "id": "cf6ca810-5eed-5694-a792-762e0d649e0b",
+              "type": "tool",
+              "name": "/skill-creator",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 9,
+          "tier": 1
+        },
+        {
+          "stem": "coachclaude",
+          "canonical": {
+            "id": "40a1f4803035b30a",
+            "type": "agent",
+            "name": "coachClaude",
+            "chunks": 2243
+          },
+          "members": [
+            {
+              "id": "person-eb93c230f23e",
+              "type": "person",
+              "name": "coachClaude",
+              "chunks": 2
+            },
+            {
+              "id": "452848c8-01b4-5f26-a276-653b5f427682",
+              "type": "tool",
+              "name": "coachClaude",
+              "chunks": 131
+            },
+            {
+              "id": "f11ac2da-f595-5b06-976e-20a3d9568944",
+              "type": "concept",
+              "name": "coachClaude",
+              "chunks": 32
+            },
+            {
+              "id": "16bee9b6-c23b-5d85-9fc4-b4534c96a085",
+              "type": "person",
+              "name": "CoachClaude",
+              "chunks": 39
+            },
+            {
+              "id": "29f6e105-773b-5e73-949e-a08c2a1e7cfd",
+              "type": "project",
+              "name": "coachClaude",
+              "chunks": 28
+            },
+            {
+              "id": "2beb9467-6e5b-51a1-9c84-c53e061c37ea",
+              "type": "technology",
+              "name": "coachClaude",
+              "chunks": 1
+            },
+            {
+              "id": "ba91a686-e136-59bc-ae82-3309a09a4d69",
+              "type": "concept",
+              "name": "\u2733 coachClaude",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 80,
+          "intra_relations": 0,
+          "size": 8,
+          "tier": 1
+        },
+        {
+          "stem": "claude code",
+          "canonical": {
+            "id": "576ab822-401e-500b-9460-67470919037f",
+            "type": "project",
+            "name": "Claude Code",
+            "chunks": 70
+          },
+          "members": [
+            {
+              "id": "tool-claude-code",
+              "type": "tool",
+              "name": "Claude Code",
+              "chunks": 0
+            },
+            {
+              "id": "93685091-788d-53f9-8dad-e02dbc5fe8a9",
+              "type": "technology",
+              "name": "Claude Code",
+              "chunks": 30
+            },
+            {
+              "id": "606bb328-e583-5786-8122-6df24fcc27fa",
+              "type": "concept",
+              "name": "Claude Code",
+              "chunks": 28
+            },
+            {
+              "id": "0a3f0ea5-5eec-5fce-893e-efd63b8172f5",
+              "type": "tool",
+              "name": "claude_code",
+              "chunks": 1
+            },
+            {
+              "id": "3a80361b-9f7a-5039-b216-9bb8aec119f1",
+              "type": "technology",
+              "name": "claude-code",
+              "chunks": 1
+            },
+            {
+              "id": "b9b42ed7-5678-5be2-b551-aeca7c8fcab5",
+              "type": "company",
+              "name": "Claude Code",
+              "chunks": 3
+            },
+            {
+              "id": "b8020481-4b3e-5e03-ac3c-0f8fe4a3b376",
+              "type": "project",
+              "name": "claude-code",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 8,
+          "tier": 1
+        },
+        {
+          "stem": "codex",
+          "canonical": {
+            "id": "1bfabf1d-f8df-5af4-a3e5-ee3b833bdc74",
+            "type": "tool",
+            "name": "Codex",
+            "chunks": 721
+          },
+          "members": [
+            {
+              "id": "auto-tag-codex",
+              "type": "topic",
+              "name": "codex",
+              "chunks": 583
+            },
+            {
+              "id": "1551ab4c-6666-5292-898b-9233ac51e3b8",
+              "type": "technology",
+              "name": "Codex",
+              "chunks": 52
+            },
+            {
+              "id": "1b5af0fe-c252-5122-a08b-89278168f4f3",
+              "type": "project",
+              "name": "Codex",
+              "chunks": 56
+            },
+            {
+              "id": "893eed7c-728f-5952-a105-8204e096bd37",
+              "type": "concept",
+              "name": "Codex",
+              "chunks": 15
+            },
+            {
+              "id": "45426644-2b9d-5f52-a9a1-1e3b5e4c0828",
+              "type": "person",
+              "name": "Codex",
+              "chunks": 7
+            },
+            {
+              "id": "1b76466c-1ef8-5440-ae52-e97797f5b97d",
+              "type": "tool",
+              "name": "@codex",
+              "chunks": 2
+            },
+            {
+              "id": "7b3896ac-7eb8-538c-9ecc-a3cb9744a140",
+              "type": "company",
+              "name": "Codex",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 11,
+          "intra_relations": 0,
+          "size": 8,
+          "tier": 1
+        },
+        {
+          "stem": "claude web research",
+          "canonical": {
+            "id": "35ff14f2-538c-56f8-9df2-b35f598921f2",
+            "type": "tool",
+            "name": "/claude-web-research",
+            "chunks": 13
+          },
+          "members": [
+            {
+              "id": "ba2b1b07-c34e-5143-bf64-dc444fd585ea",
+              "type": "project",
+              "name": "claude-web-research",
+              "chunks": 8
+            },
+            {
+              "id": "27c39a1a-3125-5da5-a205-aac4808e44c9",
+              "type": "technology",
+              "name": "claude-web-research",
+              "chunks": 1
+            },
+            {
+              "id": "a99b787b-26aa-54d9-85b8-aa1a506ec34c",
+              "type": "tool",
+              "name": "claude-web-research",
+              "chunks": 9
+            },
+            {
+              "id": "06b35096-851d-55cb-bdef-c573512bb4a8",
+              "type": "technology",
+              "name": "claude web research",
+              "chunks": 1
+            },
+            {
+              "id": "0f43bf91-f1f8-5e8f-8142-97ecb1f1ea3f",
+              "type": "concept",
+              "name": "claude-web-research",
+              "chunks": 6
+            },
+            {
+              "id": "d27d8387-5607-5c85-b868-2558b962c26e",
+              "type": "concept",
+              "name": "Claude Web Research",
+              "chunks": 4
+            },
+            {
+              "id": "6559ab9b-2a12-5476-b22a-57ba4224f688",
+              "type": "project",
+              "name": "Claude Web Research",
+              "chunks": 8
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 8,
+          "tier": 1
+        },
+        {
+          "stem": "gemini",
+          "canonical": {
+            "id": "e9d1f2d5-8b57-5bea-8236-0d6151a625c9",
+            "type": "tool",
+            "name": "Gemini",
+            "chunks": 212
+          },
+          "members": [
+            {
+              "id": "c09defc5065cd27b",
+              "type": "technology",
+              "name": "Gemini",
+              "chunks": 0
+            },
+            {
+              "id": "241acd79-f3b1-53ad-9d68-3174c3f33854",
+              "type": "project",
+              "name": "Gemini",
+              "chunks": 18
+            },
+            {
+              "id": "a72803df-8b9e-5ea7-946b-95583517fc73",
+              "type": "concept",
+              "name": "Gemini",
+              "chunks": 7
+            },
+            {
+              "id": "f909eb74-7c60-5e56-b6d0-ecbd5da3cdaf",
+              "type": "person",
+              "name": "Gemini",
+              "chunks": 1
+            },
+            {
+              "id": "1c0fafec-b6b8-522d-bcfd-25423354adc0",
+              "type": "technology",
+              "name": "gemini",
+              "chunks": 32
+            },
+            {
+              "id": "fe5541f2-5996-5aee-94cd-7bbc376cdff3",
+              "type": "company",
+              "name": "Gemini",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 7,
+          "tier": 1
+        },
+        {
+          "stem": "voicelayer mcp",
+          "canonical": {
+            "id": "81d3b91a-3234-5501-a4ea-087de708997d",
+            "type": "tool",
+            "name": "VoiceLayer MCP",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "proj-8c6aaca7333f",
+              "type": "project",
+              "name": "voicelayer-mcp",
+              "chunks": 0
+            },
+            {
+              "id": "0c18765a-d60c-5eb7-b74f-0eb287b9ecb8",
+              "type": "project",
+              "name": "VoiceLayer MCP",
+              "chunks": 2
+            },
+            {
+              "id": "a5f9068e-e4d3-5f64-bb35-b6b6480dba26",
+              "type": "technology",
+              "name": "VoiceLayer MCP",
+              "chunks": 1
+            },
+            {
+              "id": "c2edbc20-1366-5e4d-91f1-37da92df0e57",
+              "type": "concept",
+              "name": "voicelayer-mcp",
+              "chunks": 1
+            },
+            {
+              "id": "7167be64-3238-58ec-9764-9a5ab150bf49",
+              "type": "technology",
+              "name": "voicelayer-mcp",
+              "chunks": 1
+            },
+            {
+              "id": "8abcea1b-9c13-5b51-a69c-58065177fc2e",
+              "type": "tool",
+              "name": "voicelayer-mcp",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 7,
+          "tier": 1
+        },
+        {
+          "stem": "claude",
+          "canonical": {
+            "id": "auto-tag-claude",
+            "type": "topic",
+            "name": "claude",
+            "chunks": 1244
+          },
+          "members": [
+            {
+              "id": "250df0cb-da0f-510f-8f10-185938eb3b76",
+              "type": "technology",
+              "name": "Claude",
+              "chunks": 35
+            },
+            {
+              "id": "5b7ba715-c72c-5e2c-9396-b999a338017a",
+              "type": "tool",
+              "name": "Claude",
+              "chunks": 284
+            },
+            {
+              "id": "2cbc13e7-61a4-5908-a50a-4f7a1386cea1",
+              "type": "person",
+              "name": "Claude",
+              "chunks": 18
+            },
+            {
+              "id": "0f273f4e-89f5-5a14-984a-7c922c7749d9",
+              "type": "concept",
+              "name": "claude",
+              "chunks": 16
+            },
+            {
+              "id": "aa51032e-a509-55b7-a6ba-74bf1573fbe9",
+              "type": "project",
+              "name": "claude",
+              "chunks": 12
+            },
+            {
+              "id": "7cd921aa-11f1-5eef-8aad-c4b63e1b8551",
+              "type": "company",
+              "name": "Claude",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 5,
+          "intra_relations": 0,
+          "size": 7,
+          "tier": 1
+        },
+        {
+          "stem": "cmux mcp",
+          "canonical": {
+            "id": "0892b0d8-5740-5398-9c88-f010449243cc",
+            "type": "tool",
+            "name": "cmux MCP",
+            "chunks": 11
+          },
+          "members": [
+            {
+              "id": "19337aef-ed55-58ea-998e-126baf239c6c",
+              "type": "technology",
+              "name": "cmux MCP",
+              "chunks": 7
+            },
+            {
+              "id": "9678aa69-2b7b-5695-9ede-f853b35cac53",
+              "type": "project",
+              "name": "cmux MCP",
+              "chunks": 4
+            },
+            {
+              "id": "606194ba-f505-5679-9f28-c11ae7940126",
+              "type": "project",
+              "name": "cmux-mcp",
+              "chunks": 5
+            },
+            {
+              "id": "31af99c7-5faf-54c1-b307-9cc68591be4f",
+              "type": "concept",
+              "name": "cmux MCP",
+              "chunks": 1
+            },
+            {
+              "id": "7a580534-8a0c-585a-bbc7-b05fb8ab8d20",
+              "type": "tool",
+              "name": "cmux-mcp",
+              "chunks": 1
+            },
+            {
+              "id": "57b6421e-ecb8-5a37-aa78-4787913e6e17",
+              "type": "technology",
+              "name": "cmux-mcp",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 7,
+          "tier": 1
+        },
+        {
+          "stem": "cmux agents",
+          "canonical": {
+            "id": "662018fc-fe68-5346-ba37-769e8682d7f0",
+            "type": "project",
+            "name": "cmux-agents",
+            "chunks": 27
+          },
+          "members": [
+            {
+              "id": "6152242b-daaa-5850-995b-69f3b1d9740a",
+              "type": "concept",
+              "name": "cmux-agents",
+              "chunks": 12
+            },
+            {
+              "id": "e3cac796-cd0d-5618-a341-3eb2eb0fac13",
+              "type": "tool",
+              "name": "CMUX agents",
+              "chunks": 15
+            },
+            {
+              "id": "263aa4d9-7719-574b-bb8f-64ed02924316",
+              "type": "tool",
+              "name": "cmux-agents",
+              "chunks": 13
+            },
+            {
+              "id": "9bad8cbd-8a18-55a1-882e-57b3da8577cb",
+              "type": "concept",
+              "name": "CMUX agents",
+              "chunks": 13
+            },
+            {
+              "id": "4db498ae-2537-52c0-ae45-f26163758201",
+              "type": "tool",
+              "name": "/cmux-agents",
+              "chunks": 1
+            },
+            {
+              "id": "279ab68d-8e78-5ce6-907d-76c19cd51a60",
+              "type": "technology",
+              "name": "cmux agents",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 7,
+          "tier": 1
+        },
+        {
+          "stem": "linear",
+          "canonical": {
+            "id": "technology-4bf54fa2cb8c",
+            "type": "technology",
+            "name": "linear",
+            "chunks": 197
+          },
+          "members": [
+            {
+              "id": "company-ee90d1885789",
+              "type": "technology",
+              "name": "Linear",
+              "chunks": 1
+            },
+            {
+              "id": "5ac52fb0-c1f8-5d2b-bf41-0cf30006c743",
+              "type": "concept",
+              "name": "linear",
+              "chunks": 3
+            },
+            {
+              "id": "f53026ea-42fe-5fb8-b526-520774351dcc",
+              "type": "project",
+              "name": "linear",
+              "chunks": 2
+            },
+            {
+              "id": "34085825-40c0-5a99-9413-32c68c857ce4",
+              "type": "tool",
+              "name": "Linear",
+              "chunks": 22
+            },
+            {
+              "id": "af804f37-4fa4-5758-96c9-0a946cb0154b",
+              "type": "company",
+              "name": "Linear",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 6,
+          "tier": 1
+        },
+        {
+          "stem": "cursor",
+          "canonical": {
+            "id": "0fec7145-9ca1-5001-8d12-3a2f9c76da35",
+            "type": "tool",
+            "name": "Cursor",
+            "chunks": 287
+          },
+          "members": [
+            {
+              "id": "1ed1aac2-d0a3-52c9-9a32-1d66f668fe70",
+              "type": "project",
+              "name": "Cursor",
+              "chunks": 2
+            },
+            {
+              "id": "c113392c-f1ef-575f-8910-e0d453858417",
+              "type": "technology",
+              "name": "Cursor",
+              "chunks": 2
+            },
+            {
+              "id": "6b0151b0-e8a5-569e-8db5-6f886baaef8d",
+              "type": "concept",
+              "name": "cursor",
+              "chunks": 4
+            },
+            {
+              "id": "4d285761-3b21-574f-93f2-0af384caa61f",
+              "type": "person",
+              "name": "cursor",
+              "chunks": 6
+            },
+            {
+              "id": "e57c5fb0-06c7-5002-9507-0e516465e28f",
+              "type": "tool",
+              "name": "@cursor",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 6,
+          "tier": 1
+        },
+        {
+          "stem": "agent routing",
+          "canonical": {
+            "id": "8f771b20-ff5b-53a2-b387-fd90e1a7062d",
+            "type": "tool",
+            "name": "/agent-routing",
+            "chunks": 12
+          },
+          "members": [
+            {
+              "id": "eecbbbd0-faaf-51cd-9c50-dc92ac8db56c",
+              "type": "tool",
+              "name": "agent-routing",
+              "chunks": 2
+            },
+            {
+              "id": "30155b4b-8d15-5696-bcb4-b093d3a0eac3",
+              "type": "concept",
+              "name": "agent-routing",
+              "chunks": 5
+            },
+            {
+              "id": "f6f677b2-3c45-5395-9817-7bdece85cdbd",
+              "type": "project",
+              "name": "agent-routing",
+              "chunks": 2
+            },
+            {
+              "id": "5debc61f-02bc-5478-b223-f0d71125b2c9",
+              "type": "tool",
+              "name": "agent routing",
+              "chunks": 1
+            },
+            {
+              "id": "53219c9b-8d5a-5bec-9525-6be77a8ba5be",
+              "type": "concept",
+              "name": "Agent Routing",
+              "chunks": 4
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 6,
+          "tier": 1
+        },
+        {
+          "stem": "eas prebuild check",
+          "canonical": {
+            "id": "6b78f101-3213-54f7-99a4-a1b314585abd",
+            "type": "tool",
+            "name": "eas-prebuild-check",
+            "chunks": 19
+          },
+          "members": [
+            {
+              "id": "83d551c0-6009-5aaf-a2c7-946d52c96d81",
+              "type": "tool",
+              "name": "/eas-prebuild-check",
+              "chunks": 7
+            },
+            {
+              "id": "fa54f419-1d89-5f1c-b0a3-106a2653b15d",
+              "type": "project",
+              "name": "EAS Prebuild Check",
+              "chunks": 1
+            },
+            {
+              "id": "6965ca48-e0ed-5f8c-b7b7-ede42171426c",
+              "type": "tool",
+              "name": "EAS Prebuild Check",
+              "chunks": 11
+            },
+            {
+              "id": "947ff9ac-e1a0-51f3-bfcd-34bbcac0b11b",
+              "type": "concept",
+              "name": "eas-prebuild-check",
+              "chunks": 2
+            },
+            {
+              "id": "9edc4a6b-de4e-59c3-8dad-34c6be44477d",
+              "type": "project",
+              "name": "eas-prebuild-check",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 6,
+          "tier": 1
+        },
+        {
+          "stem": "convex",
+          "canonical": {
+            "id": "technology-cbd96c16c217",
+            "type": "technology",
+            "name": "convex",
+            "chunks": 2554
+          },
+          "members": [
+            {
+              "id": "95201a71-eab9-5f48-98d7-35a0f69b21d0",
+              "type": "project",
+              "name": "convex",
+              "chunks": 5
+            },
+            {
+              "id": "36a73b05-9ce6-5443-9ead-11641e804aa4",
+              "type": "concept",
+              "name": "convex",
+              "chunks": 1
+            },
+            {
+              "id": "c7b5f0bb-5806-520f-ae28-d611071e8747",
+              "type": "technology",
+              "name": "Convex",
+              "chunks": 19
+            },
+            {
+              "id": "a6b1bd30-5d6c-5a6d-afde-7c9bef7ff612",
+              "type": "company",
+              "name": "Convex",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 1
+        },
+        {
+          "stem": "mehayomclaude",
+          "canonical": {
+            "id": "d50f9d69-2168-5951-8a7a-9b24e6704aa7",
+            "type": "tool",
+            "name": "mehayomClaude",
+            "chunks": 82
+          },
+          "members": [
+            {
+              "id": "person-2e185388133c",
+              "type": "person",
+              "name": "mehayomClaude",
+              "chunks": 5
+            },
+            {
+              "id": "f6dfbc7f-a1eb-52cb-870c-0419772274b5",
+              "type": "project",
+              "name": "mehayomClaude",
+              "chunks": 51
+            },
+            {
+              "id": "8dca479e-9f95-5156-aeef-337a322c5f3d",
+              "type": "concept",
+              "name": "mehayomClaude",
+              "chunks": 21
+            },
+            {
+              "id": "436e5231-7e1d-5e1f-a748-901c1d669446",
+              "type": "person",
+              "name": "MehayomClaude",
+              "chunks": 33
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 1
+        },
+        {
+          "stem": "expo",
+          "canonical": {
+            "id": "62a80039-23a9-5bda-b114-5b2f1d871b3d",
+            "type": "tool",
+            "name": "Expo",
+            "chunks": 50
+          },
+          "members": [
+            {
+              "id": "lib-1b3e0c455416",
+              "type": "library",
+              "name": "expo",
+              "chunks": 0
+            },
+            {
+              "id": "f61d7f67-f9e1-52d9-a0e0-361fa3d54490",
+              "type": "project",
+              "name": "Expo",
+              "chunks": 13
+            },
+            {
+              "id": "f2a4dc8f-864b-5904-9352-360f7c7e9d4d",
+              "type": "technology",
+              "name": "Expo",
+              "chunks": 13
+            },
+            {
+              "id": "b2fc7b10-1799-563d-a370-a9f7aca9afeb",
+              "type": "company",
+              "name": "Expo",
+              "chunks": 6
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 1
+        },
+        {
+          "stem": "claude opus 4.6",
+          "canonical": {
+            "id": "1fb366a5-c8a8-589e-b871-3fbc6f5f98ec",
+            "type": "person",
+            "name": "Claude Opus 4.6",
+            "chunks": 9
+          },
+          "members": [
+            {
+              "id": "fbddefc3-fd79-519e-847e-7cdc03f62cea",
+              "type": "concept",
+              "name": "Claude Opus 4.6",
+              "chunks": 1
+            },
+            {
+              "id": "6aeafe3c-9629-5873-bb8d-709637f418b7",
+              "type": "technology",
+              "name": "claude-opus-4.6",
+              "chunks": 1
+            },
+            {
+              "id": "ff0cccee-41d4-5e0d-bfd5-231fba809241",
+              "type": "technology",
+              "name": "Claude Opus 4.6",
+              "chunks": 6
+            },
+            {
+              "id": "6c366515-716f-5e42-9901-62e6546de3c0",
+              "type": "tool",
+              "name": "Claude Opus 4.6",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 1
+        },
+        {
+          "stem": "groq",
+          "canonical": {
+            "id": "technology-856b905113b0",
+            "type": "technology",
+            "name": "groq",
+            "chunks": 20
+          },
+          "members": [
+            {
+              "id": "6fb1f123-f2d3-5bee-9cae-f59353ce5f22",
+              "type": "company",
+              "name": "Groq",
+              "chunks": 8
+            },
+            {
+              "id": "a7a75dfd-b44c-51dd-a93c-148a96311b94",
+              "type": "technology",
+              "name": "Groq",
+              "chunks": 3
+            },
+            {
+              "id": "540da45f-5e73-555c-a336-e0da77b43348",
+              "type": "tool",
+              "name": "Groq",
+              "chunks": 7
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 1
+        },
+        {
+          "stem": "orc agent",
+          "canonical": {
+            "id": "e8b3fad1-ecb6-5b21-9f8d-96e8198fdcba",
+            "type": "project",
+            "name": "Orc agent",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "51ddeef1-43ce-5ad0-a4ed-80fdb4a75b20",
+              "type": "tool",
+              "name": "orc agent",
+              "chunks": 2
+            },
+            {
+              "id": "37e6e550-95f4-538f-94e6-d34e2a52f885",
+              "type": "concept",
+              "name": "orc-agent",
+              "chunks": 1
+            },
+            {
+              "id": "89c46e79-b1a0-5a64-a0e5-114f6ce787df",
+              "type": "project",
+              "name": "orc-agent",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 1
+        },
+        {
+          "stem": "f5 tts mlx",
+          "canonical": {
+            "id": "914858d3-bf0b-5545-9b3a-809401fcc5e0",
+            "type": "tool",
+            "name": "F5-TTS MLX",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "20cdedca-1f5a-5122-8edd-88a726ea2c78",
+              "type": "tool",
+              "name": "f5-tts-mlx",
+              "chunks": 1
+            },
+            {
+              "id": "12c4c5ae-3eed-5643-8758-0c88785e7477",
+              "type": "technology",
+              "name": "F5-TTS MLX",
+              "chunks": 2
+            },
+            {
+              "id": "b9689c80-d753-58b6-a87f-ffb1f828c6d0",
+              "type": "technology",
+              "name": "f5-tts-mlx",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 1
+        },
+        {
+          "stem": "tailwind css",
+          "canonical": {
+            "id": "auto-tag-tailwind-css",
+            "type": "topic",
+            "name": "tailwind-css",
+            "chunks": 2274
+          },
+          "members": [
+            {
+              "id": "a80abb4d-f80b-5c3b-990b-468ca7530502",
+              "type": "technology",
+              "name": "Tailwind CSS",
+              "chunks": 8
+            },
+            {
+              "id": "22098ac2-6c3a-5e7f-af13-5e1c74867a54",
+              "type": "tool",
+              "name": "Tailwind CSS",
+              "chunks": 5
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 1
+        },
+        {
+          "stem": "nextdns",
+          "canonical": {
+            "id": "ee21a453-0513-523d-b588-a102c87cfe13",
+            "type": "company",
+            "name": "NextDNS",
+            "chunks": 27
+          },
+          "members": [
+            {
+              "id": "5b33ffa3-744a-543d-b540-da4849d283aa",
+              "type": "tool",
+              "name": "NextDNS",
+              "chunks": 16
+            },
+            {
+              "id": "779620e5-38e8-5d20-a92d-42cb8743bbbf",
+              "type": "technology",
+              "name": "NextDNS",
+              "chunks": 7
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 1
+        },
+        {
+          "stem": "golems glm",
+          "canonical": {
+            "id": "8bdf6b6a-eb1b-5255-bee6-f58959538422",
+            "type": "project",
+            "name": "golems-glm",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "7ca3320f-05ff-55d7-baae-29199cce757f",
+              "type": "tool",
+              "name": "golems-glm",
+              "chunks": 4
+            },
+            {
+              "id": "666cac27-89d8-54ce-b90c-77b9202e3eb5",
+              "type": "concept",
+              "name": "golems-glm",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 1
+        },
+        {
+          "stem": "cantaloupe ai",
+          "canonical": {
+            "id": "company-56aabb10293e",
+            "type": "company",
+            "name": "Cantaloupe AI",
+            "chunks": 253
+          },
+          "members": [
+            {
+              "id": "e8bfe73e-e00b-5231-a65e-75131934fd6b",
+              "type": "concept",
+              "name": "Cantaloupe AI",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "llama 3.2 3b",
+          "canonical": {
+            "id": "170a0b3d-a441-5f1f-b741-ed1d4bef55a3",
+            "type": "technology",
+            "name": "Llama-3.2-3B",
+            "chunks": 1
+          },
+          "members": [
+            {
+              "id": "bf38ace5-0e7d-57e4-911d-2ef4ccc90282",
+              "type": "concept",
+              "name": "Llama-3.2-3B",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "kiro cli",
+          "canonical": {
+            "id": "32aed4ae-5881-5b95-8d73-4b5068a87f56",
+            "type": "tool",
+            "name": "kiro-cli",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "c1c7c7c6-6262-52da-ae39-f92ebe4f37be",
+              "type": "tool",
+              "name": "Kiro CLI",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "using git worktrees",
+          "canonical": {
+            "id": "25d5b5bb-4988-5463-b15e-a95d6f6c2de3",
+            "type": "concept",
+            "name": "using-git-worktrees",
+            "chunks": 10
+          },
+          "members": [
+            {
+              "id": "8181a40c-5ad5-5b43-aa7f-e1037cdc5480",
+              "type": "tool",
+              "name": "using-git-worktrees",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "crucial x9 pro 1tb ssd",
+          "canonical": {
+            "id": "69c6b6fd-b732-5f43-b38f-2edb25f24edf",
+            "type": "technology",
+            "name": "Crucial X9 Pro 1TB SSD",
+            "chunks": 2
+          },
+          "members": [
+            {
+              "id": "344b0491-6445-547a-bdc2-02031c0c51c1",
+              "type": "tool",
+              "name": "Crucial X9 Pro 1TB SSD",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "careergateway.io",
+          "canonical": {
+            "id": "028ba88f-7b60-5b21-a5bc-4debd6beae45",
+            "type": "company",
+            "name": "CareerGateway.io",
+            "chunks": 5
+          },
+          "members": [
+            {
+              "id": "de178f91-f57b-5acd-8cf0-de0f52f64d90",
+              "type": "project",
+              "name": "CareerGateway.io",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "golems cli",
+          "canonical": {
+            "id": "d51b93b6-975f-5f7a-91f3-c0712d9e20c0",
+            "type": "tool",
+            "name": "golems-cli",
+            "chunks": 2
+          },
+          "members": [
+            {
+              "id": "ed14ebd9-b346-5b05-9439-f8baaaec51e4",
+              "type": "project",
+              "name": "golems-cli",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "enrichment launchagent",
+          "canonical": {
+            "id": "d280e826-ab83-57f7-a10e-d87cb58c554c",
+            "type": "project",
+            "name": "Enrichment LaunchAgent",
+            "chunks": 1
+          },
+          "members": [
+            {
+              "id": "74b10bda-616b-53ae-b35b-a6c012ce5186",
+              "type": "tool",
+              "name": "Enrichment LaunchAgent",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "coderabbitai[bot]",
+          "canonical": {
+            "id": "54648a08-3c35-5d3d-a764-43444a1dec7c",
+            "type": "tool",
+            "name": "coderabbitai[bot]",
+            "chunks": 5
+          },
+          "members": [
+            {
+              "id": "6e04de37-c6be-5e10-80c5-1772d2c7ce23",
+              "type": "person",
+              "name": "coderabbitai[bot]",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        },
+        {
+          "stem": "f5 tts",
+          "canonical": {
+            "id": "6225673e-2f85-5fd1-b9c5-5cfba0da2ac3",
+            "type": "technology",
+            "name": "F5-TTS",
+            "chunks": 4
+          },
+          "members": [
+            {
+              "id": "69a6babb-cc23-5aea-a13b-457c5df1df98",
+              "type": "tool",
+              "name": "F5-TTS",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 0,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 1
+        }
+      ]
+    },
+    "tier2_evidence_not_named": {
+      "clusters": 42,
+      "rows_merged_away": 93,
+      "all_clusters": [
+        {
+          "stem": "whatsapp",
+          "canonical": {
+            "id": "auto-tag-whatsapp",
+            "type": "technology",
+            "name": "whatsapp",
+            "chunks": 520
+          },
+          "members": [
+            {
+              "id": "e04a2805-a465-5907-a2ed-f707797028f6",
+              "type": "tool",
+              "name": "whatsapp",
+              "chunks": 84
+            },
+            {
+              "id": "0dd00761-a226-5f49-971e-e50e5798df6e",
+              "type": "technology",
+              "name": "WhatsApp",
+              "chunks": 17
+            },
+            {
+              "id": "d4992390-3c15-543c-abf3-708727a5c5bf",
+              "type": "concept",
+              "name": "whatsapp",
+              "chunks": 7
+            },
+            {
+              "id": "06d10545-ea10-529c-af33-a66151b66def",
+              "type": "project",
+              "name": "whatsapp",
+              "chunks": 3
+            },
+            {
+              "id": "9061a85c-62ba-5185-bbd7-944d501e7eaf",
+              "type": "company",
+              "name": "WhatsApp",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 6,
+          "tier": 2
+        },
+        {
+          "stem": "songscript",
+          "canonical": {
+            "id": "9808f15e3810908c",
+            "type": "project",
+            "name": "songscript",
+            "chunks": 9925
+          },
+          "members": [
+            {
+              "id": "80479959-d5c0-52af-957d-d49ff28545f8",
+              "type": "project",
+              "name": "SongScript",
+              "chunks": 101
+            },
+            {
+              "id": "27df0c70-2aac-57d9-9b65-d7efc7cc9ce5",
+              "type": "tool",
+              "name": "SongScript",
+              "chunks": 2
+            },
+            {
+              "id": "f405a4f5-b4a0-553e-8376-e1af8235b454",
+              "type": "concept",
+              "name": "songscript",
+              "chunks": 3
+            },
+            {
+              "id": "fafa39d8-80a5-5b22-a74c-b9ca9a0fe428",
+              "type": "technology",
+              "name": "SongScript",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 67,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 2
+        },
+        {
+          "stem": "supabase",
+          "canonical": {
+            "id": "bce942e1b3ee0734",
+            "type": "technology",
+            "name": "Supabase",
+            "chunks": 2290
+          },
+          "members": [
+            {
+              "id": "343238db-4c44-5afd-b644-26f47434fa35",
+              "type": "company",
+              "name": "supabase",
+              "chunks": 25
+            },
+            {
+              "id": "4ff48c4f-0777-5226-bc3e-fdf1eca75116",
+              "type": "tool",
+              "name": "supabase",
+              "chunks": 48
+            },
+            {
+              "id": "3251ea23-01c5-522a-aa26-dfb56111b990",
+              "type": "technology",
+              "name": "supabase",
+              "chunks": 11
+            },
+            {
+              "id": "d63902c8-09f8-5e5a-b050-c5eacb828ef2",
+              "type": "concept",
+              "name": "supabase",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 5,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 2
+        },
+        {
+          "stem": "mehayom",
+          "canonical": {
+            "id": "company-e32d1dab1e73",
+            "type": "company",
+            "name": "MeHayom",
+            "chunks": 4783
+          },
+          "members": [
+            {
+              "id": "124b3fed-5809-5574-914d-c8d98e20f484",
+              "type": "project",
+              "name": "MeHayom",
+              "chunks": 409
+            },
+            {
+              "id": "37a00c2e-729a-59b2-82f7-4e6e7f73ae54",
+              "type": "concept",
+              "name": "MeHayom",
+              "chunks": 5
+            },
+            {
+              "id": "b362dfb4-b184-5bc7-a6ba-1e7edeb9a53b",
+              "type": "tool",
+              "name": "Mehayom",
+              "chunks": 1
+            },
+            {
+              "id": "cacd99ff-988c-50d0-b824-032adc856f4e",
+              "type": "person",
+              "name": "mehayom",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 116,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 2
+        },
+        {
+          "stem": "dashboardclaude",
+          "canonical": {
+            "id": "agent-9f0b7d298633",
+            "type": "agent",
+            "name": "dashboardClaude",
+            "chunks": 296
+          },
+          "members": [
+            {
+              "id": "0d8f7742-b105-5464-ada3-5abdf6ed59b7",
+              "type": "tool",
+              "name": "dashboardClaude",
+              "chunks": 9
+            },
+            {
+              "id": "9e53e3ec-8a08-5c5d-a4b0-67fe1374c330",
+              "type": "project",
+              "name": "dashboardClaude",
+              "chunks": 3
+            },
+            {
+              "id": "de44f377-8cf1-568d-95af-c37c67552f3c",
+              "type": "person",
+              "name": "dashboardClaude",
+              "chunks": 1
+            },
+            {
+              "id": "6654f56f-9bfa-5c7f-92dc-3f194a04f05c",
+              "type": "concept",
+              "name": "dashboardClaude",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 14,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 2
+        },
+        {
+          "stem": "sleepcodex",
+          "canonical": {
+            "id": "5c33c243-05fa-58b9-969d-08a74601c570",
+            "type": "tool",
+            "name": "sleepCodex",
+            "chunks": 47
+          },
+          "members": [
+            {
+              "id": "0a28390b-bf4e-57b8-9967-68ed68456e69",
+              "type": "project",
+              "name": "sleepCodex",
+              "chunks": 25
+            },
+            {
+              "id": "9fdf368f-c577-5cf4-b10b-eebe355bd898",
+              "type": "person",
+              "name": "sleepCodex",
+              "chunks": 1
+            },
+            {
+              "id": "38536d95-f653-55dc-88f5-891f1b100e9d",
+              "type": "technology",
+              "name": "sleepCodex",
+              "chunks": 1
+            },
+            {
+              "id": "56bb68d9-293d-5514-97f9-5cca2a13a42d",
+              "type": "concept",
+              "name": "sleepCodex",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 5,
+          "tier": 2
+        },
+        {
+          "stem": "recruitergolem",
+          "canonical": {
+            "id": "9a3ac45ee12c2eb2",
+            "type": "agent",
+            "name": "recruiterGolem",
+            "chunks": 251
+          },
+          "members": [
+            {
+              "id": "0452bdb5-8490-5c31-b2f4-e7d60921557f",
+              "type": "project",
+              "name": "RecruiterGolem",
+              "chunks": 4
+            },
+            {
+              "id": "db8f2bc5-d94e-5b4b-89ba-5070873588b0",
+              "type": "tool",
+              "name": "recruiterGolem",
+              "chunks": 1
+            },
+            {
+              "id": "8dda6747-0d57-5541-bc46-6a83e8379d83",
+              "type": "concept",
+              "name": "RecruiterGolem",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 5,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "tellergolem",
+          "canonical": {
+            "id": "2af884d1fa38665e",
+            "type": "agent",
+            "name": "tellerGolem",
+            "chunks": 151
+          },
+          "members": [
+            {
+              "id": "fb63ba86-280b-5d42-a04d-529c069da70e",
+              "type": "project",
+              "name": "tellerGolem",
+              "chunks": 4
+            },
+            {
+              "id": "97d93983-067d-5a03-937a-fffc491f8252",
+              "type": "concept",
+              "name": "TellerGolem",
+              "chunks": 2
+            },
+            {
+              "id": "6c6509ea-e825-56f7-8eb6-7c018dcfbf78",
+              "type": "tool",
+              "name": "TellerGolem",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 5,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "etanheyman.com",
+          "canonical": {
+            "id": "5fc1c7aa07ebf5e9",
+            "type": "project",
+            "name": "etanheyman.com",
+            "chunks": 2495
+          },
+          "members": [
+            {
+              "id": "88f5efae-011e-518c-bb10-3ef70b5b162d",
+              "type": "concept",
+              "name": "etanheyman.com",
+              "chunks": 11
+            },
+            {
+              "id": "8cc18db7-8e04-5947-b852-d99a7d716132",
+              "type": "company",
+              "name": "etanheyman.com",
+              "chunks": 7
+            },
+            {
+              "id": "6d94fe0b-e427-5119-8837-5f649f6f6180",
+              "type": "tool",
+              "name": "etanheyman.com",
+              "chunks": 4
+            }
+          ],
+          "shared_chunks": 12,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "coderabbit",
+          "canonical": {
+            "id": "66562b98-0fa3-5ae4-ba7d-d92b57f78375",
+            "type": "tool",
+            "name": "CodeRabbit",
+            "chunks": 253
+          },
+          "members": [
+            {
+              "id": "29d8d109fc65b460",
+              "type": "technology",
+              "name": "CodeRabbit",
+              "chunks": 1
+            },
+            {
+              "id": "1e25941a-6746-521f-a5f5-318128db1904",
+              "type": "project",
+              "name": "coderabbit",
+              "chunks": 6
+            },
+            {
+              "id": "4aeb8a47-9f6c-514b-af6c-58dbc92bfbc5",
+              "type": "concept",
+              "name": "coderabbit",
+              "chunks": 5
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "github",
+          "canonical": {
+            "id": "technology-e34d79e37f5f",
+            "type": "technology",
+            "name": "github",
+            "chunks": 882
+          },
+          "members": [
+            {
+              "id": "2495d857-fffd-5383-829d-07a0db218886",
+              "type": "tool",
+              "name": "GitHub",
+              "chunks": 14
+            },
+            {
+              "id": "2882f651-c346-5b1b-9d84-8e4eaa69e976",
+              "type": "company",
+              "name": "GitHub",
+              "chunks": 12
+            },
+            {
+              "id": "16c8e776-3bf1-59e5-9aec-71f55b379cfb",
+              "type": "concept",
+              "name": "GitHub",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "zsh",
+          "canonical": {
+            "id": "auto-tag-zsh",
+            "type": "topic",
+            "name": "zsh",
+            "chunks": 6550
+          },
+          "members": [
+            {
+              "id": "6698c310-651f-51a1-acea-ce6de1554229",
+              "type": "tool",
+              "name": "Zsh",
+              "chunks": 5
+            },
+            {
+              "id": "afee0e61-c35e-5927-9af2-dd443096923c",
+              "type": "concept",
+              "name": "zsh",
+              "chunks": 2
+            },
+            {
+              "id": "c773443c-a2e1-5b8f-b7c5-cb4183707135",
+              "type": "technology",
+              "name": "zsh",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "ios",
+          "canonical": {
+            "id": "auto-tag-ios",
+            "type": "topic",
+            "name": "ios",
+            "chunks": 1314
+          },
+          "members": [
+            {
+              "id": "a9686216-5fc7-5076-b1da-8cf93410d043",
+              "type": "technology",
+              "name": "iOS",
+              "chunks": 43
+            },
+            {
+              "id": "5c57b210-a207-528e-9310-c54571d5d138",
+              "type": "concept",
+              "name": "iOS",
+              "chunks": 25
+            },
+            {
+              "id": "01cd4d64-3614-566c-af2c-e6c6444096f7",
+              "type": "project",
+              "name": "iOS",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "next.js",
+          "canonical": {
+            "id": "auto-tag-next-js",
+            "type": "topic",
+            "name": "next.js",
+            "chunks": 1084
+          },
+          "members": [
+            {
+              "id": "90f40219-d7f3-50e8-aa2d-c06d3496f994",
+              "type": "technology",
+              "name": "Next.js",
+              "chunks": 49
+            },
+            {
+              "id": "c70f10b4-8e98-51c3-894e-5633ec5285fb",
+              "type": "tool",
+              "name": "Next.js",
+              "chunks": 6
+            },
+            {
+              "id": "1c8bcf90-602f-5f2e-83ee-a7883d6e7d65",
+              "type": "project",
+              "name": "Next.js",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "llm",
+          "canonical": {
+            "id": "auto-tag-llm",
+            "type": "topic",
+            "name": "llm",
+            "chunks": 833
+          },
+          "members": [
+            {
+              "id": "5dd35577-db54-5da4-9ae3-ca2c3578d751",
+              "type": "technology",
+              "name": "LLM",
+              "chunks": 17
+            },
+            {
+              "id": "ebbc3d5e-6c9a-5f89-aba0-9558ea17366e",
+              "type": "concept",
+              "name": "LLM",
+              "chunks": 1
+            },
+            {
+              "id": "f545f6a7-3aa5-5b8d-81c6-3f15c72f1de6",
+              "type": "tool",
+              "name": "LLM",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "ai agents",
+          "canonical": {
+            "id": "auto-tag-ai-agents",
+            "type": "topic",
+            "name": "ai-agents",
+            "chunks": 756
+          },
+          "members": [
+            {
+              "id": "0119fbaa-c3e5-57e2-8c3f-87db4e0103c2",
+              "type": "concept",
+              "name": "AI agents",
+              "chunks": 6
+            },
+            {
+              "id": "c55acf51-bde0-54e1-8404-dab888b5d492",
+              "type": "technology",
+              "name": "AI agents",
+              "chunks": 4
+            },
+            {
+              "id": "58a089f8-8a2b-5c55-be1c-bf317c9c7114",
+              "type": "concept",
+              "name": "ai-agents",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "skillcreator",
+          "canonical": {
+            "id": "ce6df923-db76-53fe-8d50-58617b83f7e4",
+            "type": "tool",
+            "name": "skillCreator",
+            "chunks": 105
+          },
+          "members": [
+            {
+              "id": "0ee5b8f9-b8e7-5225-b7ff-a55edad15cd1",
+              "type": "project",
+              "name": "skillCreator",
+              "chunks": 27
+            },
+            {
+              "id": "a066b9d2-b220-54de-918a-e32a8fc96069",
+              "type": "person",
+              "name": "skillCreator",
+              "chunks": 14
+            },
+            {
+              "id": "7dc59c0e-ae00-5367-9ec8-6e29d547ea4e",
+              "type": "concept",
+              "name": "skillCreator",
+              "chunks": 17
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 4,
+          "tier": 2
+        },
+        {
+          "stem": "contentgolem",
+          "canonical": {
+            "id": "7a69eca9c5ffbecf",
+            "type": "agent",
+            "name": "contentGolem",
+            "chunks": 248
+          },
+          "members": [
+            {
+              "id": "bc916ccd-aa04-51de-9ef5-9ac208d02f45",
+              "type": "concept",
+              "name": "ContentGolem",
+              "chunks": 2
+            },
+            {
+              "id": "f4cb55b9-71f0-5a7d-a681-03dd5b580cd3",
+              "type": "project",
+              "name": "contentGolem",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "fastapi",
+          "canonical": {
+            "id": "technology-50bc0313db79",
+            "type": "technology",
+            "name": "fastapi",
+            "chunks": 209
+          },
+          "members": [
+            {
+              "id": "4761ed21-765c-5083-9bfb-b6e33409ccf3",
+              "type": "tool",
+              "name": "FastAPI",
+              "chunks": 3
+            },
+            {
+              "id": "bd3965ea-8562-5e2d-afb7-b35f80c26d6f",
+              "type": "technology",
+              "name": "FastAPI",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "6pm mini",
+          "canonical": {
+            "id": "project-f021bedff60b",
+            "type": "project",
+            "name": "6pm-mini",
+            "chunks": 675
+          },
+          "members": [
+            {
+              "id": "8bb9bf73-e719-558f-bf49-c8809cabd2d9",
+              "type": "project",
+              "name": "6pm Mini",
+              "chunks": 1
+            },
+            {
+              "id": "d8fc20e1-8955-53fc-94a5-55a441ce3224",
+              "type": "concept",
+              "name": "6pm-mini",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "6pm",
+          "canonical": {
+            "id": "project-340ad2a155cf",
+            "type": "project",
+            "name": "6pm",
+            "chunks": 1589
+          },
+          "members": [
+            {
+              "id": "7f554c51-ef53-5b67-980f-4b8caa6ab33c",
+              "type": "project",
+              "name": "6PM",
+              "chunks": 12
+            },
+            {
+              "id": "07e2c61e-707a-5e21-9095-2298d92bd43b",
+              "type": "company",
+              "name": "6PM",
+              "chunks": 6
+            }
+          ],
+          "shared_chunks": 12,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "macos",
+          "canonical": {
+            "id": "auto-tag-macos",
+            "type": "topic",
+            "name": "macos",
+            "chunks": 1686
+          },
+          "members": [
+            {
+              "id": "030586c5-5b7a-57d3-92b2-214c554deaaf",
+              "type": "technology",
+              "name": "macOS",
+              "chunks": 7
+            },
+            {
+              "id": "deea90e4-9878-5faa-bd97-90ce51f3f946",
+              "type": "concept",
+              "name": "macOS",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "1password",
+          "canonical": {
+            "id": "auto-tag-1password",
+            "type": "technology",
+            "name": "1password",
+            "chunks": 811
+          },
+          "members": [
+            {
+              "id": "51d6fd27-df88-5cba-a9a4-60cf9b3a7bbd",
+              "type": "tool",
+              "name": "1Password",
+              "chunks": 66
+            },
+            {
+              "id": "5633556b-767f-58e9-a80c-6d24487ca47b",
+              "type": "company",
+              "name": "1Password",
+              "chunks": 5
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "tdd",
+          "canonical": {
+            "id": "auto-tag-tdd",
+            "type": "topic",
+            "name": "tdd",
+            "chunks": 743
+          },
+          "members": [
+            {
+              "id": "86b06b4e-5f71-5ab4-883c-7f772b179dbf",
+              "type": "concept",
+              "name": "TDD",
+              "chunks": 13
+            },
+            {
+              "id": "d13aa28f-94c4-54cf-91b5-146e229b2625",
+              "type": "tool",
+              "name": "/tdd",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 4,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "research lifecycle",
+          "canonical": {
+            "id": "fab6c89b-8676-5493-bc87-8627d21ea7f7",
+            "type": "tool",
+            "name": "/research-lifecycle",
+            "chunks": 8
+          },
+          "members": [
+            {
+              "id": "1ebe63d7-3d03-5070-845d-4722335c8014",
+              "type": "concept",
+              "name": "research-lifecycle",
+              "chunks": 5
+            },
+            {
+              "id": "9c4266d5-ec53-5a21-b099-c53607efe0b5",
+              "type": "concept",
+              "name": "Research Lifecycle",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "orkplug",
+          "canonical": {
+            "id": "32ebcff9-0243-5c63-a0ee-618f2bf34f40",
+            "type": "company",
+            "name": "Orkplug",
+            "chunks": 2
+          },
+          "members": [
+            {
+              "id": "8cd0d049-e157-5fc0-aa7c-b9a15574eba8",
+              "type": "tool",
+              "name": "Orkplug",
+              "chunks": 2
+            },
+            {
+              "id": "7ae3e7a7-ac80-5be9-81bb-84a1b51bcd84",
+              "type": "concept",
+              "name": "Orkplug",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "find skills",
+          "canonical": {
+            "id": "7be82c56-6ee6-5524-84c5-7a9f863ae4b7",
+            "type": "concept",
+            "name": "find-skills",
+            "chunks": 7
+          },
+          "members": [
+            {
+              "id": "cf7a729b-b5b5-55c9-ac02-8ef5992c1d5e",
+              "type": "tool",
+              "name": "find-skills",
+              "chunks": 1
+            },
+            {
+              "id": "8a40c2b6-7ecd-5bd1-81d9-4079ab6f4c4d",
+              "type": "tool",
+              "name": "/find-skills",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 3,
+          "tier": 2
+        },
+        {
+          "stem": "domica",
+          "canonical": {
+            "id": "company-1ebe7e404092",
+            "type": "company",
+            "name": "domica",
+            "chunks": 26166
+          },
+          "members": [
+            {
+              "id": "caa1ccfcb6f24932",
+              "type": "project",
+              "name": "domica",
+              "chunks": 7707
+            }
+          ],
+          "shared_chunks": 4304,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "ollama",
+          "canonical": {
+            "id": "346b89a8c4cc6cbc",
+            "type": "technology",
+            "name": "Ollama",
+            "chunks": 597
+          },
+          "members": [
+            {
+              "id": "b215271a-69e8-52a6-a30b-79265a13a950",
+              "type": "tool",
+              "name": "ollama",
+              "chunks": 45
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "weby",
+          "canonical": {
+            "id": "company-b34b9ef0f9b2",
+            "type": "company",
+            "name": "Weby",
+            "chunks": 130
+          },
+          "members": [
+            {
+              "id": "ad58cb66-bf27-5b88-9385-75191d0c63e1",
+              "type": "project",
+              "name": "Weby",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "yichus",
+          "canonical": {
+            "id": "person-4d1b4a5b2dd9",
+            "type": "project",
+            "name": "Yichus",
+            "chunks": 68
+          },
+          "members": [
+            {
+              "id": "edc45bee-00eb-5e59-9133-156bdc084533",
+              "type": "project",
+              "name": "yichus",
+              "chunks": 2
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "api design",
+          "canonical": {
+            "id": "auto-tag-api-design",
+            "type": "topic",
+            "name": "api-design",
+            "chunks": 3290
+          },
+          "members": [
+            {
+              "id": "bdcd088a-c190-5959-9e46-27989618dca0",
+              "type": "concept",
+              "name": "API Design",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "pull request",
+          "canonical": {
+            "id": "auto-tag-pull-request",
+            "type": "topic",
+            "name": "pull-request",
+            "chunks": 2033
+          },
+          "members": [
+            {
+              "id": "c6b6822f-bc52-57b4-b0e9-03728d034f93",
+              "type": "concept",
+              "name": "pull request",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "dopamine",
+          "canonical": {
+            "id": "auto-tag-dopamine",
+            "type": "topic",
+            "name": "dopamine",
+            "chunks": 1938
+          },
+          "members": [
+            {
+              "id": "156e7ae8-7ae2-5339-9e3e-c91c8ca5675c",
+              "type": "concept",
+              "name": "dopamine",
+              "chunks": 4
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "cold exposure",
+          "canonical": {
+            "id": "auto-tag-cold-exposure",
+            "type": "topic",
+            "name": "cold-exposure",
+            "chunks": 1303
+          },
+          "members": [
+            {
+              "id": "1efdcae1-abc8-50c5-b07d-8bcc24304739",
+              "type": "concept",
+              "name": "cold exposure",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "strength training",
+          "canonical": {
+            "id": "auto-tag-strength-training",
+            "type": "topic",
+            "name": "strength-training",
+            "chunks": 883
+          },
+          "members": [
+            {
+              "id": "c50225fc-903b-51c0-aadf-91065f549b45",
+              "type": "concept",
+              "name": "strength training",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "rtl",
+          "canonical": {
+            "id": "auto-tag-rtl",
+            "type": "topic",
+            "name": "rtl",
+            "chunks": 733
+          },
+          "members": [
+            {
+              "id": "aa7feef6-9070-5c2e-aacf-650b19e6bd8b",
+              "type": "concept",
+              "name": "RTL",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "knowledge graph",
+          "canonical": {
+            "id": "auto-tag-knowledge-graph",
+            "type": "topic",
+            "name": "knowledge-graph",
+            "chunks": 578
+          },
+          "members": [
+            {
+              "id": "e27b53bc-3b55-55c6-8380-3b75f3c99f7d",
+              "type": "concept",
+              "name": "knowledge graph",
+              "chunks": 8
+            }
+          ],
+          "shared_chunks": 2,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "i18n",
+          "canonical": {
+            "id": "auto-tag-i18n",
+            "type": "topic",
+            "name": "i18n",
+            "chunks": 568
+          },
+          "members": [
+            {
+              "id": "7740b0a5-f051-57de-9606-a8ca7aaf65eb",
+              "type": "concept",
+              "name": "i18n",
+              "chunks": 5
+            }
+          ],
+          "shared_chunks": 3,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "golems dashboard",
+          "canonical": {
+            "id": "17741d62-a5c7-582d-b62b-77f9ba6a6789",
+            "type": "project",
+            "name": "golems-dashboard",
+            "chunks": 12
+          },
+          "members": [
+            {
+              "id": "2e6f0ef0-8d2d-5681-ba4f-a00855994cfc",
+              "type": "project",
+              "name": "Golems Dashboard",
+              "chunks": 3
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "yash bot",
+          "canonical": {
+            "id": "c52386c5-8bb1-55f4-a2d0-b6918a4d67ef",
+            "type": "tool",
+            "name": "yash-bot",
+            "chunks": 1
+          },
+          "members": [
+            {
+              "id": "6ee7a868-4e23-578a-a371-957249fef57b",
+              "type": "project",
+              "name": "yash-bot",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        },
+        {
+          "stem": "kokoro 82m",
+          "canonical": {
+            "id": "bf7d2fb8-f8e3-5177-80b4-4c08fea90e8a",
+            "type": "concept",
+            "name": "Kokoro-82M",
+            "chunks": 2
+          },
+          "members": [
+            {
+              "id": "ac93b524-8812-5202-9919-4be06e0ec5a7",
+              "type": "project",
+              "name": "Kokoro-82M",
+              "chunks": 1
+            }
+          ],
+          "shared_chunks": 1,
+          "intra_relations": 0,
+          "size": 2,
+          "tier": 2
+        }
+      ]
+    }
+  },
+  "flag_for_review": {
+    "diagnosis_flagged_facets": [
+      {
+        "stem": "convex",
+        "name": "convex",
+        "type": "tool"
+      },
+      {
+        "stem": "expo",
+        "name": "Expo",
+        "type": "concept"
+      },
+      {
+        "stem": "cursor",
+        "name": "Cursor",
+        "type": "company"
+      }
+    ],
+    "structural_orphans": [
+      "Gemini",
+      "Andy Galpin",
+      "Susanna S\u00f8berg"
+    ],
+    "name_match_no_evidence_clusters": 1038,
+    "rows_in_those_clusters": 2614,
+    "samples": [
+      {
+        "stem": "whatsapp business",
+        "size": 8,
+        "names": [
+          "WhatsApp Business",
+          "whatsapp-business",
+          "whatsapp-business",
+          "whatsapp-business",
+          "WhatsApp Business",
+          "whatsapp-business"
+        ]
+      },
+      {
+        "stem": "agent c",
+        "size": 8,
+        "names": [
+          "Agent C",
+          "Agent-C",
+          "Agent-C",
+          "Agent-C",
+          "Agent-C",
+          "Agent C"
+        ]
+      },
+      {
+        "stem": "mcp",
+        "size": 7,
+        "names": [
+          "MCP",
+          "mcp",
+          "MCP",
+          "MCP",
+          "MCP",
+          "/mcp"
+        ]
+      },
+      {
+        "stem": "claude web",
+        "size": 7,
+        "names": [
+          "Claude Web",
+          "claude-web",
+          "Claude Web",
+          "Claude Web",
+          "Claude Web",
+          "Claude-web"
+        ]
+      },
+      {
+        "stem": "orcclaude",
+        "size": 6,
+        "names": [
+          "orcClaude",
+          "orcClaude",
+          "orcClaude",
+          "orcClaude",
+          "orcClaude",
+          "orcClaude"
+        ]
+      },
+      {
+        "stem": "cmux",
+        "size": 6,
+        "names": [
+          "cmux",
+          "cmux",
+          "cmux",
+          "cmux",
+          "Cmux",
+          "/cmux"
+        ]
+      },
+      {
+        "stem": "orc",
+        "size": 6,
+        "names": [
+          "orc",
+          "orc",
+          "orc",
+          "orc",
+          "orc",
+          "/orc"
+        ]
+      },
+      {
+        "stem": "brainlayer mcp",
+        "size": 6,
+        "names": [
+          "BrainLayer MCP",
+          "BrainLayer MCP",
+          "BrainLayer MCP",
+          "brainlayer-mcp",
+          "brainlayer-mcp",
+          "brainlayer-mcp"
+        ]
+      },
+      {
+        "stem": "google drive",
+        "size": 6,
+        "names": [
+          "Google Drive",
+          "Google Drive",
+          "Google Drive",
+          "google-drive",
+          "Google Drive",
+          "google-drive"
+        ]
+      },
+      {
+        "stem": "google calendar",
+        "size": 6,
+        "names": [
+          "Google Calendar",
+          "Google Calendar",
+          "google-calendar",
+          "google-calendar",
+          "Google-Calendar",
+          "Google Calendar"
+        ]
+      },
+      {
+        "stem": "qa video",
+        "size": 6,
+        "names": [
+          "/qa-video",
+          "qa-video",
+          "qa-video",
+          "QA video",
+          "QA-video",
+          "qa-video"
+        ]
+      },
+      {
+        "stem": "cli agents",
+        "size": 6,
+        "names": [
+          "cli-agents",
+          "CLI agents",
+          "CLI Agents",
+          "CLI Agents",
+          "cli-agents",
+          "cli-agents"
+        ]
+      },
+      {
+        "stem": "agent b",
+        "size": 6,
+        "names": [
+          "Agent B",
+          "Agent B",
+          "Agent-B",
+          "Agent-B",
+          "Agent-B",
+          "Agent B"
+        ]
+      },
+      {
+        "stem": "whatsapp mcp",
+        "size": 6,
+        "names": [
+          "WhatsApp MCP",
+          "WhatsApp MCP",
+          "WhatsApp MCP",
+          "WhatsApp MCP",
+          "whatsapp-mcp",
+          "whatsapp-mcp"
+        ]
+      },
+      {
+        "stem": "agent a",
+        "size": 6,
+        "names": [
+          "Agent A",
+          "Agent A",
+          "Agent-A",
+          "Agent-A",
+          "Agent-A",
+          "Agent A"
+        ]
+      },
+      {
+        "stem": "ralph",
+        "size": 5,
+        "names": [
+          "Ralph",
+          "ralph",
+          "Ralph",
+          "ralph",
+          "Ralph"
+        ]
+      },
+      {
+        "stem": "railway",
+        "size": 5,
+        "names": [
+          "Railway",
+          "Railway",
+          "Railway",
+          "railway",
+          "Railway"
+        ]
+      },
+      {
+        "stem": "mlx",
+        "size": 5,
+        "names": [
+          "mlx",
+          "MLX",
+          "MLX",
+          "MLX",
+          "MLX"
+        ]
+      },
+      {
+        "stem": "git",
+        "size": 5,
+        "names": [
+          "git",
+          "git",
+          "Git",
+          "Git",
+          "git"
+        ]
+      },
+      {
+        "stem": "research",
+        "size": 5,
+        "names": [
+          "research",
+          "research",
+          "research",
+          "/research",
+          "research"
+        ]
+      }
+    ]
+  }
+}
