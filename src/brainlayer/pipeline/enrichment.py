@@ -647,6 +647,7 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
                 "model": GROQ_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
+                "temperature": 0,
             },
             timeout=timeout,
         )
