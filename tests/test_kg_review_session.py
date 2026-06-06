@@ -180,6 +180,74 @@ def test_record_decision_is_merge_safe_and_stamped(batch_file, decisions_file):
     assert_v1(data)
 
 
+def test_record_merge_excludes_context_members_from_canonical_and_losers(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 4,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "project-android", "name": "Android EAS", "type": "project", "chunks": 1},
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="contested:android eas",
+        decision={"action": "merge", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    merge = data["merge"][0]
+    assert merge["canonical"] == {"id": "tool-android", "name": "Android EAS", "type": "tool"}
+    assert [member["id"] for member in merge["members"]] == ["tech-android", "project-android"]
+    assert "ctx-android eas" not in json.dumps(merge)
+    assert_v1(data)
+
+
+def test_record_merge_rejects_context_canonical_override(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 2,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    with pytest.raises(ValueError, match="canonical override .* is not a real merge member"):
+        record_decision(
+            batch_file,
+            decisions_file,
+            cluster_id="contested:android eas",
+            decision={"action": "merge", "source": "voice", "canonical_id": "ctx-android eas"},
+        )
+
+
 def test_record_decision_validates_action(batch_file, decisions_file):
     with pytest.raises(ValueError):
         record_decision(

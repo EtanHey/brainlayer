@@ -13,7 +13,7 @@ Batches are JSON objects keyed by queue/category name:
   "<queue-name>": [
     {
       "stem": "<stable item label>",
-      "size": 2,
+      "size": 1,
       "item_kind": "question",
       "members": [
         {"id": "q1", "name": "Question text", "type": "question", "chunks": 0}
