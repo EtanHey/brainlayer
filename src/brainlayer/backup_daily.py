@@ -698,41 +698,46 @@ def run_backup(
         "local_removed": False,
         "verified": False,
     }
-    if upload:
-        credentials = get_drive_credentials()
-        service = build_drive_service()
-        folder_id = ensure_drive_folder_chain(service, folder_parts)
-        uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
-        file_id = uploaded.get("id")
-        if not file_id:
-            raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
-        verify_drive_upload(
-            service,
-            file_id=file_id,
-            expected_name=snapshot.name,
-            expected_size=snapshot_size,
-        )
-        result.update(
-            verify_sqlite_backup_artifact(
-                artifact,
-                full=_should_run_full_verify(resolved_date_stamp),
-                service=service,
-                file_id=file_id,
-            )
-        )
-        if result["verified"]:
-            if remove_local_after_upload:
-                snapshot.unlink()
-                result["local_removed"] = True
-            deleted = prune_drive_backups(
+    try:
+        if upload:
+            credentials = get_drive_credentials()
+            service = build_drive_service()
+            folder_id = ensure_drive_folder_chain(service, folder_parts)
+            uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
+            file_id = uploaded.get("id")
+            if not file_id:
+                raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+            verify_drive_upload(
                 service,
-                folder_parts=folder_parts,
-                retention_policy=retention_policy,
+                file_id=file_id,
+                expected_name=snapshot.name,
+                expected_size=snapshot_size,
             )
-        else:
-            deleted = []
-        result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
-    _append_json_log(log_path, result)
+            result.update(
+                verify_sqlite_backup_artifact(
+                    artifact,
+                    full=_should_run_full_verify(resolved_date_stamp),
+                    service=service,
+                    file_id=file_id,
+                )
+            )
+            if result["verified"]:
+                if remove_local_after_upload:
+                    snapshot.unlink()
+                    result["local_removed"] = True
+                deleted = prune_drive_backups(
+                    service,
+                    folder_parts=folder_parts,
+                    retention_policy=retention_policy,
+                )
+            else:
+                deleted = []
+            result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
+    except Exception as exc:
+        result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        raise
+    finally:
+        _append_json_log(log_path, result)
     return result
 
 
