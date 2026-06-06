@@ -96,12 +96,48 @@ def batch_file(tmp_path: Path) -> Path:
 @pytest.fixture
 def decisions_file(tmp_path: Path) -> Path:
     answers = [
-        {"stem": "Q1 of 6 - invocable substrates", "category": "etan-queue", "source": "voice", "note": "widen Technology", "decided_at": "2026-06-06T01:00:00Z"},
-        {"stem": "Q2 of 6 - sprints and QA rounds", "category": "etan-queue", "source": "voice", "note": "process vocabulary", "decided_at": "2026-06-06T01:01:00Z"},
-        {"stem": "Q3 of 6 - external media", "category": "etan-queue", "source": "voice", "note": "external-source", "decided_at": "2026-06-06T01:02:00Z"},
-        {"stem": "Q4 of 6 - agents as subtype", "category": "etan-queue", "source": "voice", "note": "agent subtype", "decided_at": "2026-06-06T01:03:00Z"},
-        {"stem": "Q5 of 6 - orphaned persons", "category": "etan-queue", "source": "voice", "note": "do not invent people", "decided_at": "2026-06-06T01:04:00Z"},
-        {"stem": "Q6 of 6 - concept demotion method", "category": "etan-queue", "source": "voice", "note": "demote by evidence", "decided_at": "2026-06-06T01:05:00Z"},
+        {
+            "stem": "Q1 of 6 - invocable substrates",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "widen Technology",
+            "decided_at": "2026-06-06T01:00:00Z",
+        },
+        {
+            "stem": "Q2 of 6 - sprints and QA rounds",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "process vocabulary",
+            "decided_at": "2026-06-06T01:01:00Z",
+        },
+        {
+            "stem": "Q3 of 6 - external media",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "external-source",
+            "decided_at": "2026-06-06T01:02:00Z",
+        },
+        {
+            "stem": "Q4 of 6 - agents as subtype",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "agent subtype",
+            "decided_at": "2026-06-06T01:03:00Z",
+        },
+        {
+            "stem": "Q5 of 6 - orphaned persons",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "do not invent people",
+            "decided_at": "2026-06-06T01:04:00Z",
+        },
+        {
+            "stem": "Q6 of 6 - concept demotion method",
+            "category": "etan-queue",
+            "source": "voice",
+            "note": "demote by evidence",
+            "decided_at": "2026-06-06T01:05:00Z",
+        },
     ]
     payload = {
         "schema": "kg-flag-decisions-v1",
@@ -212,13 +248,11 @@ def test_harvest_filters_mixed_member_maps(batch_file: Path, decisions_file: Pat
     assert not _contains_ctx(clean["needs_v1_1"])
 
 
-def test_harvest_allows_non_id_note_text_containing_ctx_token(
-    batch_file: Path, decisions_file: Path, tmp_path: Path
-):
+def test_harvest_allows_non_id_note_text_containing_ctx_token(batch_file: Path, decisions_file: Path, tmp_path: Path):
     data = json.loads(decisions_file.read_text(encoding="utf-8"))
     for item in data["keep"]:
         if item["stem"] == "agent mix":
-            item["note"] = "MIXED: {\"agent-concept\": \"keep\", \"agent-tool\": \"merge\"}; compare ctx-local wording"
+            item["note"] = 'MIXED: {"agent-concept": "keep", "agent-tool": "merge"}; compare ctx-local wording'
     decisions_file.write_text(json.dumps(data), encoding="utf-8")
 
     harvest_session(
@@ -229,9 +263,7 @@ def test_harvest_allows_non_id_note_text_containing_ctx_token(
     )
 
 
-def test_harvest_strips_embedded_ctx_member_ids_from_notes(
-    batch_file: Path, decisions_file: Path, tmp_path: Path
-):
+def test_harvest_strips_embedded_ctx_member_ids_from_notes(batch_file: Path, decisions_file: Path, tmp_path: Path):
     data = json.loads(decisions_file.read_text(encoding="utf-8"))
     data["source"] = "etan-ctx-strip-session"
     for item in data["merge"]:
@@ -285,12 +317,12 @@ def test_harvest_fails_loud_on_unknown_decision_stem(batch_file: Path, decisions
     decisions_file.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unknown decision stem"):
-        harvest_session(batch_file, decisions_file, answers_path=tmp_path / "answers.md", decisions_path=tmp_path / "clean.json")
+        harvest_session(
+            batch_file, decisions_file, answers_path=tmp_path / "answers.md", decisions_path=tmp_path / "clean.json"
+        )
 
 
-def test_harvest_fails_loud_on_non_object_decision_item(
-    batch_file: Path, decisions_file: Path, tmp_path: Path
-):
+def test_harvest_fails_loud_on_non_object_decision_item(batch_file: Path, decisions_file: Path, tmp_path: Path):
     data = json.loads(decisions_file.read_text(encoding="utf-8"))
     data["merge"].append("not an object")
     decisions_file.write_text(json.dumps(data), encoding="utf-8")
@@ -304,9 +336,7 @@ def test_harvest_fails_loud_on_non_object_decision_item(
         )
 
 
-def test_harvest_fails_loud_on_non_object_decisions_file(
-    batch_file: Path, tmp_path: Path
-):
+def test_harvest_fails_loud_on_non_object_decisions_file(batch_file: Path, tmp_path: Path):
     decisions_path = tmp_path / "bad-decisions.json"
     decisions_path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
 
@@ -337,9 +367,7 @@ def test_harvest_fails_loud_on_malformed_mixed_note_with_ctx_member(
         )
 
 
-def test_harvest_fails_loud_when_merge_selects_no_real_losers(
-    batch_file: Path, decisions_file: Path, tmp_path: Path
-):
+def test_harvest_fails_loud_when_merge_selects_no_real_losers(batch_file: Path, decisions_file: Path, tmp_path: Path):
     data = json.loads(decisions_file.read_text(encoding="utf-8"))
     for item in data["merge"]:
         if item["stem"] == "android eas":
@@ -357,9 +385,7 @@ def test_harvest_fails_loud_when_merge_selects_no_real_losers(
         )
 
 
-def test_harvest_keys_clusters_by_category_and_stem(
-    decisions_file: Path, tmp_path: Path
-):
+def test_harvest_keys_clusters_by_category_and_stem(decisions_file: Path, tmp_path: Path):
     batch = deepcopy(SESSION_BATCH)
     batch["other-queue"] = [
         {
@@ -387,9 +413,7 @@ def test_harvest_keys_clusters_by_category_and_stem(
     assert all(member["id"] != "other-android" for member in clean["merge"][0]["members"])
 
 
-def test_harvest_per_category_counts_skipped_and_undecided_non_question_clusters(
-    decisions_file: Path, tmp_path: Path
-):
+def test_harvest_per_category_counts_skipped_and_undecided_non_question_clusters(decisions_file: Path, tmp_path: Path):
     batch = deepcopy(SESSION_BATCH)
     batch["etan-queue"].extend(
         [

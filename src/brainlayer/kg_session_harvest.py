@@ -277,9 +277,7 @@ def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
     if not clean_member_ids:
         raise ValueError(f"merge decision for {cluster['stem']!r} selects no real members after ctx-strip")
     members = [
-        _member_ref(members_by_id[member_id])
-        for member_id in clean_member_ids
-        if member_id != clean_canonical["id"]
+        _member_ref(members_by_id[member_id]) for member_id in clean_member_ids if member_id != clean_canonical["id"]
     ]
     if not members:
         raise ValueError(f"merge decision for {cluster['stem']!r} selects no real loser members")
