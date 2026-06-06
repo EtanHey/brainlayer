@@ -143,7 +143,9 @@ def infer_source_subtype(name: str, raw_type: str = "") -> Optional[str]:
     entity_type = ENTITY_TYPE_ALIASES.get(raw_type.strip().lower(), raw_type.strip().lower())
     words = name.strip().split()
     suffix_word = words[-1] if words else ""
-    allow_suffix = entity_type == "source" or (suffix_word[:1].isupper() and suffix_word.lower() in VALID_ENTITY_SUBTYPES)
+    allow_suffix = entity_type == "source" or (
+        suffix_word[:1].isupper() and suffix_word.lower() in VALID_ENTITY_SUBTYPES
+    )
     if allow_suffix and normalized.endswith(" podcast"):
         return "podcast"
     if allow_suffix and normalized.endswith(" channel"):
