@@ -399,3 +399,49 @@ def test_voice_rewrite_preserves_unknown_dashboard_fields(batch_file, decisions_
     assert data["keep"][0]["note"] == "non-deterministic voice answer"
     assert data["keep"][0]["dashboard_row_id"] == "row-17"
     assert_v1(data)
+
+
+# --- speak_text v2: question items + TTS noise fixes (Etan session blockers) ---
+
+
+def _q_cluster():
+    return {
+        "stem": "Q1 of 6 — invocable substrates",
+        "category": "etan-queue",
+        "members": [{"id": "q1", "name": "DICTIONARY QUESTION: are languages Tools?", "type": "question", "chunks": 0}],
+    }
+
+
+def _tool_cluster():
+    return {
+        "stem": "github",
+        "category": "etan-queue",
+        "members": [
+            {"id": "a", "name": "github", "type": "tool", "chunks": 4},
+            {"id": "b", "name": "GitHub", "type": "technology", "chunks": 2},
+        ],
+    }
+
+
+def test_speak_question_item_uses_capture_verbatim_prompt():
+    from brainlayer.kg_review_session import speak_text
+
+    s = speak_text(_q_cluster())
+    assert "Merge, keep separate" not in s
+    assert "DICTIONARY QUESTION: are languages Tools?" in s
+    assert "capture" in s.lower() and "verbatim" in s.lower()
+
+
+def test_speak_does_not_respeak_identical_single_name():
+    from brainlayer.kg_review_session import speak_text
+
+    s = speak_text(_q_cluster())
+    assert s.count("DICTIONARY QUESTION: are languages Tools?") == 1
+
+
+def test_speak_drops_chunk_counts():
+    from brainlayer.kg_review_session import speak_text
+
+    s = speak_text(_tool_cluster())
+    assert "chunks" not in s
+    assert "Merge, keep separate, mixed, or skip?" in s

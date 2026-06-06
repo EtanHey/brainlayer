@@ -537,14 +537,20 @@ def apply_rule(
 def speak_text(cluster: dict[str, Any]) -> str:
     """Spoken summary of a cluster, optimized for TTS (short, concrete)."""
     members = cluster["members"]
+    if any(m.get("type") == "question" for m in members):
+        # Dictionary-question pseudo-cluster: the member name IS the question.
+        question = next(m["name"] for m in members if m.get("type") == "question")
+        return f"{question} Answer in your own words; I will capture it verbatim and mark this item handled."
     names = sorted({m["name"] for m in members})
     parts = [f"Cluster {cluster['stem']!r}, category {cluster['category']}, {len(members)} entries."]
     if len(names) == 1:
-        parts.append(f"All named {names[0]}.")
+        # Single shared name: say it once, with the type spread only.
+        types = ", ".join(sorted({m["type"] for m in members}))
+        parts.append(f"All named {names[0]}, typed {types}.")
     else:
         parts.append("Name variants: " + ", ".join(names) + ".")
-    by_member = ", ".join(f"{m['name']} as {m['type']} with {m.get('chunks', 0)} chunks" for m in members)
-    parts.append(by_member + ".")
+        by_member = ", ".join(f"{m['name']} as {m['type']}" for m in members)
+        parts.append(by_member + ".")
     parts.append("Merge, keep separate, mixed, or skip?")
     return " ".join(parts)
 
