@@ -57,6 +57,10 @@ def categorize(stem: str, names: list[str]) -> str:
     return "sep-variants"
 
 
+def item_kind_from_members(members: list[dict]) -> str:
+    return "question" if any(member.get("type") == "question" for member in members) else "cluster"
+
+
 def load_keep_separate_decisions(con: sqlite3.Connection) -> set[tuple[str, str]]:
     try:
         rows = con.execute(
@@ -125,6 +129,7 @@ def main() -> None:
                 for m in sorted(members, key=lambda m: -m["n_chunks"])
             ],
         }
+        cluster["item_kind"] = item_kind_from_members(cluster["members"])
         cats[category].append(cluster)
 
     out_json = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("eval_results/kg-phase1-flag-batch-2026-06-05.json")

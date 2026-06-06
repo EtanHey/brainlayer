@@ -95,6 +95,11 @@ def test_load_flag_batch_flattens_with_ids(batch_file):
     assert "diagnosis-flag:agent c" in ids
     assert "case-only:docker" in ids
     assert all("category" in c and "members" in c for c in clusters)
+    assert {c["cluster_id"]: c["item_kind"] for c in clusters} == {
+        "diagnosis-flag:agent c": "cluster",
+        "case-only:agent": "cluster",
+        "case-only:docker": "cluster",
+    }
 
 
 def test_next_undecided_is_idempotent_until_decision_or_skip(batch_file, decisions_file):
@@ -172,6 +177,137 @@ def test_record_decision_is_merge_safe_and_stamped(batch_file, decisions_file):
     data = json.loads(decisions_file.read_text())
     assert {(d["category"], d["stem"]) for d in data["merge"]} == {("case-only", "docker")}
     assert {(d["category"], d["stem"]) for d in data["keep"]} == {("case-only", "agent")}
+    assert_v1(data)
+
+
+def test_record_merge_excludes_context_members_from_canonical_and_losers(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 4,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "project-android", "name": "Android EAS", "type": "project", "chunks": 1},
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="contested:android eas",
+        decision={"action": "merge", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    merge = data["merge"][0]
+    assert merge["canonical"] == {"id": "tool-android", "name": "Android EAS", "type": "tool"}
+    assert [member["id"] for member in merge["members"]] == ["tech-android", "project-android"]
+    assert "ctx-android eas" not in json.dumps(merge)
+    assert_v1(data)
+
+
+def test_record_merge_rejects_context_canonical_override(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 3,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    with pytest.raises(ValueError, match="canonical override .* is not a real merge member"):
+        record_decision(
+            batch_file,
+            decisions_file,
+            cluster_id="contested:android eas",
+            decision={"action": "merge", "source": "voice", "canonical_id": "ctx-android eas"},
+        )
+
+
+def test_record_merge_rejects_fewer_than_two_real_members(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 2,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    with pytest.raises(ValueError, match="needs at least two real merge members"):
+        record_decision(
+            batch_file,
+            decisions_file,
+            cluster_id="contested:android eas",
+            decision={"action": "merge", "source": "voice"},
+        )
+
+    assert not decisions_file.exists()
+
+
+def test_record_merge_treats_null_chunks_as_zero(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 2,
+                "members": [
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": None},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "null-chunks-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="contested:android eas",
+        decision={"action": "merge", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    merge = data["merge"][0]
+    assert merge["canonical"] == {"id": "tech-android", "name": "Android EAS", "type": "technology"}
+    assert [member["id"] for member in merge["members"]] == ["tool-android"]
     assert_v1(data)
 
 
@@ -398,6 +534,33 @@ def test_voice_rewrite_preserves_unknown_dashboard_fields(batch_file, decisions_
     assert data["keep"][0]["source"] == "voice"
     assert data["keep"][0]["note"] == "non-deterministic voice answer"
     assert data["keep"][0]["dashboard_row_id"] == "row-17"
+    assert_v1(data)
+
+
+def test_record_decision_stamps_schema_on_legacy_decisions_file(batch_file, decisions_file):
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "source": "kg-phase1-flag-batch-2026-06-05",
+                "rules": {},
+                "per_category": {},
+                "counts": {},
+                "merge": [],
+                "keep": [],
+            }
+        )
+    )
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="case-only:agent",
+        decision={"action": "keep", "note": "legacy file upgrade", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    assert data["schema"] == DECISIONS_SCHEMA
+    assert data["keep"][0]["note"] == "legacy file upgrade"
     assert_v1(data)
 
 

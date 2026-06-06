@@ -318,3 +318,30 @@ def test_flag_batch_skips_logged_keep_separate_clusters(con, tmp_path):
 
     assert kg_flag_batch.should_skip_keep_separate("prefix-variants", "codex", keep_decisions)
     assert not kg_flag_batch.should_skip_keep_separate("case-only", "codex", keep_decisions)
+
+
+def test_flag_batch_item_kind_derives_from_question_members():
+    assert (
+        kg_flag_batch.item_kind_from_members(
+            [{"id": "q1", "name": "DICTIONARY QUESTION: classify languages?", "type": "question", "chunks": 0}]
+        )
+        == "question"
+    )
+    assert (
+        kg_flag_batch.item_kind_from_members(
+            [
+                {"id": "ctx-q", "name": "Context", "type": "context", "chunks": 0},
+                {"id": "q2", "name": "DICTIONARY QUESTION: mixed item?", "type": "question", "chunks": 0},
+            ]
+        )
+        == "question"
+    )
+    assert (
+        kg_flag_batch.item_kind_from_members(
+            [
+                {"id": "ctx-github", "name": "CONTESTED - type split", "type": "context", "chunks": 0},
+                {"id": "tool-github", "name": "GitHub", "type": "tool", "chunks": 7},
+            ]
+        )
+        == "cluster"
+    )

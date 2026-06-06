@@ -76,16 +76,22 @@ def load_flag_batch(batch_path: str | Path) -> list[dict[str, Any]]:
     clusters: list[dict[str, Any]] = []
     for category in raw:
         for cluster in raw[category]:
+            members = cluster.get("members", [])
             clusters.append(
                 {
                     "cluster_id": cluster_id(category, cluster["stem"]),
                     "category": category,
                     "stem": cluster["stem"],
-                    "size": cluster.get("size", len(cluster.get("members", []))),
-                    "members": cluster.get("members", []),
+                    "size": cluster.get("size", len(members)),
+                    "members": members,
+                    "item_kind": cluster.get("item_kind") or _item_kind_from_members(members),
                 }
             )
     return clusters
+
+
+def _item_kind_from_members(members: list[dict[str, Any]]) -> str:
+    return "question" if any(member.get("type") == "question" for member in members) else "cluster"
 
 
 def _source_from_batch(batch_path: str | Path) -> str:
@@ -106,6 +112,8 @@ def _empty_decisions(source: str = DEFAULT_SOURCE) -> dict[str, Any]:
 
 
 def _ensure_v1_shape(data: dict[str, Any], source: str) -> dict[str, Any]:
+    if "schema" not in data:
+        data["schema"] = DECISIONS_SCHEMA
     if data.get("schema") != DECISIONS_SCHEMA:
         raise ValueError(f"decisions file must use schema {DECISIONS_SCHEMA!r}; got {data.get('schema')!r}")
     data.setdefault("source", source)
@@ -235,6 +243,13 @@ def _member_ref(member: dict[str, Any]) -> dict[str, Any]:
     return {"id": member["id"], "name": member["name"], "type": member["type"]}
 
 
+def _real_merge_members(cluster: dict[str, Any]) -> list[dict[str, Any]]:
+    members = [member for member in cluster["members"] if member.get("type") != "context"]
+    if len(members) < 2:
+        raise ValueError(f"cluster {cluster['cluster_id']!r} needs at least two real merge members")
+    return sorted(members, key=lambda member: member.get("chunks") or 0, reverse=True)
+
+
 def _canonical_override(decision: dict[str, Any]) -> tuple[str | None, str | None]:
     canonical = decision.get("canonical")
     canonical_id = decision.get("canonical_id")
@@ -249,9 +264,7 @@ def _canonical_override(decision: dict[str, Any]) -> tuple[str | None, str | Non
 
 
 def _select_canonical(cluster: dict[str, Any], decision: dict[str, Any] | None = None) -> dict[str, Any]:
-    members = cluster["members"]
-    if not members:
-        raise ValueError(f"cluster {cluster['cluster_id']!r} has no members")
+    members = _real_merge_members(cluster)
     if not decision:
         return members[0]
     canonical_id, canonical_name = _canonical_override(decision)
@@ -262,6 +275,14 @@ def _select_canonical(cluster: dict[str, Any], decision: dict[str, Any] | None =
             return member
         if canonical_name and member["name"] == canonical_name:
             return member
+    for member in cluster["members"]:
+        if member.get("type") != "context":
+            continue
+        if (canonical_id and member["id"] == canonical_id) or (canonical_name and member["name"] == canonical_name):
+            raise ValueError(
+                f"canonical override {canonical_id or canonical_name!r} is not a real merge member "
+                f"in cluster {cluster['cluster_id']!r}"
+            )
     raise ValueError(
         f"canonical override {canonical_id or canonical_name!r} is not in cluster {cluster['cluster_id']!r}"
     )
@@ -280,7 +301,7 @@ def _merge_item(
         "category": cluster["category"],
         "source": source,
         "canonical": _member_ref(canonical),
-        "members": [_member_ref(member) for member in cluster["members"] if member["id"] != canonical["id"]],
+        "members": [_member_ref(member) for member in _real_merge_members(cluster) if member["id"] != canonical["id"]],
         "decided_at": decided_at,
     }
     if note:
