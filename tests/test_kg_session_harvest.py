@@ -356,6 +356,62 @@ def test_harvest_keys_clusters_by_category_and_stem(
     assert all(member["id"] != "other-android" for member in clean["merge"][0]["members"])
 
 
+def test_harvest_per_category_counts_skipped_and_undecided_non_question_clusters(
+    decisions_file: Path, tmp_path: Path
+):
+    batch = deepcopy(SESSION_BATCH)
+    batch["etan-queue"].extend(
+        [
+            {
+                "stem": "manual skip",
+                "size": 2,
+                "members": [
+                    {"id": "ctx-manual skip", "name": "Skip context", "type": "context", "chunks": 0},
+                    {"id": "skip-real", "name": "Manual Skip", "type": "concept", "chunks": 1},
+                ],
+            },
+            {
+                "stem": "still undecided",
+                "size": 2,
+                "members": [
+                    {"id": "ctx-still undecided", "name": "Undecided context", "type": "context", "chunks": 0},
+                    {"id": "undecided-real", "name": "Still Undecided", "type": "concept", "chunks": 1},
+                ],
+            },
+        ]
+    )
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    data["skipped"] = [
+        {"stem": "manual skip", "category": "etan-queue", "source": "voice", "decided_at": "2026-06-06T01:08:00Z"}
+    ]
+    batch_path = _write_json(tmp_path / "partial-session.json", batch)
+    decisions_path = _write_json(tmp_path / "partial-decisions.json", data)
+    clean_path = tmp_path / "clean.json"
+
+    harvest_session(
+        batch_path,
+        decisions_path,
+        answers_path=tmp_path / "answers.md",
+        decisions_path=clean_path,
+    )
+
+    clean = json.loads(clean_path.read_text(encoding="utf-8"))
+    assert clean["per_category"]["etan-queue"] == {
+        "total": 4,
+        "explicit": 2,
+        "by_rule": 0,
+        "undecided": 2,
+        "rule": None,
+    }
+    assert clean["counts"] == {
+        "merge_clusters": 1,
+        "rows_merged_away": 2,
+        "keep": 1,
+        "explicit": 2,
+        "by_rule": 0,
+    }
+
+
 def test_harvest_fails_loud_on_malformed_batch_member(decisions_file: Path, tmp_path: Path):
     batch = deepcopy(SESSION_BATCH)
     del batch["etan-queue"][6]["members"][2]["type"]

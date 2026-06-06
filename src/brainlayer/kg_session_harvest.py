@@ -217,11 +217,12 @@ def _build_clean_decisions(
             needs.append(_clean_needs_item(item, clusters_by_key[key]))
     needs = [item for item in needs if item is not None]
 
+    rules: dict[str, Any] = {}
     clean: dict[str, Any] = {
         "schema": DECISIONS_SCHEMA,
         "source": decisions.get("source"),
-        "rules": {},
-        "per_category": _per_category(merge, keep),
+        "rules": rules,
+        "per_category": _per_category(clusters, question_keys, merge, keep, rules),
         "counts": _counts(merge, keep),
         "merge": merge,
         "keep": keep,
@@ -397,16 +398,55 @@ def _counts(merge: list[dict[str, Any]], keep: list[dict[str, Any]]) -> dict[str
     }
 
 
-def _per_category(merge: list[dict[str, Any]], keep: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _per_category(
+    clusters: list[dict[str, Any]],
+    question_keys: set[tuple[str, str]],
+    merge: list[dict[str, Any]],
+    keep: list[dict[str, Any]],
+    rules: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     per_category: dict[str, dict[str, Any]] = {}
-    for item in merge + keep:
-        category = item["category"]
-        row = per_category.setdefault(category, {"total": 0, "explicit": 0, "by_rule": 0, "undecided": 0, "rule": None})
+    cluster_keys = set()
+    for cluster in clusters:
+        key = _cluster_key(cluster)
+        if key in question_keys:
+            continue
+        cluster_keys.add(key)
+        category = cluster["category"]
+        row = per_category.setdefault(
+            category,
+            {"total": 0, "explicit": 0, "by_rule": 0, "undecided": 0, "rule": rules.get(category)},
+        )
         row["total"] += 1
+
+    seen: set[tuple[str, str]] = set()
+    for item in merge + keep:
+        key = _decision_key(item, "exported")
+        if key in seen:
+            category, stem = key
+            raise ValueError(f"duplicate decision for {category}:{stem}")
+        seen.add(key)
+        if key not in cluster_keys:
+            category, stem = key
+            raise ValueError(f"decision references unknown non-question cluster {category}:{stem}")
+        category = item["category"]
+        row = per_category[category]
         if item.get("source") in RULE_SOURCES:
             row["by_rule"] += 1
         else:
             row["explicit"] += 1
+
+    for category, rule in rules.items():
+        per_category.setdefault(
+            category,
+            {"total": 0, "explicit": 0, "by_rule": 0, "undecided": 0, "rule": rule},
+        )
+        per_category[category]["rule"] = rule
+
+    for row in per_category.values():
+        row["undecided"] = row["total"] - row["explicit"] - row["by_rule"]
+        if row["undecided"] < 0:
+            raise ValueError("decision counts exceed category total")
     return per_category
 
 
