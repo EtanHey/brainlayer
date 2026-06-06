@@ -420,7 +420,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
         return
     tags = event.get("tags")
-    _insert_or_merge_chunk(
+    stored_chunk_id = _insert_or_merge_chunk(
         conn,
         {
             "id": chunk_id,
@@ -475,7 +475,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         if event.get("created_at")
         else datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     )
-    _insert_or_merge_chunk(
+    stored_chunk_id = _insert_or_merge_chunk(
         conn,
         {
             "id": chunk_id,
@@ -494,7 +494,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
-    return ApplyResult(chunk_id=chunk_id)
+    return ApplyResult(chunk_id=stored_chunk_id)
 
 
 def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:

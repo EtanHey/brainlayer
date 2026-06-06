@@ -145,6 +145,29 @@ class TestQueueStore:
         assert drained == 1
         assert row == (event["chunk_id"],)
 
+    def test_apply_hook_returns_canonical_chunk_id_for_embedding(self, monkeypatch):
+        """Merged hook events should embed the canonical row, not the duplicate ID."""
+        from brainlayer import drain
+
+        def fake_insert_or_merge(_conn, _row):
+            return "rt-canonical"
+
+        monkeypatch.setattr(drain, "_insert_or_merge_chunk", fake_insert_or_merge)
+
+        result = drain._apply_hook(
+            None,
+            {
+                "session_id": "session-duplicate",
+                "chunk_id": "rt-duplicate",
+                "content": "queued realtime duplicate should report canonical id",
+                "content_hash": "duplicate-hash",
+                "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+                "created_at": "2026-06-06T20:04:14Z",
+            },
+        )
+
+        assert result.chunk_id == "rt-canonical"
+
 
 class TestSingleWriterQueue:
     def test_single_worker_serializes_writes(self):

@@ -12,6 +12,7 @@ BRAINLAYER_PREPUSH_CACHE_DIR="${BRAINLAYER_PREPUSH_CACHE_DIR:-$ROOT_DIR/.git/bra
 exit_status=0
 declare -a targeted_pytest_files=()
 changed_source_unmapped=0
+changed_files_seen=0
 
 REAL_DB_TEST_FILES=(
   "test_vector_store.py"
@@ -123,9 +124,11 @@ append_unique() {
 map_changed_files_to_pytests() {
   targeted_pytest_files=()
   changed_source_unmapped=0
+  changed_files_seen=0
   local changed rel test_path module_name mapped
   while IFS= read -r changed; do
     [ -z "$changed" ] && continue
+    changed_files_seen=1
     mapped=0
     case "$changed" in
       src/brainlayer/mcp/store_handler.py|src/brainlayer/queue_io.py|src/brainlayer/drain.py|src/brainlayer/store.py)
@@ -207,6 +210,9 @@ fi
 
 if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
   echo "changed-only scope found an unmapped source change; falling back to full pytest unit suite"
+  pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_files_seen" -eq 0 ]; then
+  echo "changed-only scope found no changed files; falling back to full pytest unit suite"
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
   pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
