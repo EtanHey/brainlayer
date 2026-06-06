@@ -1,6 +1,8 @@
 """Tests for real-time indexing hooks — prompt/response pairing and storage."""
 
 import sqlite3
+import time
+from datetime import datetime
 
 import pytest
 
@@ -65,6 +67,58 @@ class TestResponsePairing:
         assert "How do auth?" in row[0]
         assert "JWT tokens" in row[0]
         assert row[1] == "sess-001"
+
+    def test_production_schema_stamps_created_at_and_project(self, tmp_path):
+        db_path = tmp_path / "prod-shape.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                source_file TEXT,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                conversation_id TEXT,
+                sender TEXT,
+                tags TEXT,
+                content_hash TEXT,
+                UNIQUE(conversation_id, content_hash)
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        indexer = RealtimeIndexer(db_path=str(db_path))
+        indexer.capture_prompt("sess-prod-001", "Why is realtime stamping missing?", "/Users/test/Gits/brainlayer")
+        before = int(time.time())
+        chunk_id = indexer.index_response(
+            "sess-prod-001",
+            "Bind created_at and project when inserting realtime hook chunks.",
+            "/Users/test/Gits/brainlayer",
+        )
+        after = int(time.time())
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT id, source, created_at, project, conversation_id FROM chunks WHERE id = ?",
+            (chunk_id,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row[1] == "realtime"
+        assert row[2] is not None
+        parsed = datetime.fromisoformat(row[2].replace("Z", "+00:00"))
+        assert before - 5 <= int(parsed.timestamp()) <= after + 5
+        assert row[3] == "brainlayer"
+        assert row[4] == "sess-prod-001"
 
     def test_clears_pending_after_pairing(self, tmp_db):
         indexer, _ = tmp_db

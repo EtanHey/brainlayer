@@ -7,6 +7,7 @@ All tests use tmp_path fixtures (no real DB contention).
 """
 
 import json
+import sqlite3
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -73,6 +74,38 @@ class TestQueueStore:
         item = json.loads(path.read_text())
 
         assert item["timestamp"] == 0.0
+
+    def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
+        """Hook/realtime queue events must replay reservation metadata, not flush time."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "hook-created-at.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        event = {
+            "kind": "hook_chunk",
+            "session_id": "session-created-at",
+            "chunk_id": "rt-session-created-at",
+            "content": "hook queue created_at reservation timestamp should survive drain",
+            "content_hash": "created-at-hash",
+            "project": "brainlayer",
+            "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+            "created_at": "2026-06-06T20:04:14Z",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "hook-created-at.jsonl").write_text(json.dumps(event) + "\n")
+
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, project, source FROM chunks WHERE id = ?", (event["chunk_id"],)
+            ).fetchone()
+
+        assert drained == 1
+        assert row == ("2026-06-06T20:04:14Z", "brainlayer", "realtime")
 
 
 class TestSingleWriterQueue:

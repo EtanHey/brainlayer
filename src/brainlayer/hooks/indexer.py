@@ -13,9 +13,11 @@ Designed to swap backend from direct DB to BrainBar socket when it merges.
 """
 
 import hashlib
+import json
 import logging
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..queue_io import enqueue_hook_chunk, get_queue_dir
@@ -126,15 +128,19 @@ class RealtimeIndexer:
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
         chunk_id = f"rt-{session_id[:8]}-{content_hash}"
         project = self._extract_project(cwd)
+        created_at = datetime.now(timezone.utc).isoformat()
 
         # Try DB write
         if self._db:
             try:
-                cursor = self._db.execute(
-                    """INSERT OR IGNORE INTO chunks
-                       (chunk_id, session_id, content, content_hash, project, source)
-                       VALUES (?, ?, ?, ?, ?, 'realtime')""",
-                    (chunk_id, session_id, content, content_hash, project),
+                cursor = self._insert_realtime_chunk(
+                    chunk_id=chunk_id,
+                    session_id=session_id,
+                    content=content,
+                    content_hash=content_hash,
+                    project=project,
+                    source_file=cwd,
+                    created_at=created_at,
                 )
                 if cursor.rowcount == 0:
                     # INSERT OR IGNORE skipped — duplicate
@@ -143,10 +149,10 @@ class RealtimeIndexer:
                 return chunk_id
             except Exception as exc:
                 logger.warning("DB write failed: %s", exc)
-                self._write_to_queue(session_id, content, content_hash, project)
+                self._write_to_queue(session_id, content, content_hash, project, source_file=cwd, created_at=created_at)
                 return None
         else:
-            self._write_to_queue(session_id, content, content_hash, project)
+            self._write_to_queue(session_id, content, content_hash, project, source_file=cwd, created_at=created_at)
             return None
 
     # MARK: - Chapter boundaries (PostCompact)
@@ -201,7 +207,60 @@ class RealtimeIndexer:
         """Extract project name from working directory path."""
         return Path(cwd.rstrip("/")).name
 
-    def _write_to_queue(self, session_id: str, content: str, content_hash: str, project: str):
+    def _chunk_columns(self) -> set[str]:
+        if not self._db:
+            return set()
+        return {row[1] for row in self._db.execute("PRAGMA table_info(chunks)")}
+
+    def _insert_realtime_chunk(
+        self,
+        *,
+        chunk_id: str,
+        session_id: str,
+        content: str,
+        content_hash: str,
+        project: str,
+        source_file: str,
+        created_at: str,
+    ) -> sqlite3.Cursor:
+        if not self._db:
+            raise RuntimeError("database is not open")
+        columns = self._chunk_columns()
+        values = {
+            "chunk_id": chunk_id,
+            "id": chunk_id,
+            "session_id": session_id,
+            "conversation_id": session_id,
+            "content": content,
+            "metadata": json.dumps({"session_id": session_id, "content_hash": content_hash}),
+            "content_hash": content_hash,
+            "source_file": source_file,
+            "project": project,
+            "content_type": "assistant_text",
+            "value_type": "HIGH",
+            "char_count": len(content),
+            "source": "realtime",
+            "created_at": created_at,
+        }
+        row = {column: values[column] for column in values if column in columns}
+        id_column = "chunk_id" if "chunk_id" in columns else "id"
+        if id_column not in row:
+            raise RuntimeError("chunks table must expose chunk_id or id")
+        names = list(row)
+        placeholders = ", ".join("?" for _ in names)
+        sql = f"INSERT OR IGNORE INTO chunks ({', '.join(names)}) VALUES ({placeholders})"
+        return self._db.execute(sql, [row[name] for name in names])
+
+    def _write_to_queue(
+        self,
+        session_id: str,
+        content: str,
+        content_hash: str,
+        project: str,
+        *,
+        source_file: str | None,
+        created_at: str,
+    ):
         """Fallback: write to queue directory when DB is unavailable."""
         if not self.queue_dir:
             return
@@ -210,7 +269,8 @@ class RealtimeIndexer:
             content=content,
             content_hash=content_hash,
             project=project,
-            timestamp=time.time(),
+            source_file=source_file,
+            created_at=created_at,
             queue_dir=Path(self.queue_dir),
         )
 

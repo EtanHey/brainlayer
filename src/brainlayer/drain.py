@@ -470,6 +470,11 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         logger.warning("Invalid hook timestamp %r; using current time", ts_raw)
         timestamp = time.time()
+    created_at = (
+        str(event["created_at"])
+        if event.get("created_at")
+        else datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+    )
     _insert_or_merge_chunk(
         conn,
         {
@@ -482,7 +487,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "value_type": "HIGH",
             "char_count": len(content),
             "source": "realtime",
-            "created_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
+            "created_at": created_at,
             "conversation_id": session_id,
             "importance": 5,
             "content_hash": _content_hash(content),
