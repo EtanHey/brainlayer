@@ -45,26 +45,28 @@ variants:
     \ sentences written as if answering the question, preserving key terms for embedding similarity>\"\n  ],\n  \"epistemic_level\"\
     : \"<one of: hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or system state discussed, or null>\"\
     ,\n  \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\": [\"<libraries or external APIs\
-    \ used>\"],\n  \"entities\": [\n    {{\"name\": \"<entity name>\", \"type\": \"<person|company|project|technology|tool|concept>\"\
-    , \"relation\": \"<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK',\
-    \ or null>\"}}\n  ],\n  \"sentiment_label\": \"<one of: frustration, confusion, positive, satisfaction, neutral>\",\n\
-    \  \"sentiment_score\": <float from -1.0 to 1.0>,\n  \"sentiment_signals\": [\"<words/phrases that indicate the sentiment>\"\
-    ]\n}}\n\nTAG RULES:\n- Use lowercase, hyphenated tags (e.g., \"bug-fix\", \"api-design\")\n- Include: language tags (python,\
-    \ typescript, sql), framework tags (react, fastapi, bun)\n- Include: concept tags (error-handling, authentication, deployment,\
-    \ testing, refactoring)\n- Include: action tags (bug-fix, feature-dev, code-review, documentation)\n- 3-7 tags per chunk\n\
-    \nIMPORTANCE RULES:\n- 1-3: Trivial (greetings, short confirmations, file listings)\n- 4-6: Moderate (standard code, config\
-    \ changes, routine discussions)\n- 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)\n- 10:\
-    \ Critical (security fixes, production incidents, key architectural choices)\n\nENTITIES:\n- Extract non-code entities\
-    \ only — people, projects, technologies, companies, tools, concepts\n- Do NOT extract variable names, function names,\
-    \ file paths, or code symbols as entities\n- Use the \"relation\" field to capture how the entity connects to other entities\
-    \ in this chunk\n\nSUMMARY QUALITY CHECK — before returning, verify your summary:\n✓ Contains at least one specific name,\
-    \ number, or date from the chunk\n✓ Does NOT start with \"This chunk\" / \"This message\" / \"The user\"\n✓ A person reading\
-    \ ONLY the summary would learn something concrete\n✓ Key decisions include the WHY, not just the WHAT\n✓ All PR numbers,\
-    \ costs, dates, file paths, and URLs from the chunk appear in either summary or key_facts\n\nEPISTEMIC RUBRIC: hypothesis\
-    \ = proposed or unverified; substantiated = backed by concrete evidence in the chunk; validated = outcome explicitly confirmed\
-    \ by execution, merge, deploy, or user confirmation\nDEBT IMPACT RUBRIC: introduction = creates debt, workaround, TODO,\
-    \ or blocker; resolution = removes debt or closes a blocker; none = no clear debt change\nSENTIMENT RUBRIC: frustration\
-    \ = blocked/annoyed/failing; confusion = uncertainty/questioning; positive = upbeat/encouraging; satisfaction = relief/resolution/completion;\
+    \ used>\"],\n  \"entities\": [\n    {{\"name\": \"<entity name>\", \"type\": \"<person|agent|company|project|technology|tool|concept|topic|source>\"\
+    , \"entity_subtype\": \"<channel|podcast|brand|newsletter or null>\", \"relation\": \"<relationship to other entities\
+    \ in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>\"}}\n  ],\n  \"sentiment_label\": \"\
+    <one of: frustration, confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n\
+    \  \"sentiment_signals\": [\"<words/phrases that indicate the sentiment>\"]\n}}\n\nTAG RULES:\n- Use lowercase, hyphenated\
+    \ tags (e.g., \"bug-fix\", \"api-design\")\n- Include: language tags (python, typescript, sql), framework tags (react,\
+    \ fastapi, bun)\n- Include: concept tags (error-handling, authentication, deployment, testing, refactoring)\n- Include:\
+    \ action tags (bug-fix, feature-dev, code-review, documentation)\n- 3-7 tags per chunk\n\nIMPORTANCE RULES:\n- 1-3: Trivial\
+    \ (greetings, short confirmations, file listings)\n- 4-6: Moderate (standard code, config changes, routine discussions)\n\
+    - 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)\n- 10: Critical (security fixes, production\
+    \ incidents, key architectural choices)\n\nENTITIES:\n- Extract non-code entities only — people, agents, projects, technologies,\
+    \ companies, tools, concepts, topics, sources\n- Sources are content you consume FROM: YouTube channels, podcasts, blogs,\
+    \ newsletters. The human host remains a person.\n- Do NOT extract variable names, function names, file paths, or code\
+    \ symbols as entities\n- Use the \"relation\" field to capture how the entity connects to other entities in this chunk\n\
+    \nSUMMARY QUALITY CHECK — before returning, verify your summary:\n✓ Contains at least one specific name, number, or date\
+    \ from the chunk\n✓ Does NOT start with \"This chunk\" / \"This message\" / \"The user\"\n✓ A person reading ONLY the\
+    \ summary would learn something concrete\n✓ Key decisions include the WHY, not just the WHAT\n✓ All PR numbers, costs,\
+    \ dates, file paths, and URLs from the chunk appear in either summary or key_facts\n\nEPISTEMIC RUBRIC: hypothesis = proposed\
+    \ or unverified; substantiated = backed by concrete evidence in the chunk; validated = outcome explicitly confirmed by\
+    \ execution, merge, deploy, or user confirmation\nDEBT IMPACT RUBRIC: introduction = creates debt, workaround, TODO, or\
+    \ blocker; resolution = removes debt or closes a blocker; none = no clear debt change\nSENTIMENT RUBRIC: frustration =\
+    \ blocked/annoyed/failing; confusion = uncertainty/questioning; positive = upbeat/encouraging; satisfaction = relief/resolution/completion;\
     \ neutral = factual/no strong affect\n\nReturn ONLY the JSON object, no other text."
   model: gemini-2.5-flash-lite
   params:
@@ -74,7 +76,7 @@ variants:
   axis: production-control
   source_path: src/brainlayer/pipeline/enrichment.py
   source_section: ENRICHMENT_PROMPT
-  prompt_hash: 533c76ed07b9625d8b460330f45a46cc8074668a11fecf34090773984a57f1f7
+  prompt_hash: dedd7f03d828b35ac5c57a1091b241065b30c69075e9c86a68c26adfdffe263c
 - id: B
   label: 2026-03-19-v2-faceted-tags
   prompt_template: 'You are a knowledge base tagger for a personal multi-project development knowledge base. Your job is to

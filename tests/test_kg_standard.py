@@ -84,7 +84,7 @@ class TestKGConstants:
     """Verify shared constants match the spec."""
 
     def test_entity_types_complete(self):
-        assert len(ENTITY_TYPES) == 7
+        assert len(ENTITY_TYPES) == 8
         assert "person" in ENTITY_TYPES
         assert "constraint" in ENTITY_TYPES
         assert "preference" in ENTITY_TYPES
@@ -92,6 +92,7 @@ class TestKGConstants:
         assert "meeting" in ENTITY_TYPES
         assert "location" in ENTITY_TYPES
         assert "organization" in ENTITY_TYPES
+        assert "source" in ENTITY_TYPES
 
     def test_relation_types_complete(self):
         assert len(RELATION_TYPES) == 9

@@ -2,7 +2,7 @@
 
 Verifies that:
 1. GEMINI_RESPONSE_SCHEMA includes a required 'entities' array
-2. Entity items have 'name' (string) and 'type' (enum of 6 values)
+2. Entity items have 'name' (string) and 'type' (closed KG enum)
 3. ENRICHMENT_PROMPT mentions entities with non-code-only instructions
 4. parse_enrichment correctly extracts and validates entities
 5. parse_enrichment rejects entities with invalid types
@@ -41,7 +41,7 @@ def test_gemini_response_schema_entity_type_enum():
     from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
 
     entity_type = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]["items"]["properties"]["type"]
-    expected_types = {"person", "company", "project", "technology", "tool", "concept"}
+    expected_types = {"person", "agent", "company", "project", "technology", "tool", "concept", "topic", "source"}
     assert set(entity_type["enum"]) == expected_types
 
 

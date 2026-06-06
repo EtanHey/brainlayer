@@ -1527,6 +1527,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("device", "entity", "Hardware device or machine"),
             ("event", "entity", "Temporal event or occurrence"),
             ("organization", "entity", "Company or group"),
+            ("source", "entity", "External content source: channel, podcast, blog, newsletter"),
             ("golem", "agent", "Specialized AI agent in the golems ecosystem"),
             ("platform", "tool", "Software platform or framework"),
             ("skill", "concept", "Reusable AI skill or capability"),

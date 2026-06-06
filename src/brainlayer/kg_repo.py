@@ -132,6 +132,7 @@ class KGMixin:
             "expired_at": row[12] if len(row) > 12 else None,
             "group_id": row[13] if len(row) > 13 else None,
             "parent_id": row[14] if len(row) > 14 else None,
+            "entity_subtype": row[15] if len(row) > 15 else None,
         }
 
     def _fetch_entities_by_lower_name(self, name: str, entity_type: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -139,7 +140,8 @@ class KGMixin:
         base_query = """
             SELECT id, entity_type, name, metadata, created_at, updated_at,
                    canonical_name, description, confidence, importance,
-                   valid_from, valid_until, expired_at, group_id, parent_id
+                   valid_from, valid_until, expired_at, group_id, parent_id,
+                   entity_subtype
             FROM kg_entities
             WHERE LOWER(name) = LOWER(?)
         """
@@ -262,6 +264,7 @@ class KGMixin:
         valid_until: Optional[str] = None,
         group_id: Optional[str] = None,
         parent_id: Optional[str] = None,
+        entity_subtype: Optional[str] = None,
     ) -> str:
         """Insert or update a KG entity. Returns the entity ID."""
         cursor = self.conn.cursor()
@@ -287,6 +290,7 @@ class KGMixin:
                     expired_at = NULL,
                     group_id = COALESCE(?, group_id),
                     parent_id = COALESCE(?, parent_id),
+                    entity_subtype = COALESCE(?, entity_subtype),
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -300,6 +304,7 @@ class KGMixin:
                     valid_until,
                     group_id,
                     parent_id,
+                    entity_subtype,
                     now,
                     existing["id"],
                 ),
@@ -319,9 +324,9 @@ class KGMixin:
             """
             INSERT INTO kg_entities (id, entity_type, name, metadata, canonical_name,
                                      description, confidence, importance,
-                                     valid_from, valid_until, group_id, parent_id,
+                                     valid_from, valid_until, group_id, parent_id, entity_subtype,
                                      created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(entity_type, name) DO UPDATE SET
                 metadata = excluded.metadata,
                 canonical_name = excluded.canonical_name,
@@ -333,6 +338,7 @@ class KGMixin:
                 expired_at = NULL,
                 group_id = COALESCE(excluded.group_id, kg_entities.group_id),
                 parent_id = COALESCE(excluded.parent_id, kg_entities.parent_id),
+                entity_subtype = COALESCE(excluded.entity_subtype, kg_entities.entity_subtype),
                 updated_at = excluded.updated_at
             """,
             (
@@ -348,6 +354,7 @@ class KGMixin:
                 valid_until,
                 group_id,
                 parent_id,
+                entity_subtype,
                 now,
                 now,
             ),
@@ -460,7 +467,8 @@ class KGMixin:
             cursor.execute(
                 """SELECT id, entity_type, name, metadata, created_at, updated_at,
                           canonical_name, description, confidence, importance,
-                          valid_from, valid_until, expired_at, group_id, parent_id
+                          valid_from, valid_until, expired_at, group_id, parent_id,
+                          entity_subtype
                    FROM kg_entities WHERE id = ?""",
                 (entity_id,),
             )

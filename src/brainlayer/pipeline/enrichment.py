@@ -377,7 +377,7 @@ Return this exact JSON structure:
   "debt_impact": "<one of: introduction, resolution, none>",
   "external_deps": ["<libraries or external APIs used>"],
   "entities": [
-    {{"name": "<entity name>", "type": "<person|company|project|technology|tool|concept>", "relation": "<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>"}}
+    {{"name": "<entity name>", "type": "<person|agent|company|project|technology|tool|concept|topic|source>", "entity_subtype": "<channel|podcast|brand|newsletter or null>", "relation": "<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>"}}
   ],
   "sentiment_label": "<one of: frustration, confusion, positive, satisfaction, neutral>",
   "sentiment_score": <float from -1.0 to 1.0>,
@@ -398,7 +398,8 @@ IMPORTANCE RULES:
 - 10: Critical (security fixes, production incidents, key architectural choices)
 
 ENTITIES:
-- Extract non-code entities only — people, projects, technologies, companies, tools, concepts
+- Extract non-code entities only — people, agents, projects, technologies, companies, tools, concepts, topics, sources
+- Sources are content you consume FROM: YouTube channels, podcasts, blogs, newsletters. The human host remains a person.
 - Do NOT extract variable names, function names, file paths, or code symbols as entities
 - Use the "relation" field to capture how the entity connects to other entities in this chunk
 
@@ -873,7 +874,17 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             if cleaned:
                 result["external_deps"] = cleaned
 
-        VALID_ENTITY_TYPES = {"person", "company", "project", "technology", "tool", "concept"}
+        VALID_ENTITY_TYPES = {
+            "person",
+            "agent",
+            "company",
+            "project",
+            "technology",
+            "tool",
+            "concept",
+            "topic",
+            "source",
+        }
         entities = match.get("entities", [])
         if isinstance(entities, list):
             cleaned_entities = []
@@ -889,6 +900,13 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
                     ):
                         relation = e.get("relation")
                         entity = {"name": name.strip(), "type": etype.lower().strip()}
+                        subtype = e.get("entity_subtype") or e.get("subtype")
+                        if (
+                            entity["type"] == "source"
+                            and isinstance(subtype, str)
+                            and subtype.strip().lower() in {"channel", "podcast", "brand", "newsletter"}
+                        ):
+                            entity["entity_subtype"] = subtype.strip().lower()
                         if isinstance(relation, str) and relation.strip() and relation.lower() != "null":
                             entity["relation"] = relation.strip()
                         cleaned_entities.append(entity)

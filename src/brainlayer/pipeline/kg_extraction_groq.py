@@ -12,6 +12,8 @@ import re
 import time
 from typing import Any, Optional
 
+from .entity_extraction import normalize_entity_type
+
 logger = logging.getLogger(__name__)
 
 # Multi-chunk NER prompt — processes N chunks in one API call
@@ -25,10 +27,13 @@ Entity types (choose carefully):
 - tool: Developer tools and services (CodeRabbit, Railway, Vercel).
 - technology: Languages, frameworks, libraries (Python, React, SQLite, Convex).
 - topic: Abstract concepts only when not fitting above types.
+- source: Content sources you consume FROM: YouTube channels, podcasts, blogs, newsletters (t3.gg, Huberman Lab, Lex Fridman Podcast). NOT the human host — the host is a person.
 
 Relation types and DIRECTION rules (source → target):
 - works_at: person → company (person works at company)
-- owns: person → project/company (person owns the project)
+- owns: person → project/company/source (person owns the project or content source)
+- hosts: person → source (person hosts the channel, podcast, blog, or newsletter)
+- appears_on: person → source (person appears as a guest on the source)
 - builds: person/agent → project (who builds what)
 - uses: entity → tool/technology (who uses what tool)
 - client_of: person/company → person/company (A is a client OF B, meaning B serves A)
@@ -37,7 +42,7 @@ Relation types and DIRECTION rules (source → target):
 - related_to: any → any (generic, use only when no specific type fits)
 
 Return JSON with this exact structure:
-{{"chunks": [{{"chunk_id": "id", "entities": [{{"text": "exact text", "type": "entity_type"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "fact": "natural language description"}}]}}]}}
+{{"chunks": [{{"chunk_id": "id", "entities": [{{"text": "exact text", "type": "entity_type", "entity_subtype": "channel|podcast|brand|newsletter or null"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "fact": "natural language description"}}]}}]}}
 
 Rules:
 - Only extract entities that appear verbatim in the text
@@ -91,7 +96,26 @@ def parse_multi_chunk_response(response: str) -> list[dict[str, Any]]:
         chunk_id = chunk_data.get("chunk_id", "")
         if not chunk_id:
             continue
-        entities = chunk_data.get("entities", [])
+        entities = []
+        for entity in chunk_data.get("entities", []):
+            if not isinstance(entity, dict):
+                continue
+            text = entity.get("text", "")
+            raw_type = entity.get("type", "")
+            if not isinstance(text, str) or not text.strip() or not isinstance(raw_type, str) or not raw_type.strip():
+                continue
+            entity_type, entity_subtype = normalize_entity_type(
+                text,
+                raw_type,
+                entity.get("entity_subtype") or entity.get("subtype"),
+            )
+            normalized_entity = {**entity, "type": entity_type}
+            if entity_subtype:
+                normalized_entity["entity_subtype"] = entity_subtype
+            else:
+                normalized_entity.pop("entity_subtype", None)
+                normalized_entity.pop("subtype", None)
+            entities.append(normalized_entity)
         relations = chunk_data.get("relations", [])
         results.append(
             {

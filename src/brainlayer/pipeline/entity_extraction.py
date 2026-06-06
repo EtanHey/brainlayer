@@ -35,6 +35,7 @@ class ExtractedEntity:
     end: int
     confidence: float
     source: str  # "seed", "llm", "gliner", "dictabert"
+    entity_subtype: Optional[str] = None
 
 
 @dataclass
@@ -125,6 +126,54 @@ def _deduplicate_overlaps(entities: list[ExtractedEntity]) -> list[ExtractedEnti
 
 # ── LLM-based extraction ──
 
+VALID_ENTITY_TYPES = {"person", "agent", "company", "project", "tool", "technology", "concept", "topic", "source"}
+ENTITY_TYPE_ALIASES = {
+    "organization": "company",
+    "org": "company",
+    "business": "company",
+}
+VALID_ENTITY_SUBTYPES = {"channel", "podcast", "brand", "newsletter"}
+
+
+def infer_source_subtype(name: str) -> Optional[str]:
+    """Infer Source subtype from stable URL/name patterns."""
+    normalized = name.strip().lower()
+    if "youtube.com/@" in normalized or "youtube.com/c/" in normalized:
+        return "channel"
+    if normalized.endswith(" podcast"):
+        return "podcast"
+    if normalized.endswith(" channel"):
+        return "channel"
+    if normalized.endswith(" newsletter"):
+        return "newsletter"
+    return None
+
+
+def normalize_entity_type(
+    name: str,
+    raw_type: str,
+    raw_subtype: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """Normalize model-emitted entity type/subtype to the closed KG vocabulary."""
+    entity_type = ENTITY_TYPE_ALIASES.get(raw_type.strip().lower(), raw_type.strip().lower())
+    subtype = raw_subtype.strip().lower() if isinstance(raw_subtype, str) and raw_subtype.strip() else None
+    if subtype not in VALID_ENTITY_SUBTYPES:
+        subtype = None
+
+    inferred_source_subtype = infer_source_subtype(name)
+    if inferred_source_subtype:
+        return "source", subtype or inferred_source_subtype
+
+    if entity_type not in VALID_ENTITY_TYPES:
+        logger.warning("Coercing unknown LLM entity type %r for %r to topic", raw_type, name)
+        entity_type = "topic"
+
+    if entity_type != "source":
+        subtype = None
+
+    return entity_type, subtype
+
+
 _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this developer conversation text.
 
 ## Entity types (be precise — choose the most specific type):
@@ -134,15 +183,14 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - project: Code repositories, apps, products (BrainLayer, VoiceLayer, 6PM).
 - tool: Developer tools and services (Docker, Railway, Supabase, CodeRabbit).
 - technology: Languages, frameworks, protocols (SQLite, SwiftUI, MCP, TypeScript).
-- skill: Reusable AI skill or command (/commit, /pr-loop, /coach).
-- service: Deployed infrastructure (LaunchAgent, daemon, watcher).
-- config: Configuration files or settings (CLAUDE.md, pyproject.toml, .env).
-- decision: Architectural or design decisions made during sessions.
 - topic: Abstract concepts or domains (enrichment, graph RAG, dark mode).
+- source: Content sources you consume FROM: YouTube channels, podcasts, blogs, newsletters (t3.gg, Huberman Lab, Lex Fridman Podcast). NOT the human host — the host is a person.
 
 ## Relation types (source → target, with description):
 - created: person/agent → project/tool. "Anthropic created Claude Code"
-- owns: person → project/company. "Etan owns BrainLayer"
+- owns: person → project/company/source. "Etan owns BrainLayer"
+- hosts: person → source. "Andrew Huberman hosts Huberman Lab"
+- appears_on: person → source. "Andy Galpin appears_on Huberman Lab"
 - works_at: person → company. "Josh Anderson works at Cantaloupe AI"
 - uses: entity → tool/technology. "BrainLayer uses SQLite"
 - depends_on: project → technology/tool. "VoiceLayer depends on whisper-cpp"
@@ -157,7 +205,7 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - related_to: generic fallback (use ONLY if no specific type fits)
 
 ## Output format — return JSON only:
-{{"entities": [{{"text": "exact text from input", "type": "entity_type", "description": "one-sentence description of this entity based on context"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "description": "natural language sentence describing the relationship", "strength": 0.8}}]}}
+{{"entities": [{{"text": "exact text from input", "type": "entity_type", "entity_subtype": "channel|podcast|brand|newsletter or null", "description": "one-sentence description of this entity based on context"}}], "relations": [{{"source": "entity text", "target": "entity text", "type": "relation_type", "description": "natural language sentence describing the relationship", "strength": 0.8}}]}}
 
 ## Rules:
 - Extract entities that are CLEARLY identifiable, not vague mentions
@@ -230,6 +278,11 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
         etype = raw_entity.get("type", "")
         if not text or not etype:
             continue
+        etype, subtype = normalize_entity_type(
+            text,
+            etype,
+            raw_entity.get("entity_subtype") or raw_entity.get("subtype"),
+        )
 
         # Find span in source text (case-insensitive)
         idx = source_lower.find(text.lower())
@@ -244,6 +297,7 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
                 end=idx + len(text),
                 confidence=0.8,
                 source="llm",
+                entity_subtype=subtype,
             )
         )
 

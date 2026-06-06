@@ -103,6 +103,7 @@ class TestEntityTypeEnumAlignment:
         "device",
         "event",
         "location",
+        "source",
     ]
 
     async def test_mcp_recall_enum_matches_canonical(self):

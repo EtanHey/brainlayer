@@ -57,6 +57,7 @@ _HIERARCHY_SEED_TYPES = {
     "device",
     "event",
     "organization",
+    "source",
     "golem",
     "platform",
     "skill",
