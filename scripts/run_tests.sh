@@ -85,7 +85,7 @@ prepush_cache_file() {
 
 changed_files() {
   if [ -n "${BRAINLAYER_CHANGED_FILES:-}" ]; then
-    printf '%s\n' "$BRAINLAYER_CHANGED_FILES" | tr ', ' '\n' | sed '/^$/d'
+    printf '%s\n' "$BRAINLAYER_CHANGED_FILES" | tr ',' '\n' | sed '/^$/d'
     return 0
   fi
   if git rev-parse --verify origin/main >/dev/null 2>&1; then
@@ -138,7 +138,7 @@ map_changed_files_to_pytests() {
         done
         ;;
       tests/test_*.py)
-        test_path="$ROOT_DIR/$changed"
+        test_path="$TEST_ROOT/$(basename "$changed")"
         if [ -f "$test_path" ] && ! is_real_db_test_file "$test_path"; then
           append_unique "$test_path"
           mapped=1
