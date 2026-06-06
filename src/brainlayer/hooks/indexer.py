@@ -130,8 +130,9 @@ class RealtimeIndexer:
         project = self._extract_project(cwd)
         created_at = datetime.now(timezone.utc).isoformat()
 
-        # Try DB write
-        if self._db:
+        # The canonical VectorStore schema must flow through the queue/drain path
+        # so drain can serialize writes and populate chunk_vectors.
+        if self._db and self._can_insert_directly():
             try:
                 cursor = self._insert_realtime_chunk(
                     chunk_id=chunk_id,
@@ -211,6 +212,10 @@ class RealtimeIndexer:
         if not self._db:
             return set()
         return {row[1] for row in self._db.execute("PRAGMA table_info(chunks)")}
+
+    def _can_insert_directly(self) -> bool:
+        columns = self._chunk_columns()
+        return "chunk_id" in columns and "session_id" in columns
 
     def _insert_realtime_chunk(
         self,
