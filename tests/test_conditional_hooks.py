@@ -13,6 +13,7 @@ Env vars tested:
 
 import importlib.util
 import io
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -662,6 +663,46 @@ class TestPromptSearchConditional:
         assert prompt_search.detect_correction("This response is too verbose.") == "style"
         assert prompt_search.detect_correction("לא נכון, תתקן את זה") == "factual"
         assert prompt_search.detect_correction("ok") is None
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "[orc gen-12 -> brainlayerCodex] No need to escalate; the worker is still running.",
+            "FLEET TICK (gen-12 orc, R5/R6.5/R8)\n"
+            "Codex s:13 working, no PR yet; do not narrate and do not stop the loop.",
+            "<task-notification>\n"
+            "<summary>Worker completed</summary>\n"
+            '<result>Historical Etan quote: "No, use the launcher."</result>\n'
+            "</task-notification>",
+            "You are the NEW brainlayerClaude-LEAD. The outgoing answer said to run "
+            "nohup ./scripts/worker.sh > /tmp/worker.log 2>&1 &.",
+        ],
+    )
+    def test_main_suppresses_correction_nudge_for_non_user_payloads(self, prompt_search, monkeypatch, capsys, prompt):
+        fake_conn = FakeConn()
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
+        monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
+        monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            prompt_search.sqlite3,
+            "connect",
+            lambda *args, **kwargs: fake_conn,
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO('{"prompt":' + json.dumps(prompt) + ',"session_id":"sess-1"}'),
+        )
+
+        with pytest.raises(SystemExit):
+            prompt_search.main()
+
+        output = capsys.readouterr().out
+        assert "Correction detected:" not in output
 
     def test_main_prints_correction_store_nudge(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
