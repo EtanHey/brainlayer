@@ -229,6 +229,37 @@ def test_harvest_allows_non_id_note_text_containing_ctx_token(
     )
 
 
+def test_harvest_strips_embedded_ctx_member_ids_from_notes(
+    batch_file: Path, decisions_file: Path, tmp_path: Path
+):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    data["source"] = "etan-ctx-strip-session"
+    for item in data["merge"]:
+        if item["stem"] == "android eas":
+            item["note"] = "merge ctx-android eas into the real Android EAS entries"
+    for item in data["keep"]:
+        if item["stem"] == "agent mix":
+            item["note"] = (
+                'MIXED: {"agent-concept": "keep", "agent-tool": "merge", "ctx-agent mix": "keep"}; '
+                "ctx-agent mix is only review context; keep ctx-local wording"
+            )
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+    clean_path = tmp_path / "clean.json"
+
+    harvest_session(
+        batch_file,
+        decisions_file,
+        answers_path=tmp_path / "answers.md",
+        decisions_path=clean_path,
+    )
+
+    clean = json.loads(clean_path.read_text(encoding="utf-8"))
+    assert clean["source"] == "etan-ctx-strip-session"
+    assert "ctx-android eas" not in clean["merge"][0]["note"]
+    assert "ctx-agent mix" not in clean["keep"][0]["note"]
+    assert "ctx-local" in clean["keep"][0]["note"]
+
+
 def test_harvest_clean_decisions_round_trip_through_apply_validator(
     batch_file: Path, decisions_file: Path, tmp_path: Path
 ):

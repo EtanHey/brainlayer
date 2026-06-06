@@ -292,6 +292,8 @@ def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
         "members": members,
     }
     _copy_optional_item_fields(item, clean)
+    if isinstance(clean.get("note"), str):
+        clean["note"] = _clean_note(clean["note"], cluster)
     return clean
 
 
@@ -303,7 +305,7 @@ def _clean_keep_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str,
     }
     _copy_optional_item_fields(item, clean)
     if isinstance(clean.get("note"), str):
-        clean["note"] = _clean_mixed_note(clean["note"])
+        clean["note"] = _clean_note(clean["note"], cluster)
     return clean
 
 
@@ -328,7 +330,7 @@ def _clean_needs_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
     }
     _copy_optional_item_fields(item, clean)
     if isinstance(clean.get("note"), str):
-        clean["note"] = _clean_mixed_note(clean["note"])
+        clean["note"] = _clean_note(clean["note"], cluster)
     return clean
 
 
@@ -385,6 +387,21 @@ def _clean_mixed_note(note: str) -> str:
     if separator:
         clean = f"{clean}; {suffix}"
     return clean
+
+
+def _clean_note(note: str, cluster: dict[str, Any]) -> str:
+    clean = _clean_mixed_note(note)
+    for ctx_id in sorted(_ctx_member_ids(cluster), key=len, reverse=True):
+        clean = re.sub(rf"(?<![\w-]){re.escape(ctx_id)}(?![\w-])", "synthetic context", clean)
+    return clean
+
+
+def _ctx_member_ids(cluster: dict[str, Any]) -> list[str]:
+    return [
+        member["id"]
+        for member in cluster.get("members", [])
+        if isinstance(member, dict) and _is_ctx_id(member.get("id"))
+    ]
 
 
 def _counts(merge: list[dict[str, Any]], keep: list[dict[str, Any]]) -> dict[str, int]:
