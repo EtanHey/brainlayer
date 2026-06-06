@@ -76,16 +76,22 @@ def load_flag_batch(batch_path: str | Path) -> list[dict[str, Any]]:
     clusters: list[dict[str, Any]] = []
     for category in raw:
         for cluster in raw[category]:
+            members = cluster.get("members", [])
             clusters.append(
                 {
                     "cluster_id": cluster_id(category, cluster["stem"]),
                     "category": category,
                     "stem": cluster["stem"],
-                    "size": cluster.get("size", len(cluster.get("members", []))),
-                    "members": cluster.get("members", []),
+                    "size": cluster.get("size", len(members)),
+                    "members": members,
+                    "item_kind": cluster.get("item_kind") or _item_kind_from_members(members),
                 }
             )
     return clusters
+
+
+def _item_kind_from_members(members: list[dict[str, Any]]) -> str:
+    return "question" if any(member.get("type") == "question" for member in members) else "cluster"
 
 
 def _source_from_batch(batch_path: str | Path) -> str:
@@ -106,6 +112,8 @@ def _empty_decisions(source: str = DEFAULT_SOURCE) -> dict[str, Any]:
 
 
 def _ensure_v1_shape(data: dict[str, Any], source: str) -> dict[str, Any]:
+    if "schema" not in data:
+        data["schema"] = DECISIONS_SCHEMA
     if data.get("schema") != DECISIONS_SCHEMA:
         raise ValueError(f"decisions file must use schema {DECISIONS_SCHEMA!r}; got {data.get('schema')!r}")
     data.setdefault("source", source)

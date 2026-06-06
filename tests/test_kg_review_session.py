@@ -95,6 +95,11 @@ def test_load_flag_batch_flattens_with_ids(batch_file):
     assert "diagnosis-flag:agent c" in ids
     assert "case-only:docker" in ids
     assert all("category" in c and "members" in c for c in clusters)
+    assert {c["cluster_id"]: c["item_kind"] for c in clusters} == {
+        "diagnosis-flag:agent c": "cluster",
+        "case-only:agent": "cluster",
+        "case-only:docker": "cluster",
+    }
 
 
 def test_next_undecided_is_idempotent_until_decision_or_skip(batch_file, decisions_file):
@@ -398,6 +403,33 @@ def test_voice_rewrite_preserves_unknown_dashboard_fields(batch_file, decisions_
     assert data["keep"][0]["source"] == "voice"
     assert data["keep"][0]["note"] == "non-deterministic voice answer"
     assert data["keep"][0]["dashboard_row_id"] == "row-17"
+    assert_v1(data)
+
+
+def test_record_decision_stamps_schema_on_legacy_decisions_file(batch_file, decisions_file):
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "source": "kg-phase1-flag-batch-2026-06-05",
+                "rules": {},
+                "per_category": {},
+                "counts": {},
+                "merge": [],
+                "keep": [],
+            }
+        )
+    )
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="case-only:agent",
+        decision={"action": "keep", "note": "legacy file upgrade", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    assert data["schema"] == DECISIONS_SCHEMA
+    assert data["keep"][0]["note"] == "legacy file upgrade"
     assert_v1(data)
 
 
