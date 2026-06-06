@@ -121,3 +121,110 @@ def test_run_tests_executes_regression_shell_scripts(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert shell_log.read_text().strip() == "ran"
+
+
+def test_prepush_cache_skips_same_tree_hash_after_success(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "full"
+    env["BRAINLAYER_PREPUSH_TREE_HASH"] = "tree-same"
+    env["BRAINLAYER_PREPUSH_CACHE_DIR"] = str(tmp_path / "cache")
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    first = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    first_log = pytest_log.read_text()
+    second = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert "SKIP: pre-push tree hash tree-same already passed" in second.stdout
+    assert pytest_log.read_text() == first_log
+    assert (tmp_path / "cache" / "tree-same.full.ok").is_file()
+
+
+def test_prepush_cache_does_not_skip_after_failure(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=2, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "full"
+    env["BRAINLAYER_PREPUSH_TREE_HASH"] = "tree-fails"
+    env["BRAINLAYER_PREPUSH_CACHE_DIR"] = str(tmp_path / "cache")
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    first = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    second = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert first.returncode != 0
+    assert second.returncode != 0
+    assert "already passed" not in second.stdout
+    assert len(pytest_log.read_text().splitlines()) >= 2
+
+
+def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_backup_daily.py").write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/backup_daily.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert str(test_root / "test_backup_daily.py") in logged
+    assert f"{test_root}/ -v" not in logged
+
+
+def test_worker_prepush_excludes_real_db_test_files(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_vector_store.py").write_text("test placeholder\n")
+    (test_root / "test_engine.py").write_text("test placeholder\n")
+    (test_root / "test_backup_daily.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "full"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert f"--ignore={test_root / 'test_vector_store.py'}" in logged
+    assert f"--ignore={test_root / 'test_engine.py'}" in logged

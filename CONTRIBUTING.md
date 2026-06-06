@@ -14,6 +14,9 @@ git config core.hooksPath .githooks
 
 The repo ships a pre-push regression gate in `.githooks/pre-push`. Set `core.hooksPath`
 once per clone so `git push` runs `scripts/run_tests.sh` before anything leaves your machine.
+The hook runs with `BRAINLAYER_PREPUSH=1`, writes a pass cache under
+`.git/brainlayer-prepush-cache`, and skips the full gate when the current git tree hash has already
+passed. Use `BRAINLAYER_PREPUSH_CACHE_DIR` to move that cache.
 The `dev` extra includes the Gemini SDK used by digest-time enrichment tests; keep it installed even if
 you do not set `GOOGLE_API_KEY` locally.
 
@@ -53,9 +56,16 @@ pytest tests/ -m "not integration"
 
 # Single file
 pytest tests/test_phase3_qa.py -v
+
+# Worker pre-push scope for small review-loop pushes
+BRAINLAYER_PREPUSH_SCOPE=changed-only git push
 ```
 
 Integration tests (marked `@pytest.mark.integration`) require the production database and embedding model. They're skipped in fast local runs.
+Worker pre-push runs never include the real-DB files `tests/test_vector_store.py` or
+`tests/test_engine.py`; run those deliberately outside worker hooks when you need production-DB
+coverage. `BRAINLAYER_PREPUSH_SCOPE=changed-only` maps changed files to known focused pytest
+targets and still runs the lightweight registration, isolated, bun, and shell checks.
 
 ## Linting
 

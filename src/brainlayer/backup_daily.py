@@ -37,6 +37,8 @@ DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "b
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
+BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
+BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_DAILY_KEEP = 7
@@ -76,6 +78,16 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _backup_log_path(log_path: Path | None) -> Path:
+    if log_path is not None:
+        return Path(log_path)
+    return Path(os.environ.get(BACKUP_LOG_PATH_ENV, str(DEFAULT_LOG_PATH)))
+
+
+def _backup_log_provenance() -> str:
+    return os.environ.get(BACKUP_LOG_PROVENANCE_ENV, "real")
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -677,13 +689,14 @@ def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
     folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
-    log_path: Path = DEFAULT_LOG_PATH,
+    log_path: Path | None = None,
     date_stamp: str | None = None,
     upload: bool = True,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     remove_local_after_upload: bool = True,
 ) -> dict[str, Any]:
     resolved_date_stamp = date_stamp or _today()
+    resolved_log_path = _backup_log_path(log_path)
     artifact = create_sqlite_backup_artifact(db_path or get_db_path(), staging_dir, date_stamp=resolved_date_stamp)
     snapshot = artifact.gzip_path
     snapshot_size = snapshot.stat().st_size
@@ -697,6 +710,7 @@ def run_backup(
         "uploaded": False,
         "local_removed": False,
         "verified": False,
+        "backup_log_provenance": _backup_log_provenance(),
     }
     try:
         if upload:
@@ -737,7 +751,7 @@ def run_backup(
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
         raise
     finally:
-        _append_json_log(log_path, result)
+        _append_json_log(resolved_log_path, result)
     return result
 
 
@@ -756,7 +770,7 @@ def main() -> int:
                 "BRAINLAYER_BACKUP_DRIVE_FOLDER",
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
             ).split("/"),
-            log_path=Path(os.environ.get("BRAINLAYER_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH))),
+            log_path=Path(os.environ.get(BACKUP_LOG_PATH_ENV, str(DEFAULT_LOG_PATH))),
         )
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
