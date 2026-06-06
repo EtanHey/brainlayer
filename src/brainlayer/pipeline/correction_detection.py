@@ -44,6 +44,10 @@ _HARNESS_MARKERS = (
     '"operation": "enqueue"',
 )
 _ENTITY_CONTEXT_MARKERS = ("[entity:",)
+_TASK_NOTIFICATION_WRAPPER = re.compile(
+    r"^\s*<task-notification\b|\"commandmode\"\s*:\s*\"task-notification\"",
+    re.IGNORECASE,
+)
 
 _DISPATCH_MARKERS = (
     "dispatch brief",
@@ -141,6 +145,11 @@ def has_standing_rule_live_correction(prompt: str) -> bool:
     return bool(_STANDING_RULE_LIVE_CORRECTION.search(prompt))
 
 
+def is_wrapped_task_notification(prompt: str) -> bool:
+    """Return True for task-notification envelopes, not mentions of the token."""
+    return bool(_TASK_NOTIFICATION_WRAPPER.search(prompt))
+
+
 def should_suppress_correction_detection(prompt: str) -> tuple[bool, str]:
     """Return (suppress, reason) for prompts that are confidently non-user payloads.
 
@@ -155,6 +164,8 @@ def should_suppress_correction_detection(prompt: str) -> tuple[bool, str]:
         return (True, "agent-relay header")
     if _FLEET_TICK.search(prompt):
         return (True, "fleet tick")
+    if is_wrapped_task_notification(prompt):
+        return (True, "task-notification wrapper")
 
     lowered = prompt.lower()
     for marker in _HARNESS_MARKERS:

@@ -27,6 +27,13 @@ FALSE_FIRE_PROMPTS = [
         id="task-notification",
     ),
     pytest.param(
+        "<task-notification>\n"
+        "<summary>Worker completed</summary>\n"
+        "<result>No, the watcher should skip this quoted worker result.</result>\n"
+        "</task-notification>",
+        id="wrapped-task-notification-correction-looking-line",
+    ),
+    pytest.param(
         "Worker Brief - Correction-Detection Gate Port\n"
         "Mission: port the gate. No PR exists yet; do not use the real DB in tests.",
         id="worker-dispatch-brief",
