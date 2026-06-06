@@ -212,6 +212,23 @@ def test_harvest_filters_mixed_member_maps(batch_file: Path, decisions_file: Pat
     assert not _contains_ctx(clean["needs_v1_1"])
 
 
+def test_harvest_allows_non_id_note_text_containing_ctx_token(
+    batch_file: Path, decisions_file: Path, tmp_path: Path
+):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for item in data["keep"]:
+        if item["stem"] == "agent mix":
+            item["note"] = "MIXED: {\"agent-concept\": \"keep\", \"agent-tool\": \"merge\"}; compare ctx-local wording"
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    harvest_session(
+        batch_file,
+        decisions_file,
+        answers_path=tmp_path / "answers.md",
+        decisions_path=tmp_path / "clean.json",
+    )
+
+
 def test_harvest_clean_decisions_round_trip_through_apply_validator(
     batch_file: Path, decisions_file: Path, tmp_path: Path
 ):
@@ -238,6 +255,22 @@ def test_harvest_fails_loud_on_unknown_decision_stem(batch_file: Path, decisions
 
     with pytest.raises(ValueError, match="unknown decision stem"):
         harvest_session(batch_file, decisions_file, answers_path=tmp_path / "answers.md", decisions_path=tmp_path / "clean.json")
+
+
+def test_harvest_fails_loud_on_non_object_decision_item(
+    batch_file: Path, decisions_file: Path, tmp_path: Path
+):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    data["merge"].append("not an object")
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="decision item in 'merge'"):
+        harvest_session(
+            batch_file,
+            decisions_file,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
 
 
 def test_harvest_fails_loud_on_malformed_batch_member(decisions_file: Path, tmp_path: Path):

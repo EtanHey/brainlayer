@@ -87,13 +87,12 @@ def _load_decisions(path: str | Path) -> dict[str, Any]:
     decisions = json.loads(Path(path).read_text(encoding="utf-8"))
     if decisions.get("schema") != DECISIONS_SCHEMA:
         raise ValueError(f"session decisions schema must be {DECISIONS_SCHEMA!r}; got {decisions.get('schema')!r}")
-    for field in ("merge", "keep"):
+    for field in ("merge", "keep", "skipped", "needs_v1_1"):
         if not isinstance(decisions.get(field, []), list):
             raise ValueError(f"session decisions field {field!r} must be a list")
-    if "skipped" in decisions and not isinstance(decisions["skipped"], list):
-        raise ValueError("session decisions field 'skipped' must be a list")
-    if "needs_v1_1" in decisions and not isinstance(decisions["needs_v1_1"], list):
-        raise ValueError("session decisions field 'needs_v1_1' must be a list")
+        for item in decisions.get(field, []):
+            if not isinstance(item, dict):
+                raise ValueError(f"decision item in {field!r} must be an object, got {type(item).__name__}")
     return decisions
 
 
@@ -432,7 +431,7 @@ def _contains_ctx(value: Any) -> bool:
         return any(_contains_ctx(key) or _contains_ctx(val) for key, val in value.items())
     if isinstance(value, list):
         return any(_contains_ctx(item) for item in value)
-    return isinstance(value, str) and "ctx-" in value
+    return _is_ctx_id(value)
 
 
 def main(argv: list[str] | None = None) -> int:
