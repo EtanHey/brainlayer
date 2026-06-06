@@ -245,8 +245,8 @@ def _member_ref(member: dict[str, Any]) -> dict[str, Any]:
 
 def _real_merge_members(cluster: dict[str, Any]) -> list[dict[str, Any]]:
     members = [member for member in cluster["members"] if member.get("type") != "context"]
-    if not members:
-        raise ValueError(f"cluster {cluster['cluster_id']!r} has no real merge members")
+    if len(members) < 2:
+        raise ValueError(f"cluster {cluster['cluster_id']!r} needs at least two real merge members")
     return sorted(members, key=lambda member: member.get("chunks", 0), reverse=True)
 
 

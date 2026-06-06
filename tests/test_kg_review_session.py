@@ -223,6 +223,37 @@ def test_record_merge_rejects_context_canonical_override(tmp_path, decisions_fil
         "contested": [
             {
                 "stem": "android eas",
+                "size": 3,
+                "members": [
+                    {
+                        "id": "ctx-android eas",
+                        "name": "CONTESTED - judge said Technology",
+                        "type": "context",
+                        "chunks": 0,
+                    },
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": 7},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "context-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    with pytest.raises(ValueError, match="canonical override .* is not a real merge member"):
+        record_decision(
+            batch_file,
+            decisions_file,
+            cluster_id="contested:android eas",
+            decision={"action": "merge", "source": "voice", "canonical_id": "ctx-android eas"},
+        )
+
+
+def test_record_merge_rejects_fewer_than_two_real_members(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
                 "size": 2,
                 "members": [
                     {
@@ -239,13 +270,15 @@ def test_record_merge_rejects_context_canonical_override(tmp_path, decisions_fil
     batch_file = tmp_path / "context-batch.json"
     batch_file.write_text(json.dumps(batch))
 
-    with pytest.raises(ValueError, match="canonical override .* is not a real merge member"):
+    with pytest.raises(ValueError, match="needs at least two real merge members"):
         record_decision(
             batch_file,
             decisions_file,
             cluster_id="contested:android eas",
-            decision={"action": "merge", "source": "voice", "canonical_id": "ctx-android eas"},
+            decision={"action": "merge", "source": "voice"},
         )
+
+    assert not decisions_file.exists()
 
 
 def test_record_decision_validates_action(batch_file, decisions_file):
