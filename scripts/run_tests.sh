@@ -139,9 +139,13 @@ map_changed_files_to_pytests() {
         ;;
       tests/test_*.py)
         test_path="$TEST_ROOT/$(basename "$changed")"
-        if [ -f "$test_path" ] && ! is_real_db_test_file "$test_path"; then
-          append_unique "$test_path"
-          mapped=1
+        if [ -f "$test_path" ]; then
+          if is_real_db_test_file "$test_path"; then
+            changed_source_unmapped=1
+          else
+            append_unique "$test_path"
+            mapped=1
+          fi
         fi
         ;;
       src/brainlayer/*.py)
