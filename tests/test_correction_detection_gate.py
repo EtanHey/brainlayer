@@ -89,6 +89,7 @@ def test_build_correction_tags_suppresses_non_user_payloads(prompt: str):
         ("Some context.\nNo, that's wrong - use the launcher", "factual"),
         ("No, [Entity: Avi Simon -- person] is wrong; Avi works at Lightricks.", "factual"),
         ("No, the <task-notification> watcher is wrong; do not store those chunks.", "factual"),
+        ("Some context\nNo, the <task-notification> watcher is wrong; do not store those chunks.", "factual"),
         ("[old -> new] is wrong; it should be old -> newer", "factual"),
         ("No --print/-p standing rule is wrong; allow -p for debug.", "factual"),
         ("No --print/-p standing rule\nis wrong; allow -p for debug.", "factual"),

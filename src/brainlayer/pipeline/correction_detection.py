@@ -158,7 +158,7 @@ def should_suppress_correction_detection(prompt: str) -> tuple[bool, str]:
 
     lowered = prompt.lower()
     for marker in _HARNESS_MARKERS:
-        if marker in lowered and not _DIRECT_LIVE_CORRECTION_LINE.search(prompt):
+        if marker in lowered and not has_direct_live_correction_line(prompt):
             return (True, f"harness marker: {marker!r}")
 
     if any(marker in lowered for marker in _ENTITY_CONTEXT_MARKERS) and not (
