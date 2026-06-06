@@ -46,6 +46,11 @@ Local logs:
 - `~/.local/share/brainlayer/logs/backup-daily.log`
 - `~/.local/share/brainlayer/logs/backup-daily.err`
 
+Each JSONL result in `backup-daily.log` includes `backup_log_provenance`. Launchd/manual backup
+runs use `real`; pytest sets `BRAINLAYER_BACKUP_LOG_PATH` to a temporary file and
+`BRAINLAYER_BACKUP_LOG_PROVENANCE=pytest`. Heartbeat monitors should treat only `real` entries in
+the production log as evidence of a successful scheduled backup.
+
 Manual run:
 
 ```bash

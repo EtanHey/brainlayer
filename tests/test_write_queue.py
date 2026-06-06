@@ -7,6 +7,7 @@ All tests use tmp_path fixtures (no real DB contention).
 """
 
 import json
+import sqlite3
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -14,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import apsw
 import pytest
 
-from brainlayer.drain import drain_once
+from brainlayer.drain import _open_connection, drain_once
 from brainlayer.mcp.store_handler import (
     _flush_pending_stores,
     _queue_store,
@@ -73,6 +74,99 @@ class TestQueueStore:
         item = json.loads(path.read_text())
 
         assert item["timestamp"] == 0.0
+
+    def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
+        """Hook/realtime queue events must replay reservation metadata, not flush time."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "hook-created-at.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+        event = {
+            "kind": "hook_chunk",
+            "session_id": "session-created-at",
+            "chunk_id": "rt-session-created-at",
+            "content": "hook queue created_at reservation timestamp should survive drain",
+            "content_hash": "created-at-hash",
+            "project": "brainlayer",
+            "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+            "created_at": "2026-06-06T20:04:14Z",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "hook-created-at.jsonl").write_text(json.dumps(event) + "\n")
+
+        drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT created_at, project, source FROM chunks WHERE id = ?", (event["chunk_id"],)
+            ).fetchone()
+
+        assert drained == 1
+        assert row == ("2026-06-06T20:04:14Z", "brainlayer", "realtime")
+
+    def test_drain_embeds_hook_event_chunk(self, tmp_path, monkeypatch):
+        """Hook queue events must return chunk IDs so drain can embed them."""
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "hook-embedded.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1")
+        event = {
+            "kind": "hook_chunk",
+            "session_id": "session-embedded",
+            "chunk_id": "rt-session-embedded",
+            "content": "hook queue event should receive a vector row from drain",
+            "content_hash": "embedded-hash",
+            "project": "brainlayer",
+            "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+            "created_at": "2026-06-06T20:04:14Z",
+        }
+        queue_dir.mkdir()
+        (queue_dir / "hook-embedded.jsonl").write_text(json.dumps(event) + "\n")
+
+        drained = drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=1,
+            log_path=tmp_path / "drain.log",
+            embed_fn=lambda _content: [0.0] * 1024,
+        )
+
+        conn = _open_connection(db_path)
+        try:
+            row = conn.execute("SELECT chunk_id FROM chunk_vectors WHERE chunk_id = ?", (event["chunk_id"],)).fetchone()
+        finally:
+            conn.close()
+
+        assert drained == 1
+        assert row == (event["chunk_id"],)
+
+    def test_apply_hook_returns_canonical_chunk_id_for_embedding(self, monkeypatch):
+        """Merged hook events should embed the canonical row, not the duplicate ID."""
+        from brainlayer import drain
+
+        def fake_insert_or_merge(_conn, _row):
+            return "rt-canonical"
+
+        monkeypatch.setattr(drain, "_insert_or_merge_chunk", fake_insert_or_merge)
+
+        result = drain._apply_hook(
+            None,
+            {
+                "session_id": "session-duplicate",
+                "chunk_id": "rt-duplicate",
+                "content": "queued realtime duplicate should report canonical id",
+                "content_hash": "duplicate-hash",
+                "source_file": "/Users/test/Gits/brainlayer/session.jsonl",
+                "created_at": "2026-06-06T20:04:14Z",
+            },
+        )
+
+        assert result.chunk_id == "rt-canonical"
 
 
 class TestSingleWriterQueue:

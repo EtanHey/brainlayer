@@ -44,6 +44,13 @@ brainlayer enrich
 ```
 - Tests: `pytest`
 - Lint/format: `ruff check src/ && ruff format src/`
+- Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
+  runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
+- Scoped worker pushes: use `BRAINLAYER_PREPUSH_SCOPE=changed-only git push` to map changed files
+  to focused pytest targets while keeping the lightweight registration, isolated, bun, and shell
+  gates.
+- Worker pre-push must not run real-DB files `tests/test_vector_store.py` or
+  `tests/test_engine.py`; run them only as deliberate production-DB checks.
 
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
@@ -108,6 +115,9 @@ brainlayer enrich
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/.local/share/brainlayer/logs/watch.{log,err} | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
 - DB: `~/.local/share/brainlayer/brainlayer.db`
+- Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
+  `backup_log_provenance=real`; pytest sets `BRAINLAYER_BACKUP_LOG_PATH` and
+  `BRAINLAYER_BACKUP_LOG_PROVENANCE=pytest` so tests cannot refresh the production heartbeat log.
 - Watcher offsets: `~/.local/share/brainlayer/offsets.json`
 - Prompts cache: `~/.local/share/brainlayer/prompts/`
 - Watcher logs: `~/.local/share/brainlayer/logs/watch.{log,err}`

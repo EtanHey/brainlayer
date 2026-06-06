@@ -1,6 +1,9 @@
 """Tests for real-time indexing hooks — prompt/response pairing and storage."""
 
+import json
 import sqlite3
+import time
+from datetime import datetime
 
 import pytest
 
@@ -65,6 +68,62 @@ class TestResponsePairing:
         assert "How do auth?" in row[0]
         assert "JWT tokens" in row[0]
         assert row[1] == "sess-001"
+
+    def test_production_schema_queues_created_at_and_project_for_drain(self, tmp_path):
+        db_path = tmp_path / "prod-shape.db"
+        queue_dir = tmp_path / "queue"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                source_file TEXT,
+                project TEXT,
+                content_type TEXT,
+                value_type TEXT,
+                char_count INTEGER,
+                source TEXT,
+                created_at TEXT,
+                conversation_id TEXT,
+                sender TEXT,
+                tags TEXT,
+                content_hash TEXT,
+                UNIQUE(conversation_id, content_hash)
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        indexer = RealtimeIndexer(db_path=str(db_path), queue_dir=str(queue_dir))
+        indexer.capture_prompt("sess-prod-001", "Why is realtime stamping missing?", "/Users/test/Gits/brainlayer")
+        before = int(time.time())
+        chunk_id = indexer.index_response(
+            "sess-prod-001",
+            "Bind created_at and project when inserting realtime hook chunks.",
+            "/Users/test/Gits/brainlayer",
+        )
+        after = int(time.time())
+
+        assert chunk_id is None
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT id FROM chunks").fetchone()
+        conn.close()
+        assert row is None
+
+        queue_files = list(queue_dir.iterdir())
+        assert len(queue_files) == 1
+        event = json.loads(queue_files[0].read_text())
+        assert event["kind"] == "hook_chunk"
+        assert event["source"] == "hook"
+        assert event["source_file"] == "/Users/test/Gits/brainlayer"
+        assert event["project"] == "brainlayer"
+        assert event["session_id"] == "sess-prod-001"
+        assert event["created_at"] is not None
+        parsed = datetime.fromisoformat(event["created_at"].replace("Z", "+00:00"))
+        assert before - 5 <= int(parsed.timestamp()) <= after + 5
 
     def test_clears_pending_after_pairing(self, tmp_db):
         indexer, _ = tmp_db

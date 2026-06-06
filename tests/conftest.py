@@ -73,6 +73,13 @@ def disable_live_gemini_for_unit_tests(monkeypatch, request):
     monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def isolate_backup_daily_log(monkeypatch, tmp_path):
+    """Keep backup_daily tests and subprocesses from appending to the production heartbeat log."""
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "pytest-backup-daily.log"))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "pytest")
+
+
 @pytest.fixture
 def test_user() -> str:
     """Username for path-based tests.

@@ -133,9 +133,12 @@ def enqueue_hook_chunk(
     content_hash: str | None = None,
     project: str | None = None,
     source_file: str | None = None,
+    created_at: str | None = None,
     timestamp: float | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
+    timestamp = timestamp if timestamp is not None else time.time()
+    created_at = created_at or datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     return enqueue_jsonl(
         {
             "kind": "hook_chunk",
@@ -145,7 +148,8 @@ def enqueue_hook_chunk(
             "content_hash": content_hash,
             "project": project,
             "source_file": source_file,
-            "timestamp": timestamp if timestamp is not None else time.time(),
+            "created_at": created_at,
+            "timestamp": timestamp,
         },
         source="hook",
         queue_dir=queue_dir,

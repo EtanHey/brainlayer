@@ -591,6 +591,45 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
     assert logged["error"] == "drive unavailable"
 
 
+def test_run_backup_uses_env_log_path_without_explicit_log_path(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    safe_log_path = tmp_path / "guarded" / "backup-daily.log"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(safe_log_path))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PROVENANCE", "pytest")
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-05-30",
+        upload=False,
+    )
+
+    lines = safe_log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    logged = json.loads(lines[0])
+    assert logged == result
+    assert logged["backup_log_provenance"] == "pytest"
+
+
+def test_tests_autouse_backup_log_guard_points_away_from_prod_log() -> None:
+    from brainlayer import backup_daily
+
+    guarded = Path(os.environ["BRAINLAYER_BACKUP_LOG_PATH"]).expanduser()
+    assert guarded != backup_daily.DEFAULT_LOG_PATH
+    assert "pytest" in guarded.as_posix()
+
+
 def test_prune_drive_backups_keeps_only_latest_n_snapshots():
     from brainlayer.backup_daily import DriveRetentionPolicy, prune_drive_backups
 
@@ -667,6 +706,7 @@ def test_launchd_installer_knows_backup_target():
     assert "<key>ExitTimeOut</key>" in plist
     assert "<integer>300</integer>" in plist
     assert "BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=300" in wrapper
+    assert "BRAINLAYER_BACKUP_LOG_PROVENANCE:=real" in wrapper
 
 
 def test_main_enforces_configured_backup_timeout(monkeypatch, capsys):
