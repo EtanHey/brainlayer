@@ -44,9 +44,9 @@ _HARNESS_MARKERS = (
     '"operation": "enqueue"',
 )
 _ENTITY_CONTEXT_MARKERS = ("[entity:",)
-_TASK_NOTIFICATION_WRAPPER = re.compile(
-    r"^\s*<task-notification\b|\"commandmode\"\s*:\s*\"task-notification\"",
-    re.IGNORECASE,
+_TASK_NOTIFICATION_JSON_WRAPPER = re.compile(
+    r"^\s*\{.*\"commandmode\"\s*:\s*\"task-notification\"",
+    re.IGNORECASE | re.DOTALL,
 )
 
 _DISPATCH_MARKERS = (
@@ -130,6 +130,11 @@ def looks_like_live_correction(prompt: str) -> bool:
     return bool(_LIVE_CORRECTION_CUES.search(prompt))
 
 
+def has_correction_signal(prompt: str) -> bool:
+    """Return True when the prompt matches any correction category pattern."""
+    return any(pattern.search(prompt) for pattern, _category in CORRECTION_PATTERNS)
+
+
 def has_strong_live_correction_cue(prompt: str) -> bool:
     """Return True for live cues strong enough to override relay/dispatch markers."""
     return bool(_STRONG_LIVE_CORRECTION_CUES.search(prompt))
@@ -147,7 +152,10 @@ def has_standing_rule_live_correction(prompt: str) -> bool:
 
 def is_wrapped_task_notification(prompt: str) -> bool:
     """Return True for task-notification envelopes, not mentions of the token."""
-    return bool(_TASK_NOTIFICATION_WRAPPER.search(prompt))
+    lowered = prompt.lstrip().lower()
+    return (lowered.startswith("<task-notification") and "</task-notification>" in lowered) or bool(
+        _TASK_NOTIFICATION_JSON_WRAPPER.search(prompt)
+    )
 
 
 def should_suppress_correction_detection(prompt: str) -> tuple[bool, str]:
@@ -169,6 +177,12 @@ def should_suppress_correction_detection(prompt: str) -> tuple[bool, str]:
 
     lowered = prompt.lower()
     for marker in _HARNESS_MARKERS:
+        if (
+            marker in {"<task-notification", "</task-notification>"}
+            and marker in lowered
+            and has_correction_signal(prompt)
+        ):
+            continue
         if marker in lowered and not has_direct_live_correction_line(prompt):
             return (True, f"harness marker: {marker!r}")
 
