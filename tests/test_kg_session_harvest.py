@@ -224,6 +224,55 @@ def test_harvest_splits_question_answers_by_stem_not_action(batch_file: Path, de
     assert "android eas" in clean_stems
 
 
+def test_harvest_excludes_question_stems_outside_dictionary_category(decisions_file: Path, tmp_path: Path):
+    batch = deepcopy(SESSION_BATCH)
+    questions = batch["etan-queue"][:6]
+    batch = {
+        "dictionary-questions": questions,
+        "etan-queue": batch["etan-queue"][6:],
+        "contested": [
+            {
+                "stem": questions[0]["stem"],
+                "size": 2,
+                "members": [
+                    {"id": "ctx-duplicate q1", "name": "Duplicate question context", "type": "context", "chunks": 0},
+                    {"id": "duplicate-q1-real", "name": "Duplicate Q1", "type": "concept", "chunks": 1},
+                ],
+            }
+        ],
+    }
+    question_stems = {question["stem"] for question in questions}
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for field in ("merge", "keep", "skipped", "needs_v1_1"):
+        for item in data.get(field, []):
+            if item["stem"] in question_stems:
+                item["category"] = "dictionary-questions"
+    data["keep"].append(
+        {
+            "stem": questions[0]["stem"],
+            "category": "contested",
+            "source": "voice",
+            "note": "duplicate question-shaped cluster",
+            "decided_at": "2026-06-06T01:08:00Z",
+        }
+    )
+    batch_path = _write_json(tmp_path / "dictionary-questions.json", batch)
+    decisions_path = _write_json(tmp_path / "dictionary-decisions.json", data)
+    clean_path = tmp_path / "clean.json"
+
+    harvest_session(
+        batch_path,
+        decisions_path,
+        answers_path=tmp_path / "answers.md",
+        decisions_path=clean_path,
+    )
+
+    clean = json.loads(clean_path.read_text(encoding="utf-8"))
+    clean_keys = {(item["category"], item["stem"]) for item in clean["merge"] + clean["keep"]}
+    assert ("contested", questions[0]["stem"]) not in clean_keys
+    assert "contested" not in clean["per_category"]
+
+
 def test_harvest_strips_ctx_members_and_rederives_canonical_from_chunk_count(
     batch_file: Path, decisions_file: Path, tmp_path: Path
 ):

@@ -195,7 +195,7 @@ def _build_clean_decisions(
     questions: list[dict[str, Any]],
     decisions: dict[str, Any],
 ) -> dict[str, Any]:
-    question_keys = {_cluster_key(cluster) for cluster in questions}
+    question_keys = _question_keys(clusters, questions)
     clusters_by_key = _clusters_by_key(clusters)
 
     merge = []
@@ -232,6 +232,12 @@ def _build_clean_decisions(
     if _contains_ctx(clean):
         raise ValueError("ctx- member leaked into clean decisions")
     return clean
+
+
+def _question_keys(clusters: list[dict[str, Any]], questions: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    keys = {_cluster_key(cluster) for cluster in questions}
+    keys.update(_cluster_key(cluster) for cluster in clusters if QUESTION_STEM_RE.match(cluster["stem"]))
+    return keys
 
 
 def _clusters_by_key(clusters: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
