@@ -385,6 +385,38 @@ def test_harvest_fails_loud_when_merge_selects_no_real_losers(batch_file: Path, 
         )
 
 
+def test_harvest_fails_loud_when_merge_canonical_is_missing(batch_file: Path, decisions_file: Path, tmp_path: Path):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for item in data["merge"]:
+        if item["stem"] == "android eas":
+            item.pop("canonical")
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include a canonical object"):
+        harvest_session(
+            batch_file,
+            decisions_file,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
+
+
+def test_harvest_fails_loud_when_merge_canonical_is_malformed(batch_file: Path, decisions_file: Path, tmp_path: Path):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for item in data["merge"]:
+        if item["stem"] == "android eas":
+            item["canonical"] = "tool-android"
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include a canonical object"):
+        harvest_session(
+            batch_file,
+            decisions_file,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
+
+
 def test_harvest_keys_clusters_by_category_and_stem(decisions_file: Path, tmp_path: Path):
     batch = deepcopy(SESSION_BATCH)
     batch["other-queue"] = [

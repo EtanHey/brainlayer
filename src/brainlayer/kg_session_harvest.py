@@ -252,10 +252,12 @@ def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
         raise ValueError(f"cluster {cluster['stem']!r} has no real members after ctx-strip")
 
     canonical = item.get("canonical")
-    canonical_id = canonical.get("id") if isinstance(canonical, dict) else None
+    if not isinstance(canonical, dict) or not isinstance(canonical.get("id"), str):
+        raise ValueError(f"merge decision for {cluster['stem']!r} must include a canonical object with a string id")
+    canonical_id = canonical["id"]
     if canonical_id in members_by_id:
         clean_canonical = _member_ref(members_by_id[canonical_id])
-    elif canonical_id is None or _is_ctx_id(canonical_id):
+    elif _is_ctx_id(canonical_id):
         clean_canonical = _member_ref(_canonical_by_chunks(real_members))
     else:
         raise ValueError(f"canonical {canonical_id!r} is not a real member of {cluster['stem']!r}")
