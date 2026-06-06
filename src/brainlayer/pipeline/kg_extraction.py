@@ -23,6 +23,7 @@ from .entity_extraction import (
     ExtractedRelation,
     ExtractionResult,
     extract_entities_combined,
+    normalize_entity_type,
 )
 from .entity_resolution import resolve_entity
 
@@ -44,6 +45,8 @@ CANONICAL_RELATION_TYPES = {
     "lives_in",
     "leads",
     "freelances_for",
+    "hosts",
+    "appears_on",
 }
 
 # Known agent names (beyond *Claude/*Golem pattern matching)
@@ -66,13 +69,16 @@ _RELATION_TYPE_ALIASES = {
     "worked_at": "works_at",
     "framework_for": "depends_on",
     "contact_at": "affiliated_with",
+    "host_of": "hosts",
+    "guest_on": "appears_on",
+    "appeared_on": "appears_on",
 }
 
 # Relation direction constraints: relation_type → (valid_source_types, valid_target_types)
 # If extracted direction is wrong, we swap source/target.
 _RELATION_DIRECTION_RULES: dict[str, tuple[set[str], set[str]]] = {
     "works_at": ({"person", "agent"}, {"company"}),
-    "owns": ({"person"}, {"company", "project", "agent"}),
+    "owns": ({"person"}, {"company", "project", "agent", "source"}),
     "builds": ({"person", "agent"}, {"project", "tool", "technology"}),
     "uses": ({"person", "agent", "project", "company"}, {"tool", "technology"}),
     "coaches": ({"agent"}, {"person"}),
@@ -82,7 +88,33 @@ _RELATION_DIRECTION_RULES: dict[str, tuple[set[str], set[str]]] = {
     "lives_in": ({"person"}, {"location"}),
     "leads": ({"person"}, {"company", "organization"}),
     "freelances_for": ({"person"}, {"company", "organization"}),
+    "hosts": ({"person"}, {"source"}),
+    "appears_on": ({"person"}, {"source"}),
 }
+
+
+def _is_command_shaped_name(name: str) -> bool:
+    """Return True for skill/agent command surfaces that should never be people/projects."""
+    stripped = name.strip()
+    if stripped.startswith("/"):
+        return True
+    if re.search(r"(?i)-loop$", stripped):
+        return True
+    if re.search(r"(?i)(claude|codex|golem)$", stripped):
+        return True
+    return False
+
+
+def _fails_rigid_person_heuristic(name: str) -> bool:
+    """Reject obvious non-rigid-designator person labels from LLM output."""
+    stripped = name.strip()
+    if not stripped:
+        return True
+    if _is_command_shaped_name(stripped):
+        return True
+    if " " not in stripped and stripped.islower():
+        return True
+    return False
 
 
 def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
@@ -101,21 +133,37 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
     for entity in result.entities:
         name = entity.text
         name_lower = name.lower().replace("-", "").replace("_", "").replace(" ", "")
+        entity.entity_type, entity.entity_subtype = normalize_entity_type(
+            name,
+            entity.entity_type,
+            entity.entity_subtype,
+        )
 
         # *Claude or *Golem pattern → agent
         if name_lower in _CANONICAL_ENTITY_TYPES_BY_NAME:
             entity.entity_type = _CANONICAL_ENTITY_TYPES_BY_NAME[name_lower]
+            entity.entity_subtype = None
+        elif _is_command_shaped_name(name) and entity.entity_type in {"person", "project", "topic"}:
+            entity.entity_type = "agent"
+            entity.entity_subtype = None
         elif re.search(r"(?i)(claude|golem)$", name):
             entity.entity_type = "agent"
+            entity.entity_subtype = None
         # Known agent names
         elif name_lower in _KNOWN_AGENTS:
             entity.entity_type = "agent"
+            entity.entity_subtype = None
         # Known project tags
         elif name_lower in {p.lower().replace("-", "").replace("_", "") for p in KNOWN_PROJECT_TAGS}:
             entity.entity_type = "project"
+            entity.entity_subtype = None
         # Known tech tags
         elif name_lower in {t.lower().replace("-", "").replace("_", "") for t in KNOWN_TECH_TAGS}:
             entity.entity_type = "technology"
+            entity.entity_subtype = None
+        elif entity.entity_type == "person" and _fails_rigid_person_heuristic(name):
+            entity.entity_type = "topic"
+            entity.entity_subtype = None
 
         entity_types[name.lower()] = entity.entity_type
 
@@ -143,12 +191,25 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
             if source_type not in valid_src and target_type in valid_src:
                 # Wrong direction — swap
                 rel.source_text, rel.target_text = rel.target_text, rel.source_text
+                source_type, target_type = target_type, source_type
                 logger.debug(
                     "Swapped relation direction: %s --%s--> %s",
                     rel.source_text,
                     rel.relation_type,
                     rel.target_text,
                 )
+            if rel.relation_type in {"hosts", "appears_on"} and (
+                source_type not in valid_src or target_type not in valid_tgt
+            ):
+                logger.debug(
+                    "Dropping invalid relation direction: %s(%s) --%s--> %s(%s)",
+                    rel.source_text,
+                    source_type,
+                    rel.relation_type,
+                    rel.target_text,
+                    target_type,
+                )
+                continue
 
         validated_relations.append(rel)
 
@@ -288,6 +349,7 @@ def process_extraction_result(
                 ext_entity.entity_type,
                 existing["name"],
                 confidence=new_confidence,
+                entity_subtype=ext_entity.entity_subtype,
             )
 
         stats["entities_created"] += 1

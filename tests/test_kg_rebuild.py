@@ -295,3 +295,17 @@ class TestEnrichmentHookFix:
         assert stats["entities_created"] >= 2
         # Should have at least one relation
         assert stats["relations_created"] >= 1
+
+
+def test_groq_rebuild_entity_payload_preserves_source_subtype():
+    from scripts.kg_rebuild import extracted_entity_from_groq_payload
+
+    entity = extracted_entity_from_groq_payload(
+        {"text": "youtube.com/@t3dotgg", "type": "source", "entity_subtype": "channel"},
+        "Watch youtube.com/@t3dotgg for the update.",
+    )
+
+    assert entity is not None
+    assert entity.entity_type == "source"
+    assert entity.entity_subtype == "channel"
+    assert entity.start == 6

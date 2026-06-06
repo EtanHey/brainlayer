@@ -14,7 +14,10 @@ VALID_INTENTS = frozenset(
 )
 VALID_EPISTEMIC_LEVELS = frozenset({"hypothesis", "substantiated", "validated"})
 VALID_DEBT_IMPACTS = frozenset({"introduction", "resolution", "none"})
-VALID_ENTITY_TYPES = frozenset({"person", "company", "project", "technology", "tool", "concept"})
+VALID_ENTITY_TYPES = frozenset(
+    {"person", "agent", "company", "project", "technology", "tool", "concept", "topic", "source"}
+)
+VALID_ENTITY_SUBTYPES = frozenset({"channel", "podcast", "brand", "newsletter"})
 VALID_SENTIMENT_LABELS = frozenset({"frustration", "confusion", "positive", "satisfaction", "neutral"})
 
 # Current runtime schema union: prompt fields plus the legacy singular resolved_query
@@ -195,11 +198,17 @@ def validate_schema_gate(candidate: str | Mapping[str, Any]) -> SchemaGateResult
                 continue
             name = entity.get("name")
             entity_type = entity.get("type")
+            entity_subtype = entity.get("entity_subtype")
             relation = entity.get("relation")
             if not isinstance(name, str) or not name.strip():
                 errors.append(f"entities[{index}].name must be a non-empty string")
             if not isinstance(entity_type, str) or entity_type not in VALID_ENTITY_TYPES:
                 errors.append(f"entities[{index}].type has invalid enum value: {entity_type}")
+            if entity_subtype is not None:
+                if entity_type != "source":
+                    errors.append(f"entities[{index}].entity_subtype is only valid for source entities")
+                elif not isinstance(entity_subtype, str) or entity_subtype not in VALID_ENTITY_SUBTYPES:
+                    errors.append(f"entities[{index}].entity_subtype has invalid enum value: {entity_subtype}")
             if relation is not None and not isinstance(relation, str):
                 errors.append(f"entities[{index}].relation must be a string or null")
 

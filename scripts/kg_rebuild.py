@@ -66,6 +66,23 @@ def save_progress(progress: dict):
     PROGRESS_FILE.write_text(json.dumps(progress, indent=2))
 
 
+def extracted_entity_from_groq_payload(ent_data: dict, content: str) -> ExtractedEntity | None:
+    text = ent_data.get("text", "")
+    etype = ent_data.get("type", "")
+    if not text or not etype:
+        return None
+    idx = content.lower().find(text.lower()) if content else -1
+    return ExtractedEntity(
+        text=text,
+        entity_type=etype,
+        start=idx,
+        end=idx + len(text) if idx >= 0 else -1,
+        confidence=0.75,
+        source="llm",
+        entity_subtype=ent_data.get("entity_subtype"),
+    )
+
+
 def tier1_seed_and_tags(store: VectorStore, batch_size: int = 5000) -> dict:
     """Tier 1: Extract entities from seed matching + enrichment tags.
 
@@ -232,22 +249,9 @@ def tier2_groq_ner(
 
                 entities = []
                 for ent_data in chunk_result.get("entities", []):
-                    text = ent_data.get("text", "")
-                    etype = ent_data.get("type", "")
-                    if not text or not etype:
-                        continue
-                    # Find span in content
-                    idx = content.lower().find(text.lower()) if content else -1
-                    entities.append(
-                        ExtractedEntity(
-                            text=text,
-                            entity_type=etype,
-                            start=idx,
-                            end=idx + len(text) if idx >= 0 else -1,
-                            confidence=0.75,
-                            source="llm",
-                        )
-                    )
+                    entity = extracted_entity_from_groq_payload(ent_data, content)
+                    if entity is not None:
+                        entities.append(entity)
 
                 relations = []
                 for rel_data in chunk_result.get("relations", []):

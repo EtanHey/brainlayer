@@ -741,7 +741,21 @@ GEMINI_RESPONSE_SCHEMA = {
                     "name": {"type": "string"},
                     "type": {
                         "type": "string",
-                        "enum": ["person", "company", "project", "technology", "tool", "concept"],
+                        "enum": [
+                            "person",
+                            "agent",
+                            "company",
+                            "project",
+                            "technology",
+                            "tool",
+                            "concept",
+                            "topic",
+                            "source",
+                        ],
+                    },
+                    "entity_subtype": {
+                        "type": "string",
+                        "enum": ["channel", "podcast", "brand", "newsletter"],
                     },
                     "relation": {"type": "string"},
                 },

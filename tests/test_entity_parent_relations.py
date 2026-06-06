@@ -38,6 +38,29 @@ def test_upsert_entity_with_parent(store):
     assert row[0] == "company-1"
 
 
+def test_upsert_entity_with_subtype(store):
+    """upsert_entity should persist entity_subtype."""
+    store.upsert_entity("source-1", "source", "t3.gg", entity_subtype="channel")
+
+    cursor = store._read_cursor()
+    row = cursor.execute("SELECT entity_type, entity_subtype FROM kg_entities WHERE id = ?", ("source-1",)).fetchone()
+    assert row is not None
+    assert row[0] == "source"
+    assert row[1] == "channel"
+
+
+def test_source_type_hierarchy_seeded(store):
+    """Source should be seeded as a top-level entity child."""
+    cursor = store._read_cursor()
+    row = cursor.execute(
+        "SELECT parent_type, description FROM entity_type_hierarchy WHERE child_type = 'source'"
+    ).fetchone()
+
+    assert row is not None
+    assert row[0] == "entity"
+    assert row[1] == "External content source: channel, podcast, blog, newsletter"
+
+
 def test_get_entity_children(store):
     """Children should be returned in the expected shape."""
     store.upsert_entity("company-1", "company", "OpenAI", description="AI company", importance=0.9)
@@ -99,6 +122,8 @@ def test_canonical_relation_types_expanded():
         "lives_in",
         "leads",
         "freelances_for",
+        "hosts",
+        "appears_on",
     }
     assert expected.issubset(CANONICAL_RELATION_TYPES)
 
@@ -109,6 +134,9 @@ def test_relation_type_aliases():
     assert _RELATION_TYPE_ALIASES["worked_at"] == "works_at"
     assert _RELATION_TYPE_ALIASES["framework_for"] == "depends_on"
     assert _RELATION_TYPE_ALIASES["contact_at"] == "affiliated_with"
+    assert _RELATION_TYPE_ALIASES["host_of"] == "hosts"
+    assert _RELATION_TYPE_ALIASES["guest_on"] == "appears_on"
+    assert _RELATION_TYPE_ALIASES["appeared_on"] == "appears_on"
 
     result = ExtractionResult(
         entities=[
@@ -120,6 +148,7 @@ def test_relation_type_aliases():
             ExtractedRelation("Etan Heyman", "BrainLayer", "framework_for", 0.8, {}),
             ExtractedRelation("Etan Heyman", "Cantaloupe", "worked_at", 0.8, {}),
             ExtractedRelation("Etan Heyman", "Cantaloupe", "ceo_of", 0.8, {}),
+            ExtractedRelation("Etan Heyman", "BrainLayer", "host_of", 0.8, {}),
         ],
         chunk_id="chunk-1",
     )
@@ -128,3 +157,86 @@ def test_relation_type_aliases():
     relation_types = [rel.relation_type for rel in validated.relations]
 
     assert relation_types == ["depends_on", "works_at", "leads"]
+
+
+def test_validation_coerces_command_shaped_people_to_agents():
+    """Slash commands and agent-shaped names must not remain person/project."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("/pr-loop", "person", 0, 8, 0.8, "llm"),
+            ExtractedEntity("brainlayerCodex", "project", 9, 23, 0.8, "llm"),
+            ExtractedEntity("yash", "person", 24, 28, 0.8, "llm"),
+        ],
+        relations=[],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [entity.entity_type for entity in validated.entities] == ["agent", "agent", "topic"]
+
+
+def test_validation_coerces_youtube_channel_to_source_with_subtype():
+    """Channel URLs and source-like suffixes should become Source facets."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("youtube.com/@t3dotgg", "project", 0, 19, 0.8, "llm"),
+            ExtractedEntity("Lex Fridman Podcast", "company", 20, 39, 0.8, "llm"),
+            ExtractedEntity("BrainLayer Newsletter", "topic", 40, 62, 0.8, "llm"),
+        ],
+        relations=[],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [(entity.entity_type, entity.entity_subtype) for entity in validated.entities] == [
+        ("source", "channel"),
+        ("source", "podcast"),
+        ("source", "newsletter"),
+    ]
+
+
+def test_validation_does_not_coerce_dev_channel_phrases_to_source():
+    """Generic dev terms such as release channels should not become content sources."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("release channel", "topic", 0, 15, 0.8, "llm"),
+            ExtractedEntity("slack channel", "tool", 16, 29, 0.8, "llm"),
+            ExtractedEntity("Release channel", "topic", 30, 45, 0.8, "llm"),
+            ExtractedEntity("Slack channel", "tool", 46, 59, 0.8, "llm"),
+        ],
+        relations=[],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [(entity.entity_type, entity.entity_subtype) for entity in validated.entities] == [
+        ("topic", None),
+        ("tool", None),
+        ("topic", None),
+        ("tool", None),
+    ]
+
+
+def test_validation_drops_source_relations_without_source_target():
+    """hosts/appears_on must not write person -> project/topic edges."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("Andrew Huberman", "person", 0, 15, 0.9, "seed"),
+            ExtractedEntity("Huberman Lab", "project", 16, 28, 0.9, "llm"),
+            ExtractedEntity("Lex Fridman Podcast", "company", 29, 48, 0.9, "llm"),
+        ],
+        relations=[
+            ExtractedRelation("Andrew Huberman", "Huberman Lab", "hosts", 0.8, {}),
+            ExtractedRelation("Andrew Huberman", "Lex Fridman Podcast", "appears_on", 0.8, {}),
+        ],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [(rel.source_text, rel.relation_type, rel.target_text) for rel in validated.relations] == [
+        ("Andrew Huberman", "appears_on", "Lex Fridman Podcast")
+    ]

@@ -18,6 +18,7 @@ ENTITY_TYPES = [
     "meeting",
     "location",
     "organization",
+    "source",
 ]
 
 RELATION_TYPES = [

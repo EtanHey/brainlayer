@@ -51,6 +51,40 @@ def test_schema_gate_accepts_current_enrichment_shape_from_mapping_and_json():
     assert json_result.passed is True
 
 
+def test_schema_gate_accepts_source_entities_and_subtypes():
+    from brainlayer.eval.enrichment_graders import validate_schema_gate
+
+    result = validate_schema_gate(
+        _candidate(
+            entities=[
+                {"name": "t3.gg", "type": "source", "entity_subtype": "channel", "relation": "YouTube channel"},
+                {"name": "Ralph", "type": "agent", "relation": "autonomous executor"},
+                {"name": "retrieval quality", "type": "topic", "relation": None},
+            ]
+        )
+    )
+
+    assert result.passed is True
+    assert result.errors == []
+
+
+def test_schema_gate_rejects_invalid_entity_subtypes():
+    from brainlayer.eval.enrichment_graders import validate_schema_gate
+
+    result = validate_schema_gate(
+        _candidate(
+            entities=[
+                {"name": "BrainLayer", "type": "project", "entity_subtype": "channel"},
+                {"name": "Huberman Lab", "type": "source", "entity_subtype": "show"},
+            ]
+        )
+    )
+
+    assert result.passed is False
+    assert "entities[0].entity_subtype is only valid for source entities" in result.errors
+    assert "entities[1].entity_subtype has invalid enum value: show" in result.errors
+
+
 def test_schema_gate_disqualifies_malformed_json_missing_keys_and_bad_ranges():
     from brainlayer.eval.enrichment_graders import validate_schema_gate
 

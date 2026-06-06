@@ -46,6 +46,7 @@ _prompt_signature_lock = threading.Lock()
 
 from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
 from ..vector_store import VectorStore
+from .entity_extraction import normalize_entity_type
 
 # Thread-local storage for per-thread VectorStore connections.
 # APSW connections are not safe for concurrent use from multiple threads.
@@ -377,7 +378,7 @@ Return this exact JSON structure:
   "debt_impact": "<one of: introduction, resolution, none>",
   "external_deps": ["<libraries or external APIs used>"],
   "entities": [
-    {{"name": "<entity name>", "type": "<person|company|project|technology|tool|concept>", "relation": "<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>"}}
+    {{"name": "<entity name>", "type": "<person|agent|company|project|technology|tool|concept|topic|source>", "entity_subtype": "<channel|podcast|brand|newsletter or null>", "relation": "<relationship to other entities in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>"}}
   ],
   "sentiment_label": "<one of: frustration, confusion, positive, satisfaction, neutral>",
   "sentiment_score": <float from -1.0 to 1.0>,
@@ -398,7 +399,8 @@ IMPORTANCE RULES:
 - 10: Critical (security fixes, production incidents, key architectural choices)
 
 ENTITIES:
-- Extract non-code entities only — people, projects, technologies, companies, tools, concepts
+- Extract non-code entities only — people, agents, projects, technologies, companies, tools, concepts, topics, sources
+- Sources are content you consume FROM: YouTube channels, podcasts, blogs, newsletters. The human host remains a person.
 - Do NOT extract variable names, function names, file paths, or code symbols as entities
 - Use the "relation" field to capture how the entity connects to other entities in this chunk
 
@@ -873,7 +875,17 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             if cleaned:
                 result["external_deps"] = cleaned
 
-        VALID_ENTITY_TYPES = {"person", "company", "project", "technology", "tool", "concept"}
+        VALID_ENTITY_TYPES = {
+            "person",
+            "agent",
+            "company",
+            "project",
+            "technology",
+            "tool",
+            "concept",
+            "topic",
+            "source",
+        }
         entities = match.get("entities", [])
         if isinstance(entities, list):
             cleaned_entities = []
@@ -881,14 +893,18 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
                 if isinstance(e, dict):
                     name = e.get("name", "")
                     etype = e.get("type", "")
-                    if (
-                        isinstance(name, str)
-                        and name.strip()
-                        and isinstance(etype, str)
-                        and etype.lower().strip() in VALID_ENTITY_TYPES
-                    ):
+                    if isinstance(name, str) and name.strip() and isinstance(etype, str) and etype.strip():
                         relation = e.get("relation")
-                        entity = {"name": name.strip(), "type": etype.lower().strip()}
+                        entity_type, entity_subtype = normalize_entity_type(
+                            name,
+                            etype,
+                            e.get("entity_subtype") or e.get("subtype"),
+                        )
+                        if entity_type not in VALID_ENTITY_TYPES:
+                            continue
+                        entity = {"name": name.strip(), "type": entity_type}
+                        if entity_subtype:
+                            entity["entity_subtype"] = entity_subtype
                         if isinstance(relation, str) and relation.strip() and relation.lower() != "null":
                             entity["relation"] = relation.strip()
                         cleaned_entities.append(entity)
