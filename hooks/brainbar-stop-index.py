@@ -15,6 +15,7 @@ import os
 import sqlite3
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 PENDING_DIR = Path.home() / ".brainlayer" / "pending"
@@ -103,10 +104,19 @@ def main():
         cursor = conn.execute(
             """INSERT OR IGNORE INTO chunks
                (id, content, metadata, source_file, source, project, content_type,
-                char_count, conversation_id, importance)
+                char_count, conversation_id, importance, created_at)
                VALUES (?, ?, ?, ?, 'realtime', ?, 'assistant_text',
-                ?, ?, 5)""",
-            (chunk_id, content, metadata, transcript, project, len(content), session_id),
+                ?, ?, 5, ?)""",
+            (
+                chunk_id,
+                content,
+                metadata,
+                transcript,
+                project,
+                len(content),
+                session_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
         if cursor.rowcount > 0:
@@ -124,6 +134,7 @@ def main():
             "content_hash": content_hash,
             "project": project,
             "timestamp": time.time(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         queue_file = QUEUE_DIR / f"{session_id}.jsonl"
         with open(queue_file, "a") as f:
