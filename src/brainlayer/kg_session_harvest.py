@@ -500,6 +500,8 @@ def _render_answers_markdown(answers: list[dict[str, Any]]) -> str:
 
 
 def _load_apply_decisions(path: Path) -> dict[str, Any]:
+    # This harvester is repo-local tooling: it intentionally validates against
+    # the sibling cleanup script instead of duplicating its decisions schema.
     root = Path(__file__).resolve().parents[2]
     validator_path = root / "scripts" / "kg_cleanup_apply.py"
     spec = importlib.util.spec_from_file_location("brainlayer_kg_cleanup_apply_validator", validator_path)

@@ -519,24 +519,28 @@ def test_cli_runs_from_plain_checkout_without_pythonpath(batch_file: Path, decis
     clean_path = tmp_path / "clean-decisions.json"
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--batch",
-            str(batch_file),
-            "--session-decisions",
-            str(decisions_file),
-            "--answers",
-            str(answers_path),
-            "--decisions",
-            str(clean_path),
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--batch",
+                str(batch_file),
+                "--session-decisions",
+                str(decisions_file),
+                "--answers",
+                str(answers_path),
+                "--decisions",
+                str(clean_path),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(f"kg_session_harvest CLI timed out after {exc.timeout} seconds")
 
     assert result.returncode == 0, result.stderr
     assert json.loads(clean_path.read_text(encoding="utf-8"))["counts"]["merge_clusters"] == 1
