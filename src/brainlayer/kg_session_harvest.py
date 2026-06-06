@@ -85,6 +85,8 @@ def _validate_members(stem: str, members: list[Any]) -> None:
 
 def _load_decisions(path: str | Path) -> dict[str, Any]:
     decisions = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(decisions, dict):
+        raise ValueError(f"session decisions must be a JSON object, got {type(decisions).__name__}")
     if decisions.get("schema") != DECISIONS_SCHEMA:
         raise ValueError(f"session decisions schema must be {DECISIONS_SCHEMA!r}; got {decisions.get('schema')!r}")
     for field in ("merge", "keep", "skipped", "needs_v1_1"):
@@ -118,21 +120,35 @@ def _question_clusters(clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [by_number[number] for number in range(1, 7)]
 
 
+def _cluster_key(cluster: dict[str, Any]) -> tuple[str, str]:
+    return cluster["category"], cluster["stem"]
+
+
+def _decision_key(item: dict[str, Any], field: str) -> tuple[str, str]:
+    stem = item.get("stem")
+    if not isinstance(stem, str):
+        raise ValueError(f"decision in {field} is missing a string stem")
+    category = item.get("category")
+    if not isinstance(category, str):
+        raise ValueError(f"decision in {field} is missing a string category")
+    return category, stem
+
+
 def _validate_decision_stems(decisions: dict[str, Any], clusters: list[dict[str, Any]]) -> None:
-    stems = {cluster["stem"] for cluster in clusters}
+    cluster_keys = {_cluster_key(cluster) for cluster in clusters}
     for field in ("merge", "keep", "skipped", "needs_v1_1"):
         for item in decisions.get(field, []):
-            stem = item.get("stem")
-            if stem not in stems:
-                raise ValueError(f"unknown decision stem {stem!r} in {field}")
+            category, stem = _decision_key(item, field)
+            if (category, stem) not in cluster_keys:
+                raise ValueError(f"unknown decision stem {stem!r} in category {category!r} for {field}")
 
 
 def _build_answers(questions: list[dict[str, Any]], decisions: dict[str, Any]) -> list[dict[str, Any]]:
-    decisions_by_stem = _decision_items_by_stem(decisions)
+    decisions_by_key = _decision_items_by_key(decisions)
     answers = []
     for question in questions:
         stem = question["stem"]
-        decision = decisions_by_stem.get(stem)
+        decision = decisions_by_key.get(_cluster_key(question))
         if decision is None:
             raise ValueError(f"missing dictionary answer decision for {stem!r}")
         note = decision.get("note")
@@ -149,17 +165,16 @@ def _build_answers(questions: list[dict[str, Any]], decisions: dict[str, Any]) -
     return answers
 
 
-def _decision_items_by_stem(decisions: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    by_stem: dict[str, dict[str, Any]] = {}
+def _decision_items_by_key(decisions: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for field in ("merge", "keep", "skipped"):
         for item in decisions.get(field, []):
-            stem = item.get("stem")
-            if not isinstance(stem, str):
-                raise ValueError(f"decision in {field} is missing a string stem")
-            if stem in by_stem:
-                raise ValueError(f"duplicate exported decision for stem {stem!r}")
-            by_stem[stem] = item
-    return by_stem
+            key = _decision_key(item, field)
+            if key in by_key:
+                category, stem = key
+                raise ValueError(f"duplicate exported decision for stem {stem!r} in category {category!r}")
+            by_key[key] = item
+    return by_key
 
 
 def _question_text(cluster: dict[str, Any]) -> str:
@@ -180,24 +195,26 @@ def _build_clean_decisions(
     questions: list[dict[str, Any]],
     decisions: dict[str, Any],
 ) -> dict[str, Any]:
-    question_stems = {cluster["stem"] for cluster in questions}
-    clusters_by_stem = _clusters_by_stem(clusters)
+    question_keys = {_cluster_key(cluster) for cluster in questions}
+    clusters_by_key = _clusters_by_key(clusters)
 
-    merge = [
-        _clean_merge_item(item, clusters_by_stem[item["stem"]])
-        for item in decisions.get("merge", [])
-        if item.get("stem") not in question_stems
-    ]
-    keep = [
-        _clean_keep_item(item, clusters_by_stem[item["stem"]])
-        for item in decisions.get("keep", [])
-        if item.get("stem") not in question_stems
-    ]
-    needs = [
-        _clean_needs_item(item, clusters_by_stem[item["stem"]])
-        for item in decisions.get("needs_v1_1", [])
-        if item.get("stem") not in question_stems
-    ]
+    merge = []
+    for item in decisions.get("merge", []):
+        key = _decision_key(item, "merge")
+        if key not in question_keys:
+            merge.append(_clean_merge_item(item, clusters_by_key[key]))
+
+    keep = []
+    for item in decisions.get("keep", []):
+        key = _decision_key(item, "keep")
+        if key not in question_keys:
+            keep.append(_clean_keep_item(item, clusters_by_key[key]))
+
+    needs = []
+    for item in decisions.get("needs_v1_1", []):
+        key = _decision_key(item, "needs_v1_1")
+        if key not in question_keys:
+            needs.append(_clean_needs_item(item, clusters_by_key[key]))
     needs = [item for item in needs if item is not None]
 
     clean: dict[str, Any] = {
@@ -216,14 +233,15 @@ def _build_clean_decisions(
     return clean
 
 
-def _clusters_by_stem(clusters: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    by_stem: dict[str, dict[str, Any]] = {}
+def _clusters_by_key(clusters: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for cluster in clusters:
-        stem = cluster["stem"]
-        if stem in by_stem:
-            raise ValueError(f"duplicate cluster stem {stem!r}")
-        by_stem[stem] = cluster
-    return by_stem
+        key = _cluster_key(cluster)
+        if key in by_key:
+            category, stem = key
+            raise ValueError(f"duplicate cluster stem {stem!r} in category {category!r}")
+        by_key[key] = cluster
+    return by_key
 
 
 def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +259,14 @@ def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
     else:
         raise ValueError(f"canonical {canonical_id!r} is not a real member of {cluster['stem']!r}")
 
-    original_loser_ids = [member.get("id") for member in item.get("members", []) if isinstance(member, dict)]
+    selected_members = item.get("members")
+    if not isinstance(selected_members, list):
+        raise ValueError(f"merge decision for {cluster['stem']!r} must include a members list")
+    original_loser_ids = []
+    for member in selected_members:
+        if not isinstance(member, dict) or not isinstance(member.get("id"), str):
+            raise ValueError(f"merge member for {cluster['stem']!r} must be an object with a string id")
+        original_loser_ids.append(member["id"])
     unknown_loser_ids = [
         member_id for member_id in original_loser_ids if member_id not in members_by_id and not _is_ctx_id(member_id)
     ]
@@ -249,12 +274,14 @@ def _clean_merge_item(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str
         raise ValueError(f"merge members {unknown_loser_ids!r} are not real members of {cluster['stem']!r}")
     clean_member_ids = _dedupe([member_id for member_id in original_loser_ids if member_id in members_by_id])
     if not clean_member_ids:
-        clean_member_ids = [member["id"] for member in real_members]
+        raise ValueError(f"merge decision for {cluster['stem']!r} selects no real members after ctx-strip")
     members = [
         _member_ref(members_by_id[member_id])
         for member_id in clean_member_ids
         if member_id != clean_canonical["id"]
     ]
+    if not members:
+        raise ValueError(f"merge decision for {cluster['stem']!r} selects no real loser members")
 
     clean: dict[str, Any] = {
         "stem": cluster["stem"],
@@ -348,10 +375,10 @@ def _clean_mixed_note(note: str) -> str:
     payload, separator, suffix = note[len(prefix) :].partition("; ")
     try:
         member_map = json.loads(payload)
-    except json.JSONDecodeError:
-        return note
+    except json.JSONDecodeError as exc:
+        raise ValueError("MIXED note payload must be valid JSON object") from exc
     if not isinstance(member_map, dict):
-        return note
+        raise ValueError("MIXED note payload must be a JSON object")
     filtered = {member_id: action for member_id, action in member_map.items() if not _is_ctx_id(member_id)}
     clean = f"{prefix}{json.dumps(filtered, sort_keys=True, ensure_ascii=False)}"
     if separator:

@@ -273,6 +273,89 @@ def test_harvest_fails_loud_on_non_object_decision_item(
         )
 
 
+def test_harvest_fails_loud_on_non_object_decisions_file(
+    batch_file: Path, tmp_path: Path
+):
+    decisions_path = tmp_path / "bad-decisions.json"
+    decisions_path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="session decisions must be a JSON object"):
+        harvest_session(
+            batch_file,
+            decisions_path,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
+
+
+def test_harvest_fails_loud_on_malformed_mixed_note_with_ctx_member(
+    batch_file: Path, decisions_file: Path, tmp_path: Path
+):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for item in data["keep"]:
+        if item["stem"] == "agent mix":
+            item["note"] = 'MIXED: {"ctx-agent mix": "keep"'
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="MIXED note payload must be valid JSON"):
+        harvest_session(
+            batch_file,
+            decisions_file,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
+
+
+def test_harvest_fails_loud_when_merge_selects_no_real_losers(
+    batch_file: Path, decisions_file: Path, tmp_path: Path
+):
+    data = json.loads(decisions_file.read_text(encoding="utf-8"))
+    for item in data["merge"]:
+        if item["stem"] == "android eas":
+            item["members"] = [
+                {"id": "ctx-android eas", "name": "CONTESTED - judge said Technology", "type": "context"}
+            ]
+    decisions_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="selects no real members"):
+        harvest_session(
+            batch_file,
+            decisions_file,
+            answers_path=tmp_path / "answers.md",
+            decisions_path=tmp_path / "clean.json",
+        )
+
+
+def test_harvest_keys_clusters_by_category_and_stem(
+    decisions_file: Path, tmp_path: Path
+):
+    batch = deepcopy(SESSION_BATCH)
+    batch["other-queue"] = [
+        {
+            "stem": "android eas",
+            "size": 2,
+            "members": [
+                {"id": "ctx-other android eas", "name": "Other contested context", "type": "context", "chunks": 0},
+                {"id": "other-android", "name": "Android EAS", "type": "project", "chunks": 9},
+            ],
+        }
+    ]
+    batch_path = _write_json(tmp_path / "duplicate-stems.json", batch)
+    clean_path = tmp_path / "clean.json"
+
+    harvest_session(
+        batch_path,
+        decisions_file,
+        answers_path=tmp_path / "answers.md",
+        decisions_path=clean_path,
+    )
+
+    clean = json.loads(clean_path.read_text(encoding="utf-8"))
+    assert clean["merge"][0]["category"] == "etan-queue"
+    assert clean["merge"][0]["canonical"]["id"] == "tool-android"
+    assert all(member["id"] != "other-android" for member in clean["merge"][0]["members"])
+
+
 def test_harvest_fails_loud_on_malformed_batch_member(decisions_file: Path, tmp_path: Path):
     batch = deepcopy(SESSION_BATCH)
     del batch["etan-queue"][6]["members"][2]["type"]
