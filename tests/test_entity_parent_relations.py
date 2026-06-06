@@ -197,12 +197,14 @@ def test_validation_coerces_youtube_channel_to_source_with_subtype():
     ]
 
 
-def test_validation_does_not_coerce_lowercase_dev_channel_phrases_to_source():
+def test_validation_does_not_coerce_dev_channel_phrases_to_source():
     """Generic dev terms such as release channels should not become content sources."""
     result = ExtractionResult(
         entities=[
             ExtractedEntity("release channel", "topic", 0, 15, 0.8, "llm"),
             ExtractedEntity("slack channel", "tool", 16, 29, 0.8, "llm"),
+            ExtractedEntity("Release channel", "topic", 30, 45, 0.8, "llm"),
+            ExtractedEntity("Slack channel", "tool", 46, 59, 0.8, "llm"),
         ],
         relations=[],
         chunk_id="chunk-1",
@@ -211,6 +213,8 @@ def test_validation_does_not_coerce_lowercase_dev_channel_phrases_to_source():
     validated = validate_extraction_result(result)
 
     assert [(entity.entity_type, entity.entity_subtype) for entity in validated.entities] == [
+        ("topic", None),
+        ("tool", None),
         ("topic", None),
         ("tool", None),
     ]
