@@ -112,6 +112,7 @@ def parse_multi_chunk_response(response: str) -> list[dict[str, Any]]:
             normalized_entity = {**entity, "type": entity_type}
             if entity_subtype:
                 normalized_entity["entity_subtype"] = entity_subtype
+                normalized_entity.pop("subtype", None)
             else:
                 normalized_entity.pop("entity_subtype", None)
                 normalized_entity.pop("subtype", None)

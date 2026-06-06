@@ -174,9 +174,35 @@ def test_parse_enrichment_rejects_invalid_entity_type():
     )
     result = parse_enrichment(raw)
     assert result is not None
-    # Only the valid entity should survive
-    assert len(result.get("entities", [])) == 1
-    assert result["entities"][0]["name"] == "React"
+    assert result["entities"] == [
+        {"name": "myVariable", "type": "topic"},
+        {"name": "React", "type": "technology"},
+    ]
+
+
+def test_parse_enrichment_normalizes_entity_type_aliases_and_source_subtypes():
+    import json
+
+    from brainlayer.pipeline.enrichment import parse_enrichment
+
+    raw = json.dumps(
+        {
+            "summary": "Some summary",
+            "tags": ["test"],
+            "importance": 5,
+            "intent": "debugging",
+            "entities": [
+                {"name": "OpenAI", "type": "organization"},
+                {"name": "youtube.com/@t3dotgg", "type": "project"},
+            ],
+        }
+    )
+    result = parse_enrichment(raw)
+    assert result is not None
+    assert result["entities"] == [
+        {"name": "OpenAI", "type": "company"},
+        {"name": "youtube.com/@t3dotgg", "type": "source", "entity_subtype": "channel"},
+    ]
 
 
 def test_parse_enrichment_rejects_entities_missing_name():

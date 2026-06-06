@@ -46,6 +46,7 @@ _prompt_signature_lock = threading.Lock()
 
 from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
 from ..vector_store import VectorStore
+from .entity_extraction import normalize_entity_type
 
 # Thread-local storage for per-thread VectorStore connections.
 # APSW connections are not safe for concurrent use from multiple threads.
@@ -892,21 +893,18 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
                 if isinstance(e, dict):
                     name = e.get("name", "")
                     etype = e.get("type", "")
-                    if (
-                        isinstance(name, str)
-                        and name.strip()
-                        and isinstance(etype, str)
-                        and etype.lower().strip() in VALID_ENTITY_TYPES
-                    ):
+                    if isinstance(name, str) and name.strip() and isinstance(etype, str) and etype.strip():
                         relation = e.get("relation")
-                        entity = {"name": name.strip(), "type": etype.lower().strip()}
-                        subtype = e.get("entity_subtype") or e.get("subtype")
-                        if (
-                            entity["type"] == "source"
-                            and isinstance(subtype, str)
-                            and subtype.strip().lower() in {"channel", "podcast", "brand", "newsletter"}
-                        ):
-                            entity["entity_subtype"] = subtype.strip().lower()
+                        entity_type, entity_subtype = normalize_entity_type(
+                            name,
+                            etype,
+                            e.get("entity_subtype") or e.get("subtype"),
+                        )
+                        if entity_type not in VALID_ENTITY_TYPES:
+                            continue
+                        entity = {"name": name.strip(), "type": entity_type}
+                        if entity_subtype:
+                            entity["entity_subtype"] = entity_subtype
                         if isinstance(relation, str) and relation.strip() and relation.lower() != "null":
                             entity["relation"] = relation.strip()
                         cleaned_entities.append(entity)
