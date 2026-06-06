@@ -51,12 +51,14 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
     return received, thread
 
 
-def _create_source_db(path: Path) -> None:
+def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn = sqlite3.connect(path)
     journal_mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
     assert journal_mode.upper() == "WAL"
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
     conn.execute("INSERT INTO chunks VALUES ('c1', 'hello')")
+    for idx in range(2, chunk_count + 1):
+        conn.execute("INSERT INTO chunks VALUES (?, ?)", (f"c{idx}", f"hello-{idx}"))
     conn.commit()
     conn.close()
 
@@ -87,6 +89,140 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
         restored_conn.close()
 
 
+def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=3)
+    socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
+    _start_fake_brainbar_vacuum_server(socket_path, source)
+    staging_dir = tmp_path / "out"
+    uploads: list[Path] = []
+
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(socket_path))
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+        uploads.append(Path(file_path))
+        return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
+
+    monkeypatch.setattr(backup_daily, "upload_file_to_drive_raw", fake_upload)
+
+    result = backup_daily.run_backup(
+        db_path=source,
+        staging_dir=staging_dir,
+        date_stamp="2026-06-05",
+        upload=True,
+        remove_local_after_upload=True,
+    )
+
+    assert uploads == [staging_dir / "2026-06-05.db.gz"]
+    assert result["verified"] is True
+    assert result["verification_mode"] == "quick"
+    assert result["sentinel_snapshot_chunks"] == 3
+    assert result["sentinel_verified_chunks"] == 3
+    assert result["local_removed"] is True
+    assert not (staging_dir / "2026-06-05.db.gz").exists()
+    assert (staging_dir / "2026-06-05.db").exists()
+
+
+def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
+    _start_fake_brainbar_vacuum_server(socket_path, source)
+    uploaded_bytes: dict[str, bytes] = {}
+    downloads: list[str] = []
+
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(socket_path))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_FULL_VERIFY", "1")
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+        uploaded_bytes["drive-file-id"] = Path(file_path).read_bytes()
+        return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
+
+    def fake_download(service, *, file_id: str, destination: Path) -> Path:  # noqa: ARG001
+        downloads.append(file_id)
+        destination.write_bytes(uploaded_bytes[file_id])
+        return destination
+
+    monkeypatch.setattr(backup_daily, "upload_file_to_drive_raw", fake_upload)
+    monkeypatch.setattr(backup_daily, "download_drive_file_raw", fake_download)
+
+    result = backup_daily.run_backup(
+        db_path=source,
+        staging_dir=tmp_path / "out",
+        date_stamp="2026-06-05",
+        upload=True,
+        remove_local_after_upload=True,
+    )
+
+    assert downloads == ["drive-file-id"]
+    assert result["verified"] is True
+    assert result["verification_mode"] == "full"
+    assert result["drive_md5_match"] is True
+    assert result["local_md5"] == result["drive_md5"]
+    assert result["sentinel_snapshot_chunks"] == 2
+    assert result["sentinel_verified_chunks"] == 2
+
+
+def test_prune_local_uncompressed_snapshots_keeps_two_newest(tmp_path):
+    from brainlayer.backup_daily import prune_local_uncompressed_snapshots
+
+    for day in range(1, 5):
+        (tmp_path / f"2026-06-0{day}.db").write_bytes(f"db-{day}".encode())
+    (tmp_path / "2026-06-04.db.gz").write_bytes(b"drive-only")
+    (tmp_path / "not-a-snapshot.db").write_bytes(b"ignore")
+
+    deleted = prune_local_uncompressed_snapshots(tmp_path, keep_latest=2)
+
+    assert deleted == ["2026-06-02.db", "2026-06-01.db"]
+    assert sorted(path.name for path in tmp_path.glob("2026-06-*.db")) == ["2026-06-03.db", "2026-06-04.db"]
+    assert (tmp_path / "2026-06-04.db.gz").exists()
+    assert (tmp_path / "not-a-snapshot.db").exists()
+
+
+def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "2026-06-05.db").write_bytes(b"newer")
+    (out_dir / "2026-06-04.db").write_bytes(b"also-newer")
+
+    def fake_vacuum_into(target_path, **kwargs):  # noqa: ARG001
+        with sqlite3.connect(source) as db:
+            db.execute("VACUUM INTO ?", (str(target_path),))
+
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", fake_vacuum_into)
+
+    artifact = backup_daily.create_sqlite_backup_artifact(
+        source,
+        out_dir,
+        date_stamp="2026-06-03",
+        keep_uncompressed=True,
+        local_uncompressed_keep=2,
+    )
+
+    assert artifact.uncompressed_path is None
+    assert artifact.local_retention_deleted == ["2026-06-03.db"]
+    assert not (out_dir / "2026-06-03.db").exists()
+    assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
+
+
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
@@ -103,6 +239,131 @@ def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     assert request["params"]["name"] == "brain_backup_vacuum_into"
     assert request["params"]["arguments"]["target_path"].endswith("/2026-05-13.db")
     assert snapshot.name == "2026-05-13.db.gz"
+
+
+def test_brainbar_vacuum_request_retries_closed_socket_with_backoff(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+    sleeps = []
+
+    def flaky_send(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append((socket_path, request["params"]["name"], timeout_seconds))
+        if len(calls) < 3:
+            raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+        target.write_bytes(b"ok")
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", flaky_send)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert len(calls) == 3
+    assert sleeps == [60, 60]
+    output = capsys.readouterr().out
+    assert "BrainBar vacuum snapshot attempt 1/3 failed" in output
+    assert "BrainBar vacuum snapshot attempt 2/3 failed" in output
+    assert "retrying in 60s" in output
+
+
+def test_brainbar_vacuum_request_fails_loud_after_retry_budget(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+    sleeps = []
+
+    def closed_socket(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", closed_socket)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(RuntimeError, match="BrainBar socket closed without response"):
+        backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into", "brain_backup_vacuum_into", "brain_backup_vacuum_into"]
+    assert sleeps == [60, 60]
+    output = capsys.readouterr().out
+    assert "BrainBar vacuum snapshot attempt 1/3 failed" in output
+    assert "BrainBar vacuum snapshot attempt 2/3 failed" in output
+    assert "BrainBar vacuum snapshot attempt 3/3 failed" in output
+    assert "retrying in 60s" in output
+    assert not target.exists()
+
+
+def test_brainbar_vacuum_request_does_not_retry_global_backup_timeout(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+    sleeps = []
+
+    def timed_out(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        raise backup_daily.BackupTimeoutError("backup exceeded configured wall-clock timeout")
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", timed_out)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(backup_daily.BackupTimeoutError):
+        backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into"]
+    assert sleeps == []
+
+
+def test_brainbar_vacuum_request_accepts_valid_target_after_lost_response(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+    sleeps = []
+
+    def closed_after_success(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        _create_source_db(target, chunk_count=2)
+        raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", closed_after_success)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into"]
+    assert sleeps == []
+    assert "target exists and passed quick_check" in capsys.readouterr().out
+
+
+def test_brainbar_vacuum_request_removes_invalid_target_before_retry(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    target = tmp_path / "snapshot.db"
+    calls = []
+    sleeps = []
+
+    def invalid_then_success(socket_path, request, timeout_seconds):  # noqa: ARG001
+        calls.append(request["params"]["name"])
+        if len(calls) == 1:
+            target.write_bytes(b"not sqlite")
+            raise RuntimeError("BrainBar socket closed without response: /tmp/brainbar.sock")
+        assert not target.exists()
+        _create_source_db(target, chunk_count=2)
+        return {"result": {"content": [{"type": "text", "text": '{"status":"ok"}'}]}}
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", invalid_then_success)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    backup_daily.request_brainbar_vacuum_into(target, socket_path="/tmp/brainbar.sock")
+
+    assert calls == ["brain_backup_vacuum_into", "brain_backup_vacuum_into"]
+    assert sleeps == [60]
+    output = capsys.readouterr().out
+    assert "removing invalid existing target" in output
+    assert "retrying in 60s" in output
 
 
 def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
@@ -176,10 +437,26 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
     verified: list[tuple[str, str, int]] = []
     pruned: list[backup_daily.DriveRetentionPolicy] = []
 
-    monkeypatch.setattr(backup_daily, "create_sqlite_backup_gzip", lambda *args, **kwargs: snapshot)
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
     monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
     monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: {
+            "verified": True,
+            "verification_mode": "quick",
+            "sentinel_snapshot_chunks": 1,
+            "sentinel_verified_chunks": 1,
+        },
+    )
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",

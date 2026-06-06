@@ -13,6 +13,7 @@
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
 #   ./scripts/launchd/install.sh repair-fts   # Install weekly explicit FTS repair
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
+#   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
@@ -129,6 +130,24 @@ install_backup_script() {
     echo "Installed: $dst"
 }
 
+install_jsonl_backup_script() {
+    local src="$SCRIPT_DIR/jsonl-backup.sh"
+    local dst="$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
+    local escaped_brainlayer_dir
+
+    if [ ! -f "$src" ]; then
+        echo "ERROR: $src not found"
+        return 1
+    fi
+
+    escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')"
+    sed \
+        -e "s|__BRAINLAYER_DIR_VALUE__|$escaped_brainlayer_dir|g" \
+        "$src" > "$dst"
+    chmod 755 "$dst"
+    echo "Installed: $dst"
+}
+
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
@@ -174,6 +193,10 @@ case "${1:-all}" in
         install_backup_script
         install_plist backup-daily
         ;;
+    jsonl|jsonl-backup)
+        install_jsonl_backup_script
+        install_plist jsonl-backup
+        ;;
     maintenance-nightly)
         install_plist maintenance-nightly
         ;;
@@ -194,6 +217,8 @@ case "${1:-all}" in
         install_plist repair-fts
         install_backup_script
         install_plist backup-daily
+        install_jsonl_backup_script
+        install_plist jsonl-backup
         install_plist maintenance-nightly
         install_plist maintenance-weekly
         # Remove old enrich plist if present
@@ -209,12 +234,14 @@ case "${1:-all}" in
         remove_plist wal-checkpoint
         remove_plist repair-fts 2>/dev/null || true
         remove_plist backup-daily 2>/dev/null || true
+        remove_plist jsonl-backup 2>/dev/null || true
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
+        rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|maintenance|maintenance-nightly|maintenance-weekly|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|all|remove]"
         exit 1
         ;;
 esac

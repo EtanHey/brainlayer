@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.brainlayer.jsonl-backup</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/.local/lib/brainlayer/jsonl-backup.sh</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>5</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/jsonl-backup.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/jsonl-backup.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER</key>
+		<string>Brain Drive/06_ARCHIVE/backups/claude-jsonl</string>
+		<key>BRAINLAYER_REPO_ROOT</key>
+		<string>__BRAINLAYER_DIR__</string>
+	</dict>
+	<key>Nice</key>
+	<integer>15</integer>
+	<key>ExitTimeOut</key>
+	<integer>1800</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>4096</integer>
+	</dict>
+</dict>
+</plist>
