@@ -135,16 +135,18 @@ ENTITY_TYPE_ALIASES = {
 VALID_ENTITY_SUBTYPES = {"channel", "podcast", "brand", "newsletter"}
 
 
-def infer_source_subtype(name: str) -> Optional[str]:
+def infer_source_subtype(name: str, raw_type: str = "") -> Optional[str]:
     """Infer Source subtype from stable URL/name patterns."""
     normalized = name.strip().lower()
     if "youtube.com/@" in normalized or "youtube.com/c/" in normalized:
         return "channel"
-    if normalized.endswith(" podcast"):
+    entity_type = ENTITY_TYPE_ALIASES.get(raw_type.strip().lower(), raw_type.strip().lower())
+    allow_suffix = entity_type == "source" or any(char.isupper() for char in name)
+    if allow_suffix and normalized.endswith(" podcast"):
         return "podcast"
-    if normalized.endswith(" channel"):
+    if allow_suffix and normalized.endswith(" channel"):
         return "channel"
-    if normalized.endswith(" newsletter"):
+    if allow_suffix and normalized.endswith(" newsletter"):
         return "newsletter"
     return None
 
@@ -160,7 +162,7 @@ def normalize_entity_type(
     if subtype not in VALID_ENTITY_SUBTYPES:
         subtype = None
 
-    inferred_source_subtype = infer_source_subtype(name)
+    inferred_source_subtype = infer_source_subtype(name, raw_type)
     if inferred_source_subtype:
         return "source", subtype or inferred_source_subtype
 

@@ -156,7 +156,7 @@ def test_relation_type_aliases():
     validated = validate_extraction_result(result)
     relation_types = [rel.relation_type for rel in validated.relations]
 
-    assert relation_types == ["depends_on", "works_at", "leads", "hosts"]
+    assert relation_types == ["depends_on", "works_at", "leads"]
 
 
 def test_validation_coerces_command_shaped_people_to_agents():
@@ -194,4 +194,45 @@ def test_validation_coerces_youtube_channel_to_source_with_subtype():
         ("source", "channel"),
         ("source", "podcast"),
         ("source", "newsletter"),
+    ]
+
+
+def test_validation_does_not_coerce_lowercase_dev_channel_phrases_to_source():
+    """Generic dev terms such as release channels should not become content sources."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("release channel", "topic", 0, 15, 0.8, "llm"),
+            ExtractedEntity("slack channel", "tool", 16, 29, 0.8, "llm"),
+        ],
+        relations=[],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [(entity.entity_type, entity.entity_subtype) for entity in validated.entities] == [
+        ("topic", None),
+        ("tool", None),
+    ]
+
+
+def test_validation_drops_source_relations_without_source_target():
+    """hosts/appears_on must not write person -> project/topic edges."""
+    result = ExtractionResult(
+        entities=[
+            ExtractedEntity("Andrew Huberman", "person", 0, 15, 0.9, "seed"),
+            ExtractedEntity("Huberman Lab", "project", 16, 28, 0.9, "llm"),
+            ExtractedEntity("Lex Fridman Podcast", "company", 29, 48, 0.9, "llm"),
+        ],
+        relations=[
+            ExtractedRelation("Andrew Huberman", "Huberman Lab", "hosts", 0.8, {}),
+            ExtractedRelation("Andrew Huberman", "Lex Fridman Podcast", "appears_on", 0.8, {}),
+        ],
+        chunk_id="chunk-1",
+    )
+
+    validated = validate_extraction_result(result)
+
+    assert [(rel.source_text, rel.relation_type, rel.target_text) for rel in validated.relations] == [
+        ("Andrew Huberman", "appears_on", "Lex Fridman Podcast")
     ]

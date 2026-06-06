@@ -191,12 +191,25 @@ def validate_extraction_result(result: ExtractionResult) -> ExtractionResult:
             if source_type not in valid_src and target_type in valid_src:
                 # Wrong direction — swap
                 rel.source_text, rel.target_text = rel.target_text, rel.source_text
+                source_type, target_type = target_type, source_type
                 logger.debug(
                     "Swapped relation direction: %s --%s--> %s",
                     rel.source_text,
                     rel.relation_type,
                     rel.target_text,
                 )
+            if rel.relation_type in {"hosts", "appears_on"} and (
+                source_type not in valid_src or target_type not in valid_tgt
+            ):
+                logger.debug(
+                    "Dropping invalid relation direction: %s(%s) --%s--> %s(%s)",
+                    rel.source_text,
+                    source_type,
+                    rel.relation_type,
+                    rel.target_text,
+                    target_type,
+                )
+                continue
 
         validated_relations.append(rel)
 
