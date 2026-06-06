@@ -473,11 +473,12 @@ final class MCPRouter: @unchecked Sendable {
         }
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
+        let project = args["project"] as? String
         guard let db = database else {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp")
+            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
         }
         do {
-            switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp") {
+            switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp", project: project) {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
                 return ToolOutput(
@@ -504,11 +505,11 @@ final class MCPRouter: @unchecked Sendable {
                 return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
             }
         } catch BrainDatabase.DBError.notOpen {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp")
+            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
         }
     }
 
-    private func queueBrainStore(content: String, tags: [String], importance: Int, source: String) throws -> ToolOutput {
+    private func queueBrainStore(content: String, tags: [String], importance: Int, source: String, project: String?) throws -> ToolOutput {
         guard let dbPath else {
             throw ToolError.noDatabase
         }
@@ -517,7 +518,8 @@ final class MCPRouter: @unchecked Sendable {
             content: content,
             tags: tags,
             importance: importance,
-            source: source
+            source: source,
+            project: project
         )
         return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
     }
@@ -1088,6 +1090,7 @@ final class MCPRouter: @unchecked Sendable {
                     "content": ["type": "string", "description": "Content to store"],
                     "tags": ["type": "array", "items": ["type": "string"], "description": "Tags for categorization"],
                     "importance": ["type": "integer", "description": "Importance score (1-10)"],
+                    "project": ["type": "string", "description": "Project context for the stored memory"],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])

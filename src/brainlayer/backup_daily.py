@@ -33,6 +33,7 @@ DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
@@ -68,6 +69,13 @@ class SQLiteBackupArtifact:
 
 def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
+
+
+def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -669,6 +677,7 @@ def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
     folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    log_path: Path = DEFAULT_LOG_PATH,
     date_stamp: str | None = None,
     upload: bool = True,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
@@ -689,40 +698,46 @@ def run_backup(
         "local_removed": False,
         "verified": False,
     }
-    if upload:
-        credentials = get_drive_credentials()
-        service = build_drive_service()
-        folder_id = ensure_drive_folder_chain(service, folder_parts)
-        uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
-        file_id = uploaded.get("id")
-        if not file_id:
-            raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
-        verify_drive_upload(
-            service,
-            file_id=file_id,
-            expected_name=snapshot.name,
-            expected_size=snapshot_size,
-        )
-        result.update(
-            verify_sqlite_backup_artifact(
-                artifact,
-                full=_should_run_full_verify(resolved_date_stamp),
-                service=service,
-                file_id=file_id,
-            )
-        )
-        if result["verified"]:
-            if remove_local_after_upload:
-                snapshot.unlink()
-                result["local_removed"] = True
-            deleted = prune_drive_backups(
+    try:
+        if upload:
+            credentials = get_drive_credentials()
+            service = build_drive_service()
+            folder_id = ensure_drive_folder_chain(service, folder_parts)
+            uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
+            file_id = uploaded.get("id")
+            if not file_id:
+                raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+            verify_drive_upload(
                 service,
-                folder_parts=folder_parts,
-                retention_policy=retention_policy,
+                file_id=file_id,
+                expected_name=snapshot.name,
+                expected_size=snapshot_size,
             )
-        else:
-            deleted = []
-        result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
+            result.update(
+                verify_sqlite_backup_artifact(
+                    artifact,
+                    full=_should_run_full_verify(resolved_date_stamp),
+                    service=service,
+                    file_id=file_id,
+                )
+            )
+            if result["verified"]:
+                if remove_local_after_upload:
+                    snapshot.unlink()
+                    result["local_removed"] = True
+                deleted = prune_drive_backups(
+                    service,
+                    folder_parts=folder_parts,
+                    retention_policy=retention_policy,
+                )
+            else:
+                deleted = []
+            result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
+    except Exception as exc:
+        result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        raise
+    finally:
+        _append_json_log(log_path, result)
     return result
 
 
@@ -741,6 +756,7 @@ def main() -> int:
                 "BRAINLAYER_BACKUP_DRIVE_FOLDER",
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
             ).split("/"),
+            log_path=Path(os.environ.get("BRAINLAYER_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH))),
         )
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)

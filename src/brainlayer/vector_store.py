@@ -585,6 +585,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 conversation_id TEXT,
                 position INTEGER,
                 context_summary TEXT,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 chunk_origin TEXT DEFAULT 'unknown',
                 content_class TEXT DEFAULT 'knowledge'
             )
@@ -1969,7 +1970,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 transaction_started = True
                 for chunk, embedding in valid_pairs:
                     chunk_id = chunk["id"]
-                    created_at = chunk.get("created_at")
+                    created_at = chunk.get("created_at") or datetime.now(timezone.utc).isoformat()
+                    chunk = {**chunk, "created_at": created_at}
                     tags_value = chunk.get("tags")
                     tags_json = json.dumps(tags_value) if isinstance(tags_value, (list, dict)) else tags_value
                     duplicate, dedupe_fields = find_duplicate(

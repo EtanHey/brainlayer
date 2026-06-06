@@ -184,6 +184,33 @@ class TestStoreMemory:
         assert created_at >= before
         assert created_at <= after
 
+    def test_store_created_at_override_does_not_backdate_write_timestamps(self, store, mock_embed):
+        """Queued replay created_at stays separate from write-time timestamps."""
+        from brainlayer.store import store_memory
+
+        reservation_created_at = "2026-01-01T00:00:00+00:00"
+        before = datetime.now(timezone.utc).isoformat()
+        result = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="Replay timestamp separation matters",
+            memory_type="note",
+            project="test",
+            created_at=reservation_created_at,
+        )
+        after = datetime.now(timezone.utc).isoformat()
+
+        cursor = store.conn.cursor()
+        row = cursor.execute(
+            "SELECT created_at, enriched_at, last_seen_at FROM chunks WHERE id = ?",
+            (result["id"],),
+        ).fetchone()
+
+        assert row is not None
+        assert row[0] == reservation_created_at
+        assert before <= row[1] <= after
+        assert before <= row[2] <= after
+
     def test_store_sets_ingested_at(self, store, mock_embed):
         """Stored memory has a fresh Unix ingested_at timestamp."""
         from brainlayer.store import store_memory

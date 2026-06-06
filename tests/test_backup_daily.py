@@ -493,6 +493,104 @@ def test_run_backup_verifies_upload_removes_local_and_rotates_last_n(tmp_path, m
     assert not snapshot.exists()
 
 
+def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    log_path = tmp_path / "backup-daily.log"
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: {
+            "verified": True,
+            "verification_mode": "quick",
+            "sentinel_snapshot_chunks": 1,
+            "sentinel_verified_chunks": 1,
+        },
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "upload_file_to_drive_raw",
+        lambda file_path, folder_id, credentials: {
+            "id": "drive-file-id",
+            "name": Path(file_path).name,
+            "size": str(Path(file_path).stat().st_size),
+        },
+    )
+    monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-05-30",
+        upload=True,
+        log_path=log_path,
+    )
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    logged = json.loads(lines[0])
+    assert logged["snapshot"] == str(snapshot)
+    assert logged["drive_file"]["id"] == "drive-file-id"
+    assert logged["verified"] is True
+    assert logged == result
+
+
+def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-05-30.db.gz"
+    snapshot.write_bytes(b"backup-bytes")
+    log_path = tmp_path / "backup-daily.log"
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda service, folder_parts: "folder-id")
+    monkeypatch.setattr(
+        backup_daily,
+        "upload_file_to_drive_raw",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("drive unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="drive unavailable"):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            date_stamp="2026-05-30",
+            upload=True,
+            log_path=log_path,
+        )
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    logged = json.loads(lines[0])
+    assert logged["snapshot"] == str(snapshot)
+    assert logged["uploaded"] is False
+    assert logged["verified"] is False
+    assert logged["error_type"] == "RuntimeError"
+    assert logged["error"] == "drive unavailable"
+
+
 def test_prune_drive_backups_keeps_only_latest_n_snapshots():
     from brainlayer.backup_daily import DriveRetentionPolicy, prune_drive_backups
 

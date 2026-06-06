@@ -2251,6 +2251,7 @@ def flush() -> None:
                     project=item.get("project"),
                     tags=item.get("tags"),
                     importance=item.get("importance"),
+                    created_at=item.get("created_at") or item.get("queued_at"),
                     source="pending",
                     confidence_score=item.get("confidence_score"),
                     outcome=item.get("outcome"),

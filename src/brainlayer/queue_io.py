@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,12 +62,14 @@ def enqueue_store(
     project: str | None = None,
     tags: list[str] | None = None,
     importance: int | None = None,
+    created_at: str | None = None,
     source: str = "mcp",
     queue_dir: Path | None = None,
     **metadata: Any,
 ) -> Path:
     supersedes = metadata.pop("supersedes", None)
     chunk_id = metadata.pop("chunk_id", None) or f"manual-{uuid.uuid4().hex[:16]}"
+    created_at = created_at or datetime.now(timezone.utc).isoformat()
     return enqueue_jsonl(
         {
             "kind": "store_memory",
@@ -76,6 +79,7 @@ def enqueue_store(
             "project": project,
             "tags": tags,
             "importance": importance,
+            "created_at": created_at,
             "supersedes": supersedes,
             "metadata": {key: value for key, value in metadata.items() if value is not None},
         },
