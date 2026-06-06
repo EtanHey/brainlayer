@@ -9,6 +9,7 @@ Tests cover:
 """
 
 import os
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -364,8 +365,8 @@ class TestCreatedAtUpsert:
         row = list(cursor.execute("SELECT created_at FROM chunks WHERE id = 'dated-chunk'"))
         assert row[0][0] == "2026-02-19T10:00:00+00:00"
 
-    def test_created_at_null_when_missing(self, tmp_path):
-        """Chunks without created_at should have NULL in the DB."""
+    def test_created_at_stamped_when_missing(self, tmp_path):
+        """Chunks without created_at should be forward-stamped at write time."""
         store = VectorStore(tmp_path / "test.db")
         chunks = [
             {
@@ -383,4 +384,5 @@ class TestCreatedAtUpsert:
 
         cursor = store.conn.cursor()
         row = list(cursor.execute("SELECT created_at FROM chunks WHERE id = 'undated-chunk'"))
-        assert row[0][0] is None
+        assert row[0][0] is not None
+        datetime.fromisoformat(row[0][0])

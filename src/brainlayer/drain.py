@@ -290,6 +290,18 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown", **event}
 
 
+def _event_created_at(event: dict[str, Any]) -> str:
+    raw_created_at = event.get("created_at")
+    if raw_created_at:
+        return str(raw_created_at)
+    raw_queued_at = event.get("queued_at")
+    if isinstance(raw_queued_at, int | float):
+        return datetime.fromtimestamp(float(raw_queued_at), timezone.utc).isoformat()
+    if raw_queued_at:
+        return str(raw_queued_at)
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     raw_content = event.get("content")
     if raw_content is None:
@@ -310,6 +322,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         logger.warning("Skipping recursive MCP store event: %s", recursive_reason)
         return ApplyResult()
     now = datetime.now(timezone.utc).isoformat()
+    created_at = _event_created_at(event)
     metadata = {"memory_type": event.get("memory_type", "note")}
     raw_metadata = event.get("metadata")
     if isinstance(raw_metadata, dict):
@@ -328,7 +341,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
                     "content": content,
                     "tags": json.dumps(tags) if tags else None,
                     "importance": float(event["importance"]) if event.get("importance") is not None else None,
-                    "created_at": now,
+                    "created_at": created_at,
                     "last_seen_at": now,
                 },
             )
@@ -346,7 +359,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "value_type": "HIGH",
             "char_count": len(content),
             "source": event.get("source") or "manual",
-            "created_at": now,
+            "created_at": created_at,
             "enriched_at": now,
             "enrich_status": "success",
             "summary": content[:200],

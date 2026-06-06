@@ -70,6 +70,7 @@ def store_memory(
     function_name: Optional[str] = None,
     line_number: Optional[int] = None,
     chunk_id: Optional[str] = None,
+    created_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -96,6 +97,7 @@ def store_memory(
         function_name: Optional function reference. Only for type=issue.
         line_number: Optional line number reference. Only for type=issue.
         chunk_id: Optional caller-supplied chunk ID for durable queued writes.
+        created_at: Optional caller-supplied reservation timestamp for queued writes.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -120,7 +122,7 @@ def store_memory(
 
     # Generate chunk ID and timestamps
     chunk_id = chunk_id or f"manual-{uuid.uuid4().hex[:16]}"
-    now = datetime.now(timezone.utc).isoformat()
+    now = created_at or datetime.now(timezone.utc).isoformat()
 
     # Embed at write time (if embed_fn provided), otherwise defer
     embedding = None

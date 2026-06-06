@@ -483,6 +483,44 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testFlushPendingStoresUsesQueuedAtAsCreatedAtAndPreservesProject() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-stamping-queue-\(UUID().uuidString).jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        let queuedAt = "2026-06-06T18:45:12Z"
+        let chunkID = "brainbar-queuedstamp1"
+        let payload: [String: Any] = [
+            "content": "Queued BrainBar store must keep reservation metadata",
+            "tags": ["brainbar", "queue"],
+            "importance": 8,
+            "source": "mcp",
+            "queue_id": "queue-stamp-test",
+            "queued_at": queuedAt,
+            "chunk_id": chunkID,
+            "project": "brainlayer"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        try (data + Data([0x0A])).write(to: queuePath)
+
+        let flushed = db.flushPendingStores()
+
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertEqual(flushed.first?.storedChunk.chunkID, chunkID)
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT created_at FROM chunks WHERE id = '\(chunkID)'"),
+            queuedAt
+        )
+        XCTAssertEqual(
+            try sqliteScalarString(path: tempDBPath, sql: "SELECT project FROM chunks WHERE id = '\(chunkID)'"),
+            "brainlayer"
+        )
+    }
+
     func testInjectionEventsTableExists() throws {
         let exists = try db.tableExists("injection_events")
         XCTAssertTrue(exists, "injection_events table must exist")

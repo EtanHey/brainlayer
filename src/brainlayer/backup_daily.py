@@ -33,6 +33,7 @@ DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json
 DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
 DEFAULT_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
@@ -68,6 +69,13 @@ class SQLiteBackupArtifact:
 
 def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
+
+
+def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -669,6 +677,7 @@ def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
     folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    log_path: Path = DEFAULT_LOG_PATH,
     date_stamp: str | None = None,
     upload: bool = True,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
@@ -723,6 +732,7 @@ def run_backup(
         else:
             deleted = []
         result.update({"uploaded": True, "drive_file": uploaded, "retention_deleted": deleted})
+    _append_json_log(log_path, result)
     return result
 
 
@@ -741,6 +751,7 @@ def main() -> int:
                 "BRAINLAYER_BACKUP_DRIVE_FOLDER",
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
             ).split("/"),
+            log_path=Path(os.environ.get("BRAINLAYER_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH))),
         )
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)

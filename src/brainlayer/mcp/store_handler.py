@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import uuid
+from datetime import datetime, timezone
 
 import apsw
 from mcp.types import CallToolResult, TextContent
@@ -41,6 +42,18 @@ def _is_lock_error(exc: BaseException) -> bool:
 
 def _new_manual_chunk_id() -> str:
     return f"manual-{uuid.uuid4().hex[:16]}"
+
+
+def _reservation_created_at(item: dict) -> str | None:
+    raw_created_at = item.get("created_at")
+    if raw_created_at:
+        return str(raw_created_at)
+    raw_queued_at = item.get("queued_at")
+    if raw_queued_at is None:
+        return None
+    if isinstance(raw_queued_at, int | float):
+        return datetime.fromtimestamp(float(raw_queued_at), timezone.utc).isoformat()
+    return str(raw_queued_at)
 
 
 async def _brain_digest(
@@ -407,6 +420,8 @@ def _queue_store(item: dict) -> None:
     Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
     are dropped to make room.
     """
+    item = dict(item)
+    item["created_at"] = _reservation_created_at(item) or datetime.now(timezone.utc).isoformat()
     try:
         from ..queue_io import enqueue_store
 
@@ -481,6 +496,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 function_name=item.get("function_name"),
                 line_number=item.get("line_number"),
                 chunk_id=item.get("chunk_id"),
+                created_at=_reservation_created_at(item),
             )
             if item.get("supersedes"):
                 if not store.supersede_chunk(item["supersedes"], result["id"]):
@@ -542,6 +558,7 @@ async def _store(
     A background task embeds pending chunks after the response is sent.
     """
     promised_chunk_id = _new_manual_chunk_id()
+    reservation_created_at = datetime.now(timezone.utc).isoformat()
     try:
         if os.environ.get("BRAINLAYER_ARBITRATED") == "1":
             from ..ingest_guard import reject_recursive_mcp_output
@@ -576,6 +593,7 @@ async def _store(
                     "function_name": function_name,
                     "line_number": line_number,
                     "supersedes": supersedes,
+                    "created_at": reservation_created_at,
                 }
             )
             clear_hybrid_search_cache()
@@ -608,6 +626,7 @@ async def _store(
             function_name=function_name,
             line_number=line_number,
             chunk_id=promised_chunk_id,
+            created_at=reservation_created_at,
         )
 
         chunk_id = result["id"]
@@ -691,6 +710,7 @@ async def _store(
                     "function_name": function_name,
                     "line_number": line_number,
                     "supersedes": supersedes,
+                    "created_at": reservation_created_at,
                 }
             )
             structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}

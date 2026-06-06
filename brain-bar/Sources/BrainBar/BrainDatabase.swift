@@ -224,8 +224,10 @@ final class BrainDatabase: @unchecked Sendable {
         let tags: [String]
         let importance: Int
         let source: String
+        let project: String?
         let queueID: String?
         let queuedAt: String?
+        let createdAt: String?
         let chunkID: String?
 
         enum CodingKeys: String, CodingKey {
@@ -233,8 +235,10 @@ final class BrainDatabase: @unchecked Sendable {
             case tags
             case importance
             case source
+            case project
             case queueID = "queue_id"
             case queuedAt = "queued_at"
+            case createdAt = "created_at"
             case chunkID = "chunk_id"
         }
 
@@ -243,16 +247,20 @@ final class BrainDatabase: @unchecked Sendable {
             tags: [String],
             importance: Int,
             source: String,
+            project: String? = nil,
             queueID: String? = nil,
             queuedAt: String? = nil,
+            createdAt: String? = nil,
             chunkID: String? = nil
         ) {
             self.content = content
             self.tags = tags
             self.importance = importance
             self.source = source
+            self.project = project
             self.queueID = queueID
             self.queuedAt = queuedAt
+            self.createdAt = createdAt
             self.chunkID = chunkID
         }
 
@@ -262,8 +270,10 @@ final class BrainDatabase: @unchecked Sendable {
             tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
             importance = try container.decodeIfPresent(Int.self, forKey: .importance) ?? 5
             source = try container.decodeIfPresent(String.self, forKey: .source) ?? "mcp"
+            project = try container.decodeIfPresent(String.self, forKey: .project)
             queueID = try container.decodeIfPresent(String.self, forKey: .queueID)
             queuedAt = try container.decodeIfPresent(String.self, forKey: .queuedAt)
+            createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
         }
     }
@@ -653,19 +663,21 @@ final class BrainDatabase: @unchecked Sendable {
         contentType: String,
         importance: Int,
         sender: String? = nil,
-        tags: String = "[]"
+        tags: String = "[]",
+        createdAt: String? = nil
     ) throws {
         guard let db else { throw DBError.notOpen }
         if (try? tableExists("chunks")) != true {
             try ensureSchema()
         }
+        let createdAt = createdAt ?? Self.timestamp()
         let sql = """
             INSERT OR REPLACE INTO chunks (
                 id, content, metadata, source_file, project, content_type,
                 importance, conversation_id, sender, char_count, tags, summary,
-                preview_text, brick_id, source_uri, status, ingested_at
+                preview_text, created_at, brick_id, source_uri, status, ingested_at
             )
-            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'brainbar', 'active', CAST(strftime('%s', 'now') AS INTEGER))
+            VALUES (?, ?, '{}', 'brainbar', ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'brainbar', 'active', CAST(strftime('%s', 'now') AS INTEGER))
         """
         try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
             bindText(id, to: stmt, index: 1)
@@ -682,7 +694,8 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_bind_int(stmt, 8, Int32(content.count))
             bindText(tags, to: stmt, index: 9)
             bindText(Self.previewText(summary: "", content: content), to: stmt, index: 10)
-            bindText(id, to: stmt, index: 11)
+            bindText(createdAt, to: stmt, index: 11)
+            bindText(id, to: stmt, index: 12)
         }
         try refreshSearchStatistics()
     }
@@ -880,19 +893,22 @@ final class BrainDatabase: @unchecked Sendable {
         tags: [String],
         importance: Int,
         source: String,
+        project: String? = nil,
         chunkID: String? = nil,
         queueID: String? = nil,
+        createdAt: String? = nil,
         refreshStatistics: Bool = true,
         retries: Int = 3,
         busyTimeoutMillis: Int32? = nil
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
         let chunkID = chunkID ?? Self.makeChunkID()
+        let createdAt = createdAt ?? Self.timestamp()
         let tagsJSON = (try? encodeJSON(tags)) ?? "[]"
         let metadataJSON = Self.storeMetadataJSON(queueID: queueID)
         let sql = """
-            INSERT INTO chunks (id, content, metadata, source_file, tags, importance, source, content_type, char_count, preview_text)
-            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, 'user_message', ?, ?)
+            INSERT INTO chunks (id, content, metadata, source_file, project, tags, importance, source, content_type, char_count, created_at, preview_text)
+            VALUES (?, ?, ?, 'brainbar-store', ?, ?, ?, ?, 'user_message', ?, ?, ?)
         """
         let previousBusyTimeout = busyTimeoutMillis.flatMap { _ in queryPragma(db, name: "busy_timeout") }
         if let busyTimeoutMillis {
@@ -909,11 +925,17 @@ final class BrainDatabase: @unchecked Sendable {
                 bindText(chunkID, to: stmt, index: 1)
                 bindText(content, to: stmt, index: 2)
                 bindText(metadataJSON, to: stmt, index: 3)
-                bindText(tagsJSON, to: stmt, index: 4)
-                sqlite3_bind_int(stmt, 5, Int32(importance))
-                bindText(source, to: stmt, index: 6)
-                sqlite3_bind_int(stmt, 7, Int32(content.count))
-                bindText(Self.previewText(summary: "", content: content), to: stmt, index: 8)
+                if let project {
+                    bindText(project, to: stmt, index: 4)
+                } else {
+                    sqlite3_bind_null(stmt, 4)
+                }
+                bindText(tagsJSON, to: stmt, index: 5)
+                sqlite3_bind_int(stmt, 6, Int32(importance))
+                bindText(source, to: stmt, index: 7)
+                sqlite3_bind_int(stmt, 8, Int32(content.count))
+                bindText(createdAt, to: stmt, index: 9)
+                bindText(Self.previewText(summary: "", content: content), to: stmt, index: 10)
             }
             if failNextStoreAfterInsertForTesting {
                 failNextStoreAfterInsertForTesting = false
@@ -934,16 +956,20 @@ final class BrainDatabase: @unchecked Sendable {
         tags: [String],
         importance: Int,
         source: String,
+        project: String? = nil,
         busyTimeoutMillis: Int32 = 50
     ) throws -> StoreWriteOutcome {
         let chunkID = Self.makeChunkID()
+        let createdAt = Self.timestamp()
         do {
             let stored = try store(
                 content: content,
                 tags: tags,
                 importance: importance,
                 source: source,
+                project: project,
                 chunkID: chunkID,
+                createdAt: createdAt,
                 refreshStatistics: true,
                 retries: 0,
                 busyTimeoutMillis: busyTimeoutMillis
@@ -958,6 +984,8 @@ final class BrainDatabase: @unchecked Sendable {
                 tags: tags,
                 importance: importance,
                 source: source,
+                project: project,
+                createdAt: createdAt,
                 chunkID: chunkID
             )
             return .queued(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
@@ -965,11 +993,25 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     /// Async wrapper for store() — runs DB write off the main thread.
-    func storeAsync(content: String, tags: [String], importance: Int, source: String) async throws -> StoredChunk {
+    func storeAsync(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        project: String? = nil,
+        createdAt: String? = nil
+    ) async throws -> StoredChunk {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 do {
-                    let result = try self.store(content: content, tags: tags, importance: importance, source: source)
+                    let result = try self.store(
+                        content: content,
+                        tags: tags,
+                        importance: importance,
+                        source: source,
+                        project: project,
+                        createdAt: createdAt
+                    )
                     continuation.resume(returning: result)
                 } catch {
                     continuation.resume(throwing: error)
@@ -996,6 +1038,8 @@ final class BrainDatabase: @unchecked Sendable {
         tags: [String],
         importance: Int,
         source: String,
+        project: String? = nil,
+        createdAt: String? = nil,
         chunkID: String? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
@@ -1004,6 +1048,8 @@ final class BrainDatabase: @unchecked Sendable {
             tags: tags,
             importance: importance,
             source: source,
+            project: project,
+            createdAt: createdAt,
             chunkID: chunkID
         )
     }
@@ -1015,6 +1061,8 @@ final class BrainDatabase: @unchecked Sendable {
         tags: [String],
         importance: Int,
         source: String,
+        project: String? = nil,
+        createdAt: String? = nil,
         chunkID: String? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
@@ -1027,14 +1075,17 @@ final class BrainDatabase: @unchecked Sendable {
         )
         let queueID = UUID().uuidString.lowercased()
         let queuedAt = Self.timestamp()
+        let createdAt = createdAt ?? queuedAt
         let chunkID = chunkID ?? Self.makeChunkID()
         let item = PendingStoreItem(
             content: content,
             tags: tags,
             importance: importance,
             source: source,
+            project: project,
             queueID: queueID,
             queuedAt: queuedAt,
+            createdAt: createdAt,
             chunkID: chunkID
         )
         var line = try JSONEncoder().encode(item)
@@ -1091,8 +1142,10 @@ final class BrainDatabase: @unchecked Sendable {
                             tags: item.tags,
                             importance: item.importance,
                             source: item.source,
+                            project: item.project,
                             chunkID: chunkID,
                             queueID: queueID,
+                            createdAt: item.createdAt ?? item.queuedAt,
                             refreshStatistics: false
                         )
                         flushed.append(
@@ -3181,8 +3234,10 @@ final class BrainDatabase: @unchecked Sendable {
             tags: item.tags,
             importance: item.importance,
             source: item.source,
+            project: item.project,
             queueID: queueID,
             queuedAt: item.queuedAt,
+            createdAt: item.createdAt ?? item.queuedAt,
             chunkID: chunkID
         )
         return try? JSONEncoder().encode(replayItem)
