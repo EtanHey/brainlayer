@@ -107,8 +107,16 @@ def main():
                 char_count, conversation_id, importance, created_at)
                VALUES (?, ?, ?, ?, 'realtime', ?, 'assistant_text',
                 ?, ?, 5, ?)""",
-            (chunk_id, content, metadata, transcript, project, len(content), session_id,
-             datetime.now(timezone.utc).isoformat()),
+            (
+                chunk_id,
+                content,
+                metadata,
+                transcript,
+                project,
+                len(content),
+                session_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
         if cursor.rowcount > 0:

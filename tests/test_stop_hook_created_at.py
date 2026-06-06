@@ -1,4 +1,5 @@
 """Stop hook must stamp created_at on realtime chunk inserts (the #455 fleet-wide NULL source)."""
+
 import json
 import sqlite3
 import subprocess
@@ -31,8 +32,12 @@ def test_stop_hook_stamps_created_at(tmp_path, monkeypatch):
     }
     env = {"BRAINLAYER_DB": str(db), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
     r = subprocess.run(
-        [sys.executable, str(HOOK)], input=json.dumps(payload), text=True,
-        capture_output=True, env=env, timeout=15,
+        [sys.executable, str(HOOK)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=15,
     )
     assert r.returncode == 0, r.stderr
     conn = sqlite3.connect(db)
