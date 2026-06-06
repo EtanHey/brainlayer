@@ -442,15 +442,15 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
     )
 
 
-def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
+def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     raw_content = event.get("content")
     if raw_content is None:
         logger.warning("Skipping malformed hook event without content")
-        return
+        return ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
-        return
+        return ApplyResult()
     content_hash = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
     session_id = event.get("session_id") or "unknown"
     chunk_id = event.get("chunk_id") or f"rt-{str(session_id)[:8]}-{content_hash}"
@@ -463,7 +463,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
-        return
+        return ApplyResult()
     ts_raw = event.get("timestamp")
     try:
         timestamp = float(ts_raw) if ts_raw is not None else time.time()
@@ -494,6 +494,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
         },
     )
+    return ApplyResult(chunk_id=chunk_id)
 
 
 def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
@@ -568,7 +569,7 @@ def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     elif kind == "watcher_chunk":
         _apply_watcher(conn, event)
     elif kind == "hook_chunk":
-        _apply_hook(conn, event)
+        return _apply_hook(conn, event)
     elif kind == "enrichment_update":
         _apply_enrichment(conn, event)
     return ApplyResult()

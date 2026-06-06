@@ -137,8 +137,8 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
-      tests/test_*.py)
-        test_path="$TEST_ROOT/$(basename "$changed")"
+      tests/*.py|tests/**/*.py)
+        test_path="$TEST_ROOT/${changed#tests/}"
         if [ -f "$test_path" ]; then
           if is_real_db_test_file "$test_path"; then
             changed_source_unmapped=1
@@ -205,11 +205,11 @@ if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   map_changed_files_to_pytests
 fi
 
-if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
-  pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
-elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
+if [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "$changed_source_unmapped" -eq 1 ]; then
   echo "changed-only scope found an unmapped source change; falling back to full pytest unit suite"
   pytest_unit_cmd=(run_pytest "$TEST_ROOT/" -v --tb=short -m "$UNIT_MARK_EXPR")
+elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ] && [ "${#targeted_pytest_files[@]}" -gt 0 ]; then
+  pytest_unit_cmd=(run_pytest "${targeted_pytest_files[@]}" -v --tb=short -m "$UNIT_MARK_EXPR")
 elif [ "$BRAINLAYER_PREPUSH_SCOPE" = "changed-only" ]; then
   echo "==> pytest unit suite"
   echo "SKIP: changed-only scope found no mapped pytest targets"

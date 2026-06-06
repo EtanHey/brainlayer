@@ -204,6 +204,33 @@ def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path
     assert f"{test_root}/ -v" not in logged
 
 
+def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_backup_daily.py").write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "\n".join(
+        ["src/brainlayer/backup_daily.py", "src/brainlayer/mcp/search_handler.py"]
+    )
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
 def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
@@ -275,6 +302,34 @@ def test_changed_files_env_preserves_paths_with_spaces(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert str(spaced_test) in pytest_log.read_text()
+
+
+def test_changed_only_scope_runs_nested_pytest_file(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    nested_dir = test_root / "eval" / "phoenix_gate"
+    nested_dir.mkdir(parents=True)
+    nested_test = nested_dir / "test_phoenix_gate.py"
+    nested_test.write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "tests/eval/phoenix_gate/test_phoenix_gate.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    logged = pytest_log.read_text()
+    assert str(nested_test) in logged
+    assert f"{test_root}/ -v" not in logged
 
 
 def test_changed_only_scope_falls_back_for_excluded_real_db_test_edit(tmp_path: Path) -> None:
