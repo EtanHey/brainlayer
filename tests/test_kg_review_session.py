@@ -281,6 +281,36 @@ def test_record_merge_rejects_fewer_than_two_real_members(tmp_path, decisions_fi
     assert not decisions_file.exists()
 
 
+def test_record_merge_treats_null_chunks_as_zero(tmp_path, decisions_file):
+    batch = {
+        "contested": [
+            {
+                "stem": "android eas",
+                "size": 2,
+                "members": [
+                    {"id": "tool-android", "name": "Android EAS", "type": "tool", "chunks": None},
+                    {"id": "tech-android", "name": "Android EAS", "type": "technology", "chunks": 3},
+                ],
+            }
+        ]
+    }
+    batch_file = tmp_path / "null-chunks-batch.json"
+    batch_file.write_text(json.dumps(batch))
+
+    record_decision(
+        batch_file,
+        decisions_file,
+        cluster_id="contested:android eas",
+        decision={"action": "merge", "source": "voice"},
+    )
+
+    data = json.loads(decisions_file.read_text())
+    merge = data["merge"][0]
+    assert merge["canonical"] == {"id": "tech-android", "name": "Android EAS", "type": "technology"}
+    assert [member["id"] for member in merge["members"]] == ["tool-android"]
+    assert_v1(data)
+
+
 def test_record_decision_validates_action(batch_file, decisions_file):
     with pytest.raises(ValueError):
         record_decision(
