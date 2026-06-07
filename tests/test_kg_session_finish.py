@@ -2,7 +2,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-from brainlayer.kg_session_finish import finish_session
+from brainlayer.kg_session_finish import _default_run_id, finish_session
 from tests.test_kg_session_harvest import SESSION_BATCH
 
 
@@ -125,6 +125,7 @@ def test_finish_failed_judge_decision_is_queued_not_applied(tmp_path: Path):
         return verdict
 
     def apply(path: Path, _run_id: str, *, execute: bool) -> dict:
+        assert execute is True
         applied_docs.append(json.loads(path.read_text(encoding="utf-8")))
         return {"ok": True}
 
@@ -231,7 +232,7 @@ def test_finish_no_judge_applies_all_clean_decisions(tmp_path: Path):
 def test_finish_dry_run_mutates_nothing(tmp_path: Path):
     batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
     decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
-    before = {path.name for path in tmp_path.iterdir()}
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
     apply_called = False
 
     def judge(item: dict, _cluster: dict) -> dict:
@@ -248,7 +249,19 @@ def test_finish_dry_run_mutates_nothing(tmp_path: Path):
     assert summary["applied"] == 0
     assert summary["queued_for_review"] == 0
     assert apply_called is False
-    assert {path.name for path in tmp_path.iterdir()} == before
+    after = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    assert after == before
+
+
+def test_default_run_id_is_stable_for_equivalent_paths(tmp_path: Path, monkeypatch):
+    batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
+    monkeypatch.chdir(tmp_path)
+
+    assert _default_run_id(Path("batch.json"), Path("decisions.json")) == _default_run_id(
+        batch_path.resolve(),
+        decisions_path.resolve(),
+    )
 
 
 def test_finish_cli_prints_one_summary_json_line(tmp_path: Path, capsys):
