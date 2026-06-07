@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import hashlib
 import io
 import json
-import os
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +24,7 @@ from brainlayer.kg_judge import judge_clusters_with_backend
 from brainlayer.kg_session_harvest import harvest_session
 from brainlayer.kg_session_harvest import main as harvest_main
 from brainlayer.paths import get_db_path
+from brainlayer.pipeline.code_intelligence import _code_intelligence_writer_lock
 
 SUMMARY_KEYS = (
     "harvested",
@@ -117,11 +114,15 @@ def finish_session(
 
     applied = 0
     if not dry_run and pass_items:
-        with _writer_pidfile_guard(get_db_path()):
+        with _code_intelligence_writer_lock(get_db_path(), dry_run=False):
             passes_doc = _filtered_decisions_doc(clean, pass_items)
             passes_path = decisions.with_name(f"{decisions.stem}.passes.json")
             passes_path.write_text(json.dumps(passes_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            (apply_func or _apply_passes)(passes_path, resolved_run_id, execute=True)
+            try:
+                (apply_func or _apply_passes)(passes_path, resolved_run_id, execute=True)
+            except Exception:
+                _unlink_if_exists(passes_path)
+                raise
         applied = len(pass_items)
 
     summary = {
@@ -292,72 +293,6 @@ def _default_run_id(batch_path: Path, decisions_path: Path) -> str:
         if path.exists():
             digest.update(path.read_bytes())
     return f"orqi-session-{today}-{digest.hexdigest()[:8]}"
-
-
-def _writer_pidfile_path(db_path: str | Path) -> Path:
-    pidfile_dir = Path(os.environ.get("BRAINLAYER_WRITER_PIDFILE_DIR", "/tmp")).expanduser()
-    if not pidfile_dir.is_absolute():
-        pidfile_dir = Path("/tmp") / pidfile_dir
-    resolved_path = Path(db_path).expanduser().resolve()
-    path_hash = hashlib.sha256(str(resolved_path).encode("utf-8")).hexdigest()[:16]
-    return pidfile_dir.resolve() / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
-
-
-@contextmanager
-def _writer_pidfile_guard(db_path: str | Path):
-    pidfile = _writer_pidfile_path(db_path)
-    pidfile.parent.mkdir(parents=True, exist_ok=True)
-    pid = os.getpid()
-    fd = None
-    for attempt in range(4):
-        try:
-            fd = os.open(pidfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            os.write(fd, f"{pid}\ndb_path={Path(db_path).expanduser().resolve()}\n".encode("utf-8"))
-            break
-        except FileExistsError as exc:
-            owner_pid = _read_pidfile_owner(pidfile)
-            if owner_pid is not None and _pid_is_alive(owner_pid):
-                raise RuntimeError(f"another writer is using {db_path} (pid {owner_pid})") from exc
-            try:
-                pidfile.unlink()
-            except FileNotFoundError:
-                pass
-            time.sleep(0.01 * (attempt + 1))
-    else:
-        raise RuntimeError(f"could not acquire writer pidfile for {db_path}")
-
-    try:
-        yield
-    finally:
-        if fd is not None:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            finally:
-                os.close(fd)
-        if _read_pidfile_owner(pidfile) == pid:
-            try:
-                pidfile.unlink()
-            except FileNotFoundError:
-                pass
-
-
-def _read_pidfile_owner(pidfile: Path) -> int | None:
-    try:
-        first = pidfile.read_text(encoding="utf-8").splitlines()[0].strip()
-        return int(first)
-    except (OSError, IndexError, ValueError):
-        return None
-
-
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def _load_json(path: Path) -> Any:

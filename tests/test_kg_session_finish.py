@@ -229,6 +229,28 @@ def test_finish_no_judge_applies_all_clean_decisions(tmp_path: Path):
     assert {item["stem"] for item in applied_docs[0]["merge"] + applied_docs[0]["keep"]} == {"android eas", "agent mix"}
 
 
+def test_finish_removes_passes_sidecar_when_apply_fails(tmp_path: Path):
+    batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
+
+    def judge(item: dict, _cluster: dict) -> dict:
+        disposition = "merge" if item["stem"] == "android eas" else "keep"
+        return _pass_verdict(item["stem"], disposition)
+
+    def apply(_path: Path, _run_id: str, *, execute: bool) -> dict:
+        assert execute is True
+        raise RuntimeError("apply failed")
+
+    try:
+        finish_session(batch_path, decisions_path, run_id="test-run", judge_func=judge, apply_func=apply)
+    except RuntimeError as exc:
+        assert str(exc) == "apply failed"
+    else:
+        raise AssertionError("finish_session should propagate apply failure")
+
+    assert not (tmp_path / "decisions.passes.json").exists()
+
+
 def test_finish_dry_run_mutates_nothing(tmp_path: Path):
     batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
     decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
