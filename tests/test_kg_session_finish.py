@@ -142,6 +142,75 @@ def test_finish_failed_judge_decision_is_queued_not_applied(tmp_path: Path):
     assert queue["etan-queue"][0]["item_kind"] == "cluster"
 
 
+def test_finish_clears_stale_review_queue_when_later_run_has_no_failures(tmp_path: Path):
+    batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
+    stale_queue = tmp_path / "decisions.review-queue.json"
+    stale_queue.write_text(json.dumps({"etan-queue": [{"stem": "stale"}]}), encoding="utf-8")
+
+    def judge(item: dict, _cluster: dict) -> dict:
+        disposition = "merge" if item["stem"] == "android eas" else "keep"
+        return _pass_verdict(item["stem"], disposition)
+
+    def apply(_path: Path, _run_id: str, *, execute: bool) -> dict:
+        assert execute is True
+        return {"ok": True}
+
+    summary = finish_session(batch_path, decisions_path, run_id="test-run", judge_func=judge, apply_func=apply)
+
+    assert summary["queued_for_review"] == 0
+    assert not stale_queue.exists()
+
+
+def test_finish_clears_stale_passes_when_no_decisions_pass_judge(tmp_path: Path):
+    batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
+    stale_passes = tmp_path / "decisions.passes.json"
+    stale_passes.write_text(json.dumps({"merge": [{"stem": "stale"}], "keep": []}), encoding="utf-8")
+    apply_called = False
+
+    def judge(item: dict, _cluster: dict) -> dict:
+        verdict = _pass_verdict(item["stem"], "split")
+        verdict["canonical_suggestion"] = None
+        return verdict
+
+    def apply(_path: Path, _run_id: str, *, execute: bool) -> dict:
+        nonlocal apply_called
+        apply_called = True
+        return {"ok": True}
+
+    summary = finish_session(batch_path, decisions_path, run_id="test-run", judge_func=judge, apply_func=apply)
+
+    assert summary["applied"] == 0
+    assert summary["queued_for_review"] == 2
+    assert apply_called is False
+    assert not stale_passes.exists()
+
+
+def test_finish_merge_fails_when_judge_selects_different_canonical(tmp_path: Path):
+    batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())
+    applied_docs: list[dict] = []
+
+    def judge(item: dict, _cluster: dict) -> dict:
+        if item["stem"] == "android eas":
+            verdict = _pass_verdict(item["stem"], "merge")
+            verdict["canonical_suggestion"] = "Different Android EAS"
+            return verdict
+        return _pass_verdict(item["stem"], "keep")
+
+    def apply(path: Path, _run_id: str, *, execute: bool) -> dict:
+        applied_docs.append(json.loads(path.read_text(encoding="utf-8")))
+        return {"ok": True}
+
+    summary = finish_session(batch_path, decisions_path, run_id="test-run", judge_func=judge, apply_func=apply)
+
+    assert summary["judge_fail"] == 1
+    assert applied_docs[0]["merge"] == []
+    queue = json.loads((tmp_path / "decisions.review-queue.json").read_text(encoding="utf-8"))
+    assert queue["etan-queue"][0]["stem"] == "android eas"
+
+
 def test_finish_no_judge_applies_all_clean_decisions(tmp_path: Path):
     batch_path = _write_json(tmp_path / "batch.json", SESSION_BATCH)
     decisions_path = _write_json(tmp_path / "decisions.json", _session_decisions())

@@ -18,7 +18,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from brainlayer.kg_judge import judge_clusters_with_backend
 from brainlayer.kg_session_harvest import harvest_session
@@ -39,6 +39,10 @@ SUMMARY_KEYS = (
 JudgeFunc = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
+class ApplyFunc(Protocol):
+    def __call__(self, path: Path, run_id: str, *, execute: bool) -> dict[str, Any]: ...
+
+
 def finish_session(
     batch_path: str | Path,
     decisions_path: str | Path,
@@ -47,7 +51,7 @@ def finish_session(
     no_judge: bool = False,
     dry_run: bool = False,
     judge_func: JudgeFunc | None = None,
-    apply_func: Callable[[Path, str], dict[str, Any]] | None = None,
+    apply_func: ApplyFunc | None = None,
 ) -> dict[str, Any]:
     """Run the ORQI session-finish pipeline and return the summary contract."""
     batch = Path(batch_path)
@@ -74,6 +78,8 @@ def finish_session(
     else:
         answers_path = decisions.with_name(f"{decisions.stem}.answers.json")
         clean_path = decisions.with_name(f"{decisions.stem}.clean.json")
+        review_queue_path = decisions.with_name(f"{decisions.stem}.review-queue.json")
+        passes_path = decisions.with_name(f"{decisions.stem}.passes.json")
         with contextlib.redirect_stdout(io.StringIO()):
             harvest_exit = harvest_main(
                 [
@@ -98,7 +104,11 @@ def finish_session(
             judge_func=judge_func,
         )
         if fail_items:
-            _write_review_queue(fail_items, batch, decisions.with_name(f"{decisions.stem}.review-queue.json"))
+            _write_review_queue(fail_items, batch, review_queue_path)
+        else:
+            _unlink_if_exists(review_queue_path)
+        if not pass_items:
+            _unlink_if_exists(passes_path)
 
     applied = 0
     if not dry_run and pass_items:
@@ -160,7 +170,14 @@ def _verdict_passes_item(item: dict[str, Any], verdict: dict[str, Any]) -> bool:
     if verdict.get("confidence") == "low" or verdict.get("evidence_degraded") is True:
         return False
     expected = "merge" if "canonical" in item else "keep"
-    return verdict.get("merge_disposition") == expected
+    if verdict.get("merge_disposition") != expected:
+        return False
+    if expected == "merge":
+        canonical = item.get("canonical")
+        if not isinstance(canonical, dict):
+            return False
+        return verdict.get("canonical_suggestion") == canonical.get("name")
+    return True
 
 
 def _decision_items(clean: dict[str, Any]) -> list[dict[str, Any]]:
@@ -243,7 +260,9 @@ def _item_key(item: dict[str, Any]) -> tuple[str, str]:
 
 
 def _item_kind(members: Any) -> str:
-    if isinstance(members, list) and any(isinstance(member, dict) and member.get("type") == "question" for member in members):
+    if isinstance(members, list) and any(
+        isinstance(member, dict) and member.get("type") == "question" for member in members
+    ):
         return "question"
     return "cluster"
 
@@ -271,6 +290,13 @@ def _default_run_id(batch_path: Path, decisions_path: Path) -> str:
 
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _unlink_if_exists(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _count_answers(answers_path: Path) -> int:
