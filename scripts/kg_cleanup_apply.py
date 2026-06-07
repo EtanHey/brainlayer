@@ -28,8 +28,9 @@ from brainlayer.kg_cleanup import (  # noqa: E402
     rollback,
     select_prune,
 )
+from brainlayer.paths import get_db_path  # noqa: E402
 
-DB = Path.home() / ".local/share/brainlayer/brainlayer.db"
+DB = get_db_path()
 DECISIONS_SCHEMA = "kg-flag-decisions-v1"
 DECISION_APPLY_COUNT_KEYS = ("merge_clusters", "rows_merged_away", "keep")
 
