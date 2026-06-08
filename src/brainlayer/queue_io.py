@@ -192,6 +192,7 @@ def enqueue_enrichment_updates(
             "content_hash": update.get("content_hash"),
             "entities": update.get("entities"),
             "chunk_origin": update.get("chunk_origin"),
+            "provenance_class": update.get("provenance_class"),
         }
         for update in updates
     ]

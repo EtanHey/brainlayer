@@ -543,6 +543,9 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["raw_entities_json"] = json.dumps(event["entities"])
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
+    provenance_class = str(event.get("provenance_class") or "").strip()
+    if "provenance_class" in cols and provenance_class:
+        updates["provenance_class"] = provenance_class
     chunk_origin = str(event.get("chunk_origin") or "").strip()
     if "chunk_origin" in cols and chunk_origin:
         row = conn.execute("SELECT chunk_origin FROM chunks WHERE id = ?", (chunk_id,)).fetchone()

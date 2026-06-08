@@ -586,6 +586,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 position INTEGER,
                 context_summary TEXT,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                provenance_class TEXT,
                 chunk_origin TEXT DEFAULT 'unknown',
                 content_class TEXT DEFAULT 'knowledge'
             )
@@ -638,6 +639,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("key_facts", "TEXT"),
             ("resolved_queries", "TEXT"),
             ("raw_entities_json", "TEXT"),
+            ("provenance_class", "TEXT"),
             ("epistemic_level", "TEXT"),
             ("version_scope", "TEXT"),
             ("debt_impact", "TEXT"),

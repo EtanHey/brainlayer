@@ -17,8 +17,6 @@ Pure-function unit tests only — no DB, no live BrainLayer, no writes.
 
 from __future__ import annotations
 
-import pytest
-
 from brainlayer.provenance import (
     PROVENANCE_RANK,
     Claim,
@@ -27,7 +25,6 @@ from brainlayer.provenance import (
     resolve,
     resolve_entity,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. CLASS DERIVATION (the mechanical gate that rides enrichment)
@@ -192,6 +189,59 @@ def test_per_attribute_resolution_keeps_attributes_independent():
     # ARBITRATION resolved INDEPENDENTLY — not crowned, routed to confirm
     assert by_attr["ARBITRATION"].disposition == "PENDING-USER-CONFIRM"
     assert by_attr["ARBITRATION"].authoritative is None
+
+
+def test_controllayer_definition_converges_but_arbitration_is_inference_only():
+    """Flip-case: controlLayer's DEFINITION can converge cleanly while a separate
+    ARBITRATION claim remains inference-only and must not borrow authority from
+    the definition attribute."""
+    claims = [
+        _c("FILE_SCHEMA_AND_POLICIES", "RAW-ETAN-DIRECT", "2026-06-05T22:32:03Z", attribute="DEFINITION"),
+        _c("FILE_SCHEMA_AND_POLICIES", "ETAN-ENDORSEMENT", "2026-06-05T22:33:00Z", attribute="DEFINITION"),
+        _c("FILE_SCHEMA_AND_POLICIES", "AGENT-PARAPHRASE", "2026-06-05T22:34:00Z", attribute="DEFINITION"),
+        _c("CONTROLLAYER_DECIDES", "AGENT-INFERENCE", "2026-06-08T09:00:00Z", anchored=False, attribute="ARBITRATION"),
+        _c(
+            "VOICEBAR_DAEMON_ENFORCES",
+            "AGENT-INFERENCE",
+            "2026-06-08T09:05:00Z",
+            anchored=False,
+            attribute="ARBITRATION",
+        ),
+    ]
+    by_attr = resolve_entity(claims)
+    assert by_attr["DEFINITION"].authoritative.value == "FILE_SCHEMA_AND_POLICIES"
+    assert by_attr["DEFINITION"].authoritative.provenance_class == "RAW-ETAN-DIRECT"
+    assert by_attr["ARBITRATION"].disposition == "PENDING-USER-CONFIRM"
+    assert by_attr["ARBITRATION"].authoritative is None
+    assert {c.value for c in by_attr["ARBITRATION"].flagged_pending_user_confirm} == {
+        "CONTROLLAYER_DECIDES",
+        "VOICEBAR_DAEMON_ENFORCES",
+    }
+
+
+def test_codex_budget_shape_newer_agent_budget_inference_cannot_beat_old_direct_budget():
+    """Flip-case: a recent Codex-budget inference must not cross the class
+    boundary and replace an older direct budget statement."""
+    direct_budget = _c(
+        "TOKEN_BUDGET_IS_USER_CONTROLLED",
+        "RAW-ETAN-DIRECT",
+        "2026-04-12T10:00:00Z",
+        cid="budget-direct",
+        attribute="CODEX_BUDGET_POLICY",
+    )
+    recent_agent_budget = _c(
+        "CODEX_CAN_SPEND_FREELY_UNTIL_CONTEXT_COMPACTION",
+        "AGENT-INFERENCE",
+        "2026-06-08T23:20:00Z",
+        anchored=False,
+        cid="budget-infer",
+        attribute="CODEX_BUDGET_POLICY",
+    )
+    by_attr = resolve_entity([direct_budget, recent_agent_budget])
+    out = by_attr["CODEX_BUDGET_POLICY"]
+    assert out.authoritative.id == "budget-direct"
+    assert out.authoritative.value == "TOKEN_BUDGET_IS_USER_CONTROLLED"
+    assert recent_agent_budget in out.flagged_pending_user_confirm
 
 
 def test_foundational_old_fact_not_buried_by_recent_other_attribute():
