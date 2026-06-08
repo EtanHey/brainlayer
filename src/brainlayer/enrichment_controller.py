@@ -30,6 +30,7 @@ from .pipeline.enrichment import build_external_prompt, parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
 from .pipeline.write_queue import WriteQueue
+from .provenance import derive_provenance_class
 
 logger = logging.getLogger(__name__)
 
@@ -505,6 +506,12 @@ def _enrichment_update_payload(
         "content_hash": _content_hash(content) if content else None,
         "entities": enrichment.get("entities", []),
         "chunk_origin": normalized_origin,
+        "provenance_class": derive_provenance_class(
+            content_type=chunk.get("content_type"),
+            sender=chunk.get("sender"),
+            text=content,
+            prev_assistant_text=chunk.get("prev_assistant_text"),
+        ),
     }
 
 
@@ -638,6 +645,7 @@ def _ensure_enrichment_columns(store, *, yield_after: bool = True) -> None:
     def _ensure() -> None:
         _ensure_content_hash_column(store)
         _ensure_raw_entities_json_column(store)
+        _ensure_provenance_class_column(store)
 
     _submit_write(store, "ensure-enrichment-columns", _ensure, yield_after=yield_after)
 
@@ -902,6 +910,19 @@ def _ensure_raw_entities_json_column(store) -> bool:
             return False
 
 
+def _ensure_provenance_class_column(store) -> bool:
+    """Ensure the provenance_class staging column exists on chunks."""
+    try:
+        store.conn.cursor().execute("SELECT provenance_class FROM chunks LIMIT 0")
+        return True
+    except Exception:
+        try:
+            store.conn.cursor().execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+            return True
+        except Exception:
+            return False
+
+
 def _normalize_chunk_tags(tags: Any) -> list[str]:
     if isinstance(tags, str):
         try:
@@ -1057,6 +1078,17 @@ def _apply_enrichment(
             store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
         except Exception:
             pass  # Non-critical — dedup still works on next index
+    if _ensure_provenance_class_column(store):
+        provenance_class = derive_provenance_class(
+            content_type=chunk.get("content_type"),
+            sender=chunk.get("sender"),
+            text=content,
+            prev_assistant_text=chunk.get("prev_assistant_text"),
+        )
+        store.conn.cursor().execute(
+            "UPDATE chunks SET provenance_class = ? WHERE id = ?",
+            (provenance_class, chunk["id"]),
+        )
 
 
 def _enrich_single_chunk(

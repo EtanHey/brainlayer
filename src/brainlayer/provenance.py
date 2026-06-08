@@ -98,12 +98,10 @@ def derive_provenance_class(
 
     # Etan-direct candidates: genuine user_message turns only. A role:user
     # envelope carrying tool_result / file_read content is NOT Etan speaking.
-    if ct in _ETAN_CONTENT_TYPES or (sdr == "user" and ct not in _ASSISTANT_CONTENT_TYPES and ct not in {"file_read", "tool_result"}):
-        if (
-            prev_assistant_text
-            and len(text.strip()) <= _ENDORSEMENT_MAX_LEN
-            and _echoes(text, prev_assistant_text)
-        ):
+    if ct in _ETAN_CONTENT_TYPES or (
+        sdr == "user" and ct not in _ASSISTANT_CONTENT_TYPES and ct not in {"file_read", "tool_result"}
+    ):
+        if prev_assistant_text and len(text.strip()) <= _ENDORSEMENT_MAX_LEN and _echoes(text, prev_assistant_text):
             return ETAN_ENDORSEMENT
         return RAW_ETAN_DIRECT
 
@@ -122,9 +120,31 @@ def derive_provenance_class(
 # ack / filler words carry no propositional content: a short user turn made up
 # only of these is a bare agreement to whatever was just said -> ENDORSEMENT.
 _ACK_FILLER = {
-    "yeah", "yep", "yes", "okay", "sure", "exactly", "that", "this", "right",
-    "true", "agree", "agreed", "correct", "good", "great", "nice", "perfect",
-    "love", "like", "fine", "cool", "totally", "absolutely", "indeed", "yup",
+    "yeah",
+    "yep",
+    "yes",
+    "okay",
+    "sure",
+    "exactly",
+    "that",
+    "this",
+    "right",
+    "true",
+    "agree",
+    "agreed",
+    "correct",
+    "good",
+    "great",
+    "nice",
+    "perfect",
+    "love",
+    "like",
+    "fine",
+    "cool",
+    "totally",
+    "absolutely",
+    "indeed",
+    "yup",
 }
 
 
