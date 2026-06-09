@@ -217,6 +217,40 @@ class TestHybridSearch:
 
         assert "fts-hit" in results["ids"][0]
 
+    def test_hybrid_search_fts_only_returns_provenance_metadata(self, store):
+        cursor = store.conn.cursor()
+        columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+        if "provenance_class" not in columns:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+        if "superseded_by" not in columns:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN superseded_by TEXT")
+        store._has_provenance_class = True
+        store._has_superseded_by = True
+        _insert_chunk(
+            store,
+            chunk_id="fts-provenance",
+            content="exact provenance keyword fallback for full text only",
+            embedding=_embed("distant vector"),
+        )
+        cursor.execute(
+            "UPDATE chunks SET provenance_class = ?, superseded_by = ? WHERE id = ?",
+            ("RAW-ETAN-DIRECT", "replacement-chunk", "fts-provenance"),
+        )
+        store.build_binary_index()
+        cursor.execute("DELETE FROM chunk_vectors")
+        cursor.execute("DELETE FROM chunk_vectors_binary")
+
+        results = store.hybrid_search(
+            query_embedding=_embed("nothing close"),
+            query_text="provenance keyword fallback",
+            n_results=5,
+            include_archived=True,
+        )
+
+        assert results["ids"][0] == ["fts-provenance"]
+        assert results["metadatas"][0][0]["provenance_class"] == "RAW-ETAN-DIRECT"
+        assert results["metadatas"][0][0]["superseded_by"] == "replacement-chunk"
+
     def test_hybrid_search_fts_only_respects_sender_and_language_filters(self, store):
         _insert_chunk(
             store,
