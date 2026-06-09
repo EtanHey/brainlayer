@@ -1015,8 +1015,14 @@ def test_apply_enrichment_sets_content_hash():
     _apply_enrichment(store, chunk, {"summary": "s"})
 
     expected_hash = _content_hash("test content")
-    args = cursor.execute.call_args_list[-1][0]
-    assert args[1] == (expected_hash, "c1")
+    # _apply_enrichment issues several UPDATEs (raw_entities, content_hash,
+    # provenance_class); assert on the content_hash write specifically rather
+    # than relying on it being the last execute call.
+    content_hash_calls = [
+        call.args for call in cursor.execute.call_args_list if call.args and "content_hash" in call.args[0]
+    ]
+    assert content_hash_calls, "expected a content_hash UPDATE"
+    assert content_hash_calls[-1][1] == (expected_hash, "c1")
 
 
 def test_apply_enrichment_persists_raw_entities():
