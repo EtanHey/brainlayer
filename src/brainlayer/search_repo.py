@@ -1848,6 +1848,8 @@ class SearchMixin:
 
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self, "c")
+            provenance_class_expr = _optional_chunk_expr(self, "provenance_class", "c")
+            superseded_by_expr = _optional_chunk_expr(self, "superseded_by", "c")
 
             def _set_fts_progress_handler(timeout_ms: float):
                 connection = None
