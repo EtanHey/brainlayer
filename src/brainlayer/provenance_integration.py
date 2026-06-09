@@ -282,6 +282,13 @@ def get_entity_provenance_annotations(store, entity: str) -> dict[str, dict[str,
 
     annotations: dict[str, dict[str, Any]] = {}
     for attribute, resolution in resolutions.items():
+        # "MENTION" is the catch-all attribute for chunks with no parseable
+        # (attribute: value) claim — i.e. the entity is merely referenced. These
+        # are not resolved facts and must never be crowned AUTHORITATIVE, or a
+        # stale chunk that a correction already superseded at the entity_facts
+        # layer gets re-surfaced here. Only structured attributes are real.
+        if attribute == "MENTION":
+            continue
         authoritative = resolution.authoritative
         if authoritative is None:
             continue
