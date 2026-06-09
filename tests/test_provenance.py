@@ -380,6 +380,28 @@ def test_operational_evidence_opt_in_wins_for_system_state_attribute():
     assert out.authoritative.id == "operational"
 
 
+def test_operational_evidence_opt_in_treats_primary_backend_as_system_state():
+    operational = _c(
+        "GEMINI_FROM_AGGREGATE_ORIGIN_COUNTS",
+        OPERATIONAL_EVIDENCE,
+        "2026-06-08T11:00:00Z",
+        cid="operational",
+        attribute="PRIMARY_BACKEND",
+    )
+    stale_paraphrase = _c(
+        "GROQ_FROM_STALE_STATUS_SUMMARY",
+        "AGENT-PARAPHRASE",
+        "2026-06-01T11:00:00Z",
+        cid="paraphrase",
+        attribute="PRIMARY_BACKEND",
+    )
+
+    out = resolve([operational, stale_paraphrase], enable_operational_evidence=True)
+
+    assert out.authoritative.id == "operational"
+    assert [claim.id for claim in out.superseded] == ["paraphrase"]
+
+
 def test_operational_evidence_opt_in_does_not_apply_to_personal_attributes():
     operational = _c(
         "SYSTEM_OBSERVED_PREFERENCE",

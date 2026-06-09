@@ -129,6 +129,34 @@ def test_brain_entity_output_does_not_mark_future_valid_until_expired():
     assert "expired 2026-12-31" not in output
 
 
+def test_brain_entity_output_includes_provenance_authority_annotations():
+    output = format_entity_simple(
+        {
+            "name": "enrichment",
+            "provenance_resolutions": {
+                "PRIMARY_BACKEND": {
+                    "authoritative": {
+                        "value": "Gemini",
+                        "provenance_class": "OPERATIONAL-EVIDENCE",
+                        "evidence": "220K chunk_origin rows",
+                    },
+                    "superseded": [
+                        {
+                            "value": "Groq",
+                            "provenance_class": "AGENT-PARAPHRASE",
+                            "chunk_id": "c-groq",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+    assert "### Provenance Authority" in output
+    assert "PRIMARY_BACKEND: Gemini [AUTHORITATIVE · OPERATIONAL-EVIDENCE · 220K chunk_origin rows]" in output
+    assert 'superseded: "Groq" (AGENT-PARAPHRASE, c-groq) — reversible' in output
+
+
 def test_brain_recall_context_output_is_labeled_chunk_markdown():
     output = format_recalled_context(
         "how did we handle session expiry",

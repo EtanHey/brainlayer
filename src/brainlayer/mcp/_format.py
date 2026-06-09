@@ -232,6 +232,40 @@ def format_entity_simple(entity: dict) -> str:
     if not facts and not semantic_rels:
         lines.append("- None")
 
+    provenance = entity.get("provenance_resolutions")
+    if isinstance(provenance, dict) and provenance:
+        lines.extend(["", "### Provenance Authority"])
+        for attribute, resolution in sorted(provenance.items()):
+            if not isinstance(resolution, dict):
+                continue
+            authoritative = resolution.get("authoritative")
+            if isinstance(authoritative, dict):
+                value = authoritative.get("value", "")
+                provenance_class = authoritative.get("provenance_class", "")
+                evidence = authoritative.get("evidence") or authoritative.get("chunk_id") or ""
+                parts = ["AUTHORITATIVE"]
+                if provenance_class:
+                    parts.append(str(provenance_class))
+                if evidence:
+                    parts.append(str(evidence))
+                lines.append(f"- {attribute}: {value} [{' · '.join(parts)}]")
+            for superseded in resolution.get("superseded") or []:
+                if not isinstance(superseded, dict):
+                    continue
+                value = superseded.get("value", "")
+                provenance_class = superseded.get("provenance_class", "")
+                chunk_id = superseded.get("chunk_id", "")
+                details = ", ".join(str(part) for part in (provenance_class, chunk_id) if part)
+                suffix = f" ({details})" if details else ""
+                lines.append(f'  - superseded: "{value}"{suffix} — reversible')
+            for pending in resolution.get("pending") or []:
+                if not isinstance(pending, dict):
+                    continue
+                lines.append(
+                    f"  - pending-confirm: {pending.get('value', '')} "
+                    f"({pending.get('provenance_class', '')}, {pending.get('chunk_id', '')})"
+                )
+
     # Chunks / memories
     lines.extend(["", "### Recent context"])
     chunks = entity.get("chunks", [])

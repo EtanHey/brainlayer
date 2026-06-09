@@ -31,6 +31,7 @@ from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
 from .pipeline.write_queue import WriteQueue
 from .provenance import derive_provenance_class
+from .provenance_integration import enqueue_provenance_resolution_for_entities
 
 logger = logging.getLogger(__name__)
 
@@ -914,10 +915,12 @@ def _ensure_provenance_class_column(store) -> bool:
     """Ensure the provenance_class staging column exists on chunks."""
     try:
         store.conn.cursor().execute("SELECT provenance_class FROM chunks LIMIT 0")
+        setattr(store, "_has_provenance_class", True)
         return True
     except Exception:
         try:
             store.conn.cursor().execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+            setattr(store, "_has_provenance_class", True)
             return True
         except Exception:
             return False
@@ -1089,6 +1092,7 @@ def _apply_enrichment(
             "UPDATE chunks SET provenance_class = ? WHERE id = ?",
             (provenance_class, chunk["id"]),
         )
+    enqueue_provenance_resolution_for_entities(store, entities, chunk_id=chunk["id"])
 
 
 def _enrich_single_chunk(

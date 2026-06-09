@@ -358,6 +358,13 @@ def _content_class_expr(store: Any, alias: str | None = None) -> str:
     return f"'{DEFAULT_CONTENT_CLASS}'"
 
 
+def _optional_chunk_expr(store: Any, column: str, alias: str | None = None, fallback: str = "NULL") -> str:
+    attr = f"_has_{column}"
+    if getattr(store, attr, False):
+        return f"{alias}.{column}" if alias else column
+    return f"{fallback} AS {column}"
+
+
 def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
     """Return a defensive deep copy of cached hybrid_search results."""
     return copy.deepcopy(result)
@@ -1042,13 +1049,16 @@ class SearchMixin:
             params = [query_bytes, effective_k] + filter_params
             chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self, "c")
+            provenance_class_expr = _optional_chunk_expr(self, "provenance_class", "c")
+            superseded_by_expr = _optional_chunk_expr(self, "superseded_by", "c")
             query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
                        c.created_at, c.source, c.decay_score,
-                       {chunk_origin_expr}, {content_class_expr} AS content_class
+                       {chunk_origin_expr}, {content_class_expr} AS content_class,
+                       {provenance_class_expr}, {superseded_by_expr}
                 FROM chunk_vectors v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH ? AND k = ? {where_sql}
@@ -1138,13 +1148,16 @@ class SearchMixin:
 
             chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self)
+            provenance_class_expr = _optional_chunk_expr(self, "provenance_class")
+            superseded_by_expr = _optional_chunk_expr(self, "superseded_by")
             query = f"""
                 SELECT id, content, metadata, source_file, project,
                        content_type, value_type, char_count,
                        NULL as distance,
                        summary, tags, importance, intent,
                        created_at, source, decay_score,
-                       {chunk_origin_expr}, {content_class_expr} AS content_class
+                       {chunk_origin_expr}, {content_class_expr} AS content_class,
+                       {provenance_class_expr}, {superseded_by_expr}
                 FROM chunks
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY char_count DESC
@@ -1200,6 +1213,10 @@ class SearchMixin:
                 metadata["chunk_origin"] = row[16]
             if len(row) > 17:
                 metadata["content_class"] = normalize_content_class(row[17])
+            if len(row) > 18 and row[18]:
+                metadata["provenance_class"] = row[18]
+            if len(row) > 19 and row[19]:
+                metadata["superseded_by"] = row[19]
             metadatas.append(metadata)
             distances.append(row[8])  # distance (None for text search)
 
@@ -1435,13 +1452,16 @@ class SearchMixin:
         params = [query_bytes, effective_k] + filter_params
         chunk_origin_expr = "c.chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
         content_class_expr = _content_class_expr(self, "c")
+        provenance_class_expr = _optional_chunk_expr(self, "provenance_class", "c")
+        superseded_by_expr = _optional_chunk_expr(self, "superseded_by", "c")
         query = f"""
                 SELECT c.id, c.content, c.metadata, c.source_file, c.project,
                        c.content_type, c.value_type, c.char_count,
                        v.distance,
                        c.summary, c.tags, c.importance, c.intent,
                        c.created_at, c.source, c.decay_score,
-                       {chunk_origin_expr}, {content_class_expr} AS content_class
+                       {chunk_origin_expr}, {content_class_expr} AS content_class,
+                       {provenance_class_expr}, {superseded_by_expr}
                 FROM chunk_vectors_binary v
                 JOIN chunks c ON v.chunk_id = c.id
                 WHERE v.embedding MATCH vec_quantize_binary(?) AND k = ? {where_sql}
@@ -1502,6 +1522,10 @@ class SearchMixin:
                 metadata["chunk_origin"] = row[16]
             if len(row) > 17:
                 metadata["content_class"] = normalize_content_class(row[17])
+            if len(row) > 18 and row[18]:
+                metadata["provenance_class"] = row[18]
+            if len(row) > 19 and row[19]:
+                metadata["superseded_by"] = row[19]
             metadatas.append(metadata)
             distances.append(row[8])
 
@@ -1859,7 +1883,8 @@ class SearchMixin:
                            c.content_type, c.value_type, c.char_count,
                            c.summary, c.tags, c.importance, c.intent,
                            c.created_at, c.source, c.sender, c.language, c.decay_score,
-                           {chunk_origin_expr}, {content_class_expr} AS content_class
+                           {chunk_origin_expr}, {content_class_expr} AS content_class,
+                           {provenance_class_expr}, {superseded_by_expr}
                     FROM {table_name} f
                     JOIN chunks c ON f.chunk_id = c.id
                     {entity_join}
@@ -1926,6 +1951,8 @@ class SearchMixin:
                         "decay_score": row[17],
                         "chunk_origin": row[18],
                         "content_class": normalize_content_class(row[19] if len(row) > 19 else None),
+                        "provenance_class": row[20] if len(row) > 20 else None,
+                        "superseded_by": row[21] if len(row) > 21 else None,
                     },
                 )
 
@@ -2003,12 +2030,15 @@ class SearchMixin:
 
             chunk_origin_expr = "chunk_origin" if getattr(self, "_has_chunk_origin", True) else "'unknown'"
             content_class_expr = _content_class_expr(self)
+            provenance_class_expr = _optional_chunk_expr(self, "provenance_class")
+            superseded_by_expr = _optional_chunk_expr(self, "superseded_by")
             recent_query = f"""
                     SELECT id, content, metadata, source_file, project,
                            content_type, value_type, char_count,
                            summary, tags, importance, intent,
                            created_at, source, sender, language, decay_score,
-                           {chunk_origin_expr}, {content_class_expr} AS content_class
+                           {chunk_origin_expr}, {content_class_expr} AS content_class,
+                           {provenance_class_expr}, {superseded_by_expr}
                     FROM chunks
                     WHERE datetime(created_at) >= datetime('now', '-7 days') {" ".join(recent_extra)}
                     ORDER BY created_at DESC
@@ -2050,6 +2080,8 @@ class SearchMixin:
                         "decay_score": row[16],
                         "chunk_origin": row[17],
                         "content_class": normalize_content_class(row[18] if len(row) > 18 else None),
+                        "provenance_class": row[19] if len(row) > 19 else None,
+                        "superseded_by": row[20] if len(row) > 20 else None,
                     },
                 )
 
@@ -2126,6 +2158,10 @@ class SearchMixin:
                 if data.get("chunk_origin"):
                     meta["chunk_origin"] = data["chunk_origin"]
                 meta["content_class"] = normalize_content_class(data.get("content_class"))
+                if data.get("provenance_class"):
+                    meta["provenance_class"] = data["provenance_class"]
+                if data.get("superseded_by"):
+                    meta["superseded_by"] = data["superseded_by"]
                 dist = None
             else:
                 continue

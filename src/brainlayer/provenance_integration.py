@@ -36,6 +36,16 @@ class ProvenanceConflictReport:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ProvenanceSweepReport:
+    swept: int = 0
+    superseded_count: int = 0
+    pending_confirm_count: int = 0
+    skipped_personal_count: int = 0
+    entities: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
 def resolve_entity_conflicts(
     store,
     entity: str,
@@ -64,6 +74,7 @@ def resolve_entity_conflicts(
 
     rows = _entity_chunk_rows(conn, entity_ids)
     claims = [_row_to_claim(row, canonical_name) for row in rows]
+    actionable_claim_ids = {claim.id for row, claim in zip(rows, claims, strict=True) if _row_has_actionable_fact(row)}
     resolutions = resolve_entity(
         claims,
         enable_operational_evidence=enable_operational_evidence,
@@ -83,9 +94,19 @@ def resolve_entity_conflicts(
         authoritative = resolution.authoritative
         if authoritative is not None:
             for loser in resolution.superseded:
+                if authoritative.id not in actionable_claim_ids or loser.id not in actionable_claim_ids:
+                    report.notes.append(
+                        f"Skipped unstructured provenance supersede for attribute {resolution.attribute}"
+                    )
+                    continue
                 if _brain_supersede(store, conn, loser.id, authoritative.id):
                     report.superseded_count += 1
+                elif _is_personal_chunk(conn, loser.id):
+                    report.notes.append(f"Skipped personal-data supersede for chunk {loser.id}")
         for claim in resolution.flagged_pending_user_confirm:
+            if claim.id not in actionable_claim_ids:
+                report.notes.append(f"Skipped unstructured pending-confirm for attribute {resolution.attribute}")
+                continue
             if _enqueue_pending_user_confirm(conn, claim):
                 report.pending_confirm_count += 1
     _commit_if_supported(conn)
@@ -126,6 +147,161 @@ def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
     conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ? OR id = ?", (chunk_id, claim_id))
     _commit_if_supported(conn)
     return resolve_entity_conflicts(store, entity, dry_run=False)
+
+
+def enqueue_provenance_resolution(
+    store, entity: str, *, chunk_id: str | None = None, reason: str = "enrichment"
+) -> bool:
+    """Debounced enqueue for an entity whose claims should be re-resolved."""
+    normalized = str(entity or "").strip()
+    if not normalized:
+        return False
+    conn = _conn(store)
+    _ensure_provenance_resolve_queue(conn)
+    now = datetime.now(timezone.utc).isoformat()
+    inserted = not conn.execute("SELECT 1 FROM provenance_resolve_queue WHERE entity = ?", (normalized,)).fetchone()
+    conn.execute(
+        """
+        INSERT INTO provenance_resolve_queue (entity, chunk_id, reason, created_at, updated_at, attempts)
+        VALUES (?, ?, ?, ?, ?, 0)
+        ON CONFLICT(entity) DO UPDATE SET
+            chunk_id = COALESCE(excluded.chunk_id, provenance_resolve_queue.chunk_id),
+            reason = excluded.reason,
+            updated_at = excluded.updated_at
+        """,
+        (normalized, chunk_id, reason, now, now),
+    )
+    _commit_if_supported(conn)
+    return inserted
+
+
+def enqueue_provenance_resolution_for_entities(
+    store,
+    entities: list[Any] | None,
+    *,
+    chunk_id: str | None = None,
+    reason: str = "enrichment",
+) -> int:
+    """Extract entity names from enrichment payloads and enqueue each once."""
+    count = 0
+    for entity in entities or []:
+        name = _entity_name_from_payload(entity)
+        if name and enqueue_provenance_resolution(store, name, chunk_id=chunk_id, reason=reason):
+            count += 1
+    return count
+
+
+def sweep_provenance_queue(
+    store,
+    *,
+    limit: int = 100,
+    enable_operational_evidence: bool = False,
+) -> ProvenanceSweepReport:
+    """Drain queued entities and apply reversible provenance resolution."""
+    conn = _conn(store)
+    _ensure_provenance_resolve_queue(conn)
+    rows = list(
+        conn.execute(
+            """
+            SELECT entity
+            FROM provenance_resolve_queue
+            ORDER BY updated_at ASC, entity ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    )
+    report = ProvenanceSweepReport()
+    for row in rows:
+        entity = str(row[0])
+        entity_report = resolve_entity_conflicts(
+            store,
+            entity,
+            dry_run=False,
+            enable_operational_evidence=enable_operational_evidence,
+        )
+        report.swept += 1
+        report.entities.append(entity)
+        report.superseded_count += entity_report.superseded_count
+        report.pending_confirm_count += entity_report.pending_confirm_count
+        personal_notes = [note for note in entity_report.notes if "personal-data" in note]
+        report.skipped_personal_count += len(personal_notes)
+        report.notes.extend(entity_report.notes)
+        conn.execute("DELETE FROM provenance_resolve_queue WHERE entity = ?", (entity,))
+    _commit_if_supported(conn)
+    return report
+
+
+def list_pending_confirm(store) -> list[dict[str, Any]]:
+    conn = _conn(store)
+    _ensure_pending_user_confirm_table(conn)
+    rows = conn.execute(
+        """
+        SELECT id, entity, attribute, chunk_id, value, provenance_class, reason, created_at
+        FROM provenance_pending_user_confirm
+        ORDER BY created_at ASC, entity ASC, attribute ASC
+        """
+    ).fetchall()
+    keys = ["id", "entity", "attribute", "chunk_id", "value", "provenance_class", "reason", "created_at"]
+    return [dict(zip(keys, tuple(row), strict=True)) for row in rows]
+
+
+def reject_pending(store, claim_id: str) -> bool:
+    """Reject a pending inference by reversibly archiving its source chunk."""
+    conn = _conn(store)
+    _ensure_pending_user_confirm_table(conn)
+    row = conn.execute(
+        """
+        SELECT chunk_id
+        FROM provenance_pending_user_confirm
+        WHERE chunk_id = ? OR id = ?
+        """,
+        (claim_id, claim_id),
+    ).fetchone()
+    if row is None:
+        return False
+    chunk_id = str(row[0])
+    archived = _archive_chunk(store, conn, chunk_id)
+    if archived:
+        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ? OR id = ?", (chunk_id, claim_id))
+        _commit_if_supported(conn)
+    return archived
+
+
+def get_entity_provenance_annotations(store, entity: str) -> dict[str, dict[str, Any]]:
+    """Return authoritative/superseded/pending provenance by attribute for brain_entity."""
+    conn = _conn(store)
+    entity_ids, canonical_name = _entity_ids(conn, entity)
+    if not entity_ids:
+        return {}
+
+    rows = _entity_chunk_rows(conn, entity_ids, include_archived=True)
+    active_claims = [_row_to_claim(row, canonical_name) for row in rows if _is_active_row(row)]
+    resolutions = resolve_entity(active_claims)
+    all_pairs = [(row, _row_to_claim(row, canonical_name)) for row in rows]
+
+    annotations: dict[str, dict[str, Any]] = {}
+    for attribute, resolution in resolutions.items():
+        authoritative = resolution.authoritative
+        if authoritative is None:
+            continue
+        superseded = [
+            _claim_annotation(claim)
+            for row, claim in all_pairs
+            if claim.attribute == attribute and _is_superseded_row(row) and claim.id != authoritative.id
+        ]
+        annotations[attribute] = {
+            "authoritative": _claim_annotation(authoritative),
+            "superseded": superseded,
+            "pending": [],
+        }
+
+    for pending in _pending_for_entity(conn, canonical_name):
+        attribute = pending["attribute"]
+        annotations.setdefault(attribute, {"authoritative": None, "superseded": [], "pending": []})
+        annotations[attribute]["pending"].append(pending)
+
+    return annotations
 
 
 def _conn(store):
@@ -173,7 +349,32 @@ def _tables(conn) -> set[str]:
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
-def _entity_chunk_rows(conn, entity_ids: list[str]) -> list[dict[str, Any]]:
+def _ensure_provenance_resolve_queue(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provenance_resolve_queue (
+            entity TEXT PRIMARY KEY,
+            chunk_id TEXT,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+
+def _entity_name_from_payload(entity: Any) -> str:
+    if isinstance(entity, dict):
+        for key in ("name", "text", "entity", "label"):
+            value = entity.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+    return str(entity or "").strip()
+
+
+def _entity_chunk_rows(conn, entity_ids: list[str], *, include_archived: bool = False) -> list[dict[str, Any]]:
     chunk_cols = _columns(conn, "chunks")
     ec_cols = _columns(conn, "kg_entity_chunks")
 
@@ -185,8 +386,18 @@ def _entity_chunk_rows(conn, entity_ids: list[str]) -> list[dict[str, Any]]:
 
     placeholders = ",".join("?" for _ in entity_ids)
     status_filter = ""
-    if "status" in chunk_cols:
-        status_filter = "AND COALESCE(c.status, 'active') NOT IN ('archived', 'superseded')"
+    lifecycle_filters: list[str] = []
+    if not include_archived:
+        if "status" in chunk_cols:
+            lifecycle_filters.append("COALESCE(c.status, 'active') NOT IN ('archived', 'superseded')")
+        if "superseded_by" in chunk_cols:
+            lifecycle_filters.append("c.superseded_by IS NULL")
+        if "archived_at" in chunk_cols:
+            lifecycle_filters.append("c.archived_at IS NULL")
+        if "archived" in chunk_cols:
+            lifecycle_filters.append("COALESCE(c.archived, 0) = 0")
+    if lifecycle_filters:
+        status_filter = "AND " + " AND ".join(lifecycle_filters)
 
     sql = f"""
         SELECT
@@ -196,6 +407,10 @@ def _entity_chunk_rows(conn, entity_ids: list[str]) -> list[dict[str, Any]]:
             {chunk_expr("sender")},
             {chunk_expr("created_at", "'1970-01-01T00:00:00Z'")},
             {chunk_expr("provenance_class")},
+            {chunk_expr("status", "'active'")},
+            {chunk_expr("superseded_by")},
+            {chunk_expr("archived", "0")},
+            {chunk_expr("archived_at")},
             {ec_expr("context")},
             {ec_expr("mention_type")}
         FROM kg_entity_chunks ec
@@ -210,6 +425,10 @@ def _entity_chunk_rows(conn, entity_ids: list[str]) -> list[dict[str, Any]]:
         "sender",
         "created_at",
         "provenance_class",
+        "status",
+        "superseded_by",
+        "archived",
+        "archived_at",
         "context",
         "mention_type",
     ]
@@ -235,6 +454,23 @@ def _row_to_claim(row: dict[str, Any], entity: str) -> Claim:
     )
 
 
+_ATTRIBUTE_VALUE_RE = re.compile(r"\s*([A-Za-z][A-Za-z0-9 _-]{1,40})\s*:\s*(.+?)\s*$", flags=re.S)
+
+
+def _row_has_actionable_fact(row: dict[str, Any]) -> bool:
+    structured = _parse_context(row.get("context"))
+    if structured:
+        attr = structured.get("attribute") or structured.get("relation_type") or structured.get("relation")
+        value = structured.get("value") or structured.get("fact") or structured.get("summary")
+        if attr and value:
+            return True
+
+    return any(
+        bool(_ATTRIBUTE_VALUE_RE.match(candidate))
+        for candidate in (str(row.get("context") or ""), str(row.get("content") or ""))
+    )
+
+
 def _attribute_value(content: str, context: Any, mention_type: Any) -> tuple[str, str]:
     structured = _parse_context(context)
     if structured:
@@ -244,7 +480,7 @@ def _attribute_value(content: str, context: Any, mention_type: Any) -> tuple[str
             return _normalize_attribute(str(attr)), _normalize_value(str(value))
 
     for candidate in (str(context or ""), content):
-        match = re.match(r"\s*([A-Za-z][A-Za-z0-9 _-]{1,40})\s*:\s*(.+?)\s*$", candidate, flags=re.S)
+        match = _ATTRIBUTE_VALUE_RE.match(candidate)
         if match:
             return _normalize_attribute(match.group(1)), _normalize_value(match.group(2))
 
@@ -274,6 +510,9 @@ def _normalize_value(value: str) -> str:
 
 
 def _brain_supersede(store, conn, old_chunk_id: str, new_chunk_id: str) -> bool:
+    if _is_personal_chunk(conn, old_chunk_id):
+        return False
+
     if hasattr(store, "supersede_chunk"):
         return bool(store.supersede_chunk(old_chunk_id, new_chunk_id))
 
@@ -289,6 +528,88 @@ def _brain_supersede(store, conn, old_chunk_id: str, new_chunk_id: str) -> bool:
         updates += ", status = 'superseded'"
     conn.execute(f"UPDATE chunks SET {updates} WHERE id = ?", (new_chunk_id, old_chunk_id))
     return True
+
+
+_PERSONAL_TYPES = {"journal", "note", "bookmark"}
+_PERSONAL_KEYWORDS = ("health", "family", "relationship", "finance", "financial", "personal", "therapy", "medical")
+
+
+def _is_personal_chunk(conn, chunk_id: str) -> bool:
+    cols = _columns(conn, "chunks")
+    if not conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+        return False
+    select_cols = ["content"]
+    select_cols.append("content_type" if "content_type" in cols else "NULL AS content_type")
+    row = conn.execute(f"SELECT {', '.join(select_cols)} FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    if row is None:
+        return False
+    content = str(row[0] or "")
+    content_type = str(row[1] or "").strip().lower()
+    return content_type in _PERSONAL_TYPES or any(keyword in content.lower() for keyword in _PERSONAL_KEYWORDS)
+
+
+def _archive_chunk(store, conn, chunk_id: str) -> bool:
+    if hasattr(store, "archive_chunk"):
+        return bool(store.archive_chunk(chunk_id))
+
+    if not conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+        return False
+    cols = _columns(conn, "chunks")
+    updates = []
+    params: list[Any] = []
+    if "status" in cols:
+        updates.append("status = 'archived'")
+    if "archived" in cols:
+        updates.append("archived = 1")
+    if "archived_at" in cols:
+        updates.append("archived_at = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+    if not updates:
+        updates.append("status = 'archived'")
+        conn.execute("ALTER TABLE chunks ADD COLUMN status TEXT DEFAULT 'active'")
+    params.append(chunk_id)
+    conn.execute(f"UPDATE chunks SET {', '.join(updates)} WHERE id = ?", params)
+    return True
+
+
+def _is_active_row(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "active").lower()
+    return (
+        status not in {"archived", "superseded"}
+        and not row.get("superseded_by")
+        and not row.get("archived_at")
+        and not bool(row.get("archived"))
+    )
+
+
+def _is_superseded_row(row: dict[str, Any]) -> bool:
+    return str(row.get("status") or "").lower() == "superseded" or bool(row.get("superseded_by"))
+
+
+def _claim_annotation(claim: Claim) -> dict[str, Any]:
+    return {
+        "chunk_id": claim.id,
+        "value": claim.value,
+        "provenance_class": claim.provenance_class,
+        "evidence": claim.id,
+        "text": claim.text,
+    }
+
+
+def _pending_for_entity(conn, entity: str) -> list[dict[str, Any]]:
+    if "provenance_pending_user_confirm" not in _tables(conn):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, entity, attribute, chunk_id, value, provenance_class, reason, created_at
+        FROM provenance_pending_user_confirm
+        WHERE entity = ?
+        ORDER BY created_at ASC
+        """,
+        (entity,),
+    ).fetchall()
+    keys = ["id", "entity", "attribute", "chunk_id", "value", "provenance_class", "reason", "created_at"]
+    return [dict(zip(keys, tuple(row), strict=True)) for row in rows]
 
 
 def _ensure_pending_user_confirm_table(conn) -> None:

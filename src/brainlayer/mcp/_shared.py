@@ -322,7 +322,18 @@ def _build_compact_result(item: dict) -> dict:
     Returns: chunk_id, score, project, date, source_file, snippet (150 chars), summary, importance.
     """
     result = {}
-    for key in ("chunk_id", "score", "project", "date", "source_file", "summary", "importance", "tags"):
+    for key in (
+        "chunk_id",
+        "score",
+        "project",
+        "date",
+        "source_file",
+        "summary",
+        "importance",
+        "tags",
+        "provenance_class",
+        "superseded_by",
+    ):
         if item.get(key) is not None:
             result[key] = item[key]
     content = item.get("content", "")
