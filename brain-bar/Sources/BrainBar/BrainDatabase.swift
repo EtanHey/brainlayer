@@ -314,6 +314,7 @@ final class BrainDatabase: @unchecked Sendable {
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
     var failNextStoreAfterInsertForTesting = false
+    var failNextStoreWithBusyForTesting = false
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -934,10 +935,14 @@ final class BrainDatabase: @unchecked Sendable {
         tags: [String],
         importance: Int,
         source: String,
-        busyTimeoutMillis: Int32 = 50
+        busyTimeoutMillis: Int32 = 30_000
     ) throws -> StoreWriteOutcome {
         let chunkID = Self.makeChunkID()
         do {
+            if failNextStoreWithBusyForTesting {
+                failNextStoreWithBusyForTesting = false
+                throw DBError.exec(SQLITE_BUSY, "simulated busy store for queue fallback")
+            }
             let stored = try store(
                 content: content,
                 tags: tags,
@@ -945,7 +950,7 @@ final class BrainDatabase: @unchecked Sendable {
                 source: source,
                 chunkID: chunkID,
                 refreshStatistics: true,
-                retries: 0,
+                retries: 3,
                 busyTimeoutMillis: busyTimeoutMillis
             )
             return .stored(stored)
@@ -1043,7 +1048,7 @@ final class BrainDatabase: @unchecked Sendable {
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
-    func flushPendingStores() -> [FlushedPendingStore] {
+    func flushPendingStores(excludingChunkIDs excludedChunkIDs: Set<String> = []) -> [FlushedPendingStore] {
         let path = pendingStorePath()
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
@@ -1075,6 +1080,10 @@ final class BrainDatabase: @unchecked Sendable {
                     let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
                     let chunkID = item.chunkID ?? Self.makeChunkID()
                     let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID, chunkID: chunkID) ?? line
+                    if excludedChunkIDs.contains(chunkID) {
+                        remaining.append(replayLine)
+                        continue
+                    }
                     do {
                         if try hasStoredQueuedItem(queueID: queueID) {
                             continue
