@@ -17,6 +17,8 @@ Pure-function unit tests only — no DB, no live BrainLayer, no writes.
 
 from __future__ import annotations
 
+import pytest
+
 from brainlayer.provenance import (
     PROVENANCE_RANK,
     Claim,
@@ -100,6 +102,21 @@ def test_alias_normalization_collapses_spaced_and_camelcase():
     assert normalize_entity("control layer") == normalize_entity("controlLayer")
 
 
+@pytest.mark.parametrize(
+    "aliases",
+    [
+        ("nano claw", "nanoClaw", "Nano Claw", "NANOCLAW"),
+        ("control layer", "controlLayer", "ControlLayer"),
+        ("brain layer", "BrainLayer", "brainlayer", "brain-layer"),
+        ("gpt-5.5", "gpt 5.5", "GPT5.5", "gpt5.5"),
+        ("co-pilot", "copilot", "co pilot", "CoPilot"),
+    ],
+)
+def test_alias_normalization_comprehensive_alias_table(aliases):
+    keys = {normalize_entity(alias) for alias in aliases}
+    assert len(keys) == 1
+
+
 def test_alias_normalization_collapses_hyphen_space_and_missing_separator():
     assert normalize_entity("co-pilot") == normalize_entity("copilot")
     assert normalize_entity("co pilot") == normalize_entity("copilot")
@@ -122,9 +139,16 @@ def test_alias_normalization_handles_hebrew_unicode_idempotently():
     assert normalize_entity(normalized) == normalized
 
 
+def test_alias_normalization_hebrew_is_stable():
+    normalized = normalize_entity("זיכרון")
+    assert normalized == normalize_entity(normalized)
+
+
 def test_alias_normalization_degenerate_input_does_not_throw():
     assert normalize_entity("") == ""
+    assert normalize_entity("   ") == ""
     assert normalize_entity("!!!...---") == ""
+    assert normalize_entity("—") == ""
 
 
 # ---------------------------------------------------------------------------

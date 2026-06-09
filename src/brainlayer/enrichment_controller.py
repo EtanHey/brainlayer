@@ -31,6 +31,7 @@ from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
 from .pipeline.write_queue import WriteQueue
 from .provenance import derive_provenance_class
+from .provenance_autosupersede import auto_supersede
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 
 logger = logging.getLogger(__name__)
@@ -488,6 +489,68 @@ def _current_post_write_yield_seconds() -> float:
 
 def _current_enrichment_chunk_origin() -> str:
     return str(GEMINI_REALTIME_MODEL).strip() or CHUNK_ORIGIN_GEMINI_FLASH_LITE
+
+
+def _current_auto_supersede_dry_run() -> bool | None:
+    raw = str(os.environ.get("BRAINLAYER_AUTO_SUPERSEDE") or "").strip().lower()
+    if raw in {"", "0", "false", "off", "no"}:
+        return None
+    return raw != "apply"
+
+
+def _entity_name_from_payload(entity: Any) -> str:
+    if isinstance(entity, dict):
+        for key in ("name", "text", "entity", "label"):
+            value = entity.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+    return str(entity or "").strip()
+
+
+def _maybe_auto_supersede_ingested_chunk(
+    store,
+    chunk: dict[str, Any],
+    entities: list[Any],
+    *,
+    provenance_class: str,
+) -> None:
+    dry_run = _current_auto_supersede_dry_run()
+    if dry_run is None:
+        return
+
+    for entity in entities:
+        entity_name = _entity_name_from_payload(entity)
+        if not entity_name:
+            continue
+        new_chunk = dict(chunk)
+        new_chunk["entity"] = entity_name
+        new_chunk["provenance_class"] = provenance_class
+        try:
+            report = auto_supersede(store, new_chunk, dry_run=dry_run)
+        except Exception:
+            logger.exception("auto_supersede failed for chunk=%s entity=%s", chunk.get("id"), entity_name)
+            continue
+        mode = "dry_run" if dry_run else "apply"
+        if (
+            report.candidate_count
+            or report.contradiction_count
+            or report.would_supersede_count
+            or report.pending_confirm_count
+            or report.skipped_count
+        ):
+            logger.info(
+                "auto_supersede %s entity=%s candidates=%s contradictions=%s would_supersede=%s superseded=%s "
+                "pending_confirm=%s skipped=%s",
+                mode,
+                report.entity,
+                report.candidate_count,
+                report.contradiction_count,
+                report.would_supersede_count,
+                report.superseded_count,
+                report.pending_confirm_count,
+                report.skipped_reason or report.skipped_count,
+            )
 
 
 def _enrichment_update_payload(
@@ -1081,17 +1144,18 @@ def _apply_enrichment(
             store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
         except Exception:
             pass  # Non-critical — dedup still works on next index
+    provenance_class = derive_provenance_class(
+        content_type=chunk.get("content_type"),
+        sender=chunk.get("sender"),
+        text=content,
+        prev_assistant_text=chunk.get("prev_assistant_text"),
+    )
     if _ensure_provenance_class_column(store):
-        provenance_class = derive_provenance_class(
-            content_type=chunk.get("content_type"),
-            sender=chunk.get("sender"),
-            text=content,
-            prev_assistant_text=chunk.get("prev_assistant_text"),
-        )
         store.conn.cursor().execute(
             "UPDATE chunks SET provenance_class = ? WHERE id = ?",
             (provenance_class, chunk["id"]),
         )
+    _maybe_auto_supersede_ingested_chunk(store, chunk, entities, provenance_class=provenance_class)
     enqueue_provenance_resolution_for_entities(store, entities, chunk_id=chunk["id"])
 
 

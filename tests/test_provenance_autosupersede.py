@@ -103,6 +103,19 @@ def test_gather_same_entity_uses_normalized_aliases(con):
     assert [row["id"] for row in rows] == ["c-old"]
 
 
+def test_gather_same_entity_returns_all_normalized_entity_spellings(con):
+    from brainlayer.provenance_autosupersede import gather_same_entity
+
+    _entity(con, "e-nano-spaced", "nano claw")
+    _entity(con, "e-nano-camel", "nanoClaw")
+    _chunk(con, "c-spaced", "e-nano-spaced", "IDENTITY: HERMES_ADJACENT")
+    _chunk(con, "c-camel", "e-nano-camel", "IDENTITY: DISTINCT")
+
+    rows = gather_same_entity(con, "Nano Claw")
+
+    assert {row["id"] for row in rows} == {"c-spaced", "c-camel"}
+
+
 def test_detect_contradiction_requires_same_attribute_and_different_value():
     from brainlayer.provenance_autosupersede import detect_contradiction
 
@@ -124,6 +137,141 @@ def test_detect_contradiction_requires_same_attribute_and_different_value():
     )
     assert same_value is False
     assert different_attribute is False
+
+
+def test_no_false_positive_for_agreeing_same_attribute_mentions(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-voice", "voicelayer")
+    for chunk_id, content_type, sender, provenance_class, created_at in [
+        ("c-direct", "user_message", "user", "RAW-ETAN-DIRECT", "2026-06-01T00:00:00Z"),
+        ("c-para-a", "assistant_text", "assistant", "AGENT-PARAPHRASE", "2026-06-02T00:00:00Z"),
+        ("c-para-b", "assistant_text", "assistant", "AGENT-PARAPHRASE", "2026-06-03T00:00:00Z"),
+    ]:
+        _chunk(
+            con,
+            chunk_id,
+            "e-voice",
+            "ENGINE: Theo voice via n4a zero-shot clone",
+            content_type=content_type,
+            sender=sender,
+            created_at=created_at,
+            provenance_class=provenance_class,
+        )
+    _chunk(
+        con,
+        "c-new",
+        "e-voice",
+        "ENGINE: Theo voice via n4a zero-shot clone",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk(
+            "c-new",
+            "voicelayer",
+            "ENGINE: Theo voice via n4a zero-shot clone",
+            provenance_class="AGENT-PARAPHRASE",
+        ),
+        dry_run=False,
+    )
+
+    assert report.contradiction_count == 0
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 0
+    assert report.authoritative_by_attribute["ENGINE"] == "c-direct"
+    rows = con.execute("SELECT id, status, superseded_by FROM chunks ORDER BY id").fetchall()
+    assert all(row["status"] == "active" and row["superseded_by"] is None for row in rows)
+
+
+def test_no_false_positive_for_cross_attribute_pairs(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, detect_contradiction
+
+    _entity(con, "e-voice", "voicelayer")
+    _chunk(
+        con,
+        "c-engine",
+        "e-voice",
+        "ENGINE: Theo voice via n4a zero-shot clone",
+        content_type="user_message",
+        sender="user",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+    _chunk(
+        con,
+        "c-review",
+        "e-voice",
+        "REVIEW_CADENCE: weekly",
+        content_type="assistant_text",
+        sender="assistant",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+
+    is_contradiction, _attribute = detect_contradiction(
+        _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
+        {"content": "REVIEW_CADENCE: weekly", "context": None, "mention_type": None, "id": "c-review"},
+    )
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
+        dry_run=False,
+    )
+
+    assert is_contradiction is False
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 0
+
+
+def test_multi_attribute_divergent_resolution_in_one_call(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-control", "controlLayer")
+    _chunk(
+        con,
+        "c-definition",
+        "e-control",
+        "DEFINITION: FILE_SCHEMA_AND_POLICIES",
+        content_type="user_message",
+        sender="user",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+
+    report = auto_supersede(
+        con,
+        {
+            "id": "c-new",
+            "entity": "controlLayer",
+            "content": "controlLayer definition and arbitration update",
+            "content_type": "user_message",
+            "sender": "user",
+            "created_at": "2026-06-09T00:00:00Z",
+            "claims": [
+                {
+                    "attribute": "DEFINITION",
+                    "value": "FILE_SCHEMA_AND_POLICIES",
+                    "provenance_class": "RAW-ETAN-DIRECT",
+                },
+                {
+                    "attribute": "ARBITRATION",
+                    "value": "CONTROLLAYER_DECIDES_VOICEBAR_ENFORCES",
+                    "provenance_class": "AGENT-INFERENCE",
+                },
+            ],
+        },
+        dry_run=True,
+    )
+
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 1
+    assert report.attribute_dispositions["DEFINITION"] == "RESOLVED"
+    assert report.attribute_dispositions["ARBITRATION"] == "PENDING-USER-CONFIRM"
+    assert report.authoritative_by_attribute["DEFINITION"] == "c-new"
+    assert report.authoritative_by_attribute["ARBITRATION"] is None
 
 
 def test_nanoclaw_supersedes_stale_direct_and_flags_agent_inference(con):

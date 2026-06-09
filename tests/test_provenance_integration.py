@@ -7,6 +7,7 @@ contract plus the v1 resolver consumer that reads kg_entity_chunks.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 
 import pytest
@@ -133,6 +134,91 @@ def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
 
     rows = con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue ORDER BY entity").fetchall()
     assert [tuple(row) for row in rows] == [("enrichment", "chunk-1"), ("orc", "chunk-1")]
+
+
+def test_apply_enrichment_auto_supersede_flag_defaults_off(con, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.delenv("BRAINLAYER_AUTO_SUPERSEDE", raising=False)
+    monkeypatch.setattr(
+        controller,
+        "auto_supersede",
+        lambda *args, **kwargs: pytest.fail("auto_supersede should not run when flag is unset"),
+        raising=False,
+    )
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("chunk-1", "PRIMARY_BACKEND: Gemini", "user_message", "user", "2026-06-09T10:00:00Z"),
+    )
+
+    controller._apply_enrichment(
+        Store(con),
+        {
+            "id": "chunk-1",
+            "content": "PRIMARY_BACKEND: Gemini",
+            "content_type": "user_message",
+            "sender": "user",
+        },
+        {"summary": "summary", "entities": [{"name": "provider router"}]},
+    )
+
+    assert con.execute("SELECT superseded_by FROM chunks WHERE id = 'chunk-1'").fetchone()["superseded_by"] is None
+
+
+def test_apply_enrichment_auto_supersede_flag_on_runs_dry_run_only(con, monkeypatch, caplog):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_AUTO_SUPERSEDE", "1")
+    caplog.set_level(logging.INFO, logger="brainlayer.enrichment_controller")
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-provider', 'provider router')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-groq",
+                "PRIMARY_BACKEND: Groq",
+                "assistant_text",
+                "assistant",
+                "2026-03-26T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-gemini",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "2026-06-09T10:00:00Z",
+                None,
+            ),
+        ],
+    )
+    con.execute("INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-provider', 'c-groq')")
+
+    controller._apply_enrichment(
+        Store(con),
+        {
+            "id": "c-gemini",
+            "content": "PRIMARY_BACKEND: Gemini",
+            "content_type": "user_message",
+            "sender": "user",
+            "created_at": "2026-06-09T10:00:00Z",
+        },
+        {"summary": "summary", "entities": [{"name": "provider router"}]},
+    )
+
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-groq'").fetchone()) == (
+        "active",
+        None,
+    )
+    assert not con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='provenance_pending_user_confirm'"
+    ).fetchone()
+    assert "auto_supersede dry_run entity=provider router" in caplog.text
+    assert "would_supersede=1" in caplog.text
 
 
 def test_queue_and_drain_preserve_provenance_class(tmp_path, con):

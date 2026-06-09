@@ -45,6 +45,8 @@ class AutoSupersedeReport:
     pending_confirm_count: int = 0
     skipped_count: int = 0
     skipped_reason: str | None = None
+    attribute_dispositions: dict[str, str] = field(default_factory=dict)
+    authoritative_by_attribute: dict[str, str | None] = field(default_factory=dict)
     decisions: list[AutoSupersedeDecision] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -64,11 +66,12 @@ def detect_contradiction(new_chunk: dict[str, Any], candidate: dict[str, Any]) -
     if not _same_chunk_entity(new_chunk, candidate):
         return False, ""
 
-    new_attribute, new_value = _chunk_attribute_value(new_chunk)
     candidate_attribute, candidate_value = _chunk_attribute_value(candidate)
-    if new_attribute != candidate_attribute:
-        return False, new_attribute
-    return new_value != candidate_value, new_attribute
+    for claim_chunk in _chunk_claim_chunks(new_chunk):
+        new_attribute, new_value = _chunk_attribute_value(claim_chunk)
+        if new_attribute == candidate_attribute:
+            return new_value != candidate_value, new_attribute
+    return False, ""
 
 
 def auto_supersede(
@@ -98,16 +101,18 @@ def auto_supersede(
     if any(_is_personal_entity_or_chunk(canonical_entity, candidate) for candidate in candidates):
         return _skip_personal(report, new_chunk)
 
-    contradictory_by_attribute: dict[str, list[dict[str, Any]]] = {}
+    new_claim_chunks = _chunk_claim_chunks(new_chunk)
+    new_claims_by_attribute = _chunks_by_attribute(new_claim_chunks)
+    candidates_by_attribute = _chunks_by_attribute(candidates)
+
     for candidate in candidates:
         is_contradiction, attribute = detect_contradiction(new_chunk, candidate)
         if is_contradiction:
-            contradictory_by_attribute.setdefault(attribute, []).append(candidate)
-    report.contradiction_count = sum(len(rows) for rows in contradictory_by_attribute.values())
+            report.contradiction_count += 1
 
-    for attribute, rows in contradictory_by_attribute.items():
-        claims = [_chunk_to_claim(new_chunk, canonical_entity)]
-        claims.extend(_chunk_to_claim(row, canonical_entity) for row in rows)
+    for attribute, new_rows in new_claims_by_attribute.items():
+        rows = [*new_rows, *candidates_by_attribute.get(attribute, [])]
+        claims = [_chunk_to_claim(row, canonical_entity) for row in rows]
         resolution = resolve(
             claims,
             enable_operational_evidence=enable_operational_evidence,
@@ -115,14 +120,16 @@ def auto_supersede(
         )
 
         authoritative = resolution.authoritative
+        report.attribute_dispositions[attribute] = resolution.disposition
+        report.authoritative_by_attribute[attribute] = authoritative.id if authoritative is not None else None
         if authoritative is None:
             for claim in resolution.flagged_pending_user_confirm:
                 _record_pending(report, db, claim, dry_run=dry_run)
             continue
 
-        if authoritative.id != _chunk_id(new_chunk):
+        new_claim_ids = {_chunk_id(row) for row in new_rows}
+        if authoritative.id not in new_claim_ids:
             report.notes.append(f"Existing chunk {authoritative.id} remains authoritative for {attribute}")
-            continue
 
         for loser in resolution.superseded:
             _record_supersede(report, store, db, loser, authoritative, dry_run=dry_run)
@@ -208,11 +215,42 @@ def _chunk_id(chunk: dict[str, Any]) -> str:
 
 
 def _chunk_attribute_value(chunk: dict[str, Any]) -> tuple[str, str]:
+    if chunk.get("attribute") is not None and chunk.get("value") is not None:
+        return _attribute_value(
+            f"{chunk.get('attribute')}: {chunk.get('value')}",
+            None,
+            None,
+        )
     return _attribute_value(
         str(chunk.get("content") or ""),
         chunk.get("context"),
         chunk.get("mention_type"),
     )
+
+
+def _chunk_claim_chunks(chunk: dict[str, Any]) -> list[dict[str, Any]]:
+    claims = chunk.get("claims")
+    if not isinstance(claims, list) or not claims:
+        return [chunk]
+
+    claim_chunks: list[dict[str, Any]] = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        merged = dict(chunk)
+        merged.update(claim)
+        if not merged.get("content") and merged.get("attribute") is not None and merged.get("value") is not None:
+            merged["content"] = f"{merged['attribute']}: {merged['value']}"
+        claim_chunks.append(merged)
+    return claim_chunks or [chunk]
+
+
+def _chunks_by_attribute(chunks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_attribute: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunks:
+        attribute, _value = _chunk_attribute_value(chunk)
+        by_attribute.setdefault(attribute, []).append(chunk)
+    return by_attribute
 
 
 def _chunk_to_claim(chunk: dict[str, Any], entity: str) -> Claim:
