@@ -26,6 +26,8 @@ from brainlayer.provenance import (
     resolve_entity,
 )
 
+OPERATIONAL_EVIDENCE = "OPERATIONAL-EVIDENCE"
+
 # ---------------------------------------------------------------------------
 # 1. CLASS DERIVATION (the mechanical gate that rides enrichment)
 #    content_type + sender + quote-vs-assertion -> provenance class.
@@ -33,10 +35,7 @@ from brainlayer.provenance import (
 
 
 def test_user_message_is_raw_etan_direct():
-    assert (
-        derive_provenance_class(content_type="user_message", sender="user", text="x" * 200)
-        == "RAW-ETAN-DIRECT"
-    )
+    assert derive_provenance_class(content_type="user_message", sender="user", text="x" * 200) == "RAW-ETAN-DIRECT"
 
 
 def test_short_user_echoing_prior_assistant_is_endorsement():
@@ -49,6 +48,18 @@ def test_short_user_echoing_prior_assistant_is_endorsement():
         prev_assistant_text="controlLayer is an umbrella for the file schema + policies, not a new running thing",
     )
     assert cls == "ETAN-ENDORSEMENT"
+
+
+def test_short_user_correction_without_echo_is_raw_direct():
+    # Short user turns are not automatically endorsements: a correction that
+    # does not echo the assistant is Etan stating a direct replacement fact.
+    cls = derive_provenance_class(
+        content_type="user_message",
+        sender="user",
+        text="no, it's X",
+        prev_assistant_text="The entity's active mode is Y.",
+    )
+    assert cls == "RAW-ETAN-DIRECT"
 
 
 def test_assistant_quoting_user_is_paraphrase():
@@ -89,6 +100,33 @@ def test_alias_normalization_collapses_spaced_and_camelcase():
     assert normalize_entity("control layer") == normalize_entity("controlLayer")
 
 
+def test_alias_normalization_collapses_hyphen_space_and_missing_separator():
+    assert normalize_entity("co-pilot") == normalize_entity("copilot")
+    assert normalize_entity("co pilot") == normalize_entity("copilot")
+
+
+def test_alias_normalization_collapses_digit_version_separators():
+    # Version punctuation is treated as a separator/noise boundary, not as a
+    # semantic token. This intentionally collapses 5.5 -> 55 for alias lookup.
+    assert normalize_entity("gpt-5.5") == "gpt55"
+    assert normalize_entity("gpt 5.5") == normalize_entity("GPT5.5")
+
+
+def test_alias_normalization_strips_trailing_punctuation_and_repeated_whitespace():
+    assert normalize_entity("  Co   Pilot!!! ") == normalize_entity("co-pilot")
+
+
+def test_alias_normalization_handles_hebrew_unicode_idempotently():
+    normalized = normalize_entity("  איתן  היימן!!! ")
+    assert normalized
+    assert normalize_entity(normalized) == normalized
+
+
+def test_alias_normalization_degenerate_input_does_not_throw():
+    assert normalize_entity("") == ""
+    assert normalize_entity("!!!...---") == ""
+
+
 # ---------------------------------------------------------------------------
 # 3. THE CORE RESOLVER — class-gate, not naive latest-wins
 # ---------------------------------------------------------------------------
@@ -127,6 +165,28 @@ def test_recency_tiebreaks_within_top_class_only():
     out = resolve([older, newer])
     assert out.authoritative.value == "B"
     assert older in out.superseded  # older same-class -> superseded (revised by Etan himself)
+
+
+def test_identical_timestamps_tiebreak_by_lowest_claim_id():
+    a = _c("A", "RAW-ETAN-DIRECT", "2026-06-08T14:31:46Z", cid="claim-a")
+    b = _c("B", "RAW-ETAN-DIRECT", "2026-06-08T14:31:46Z", cid="claim-b")
+    out = resolve([b, a])
+    assert out.authoritative.id == "claim-a"
+
+
+def test_malformed_and_empty_timestamps_sort_last_without_crashing():
+    malformed = _c("BAD_TS", "RAW-ETAN-DIRECT", "not-a-date", cid="claim-bad")
+    empty = _c("EMPTY_TS", "RAW-ETAN-DIRECT", "", cid="claim-empty")
+    valid = _c("VALID_TS", "RAW-ETAN-DIRECT", "2026-06-08T14:31:46Z", cid="claim-valid")
+    out = resolve([malformed, empty, valid])
+    assert out.authoritative.id == "claim-valid"
+
+
+def test_mixed_iso_offsets_compare_by_absolute_time_not_raw_text():
+    older_same_day_local = _c("OLDER", "RAW-ETAN-DIRECT", "2026-06-08T11:00:00+02:00", cid="older-local")
+    newer_utc = _c("NEWER", "RAW-ETAN-DIRECT", "2026-06-08T10:00:00Z", cid="newer-utc")
+    out = resolve([older_same_day_local, newer_utc])
+    assert out.authoritative.id == "newer-utc"
 
 
 def test_nanoclaw_flip_case():
@@ -191,6 +251,34 @@ def test_per_attribute_resolution_keeps_attributes_independent():
     assert by_attr["ARBITRATION"].authoritative is None
 
 
+def test_three_attributes_resolve_to_different_top_classes_in_one_pass():
+    claims = [
+        _c("DIRECT_DEF", "RAW-ETAN-DIRECT", "2026-01-01T00:00:00Z", attribute="DEFINITION"),
+        _c("ENDORSED_STATUS", "ETAN-ENDORSEMENT", "2026-02-01T00:00:00Z", attribute="STATUS"),
+        _c("AGENT_ONLY", "AGENT-INFERENCE", "2026-03-01T00:00:00Z", anchored=False, attribute="ARBITRATION"),
+    ]
+    by_attr = resolve_entity(claims)
+    assert by_attr["DEFINITION"].authoritative.provenance_class == "RAW-ETAN-DIRECT"
+    assert by_attr["STATUS"].authoritative.provenance_class == "ETAN-ENDORSEMENT"
+    assert by_attr["ARBITRATION"].disposition == "PENDING-USER-CONFIRM"
+
+
+def test_endorsement_wins_without_direct_and_agreeing_paraphrase_is_not_superseded():
+    endorsement = _c("CURRENT", "ETAN-ENDORSEMENT", "2026-06-08T10:00:00Z", cid="endorsement")
+    paraphrase = _c("CURRENT", "AGENT-PARAPHRASE", "2026-06-08T11:00:00Z", cid="paraphrase")
+    out = resolve([endorsement, paraphrase])
+    assert out.authoritative.id == "endorsement"
+    assert not out.superseded
+
+
+def test_endorsement_wins_without_direct_and_disagreeing_paraphrase_is_superseded():
+    endorsement = _c("CURRENT", "ETAN-ENDORSEMENT", "2026-06-08T10:00:00Z", cid="endorsement")
+    paraphrase = _c("STALE", "AGENT-PARAPHRASE", "2026-06-08T11:00:00Z", cid="paraphrase")
+    out = resolve([endorsement, paraphrase])
+    assert out.authoritative.id == "endorsement"
+    assert paraphrase in out.superseded
+
+
 def test_controllayer_definition_converges_but_arbitration_is_inference_only():
     """Flip-case: controlLayer's DEFINITION can converge cleanly while a separate
     ARBITRATION claim remains inference-only and must not borrow authority from
@@ -252,6 +340,63 @@ def test_foundational_old_fact_not_buried_by_recent_other_attribute():
     by_attr = resolve_entity([foundational, recent_other])
     assert by_attr["DEFINITION"].authoritative.value == "CORE_DEF"
     assert by_attr["DEFINITION"].authoritative.timestamp == "2026-01-15T00:00:00Z"
+
+
+def test_operational_evidence_default_off_loses_to_agent_paraphrase():
+    operational = _c(
+        "CHUNK_ORIGIN_COUNTS_FROM_DB",
+        OPERATIONAL_EVIDENCE,
+        "2026-06-08T11:00:00Z",
+        cid="operational",
+        attribute="CHUNK_ORIGIN_COUNTS",
+    )
+    stale_paraphrase = _c(
+        "OLDER_SUMMARY",
+        "AGENT-PARAPHRASE",
+        "2026-06-01T11:00:00Z",
+        cid="paraphrase",
+        attribute="CHUNK_ORIGIN_COUNTS",
+    )
+    out = resolve([operational, stale_paraphrase])
+    assert out.authoritative.id == "paraphrase"
+
+
+def test_operational_evidence_opt_in_wins_for_system_state_attribute():
+    operational = _c(
+        "CHUNK_ORIGIN_COUNTS_FROM_DB",
+        OPERATIONAL_EVIDENCE,
+        "2026-06-08T11:00:00Z",
+        cid="operational",
+        attribute="CHUNK_ORIGIN_COUNTS",
+    )
+    stale_paraphrase = _c(
+        "OLDER_SUMMARY",
+        "AGENT-PARAPHRASE",
+        "2026-06-01T11:00:00Z",
+        cid="paraphrase",
+        attribute="CHUNK_ORIGIN_COUNTS",
+    )
+    out = resolve([operational, stale_paraphrase], enable_operational_evidence=True)
+    assert out.authoritative.id == "operational"
+
+
+def test_operational_evidence_opt_in_does_not_apply_to_personal_attributes():
+    operational = _c(
+        "SYSTEM_OBSERVED_PREFERENCE",
+        OPERATIONAL_EVIDENCE,
+        "2026-06-08T11:00:00Z",
+        cid="operational",
+        attribute="PREFERENCE",
+    )
+    paraphrase = _c(
+        "ETAN_SAID_PREFERENCE",
+        "AGENT-PARAPHRASE",
+        "2026-06-01T11:00:00Z",
+        cid="paraphrase",
+        attribute="PREFERENCE",
+    )
+    out = resolve([operational, paraphrase], enable_operational_evidence=True)
+    assert out.authoritative.id == "paraphrase"
 
 
 # ---------------------------------------------------------------------------
