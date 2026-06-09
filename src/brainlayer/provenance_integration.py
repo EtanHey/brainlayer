@@ -13,7 +13,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .provenance import AGENT_INFERENCE, Claim, Resolution, derive_provenance_class, normalize_entity, resolve_entity
+from .provenance import (
+    AGENT_INFERENCE,
+    RAW_ETAN_DIRECT,
+    Claim,
+    Resolution,
+    derive_provenance_class,
+    normalize_entity,
+    resolve_entity,
+)
 
 
 @dataclass
@@ -28,7 +36,14 @@ class ProvenanceConflictReport:
     notes: list[str] = field(default_factory=list)
 
 
-def resolve_entity_conflicts(store, entity: str, *, dry_run: bool = True) -> ProvenanceConflictReport:
+def resolve_entity_conflicts(
+    store,
+    entity: str,
+    *,
+    dry_run: bool = True,
+    enable_operational_evidence: bool = False,
+    system_state_attributes: set[str] | None = None,
+) -> ProvenanceConflictReport:
     """Resolve conflicting chunk claims for one KG entity.
 
     V1 attribute heuristic: prefer structured `kg_entity_chunks.context`
@@ -49,7 +64,11 @@ def resolve_entity_conflicts(store, entity: str, *, dry_run: bool = True) -> Pro
 
     rows = _entity_chunk_rows(conn, entity_ids)
     claims = [_row_to_claim(row, canonical_name) for row in rows]
-    resolutions = resolve_entity(claims)
+    resolutions = resolve_entity(
+        claims,
+        enable_operational_evidence=enable_operational_evidence,
+        system_state_attributes=system_state_attributes,
+    )
     report = ProvenanceConflictReport(
         entity=canonical_name,
         entity_ids=entity_ids,
@@ -67,10 +86,46 @@ def resolve_entity_conflicts(store, entity: str, *, dry_run: bool = True) -> Pro
                 if _brain_supersede(store, conn, loser.id, authoritative.id):
                     report.superseded_count += 1
         for claim in resolution.flagged_pending_user_confirm:
-            _enqueue_pending_user_confirm(conn, claim)
-            report.pending_confirm_count += 1
+            if _enqueue_pending_user_confirm(conn, claim):
+                report.pending_confirm_count += 1
     _commit_if_supported(conn)
     return report
+
+
+def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
+    """Confirm a pending inference and rerun resolution for its entity.
+
+    Confirmation promotes the chunk to RAW-ETAN-DIRECT, removes its queue row,
+    and lets the normal reversible supersede path resolve the affected
+    attribute. The caller controls when this user-confirmed write is allowed.
+    """
+    conn = _conn(store)
+    _ensure_pending_user_confirm_table(conn)
+    row = conn.execute(
+        """
+        SELECT entity, attribute, chunk_id
+        FROM provenance_pending_user_confirm
+        WHERE chunk_id = ? OR id = ?
+        """,
+        (claim_id, claim_id),
+    ).fetchone()
+    if row is None:
+        return ProvenanceConflictReport(
+            entity="",
+            entity_ids=[],
+            resolutions={},
+            dry_run=False,
+            notes=[f"No pending provenance confirmation matched claim_id={claim_id}"],
+        )
+
+    entity = str(row[0])
+    chunk_id = str(row[2])
+    if "provenance_class" not in _columns(conn, "chunks"):
+        conn.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    conn.execute("UPDATE chunks SET provenance_class = ? WHERE id = ?", (RAW_ETAN_DIRECT, chunk_id))
+    conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ? OR id = ?", (chunk_id, claim_id))
+    _commit_if_supported(conn)
+    return resolve_entity_conflicts(store, entity, dry_run=False)
 
 
 def _conn(store):
@@ -236,7 +291,7 @@ def _brain_supersede(store, conn, old_chunk_id: str, new_chunk_id: str) -> bool:
     return True
 
 
-def _enqueue_pending_user_confirm(conn, claim: Claim) -> None:
+def _ensure_pending_user_confirm_table(conn) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS provenance_pending_user_confirm (
@@ -251,7 +306,13 @@ def _enqueue_pending_user_confirm(conn, claim: Claim) -> None:
         )
         """
     )
+
+
+def _enqueue_pending_user_confirm(conn, claim: Claim) -> bool:
+    _ensure_pending_user_confirm_table(conn)
     pending_id = f"{claim.entity}:{claim.attribute}:{claim.id}"
+    if conn.execute("SELECT 1 FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,)).fetchone():
+        return False
     conn.execute(
         """
         INSERT OR IGNORE INTO provenance_pending_user_confirm
@@ -269,6 +330,7 @@ def _enqueue_pending_user_confirm(conn, claim: Claim) -> None:
             datetime.now(timezone.utc).isoformat(),
         ),
     )
+    return True
 
 
 def _commit_if_supported(conn) -> None:

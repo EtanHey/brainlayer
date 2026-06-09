@@ -254,3 +254,117 @@ def test_resolve_entity_conflicts_write_path_uses_fixture_db(con):
         "CONTROLLAYER_DECIDES",
         "AGENT-INFERENCE",
     )
+
+
+def test_two_unanchored_inferences_that_contradict_each_other_both_pending(con):
+    from brainlayer.provenance_integration import resolve_entity_conflicts
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-infer-a",
+                "ARBITRATION: CONTROLLAYER_DECIDES",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:47:27Z",
+                "AGENT-INFERENCE",
+            ),
+            (
+                "c-infer-b",
+                "ARBITRATION: VOICEBAR_DAEMON_ENFORCES",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:48:27Z",
+                "AGENT-INFERENCE",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-control', ?)",
+        [("c-infer-a",), ("c-infer-b",)],
+    )
+
+    report = resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+
+    assert report.resolutions["ARBITRATION"].disposition == "PENDING-USER-CONFIRM"
+    assert report.resolutions["ARBITRATION"].authoritative is None
+    pending = con.execute("SELECT chunk_id FROM provenance_pending_user_confirm ORDER BY chunk_id").fetchall()
+    assert [row["chunk_id"] for row in pending] == ["c-infer-a", "c-infer-b"]
+
+
+def test_pending_confirm_enqueue_is_idempotent_for_same_inference(con):
+    from brainlayer.provenance_integration import resolve_entity_conflicts
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "c-infer",
+            "ARBITRATION: CONTROLLAYER_DECIDES",
+            "assistant_text",
+            "assistant",
+            "2026-06-05T21:47:27Z",
+            "AGENT-INFERENCE",
+        ),
+    )
+    con.execute("INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-control', 'c-infer')")
+
+    first = resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+    second = resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+
+    assert first.pending_confirm_count == 1
+    assert second.pending_confirm_count == 0
+    assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 1
+
+
+def test_confirm_pending_promotes_inference_and_resolves_attribute(con):
+    from brainlayer.provenance_integration import confirm_pending, resolve_entity_conflicts
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-para",
+                "ARBITRATION: OLD_AGENT_FRAME",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:40:27Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-infer",
+                "ARBITRATION: CONFIRMED_SYSTEM_STATE",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:47:27Z",
+                "AGENT-INFERENCE",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-control', ?)",
+        [("c-para",), ("c-infer",)],
+    )
+    resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+
+    report = confirm_pending(con, "c-infer")
+
+    assert report.resolutions["ARBITRATION"].authoritative.id == "c-infer"
+    assert con.execute("SELECT provenance_class FROM chunks WHERE id = 'c-infer'").fetchone()[0] == "RAW-ETAN-DIRECT"
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-para'").fetchone()) == (
+        "superseded",
+        "c-infer",
+    )
+    assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
