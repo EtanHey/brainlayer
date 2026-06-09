@@ -81,6 +81,33 @@ class TestSearchReturnsChunkId:
             assert r["chunk_id"] == chunk_ids[i], f"Result {i} chunk_id mismatch"
 
     @pytest.mark.asyncio
+    async def test_compact_results_include_lightweight_provenance_fields(self, mock_store, mock_model):
+        """Compact search should expose provenance_class and superseded_by when present."""
+        chunk_ids = ["authoritative-1"]
+        documents = ["Primary backend is Gemini"]
+        metadatas = [
+            {
+                "source_file": "session.jsonl",
+                "project": "brainlayer",
+                "content_type": "user_message",
+                "created_at": "2026-06-09T12:00:00Z",
+                "provenance_class": "RAW-ETAN-DIRECT",
+                "superseded_by": None,
+            }
+        ]
+        mock_store.hybrid_search.return_value = _make_search_results(chunk_ids, documents, metadatas=metadatas)
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+            patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
+        ):
+            result = await _search(query="primary backend", detail="compact")
+
+        _, structured = result
+        assert structured["results"][0]["provenance_class"] == "RAW-ETAN-DIRECT"
+        assert "superseded_by" not in structured["results"][0]
+
+    @pytest.mark.asyncio
     async def test_full_results_include_chunk_id(self, mock_store, mock_model):
         """Full detail mode must include chunk_id in every result."""
         chunk_ids = ["abc-123", "def-456"]

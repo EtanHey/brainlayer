@@ -46,6 +46,15 @@ async def _brain_entity(
     entity_record = await loop.run_in_executor(None, lambda: store.get_entity(entity_id))
     facts = await loop.run_in_executor(None, lambda: store.get_entity_facts(entity_id))
     result["facts"] = facts
+    try:
+        from ..provenance_integration import get_entity_provenance_annotations
+
+        result["provenance_resolutions"] = await loop.run_in_executor(
+            None,
+            lambda: get_entity_provenance_annotations(store, result.get("name") or query),
+        )
+    except Exception:
+        logger.debug("Entity provenance annotation failed for %s", query, exc_info=True)
     if entity_record and entity_record.get("parent_id"):
         parent = await loop.run_in_executor(None, lambda: store.get_entity_parent(entity_id))
         if parent is not None:

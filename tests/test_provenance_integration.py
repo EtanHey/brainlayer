@@ -106,6 +106,35 @@ def test_direct_apply_enrichment_persists_provenance_class(con):
     assert row["provenance_class"] == "AGENT-PARAPHRASE"
 
 
+def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
+        (
+            "chunk-1",
+            "PRIMARY_BACKEND: Gemini",
+            "assistant_text",
+            "assistant",
+            "2026-06-09T10:00:00Z",
+        ),
+    )
+
+    controller._apply_enrichment(
+        Store(con),
+        {
+            "id": "chunk-1",
+            "content": "PRIMARY_BACKEND: Gemini",
+            "content_type": "assistant_text",
+            "sender": "assistant",
+        },
+        {"summary": "summary", "entities": [{"name": "enrichment"}, {"text": "orc"}]},
+    )
+
+    rows = con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue ORDER BY entity").fetchall()
+    assert [tuple(row) for row in rows] == [("enrichment", "chunk-1"), ("orc", "chunk-1")]
+
+
 def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
     from brainlayer.drain import _apply_enrichment
     from brainlayer.queue_io import enqueue_enrichment_updates
@@ -368,3 +397,219 @@ def test_confirm_pending_promotes_inference_and_resolves_attribute(con):
         "c-infer",
     )
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
+
+
+def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-groq",
+                "PRIMARY_BACKEND: Groq",
+                "assistant_text",
+                "assistant",
+                "2026-03-26T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-gemini",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-groq",), ("c-gemini",)],
+    )
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-gemini")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.superseded_count == 1
+    assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-groq'").fetchone()) == (
+        "superseded",
+        "c-gemini",
+    )
+
+
+def test_provenance_sweep_does_not_auto_supersede_personal_data(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-etan', 'Etan')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-health-old",
+                "HEALTH_STATUS: recovering",
+                "journal",
+                "user",
+                "2026-06-01T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+            (
+                "c-health-new",
+                "HEALTH_STATUS: recovered",
+                "journal",
+                "user",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-etan', ?)",
+        [("c-health-old",), ("c-health-new",)],
+    )
+    enqueue_provenance_resolution(con, "Etan", chunk_id="c-health-new")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.superseded_count == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-health-old'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_provenance_sweep_does_not_auto_supersede_unstructured_tag_mentions(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-tag-old",
+                "Legacy BrainLayer enrichment note",
+                "assistant_text",
+                "assistant",
+                "2026-06-01T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-tag-new",
+                "Current BrainLayer enrichment note",
+                "user_message",
+                "user",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, mention_type)
+        VALUES ('e-control', ?, 'tag')
+        """,
+        [("c-tag-old",), ("c-tag-new",)],
+    )
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-tag-new")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.superseded_count == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-tag-old'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_pending_reject_archives_inference_and_removes_queue_row(con):
+    from brainlayer.provenance_integration import list_pending_confirm, reject_pending, resolve_entity_conflicts
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "c-infer",
+            "ARBITRATION: CONTROLLAYER_DECIDES",
+            "assistant_text",
+            "assistant",
+            "2026-06-05T21:47:27Z",
+            "AGENT-INFERENCE",
+        ),
+    )
+    con.execute("INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-control', 'c-infer')")
+    resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+
+    pending = list_pending_confirm(con)
+    assert len(pending) == 1
+    assert pending[0]["chunk_id"] == "c-infer"
+
+    assert reject_pending(con, "c-infer") is True
+
+    assert list_pending_confirm(con) == []
+    assert con.execute("SELECT status FROM chunks WHERE id = 'c-infer'").fetchone()[0] == "archived"
+
+
+def test_entity_authority_annotations_show_authoritative_and_superseded_values(con):
+    from brainlayer.provenance_integration import (
+        enqueue_provenance_resolution,
+        get_entity_provenance_annotations,
+        sweep_provenance_queue,
+    )
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-groq",
+                "PRIMARY_BACKEND: Groq",
+                "assistant_text",
+                "assistant",
+                "2026-03-26T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-gemini",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-groq",), ("c-gemini",)],
+    )
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-gemini")
+    sweep_provenance_queue(con)
+
+    annotations = get_entity_provenance_annotations(con, "enrichment")
+
+    assert annotations["PRIMARY_BACKEND"]["authoritative"]["value"] == "Gemini"
+    assert annotations["PRIMARY_BACKEND"]["authoritative"]["provenance_class"] == "RAW-ETAN-DIRECT"
+    assert annotations["PRIMARY_BACKEND"]["superseded"][0]["value"] == "Groq"

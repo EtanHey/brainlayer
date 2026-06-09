@@ -34,6 +34,8 @@ app = typer.Typer(
 console = Console()
 agent_profile_app = typer.Typer(help="Manage per-agent search ranking profiles")
 app.add_typer(agent_profile_app, name="agent-profile")
+provenance_app = typer.Typer(help="Resolve provenance conflicts and pending confirmations")
+app.add_typer(provenance_app, name="provenance")
 
 
 @app.command()
@@ -89,6 +91,98 @@ def search(
     from ..cli_new import search_command
 
     search_command(query, n, project, content_type, agent_id, text, hybrid)
+
+
+def _open_vector_store_for_cli():
+    from ..vector_store import VectorStore
+
+    return VectorStore(get_db_path())
+
+
+@provenance_app.command("sweep")
+def provenance_sweep(
+    limit: int = typer.Option(100, "--limit", "-n", help="Maximum queued entities to resolve"),
+    operational_evidence: bool = typer.Option(
+        False,
+        "--operational-evidence",
+        help="Enable experimental OPERATIONAL-EVIDENCE for system-state attributes only",
+    ),
+) -> None:
+    """Drain queued provenance resolutions and apply reversible supersedes."""
+    from ..provenance_integration import sweep_provenance_queue
+
+    store = _open_vector_store_for_cli()
+    try:
+        result = sweep_provenance_queue(
+            store,
+            limit=limit,
+            enable_operational_evidence=operational_evidence,
+        )
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+    typer.echo(
+        " ".join(
+            [
+                f"swept={result.swept}",
+                f"superseded={result.superseded_count}",
+                f"pending={result.pending_confirm_count}",
+                f"skipped_personal={result.skipped_personal_count}",
+            ]
+        )
+    )
+
+
+@provenance_app.command("pending")
+def provenance_pending() -> None:
+    """List pending user confirmations from unanchored inferences."""
+    from ..provenance_integration import list_pending_confirm
+
+    store = _open_vector_store_for_cli()
+    try:
+        pending = list_pending_confirm(store)
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+    if not pending:
+        typer.echo("No pending provenance confirmations.")
+        return
+    for row in pending:
+        typer.echo(f"{row['entity']} · {row['attribute']} · {row['value']} · {row['chunk_id']} · confirm|reject")
+
+
+@provenance_app.command("confirm")
+def provenance_confirm(claim_id: str = typer.Argument(..., help="Pending chunk_id or queue id to confirm")) -> None:
+    """Promote a pending inference to direct authority and resolve its attribute."""
+    from ..provenance_integration import confirm_pending
+
+    store = _open_vector_store_for_cli()
+    try:
+        result = confirm_pending(store, claim_id)
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+    typer.echo(f"confirmed={claim_id} superseded={result.superseded_count} pending={result.pending_confirm_count}")
+
+
+@provenance_app.command("reject")
+def provenance_reject(claim_id: str = typer.Argument(..., help="Pending chunk_id or queue id to reject")) -> None:
+    """Reject and reversibly archive a pending inference."""
+    from ..provenance_integration import reject_pending
+
+    store = _open_vector_store_for_cli()
+    try:
+        rejected = reject_pending(store, claim_id)
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+    if not rejected:
+        raise typer.Exit(1)
+    typer.echo(f"rejected={claim_id}")
 
 
 @agent_profile_app.command("show")

@@ -493,6 +493,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._has_content_class = "content_class" in chunk_columns
+        self._has_provenance_class = "provenance_class" in chunk_columns
+        self._has_superseded_by = "superseded_by" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._chunk_tags_available = "chunk_tags" in existing_tables

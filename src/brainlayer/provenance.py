@@ -64,6 +64,7 @@ _DEFAULT_SYSTEM_STATE_ATTRIBUTES = {
     "SERVICE_STATUS",
     "MCP_STATUS",
     "DEPLOYMENT_STATUS",
+    "PRIMARY_BACKEND",
 }
 
 # content_type values the indexer assigns to genuine Etan turns vs everything
