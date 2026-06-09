@@ -502,7 +502,13 @@ final class MCPRouter: @unchecked Sendable {
                     ]
                 )
             case .queued(let queueID, let queuedAt, let chunkID):
-                return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
+                let flushedStores = db.flushPendingStores(excludingChunkIDs: [chunkID])
+                return queuedBrainStoreOutput(
+                    queueID: queueID,
+                    queuedAt: queuedAt,
+                    chunkID: chunkID,
+                    flushedStores: flushedStores
+                )
             }
         } catch BrainDatabase.DBError.notOpen {
             return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
@@ -524,14 +530,29 @@ final class MCPRouter: @unchecked Sendable {
         return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
     }
 
-    private func queuedBrainStoreOutput(queueID: String, queuedAt: String, chunkID: String) -> ToolOutput {
+    private func queuedBrainStoreOutput(
+        queueID: String,
+        queuedAt: String,
+        chunkID: String,
+        flushedStores: [BrainDatabase.FlushedPendingStore] = []
+    ) -> ToolOutput {
         ToolOutput(
             text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
             metadata: [
                 "queued": true,
                 "queue_id": queueID,
                 "queued_at": queuedAt,
-                "chunk_id": chunkID
+                "chunk_id": chunkID,
+                "flushed_count": flushedStores.count,
+                "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
+                    [
+                        "chunk_id": flushed.storedChunk.chunkID,
+                        "rowid": flushed.storedChunk.rowID,
+                        "content": flushed.content,
+                        "tags": flushed.tags,
+                        "importance": flushed.importance
+                    ] as [String: Any]
+                }
             ]
         )
     }

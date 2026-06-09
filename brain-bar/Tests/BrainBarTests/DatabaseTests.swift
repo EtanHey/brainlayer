@@ -521,6 +521,48 @@ final class DatabaseTests: XCTestCase {
         )
     }
 
+    func testStoreOrQueueWithinDefaultBudgetStoresAfterBriefWriteLock() throws {
+        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("brainbar-brief-lock-queue-\(UUID().uuidString).jsonl")
+        setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
+        defer {
+            unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            try? FileManager.default.removeItem(at: queuePath)
+        }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(tempDBPath, &lockDB, flags, nil), SQLITE_OK)
+        guard let lockDB else {
+            XCTFail("Failed to open secondary lock connection")
+            return
+        }
+        defer { sqlite3_close(lockDB) }
+
+        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        let releaseExpectation = expectation(description: "release brief write lock")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2, execute: DispatchWorkItem {
+            sqlite3_exec(lockDB, "COMMIT", nil, nil, nil)
+            releaseExpectation.fulfill()
+        })
+
+        let outcome = try db.storeOrQueueWithinBudget(
+            content: "StoreOrQueue should wait through a brief writer lock",
+            tags: ["brief-lock"],
+            importance: 6,
+            source: "mcp"
+        )
+
+        guard case .stored(let stored) = outcome else {
+            XCTFail("Expected stored outcome after brief lock, got \(outcome)")
+            wait(for: [releaseExpectation], timeout: 2.0)
+            return
+        }
+        XCTAssertTrue(stored.chunkID.hasPrefix("brainbar-"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+        wait(for: [releaseExpectation], timeout: 2.0)
+    }
+
     func testInjectionEventsTableExists() throws {
         let exists = try db.tableExists("injection_events")
         XCTAssertTrue(exists, "injection_events table must exist")

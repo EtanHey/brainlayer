@@ -1642,6 +1642,57 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(contents.contains("Live write triggers flush"))
     }
 
+    func testBrainStoreFlushesPendingQueueWhenCurrentStoreQueues() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let queuedPayload = """
+        {"content":"Queued item should flush even when live write queues","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try (queuedPayload + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        db.failNextStoreWithBusyForTesting = true
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live write queues but still triggers flush",
+                    "tags": ["live"],
+                    "importance": 5
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNil(result?["isError"])
+        XCTAssertEqual(result?["queued"] as? Bool, true)
+        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
+        let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
+        XCTAssertEqual(flushed?.count, 1)
+        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush even when live write queues")
+
+        let queuedPayloadAfterFlush = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
+        XCTAssertEqual(queuedPayloadAfterFlush["content"] as? String, "Live write queues but still triggers flush")
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertTrue(contents.contains("Queued item should flush even when live write queues"))
+        XCTAssertFalse(contents.contains("Live write queues but still triggers flush"))
+    }
+
     func testBrainStoreFlushKeepsMalformedQueueLines() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
