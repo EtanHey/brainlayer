@@ -624,8 +624,49 @@ def label_communities(
 # ─── UMAP 3D Layout ────────────────────────────────────────────────
 
 
+def _ensure_umap_sklearn_compat() -> None:
+    """Bridge umap-learn (>=0.5.7) against scikit-learn <1.6.
+
+    umap calls ``check_array(..., ensure_all_finite=...)``, a kwarg that only
+    exists in scikit-learn >=1.6 (it replaced ``force_all_finite``). When the
+    installed sklearn predates 1.6 — e.g. when another dependency pins
+    ``scikit-learn<1.6`` (category-encoders) — that call raises
+    ``TypeError: unexpected keyword argument 'ensure_all_finite'`` and the
+    export crashes for any layout with >=4096 nodes. Translate the kwarg in
+    place (idempotent; no-op on sklearn>=1.6) so brain-export is robust to the
+    resolved sklearn version.
+    """
+    import inspect
+
+    import sklearn.utils as sk_utils
+
+    if "ensure_all_finite" in inspect.signature(sk_utils.check_array).parameters:
+        return  # sklearn>=1.6 — native support, nothing to do
+    if getattr(sk_utils.check_array, "_brainlayer_finite_shim", False):
+        return  # already patched
+
+    _orig = sk_utils.check_array
+
+    def _check_array_compat(*args, **kwargs):
+        if "ensure_all_finite" in kwargs:
+            kwargs["force_all_finite"] = kwargs.pop("ensure_all_finite")
+        return _orig(*args, **kwargs)
+
+    _check_array_compat._brainlayer_finite_shim = True
+    sk_utils.check_array = _check_array_compat
+    try:
+        import sklearn.utils.validation as sk_val
+
+        sk_val.check_array = _check_array_compat
+    except Exception as exc:
+        logger.debug("Could not patch sklearn.utils.validation.check_array: %s", exc)
+    logger.info("Applied sklearn<1.6 check_array(ensure_all_finite) compat shim for umap")
+
+
 def compute_layout(sessions: list[dict]) -> np.ndarray:
     """Compute 3D positions via UMAP on session embeddings."""
+    _ensure_umap_sklearn_compat()
+    # Keep this lazy import below the sklearn shim so umap binds the patched check_array.
     import umap
 
     embeddings = np.array([s["embedding"] for s in sessions])
