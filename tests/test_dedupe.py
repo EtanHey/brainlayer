@@ -266,6 +266,89 @@ def test_weekly_standups_remain_distinct_chunks(tmp_path):
     store.close()
 
 
+def test_simhash_scope_allows_unknown_week_to_unknown_week(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, find_duplicate
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
+    candidate_content = " ".join(first_words)
+    incoming_content = " ".join(second_words)
+    fields = compute_dedupe_fields(candidate_content, None)
+
+    store.conn.cursor().execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', NULL, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "unknown-week",
+            candidate_content,
+            fields.dedupe_hash,
+            fields.simhash,
+            *fields.bands,
+        ),
+    )
+
+    hit, _ = find_duplicate(
+        store.conn,
+        chunk_id="incoming",
+        content=incoming_content,
+        created_at=None,
+        project="brainlayer",
+        content_type="note",
+    )
+
+    assert hit is not None
+    assert hit.canonical_chunk_id == "unknown-week"
+    assert hit.mechanism == "simhash"
+    store.close()
+
+
+def test_simhash_scope_blocks_unknown_week_to_dated_week(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, find_duplicate
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
+    candidate_content = " ".join(first_words)
+    incoming_content = " ".join(second_words)
+    fields = compute_dedupe_fields(candidate_content, "2026-05-11T09:00:00Z")
+
+    store.conn.cursor().execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "dated-week",
+            candidate_content,
+            "2026-05-11T09:00:00Z",
+            fields.dedupe_hash,
+            fields.simhash,
+            *fields.bands,
+        ),
+    )
+
+    hit, _ = find_duplicate(
+        store.conn,
+        chunk_id="incoming",
+        content=incoming_content,
+        created_at=None,
+        project="brainlayer",
+        content_type="note",
+    )
+
+    assert hit is None
+    store.close()
+
+
 def test_timestamp_only_changes_remain_distinct_chunks(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
