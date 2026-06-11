@@ -1042,9 +1042,7 @@ def resimhash_dedupe_database(
         raise ValueError("checkpoint_every must be a positive integer")
     path = Path(db_path).expanduser().resolve()
     if path == Path(get_db_path()).expanduser().resolve() and not allow_live:
-        raise ValueError(
-            "Refusing to re-simhash the default live DB; stop enrichment and pass allow_live=True"
-        )
+        raise ValueError("Refusing to re-simhash the default live DB; stop enrichment and pass allow_live=True")
 
     conn = apsw.Connection(str(path))
     conn.setbusytimeout(30_000)
@@ -1150,7 +1148,9 @@ def resimhash_dedupe_database(
 
 
 def resimhash_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Recompute BrainLayer stored simhashes with content-only fingerprints.")
+    parser = argparse.ArgumentParser(
+        description="Recompute BrainLayer stored simhashes with content-only fingerprints."
+    )
     parser.add_argument("--db", default=get_db_path(), help="SQLite DB path to process")
     parser.add_argument("--batch-size", type=int, default=5000)
     parser.add_argument("--checkpoint-every", type=int, default=3, help="WAL checkpoint every N batches")

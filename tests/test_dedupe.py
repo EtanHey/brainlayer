@@ -588,9 +588,7 @@ def test_resimhash_resumes_after_recorded_last_id(tmp_path):
 
     checked = VectorStore(db_path)
     rows = dict(
-        checked.conn.cursor().execute(
-            "SELECT id, simhash FROM chunks WHERE id IN ('a-first', 'b-second') ORDER BY id"
-        )
+        checked.conn.cursor().execute("SELECT id, simhash FROM chunks WHERE id IN ('a-first', 'b-second') ORDER BY id")
     )
     assert result.scanned == 2
     assert rows == {"a-first": stale_simhash, "b-second": new_fields.simhash}
