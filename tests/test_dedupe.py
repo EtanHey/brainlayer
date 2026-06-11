@@ -51,19 +51,18 @@ def test_normalized_exact_hash_preserves_timestamps_but_ignores_stopwords_and_wh
     assert normalized_exact_hash(first_deadline) != normalized_exact_hash(second_deadline)
 
 
-def test_simhash_week_bucket_prevents_weekly_milestone_collapse():
+def test_simhash_is_content_only_across_week_buckets():
     from brainlayer.dedupe import hamming_distance, is_near_duplicate, simhash64
 
-    week_1 = "Week 1 standup: shipped ingest dedupe tests and opened the review loop"
-    week_2 = "Week 2 standup: shipped ingest dedupe tests and opened the review loop"
+    content = "Weekly standup shipped ingest dedupe tests and opened the review loop"
 
-    left = simhash64(week_1, created_at="2026-05-04T09:00:00Z")
-    right = simhash64(week_2, created_at="2026-05-11T09:00:00Z")
+    left = simhash64(content, created_at="2026-05-04T09:00:00Z")
+    right = simhash64(content, created_at="2026-05-11T09:00:00Z")
 
-    assert hamming_distance(left, right) > 3
-    assert not is_near_duplicate(
-        week_1,
-        week_2,
+    assert hamming_distance(left, right) == 0
+    assert is_near_duplicate(
+        content,
+        content,
         created_at_a="2026-05-04T09:00:00Z",
         created_at_b="2026-05-11T09:00:00Z",
     )
@@ -238,17 +237,20 @@ def test_merged_content_list_does_not_double_number_existing_items():
 def test_weekly_standups_remain_distinct_chunks(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
 
     store.upsert_chunks(
         [
             _chunk(
                 "week-1",
-                "Week 1 standup: shipped ingest dedupe tests and opened the review loop",
+                " ".join(first_words),
                 created_at="2026-05-04T09:00:00Z",
             ),
             _chunk(
                 "week-2",
-                "Week 2 standup: shipped ingest dedupe tests and opened the review loop",
+                " ".join(second_words),
                 created_at="2026-05-11T09:00:00Z",
             ),
         ],
@@ -261,6 +263,89 @@ def test_weekly_standups_remain_distinct_chunks(tmp_path):
     assert count == 2
     assert aliases == 0
 
+    store.close()
+
+
+def test_simhash_scope_allows_unknown_week_to_unknown_week(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, find_duplicate
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
+    candidate_content = " ".join(first_words)
+    incoming_content = " ".join(second_words)
+    fields = compute_dedupe_fields(candidate_content, None)
+
+    store.conn.cursor().execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', NULL, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "unknown-week",
+            candidate_content,
+            fields.dedupe_hash,
+            fields.simhash,
+            *fields.bands,
+        ),
+    )
+
+    hit, _ = find_duplicate(
+        store.conn,
+        chunk_id="incoming",
+        content=incoming_content,
+        created_at=None,
+        project="brainlayer",
+        content_type="note",
+    )
+
+    assert hit is not None
+    assert hit.canonical_chunk_id == "unknown-week"
+    assert hit.mechanism == "simhash"
+    store.close()
+
+
+def test_simhash_scope_blocks_unknown_week_to_dated_week(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, find_duplicate
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    first_words = [f"token{i}" for i in range(100)]
+    second_words = first_words.copy()
+    second_words[0] = "changed0"
+    candidate_content = " ".join(first_words)
+    incoming_content = " ".join(second_words)
+    fields = compute_dedupe_fields(candidate_content, "2026-05-11T09:00:00Z")
+
+    store.conn.cursor().execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, project, content_type, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', 'brainlayer', 'note', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "dated-week",
+            candidate_content,
+            "2026-05-11T09:00:00Z",
+            fields.dedupe_hash,
+            fields.simhash,
+            *fields.bands,
+        ),
+    )
+
+    hit, _ = find_duplicate(
+        store.conn,
+        chunk_id="incoming",
+        content=incoming_content,
+        created_at=None,
+        project="brainlayer",
+        content_type="note",
+    )
+
+    assert hit is None
     store.close()
 
 
@@ -486,6 +571,111 @@ def test_backfill_refuses_default_live_db_without_explicit_allow(monkeypatch, tm
         assert "snapshot" in str(exc)
     else:
         raise AssertionError("live default DB backfill should require allow_live=True")
+
+
+def test_resimhash_recomputes_stored_simhashes_without_merging(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, resimhash_dedupe_database
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    content = "Resimhash migration should recompute stale simhash fields only"
+    expected_fields = compute_dedupe_fields(content, "2026-05-11T09:00:00Z")
+    cursor = store.conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO chunks(id, content, metadata, source_file, created_at,
+                           dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+        VALUES (?, ?, '{}', 'seed', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "stale-row",
+            content,
+            "2026-05-11T09:00:00Z",
+            expected_fields.dedupe_hash,
+            "0000000000000000",
+            "0000",
+            "0000",
+            "0000",
+            "0000",
+        ),
+    )
+    store.close()
+
+    result = resimhash_dedupe_database(db_path, batch_size=1, checkpoint_every=1)
+
+    checked = VectorStore(db_path)
+    row = (
+        checked.conn.cursor()
+        .execute(
+            """
+            SELECT simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
+            FROM chunks
+            WHERE id = 'stale-row'
+            """
+        )
+        .fetchone()
+    )
+    aliases = checked.conn.cursor().execute("SELECT COUNT(*) FROM chunk_id_alias").fetchone()[0]
+
+    assert result.scanned == 1
+    assert result.updated == 1
+    assert row == (expected_fields.simhash, *expected_fields.bands)
+    assert aliases == 0
+    checked.close()
+
+
+def test_resimhash_resumes_after_recorded_last_id(tmp_path):
+    from brainlayer.dedupe import compute_dedupe_fields, resimhash_dedupe_database
+
+    db_path = tmp_path / "brainlayer.db"
+    store = VectorStore(db_path)
+    cursor = store.conn.cursor()
+    new_fields = compute_dedupe_fields("second migration resume row", "2026-05-11T09:00:00Z")
+    stale_simhash = "0000000000000000"
+    stale_bands = ("0000", "0000", "0000", "0000")
+    for chunk_id, content in [
+        ("a-first", "first migration resume row"),
+        ("b-second", "second migration resume row"),
+    ]:
+        fields = compute_dedupe_fields(content, "2026-05-11T09:00:00Z")
+        cursor.execute(
+            """
+            INSERT INTO chunks(id, content, metadata, source_file, created_at,
+                               dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3)
+            VALUES (?, ?, '{}', 'seed', '2026-05-11T09:00:00Z', ?, ?, ?, ?, ?, ?)
+            """,
+            (chunk_id, content, fields.dedupe_hash, stale_simhash, *stale_bands),
+        )
+    cursor.execute(
+        """
+        CREATE TABLE dedupe_resimhash_progress (
+            migration_name TEXT PRIMARY KEY,
+            last_id TEXT,
+            scanned INTEGER NOT NULL DEFAULT 0,
+            updated INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO dedupe_resimhash_progress(migration_name, last_id, scanned, updated, started_at, updated_at)
+        VALUES ('test-resume', 'a-first', 1, 1, '2026-06-11T00:00:00Z', '2026-06-11T00:00:00Z')
+        """
+    )
+    store.close()
+
+    result = resimhash_dedupe_database(db_path, batch_size=1, checkpoint_every=1, migration_name="test-resume")
+
+    checked = VectorStore(db_path)
+    rows = dict(
+        checked.conn.cursor().execute("SELECT id, simhash FROM chunks WHERE id IN ('a-first', 'b-second') ORDER BY id")
+    )
+    assert result.scanned == 2
+    assert rows == {"a-first": stale_simhash, "b-second": new_fields.simhash}
+    checked.close()
 
 
 def test_alias_resolution_expires_after_grace_period(tmp_path):
