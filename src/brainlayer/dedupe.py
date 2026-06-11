@@ -83,6 +83,14 @@ class BackfillResult:
     hashed: int
 
 
+@dataclass(frozen=True)
+class ResimhashResult:
+    scanned: int
+    updated: int
+    last_id: str | None
+    complete: bool
+
+
 def normalize_for_dedupe(content: str) -> str:
     """Normalize text before SimHash tokenization."""
     without_timestamps = _ISO_TIMESTAMP_RE.sub(" ", content.lower())
@@ -144,17 +152,11 @@ def _weighted_features(content: str, created_at: str | None = None) -> Iterable[
     if not tokens:
         return []
     if len(tokens) < SHINGLE_WIDTH:
-        features = [(f"tok:{token}", 1.0) for token in tokens]
-    else:
-        features = [
-            (f"sh:{' '.join(tokens[index : index + SHINGLE_WIDTH])}", 1.0)
-            for index in range(0, len(tokens) - SHINGLE_WIDTH + 1)
-        ]
-    bucket = _week_bucket(created_at)
-    if bucket is not None:
-        # Low relative to long chunks, but strong enough to separate short weekly milestones.
-        features.extend((f"week:{bucket}:{bit}", 2.0) for bit in range(2))
-    return features
+        return [(f"tok:{token}", 1.0) for token in tokens]
+    return [
+        (f"sh:{' '.join(tokens[index : index + SHINGLE_WIDTH])}", 1.0)
+        for index in range(0, len(tokens) - SHINGLE_WIDTH + 1)
+    ]
 
 
 def simhash64(content: str, *, created_at: str | None = None) -> int:
@@ -335,7 +337,7 @@ def find_duplicate(
 
     candidates = cursor.execute(
         f"""
-        SELECT id, simhash, content FROM chunks
+        SELECT id, simhash, content, created_at FROM chunks
         WHERE id != ?
           AND {_active_clause()}
           AND {scope_sql}
@@ -349,7 +351,10 @@ def find_duplicate(
         (chunk_id, *scope_params, *fields.bands),
     ).fetchall()
     best: DuplicateHit | None = None
-    for candidate_id, candidate_simhash, candidate_content in candidates:
+    incoming_week = _week_bucket(created_at)
+    for candidate_id, candidate_simhash, candidate_content, candidate_created_at in candidates:
+        if _week_bucket(candidate_created_at) != incoming_week:
+            continue
         if _numeric_tokens_conflict(content, str(candidate_content)):
             continue
         distance = hamming_distance(fields.simhash, candidate_simhash)
@@ -784,7 +789,7 @@ def _drop_backfill_index(
     chunk_id: str,
     *,
     seen_hashes: dict[tuple[str | None, str | None, str], str],
-    band_index: dict[tuple[str | None, str | None, str], set[str]],
+    band_index: dict[tuple[str | None, str | None, str | None, str], set[str]],
     fingerprints: dict[str, str],
     numeric_index: dict[str, set[str]],
 ) -> None:
@@ -805,7 +810,7 @@ def _add_backfill_index(
     project: Any,
     content_type: Any,
     seen_hashes: dict[tuple[str | None, str | None, str], str],
-    band_index: dict[tuple[str | None, str | None, str], set[str]],
+    band_index: dict[tuple[str | None, str | None, str | None, str], set[str]],
     fingerprints: dict[str, str],
     numeric_index: dict[str, set[str]],
 ) -> DedupeFields:
@@ -814,8 +819,9 @@ def _add_backfill_index(
     seen_hashes[(*scope, fields.dedupe_hash)] = chunk_id
     fingerprints[chunk_id] = fields.simhash
     numeric_index[chunk_id] = _numeric_tokens(content)
+    week_bucket = _week_bucket(created_at)
     for band in fields.bands:
-        band_index.setdefault((*scope, band), set()).add(chunk_id)
+        band_index.setdefault((*scope, week_bucket, band), set()).add(chunk_id)
     return fields
 
 
@@ -844,7 +850,7 @@ def backfill_dedupe_database(
         cursor.execute("PRAGMA wal_checkpoint(FULL)")
         total = cursor.execute(f"SELECT COUNT(*) FROM chunks WHERE {_active_clause()}").fetchone()[0]
         seen_hashes: dict[tuple[str | None, str | None, str], str] = {}
-        band_index: dict[tuple[str | None, str | None, str], set[str]] = {}
+        band_index: dict[tuple[str | None, str | None, str | None, str], set[str]] = {}
         fingerprints: dict[str, str] = {}
         numeric_index: dict[str, set[str]] = {}
         merged = 0
@@ -901,8 +907,9 @@ def backfill_dedupe_database(
                     hit = DuplicateHit(seen_hashes[hash_key], "sha256", 0)
                 elif len(normalize_for_dedupe(str(incoming["content"])).split()) >= MIN_SIMHASH_TOKENS:
                     candidate_ids: set[str] = set()
+                    week_bucket = _week_bucket(incoming.get("created_at"))
                     for band in fields.bands:
-                        candidate_ids.update(band_index.get((*scope, band), set()))
+                        candidate_ids.update(band_index.get((*scope, week_bucket, band), set()))
                     best_id = None
                     best_distance = SIMHASH_BITS
                     for candidate_id in candidate_ids:
@@ -1000,6 +1007,163 @@ def backfill_dedupe_database(
         return BackfillResult(scanned=scanned, merged=merged, hashed=hashed)
     finally:
         conn.close()
+
+
+RESIMHASH_MIGRATION_NAME = "2026_06_11_content_only_simhash_v1"
+
+
+def _ensure_resimhash_progress_schema(cursor: Any) -> None:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dedupe_resimhash_progress (
+            migration_name TEXT PRIMARY KEY,
+            last_id TEXT,
+            scanned INTEGER NOT NULL DEFAULT 0,
+            updated INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+        """
+    )
+
+
+def resimhash_dedupe_database(
+    db_path: str | Path,
+    *,
+    batch_size: int = 5000,
+    checkpoint_every: int = 3,
+    allow_live: bool = False,
+    migration_name: str = RESIMHASH_MIGRATION_NAME,
+) -> ResimhashResult:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    if checkpoint_every <= 0:
+        raise ValueError("checkpoint_every must be a positive integer")
+    path = Path(db_path).expanduser().resolve()
+    if path == Path(get_db_path()).expanduser().resolve() and not allow_live:
+        raise ValueError(
+            "Refusing to re-simhash the default live DB; stop enrichment and pass allow_live=True"
+        )
+
+    conn = apsw.Connection(str(path))
+    conn.setbusytimeout(30_000)
+    try:
+        cursor = conn.cursor()
+        ensure_dedupe_schema(conn)
+        _ensure_resimhash_progress_schema(cursor)
+        cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        now = datetime.now(timezone.utc).isoformat()
+        row = cursor.execute(
+            """
+            SELECT last_id, scanned, updated, completed_at
+            FROM dedupe_resimhash_progress
+            WHERE migration_name = ?
+            """,
+            (migration_name,),
+        ).fetchone()
+        if row and row[3]:
+            return ResimhashResult(scanned=int(row[1]), updated=int(row[2]), last_id=row[0], complete=True)
+        if row:
+            last_id = str(row[0] or "")
+            scanned = int(row[1] or 0)
+            updated = int(row[2] or 0)
+        else:
+            last_id = ""
+            scanned = 0
+            updated = 0
+            cursor.execute(
+                """
+                INSERT INTO dedupe_resimhash_progress(
+                    migration_name, last_id, scanned, updated, started_at, updated_at
+                )
+                VALUES (?, '', 0, 0, ?, ?)
+                """,
+                (migration_name, now, now),
+            )
+
+        batches = 0
+        while True:
+            rows = cursor.execute(
+                """
+                SELECT id, content, created_at
+                FROM chunks
+                WHERE id > ?
+                  AND content IS NOT NULL
+                  AND simhash IS NOT NULL
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (last_id, batch_size),
+            ).fetchall()
+            if not rows:
+                break
+            cursor.execute("BEGIN IMMEDIATE")
+            try:
+                for chunk_id, content, created_at in rows:
+                    fields = compute_dedupe_fields(str(content), created_at)
+                    cursor.execute(
+                        """
+                        UPDATE chunks
+                        SET simhash = ?,
+                            simhash_band_0 = ?,
+                            simhash_band_1 = ?,
+                            simhash_band_2 = ?,
+                            simhash_band_3 = ?
+                        WHERE id = ?
+                        """,
+                        (fields.simhash, *fields.bands, chunk_id),
+                    )
+                last_id = str(rows[-1][0])
+                scanned += len(rows)
+                updated += len(rows)
+                cursor.execute(
+                    """
+                    UPDATE dedupe_resimhash_progress
+                    SET last_id = ?, scanned = ?, updated = ?, updated_at = ?
+                    WHERE migration_name = ?
+                    """,
+                    (last_id, scanned, updated, datetime.now(timezone.utc).isoformat(), migration_name),
+                )
+                cursor.execute("COMMIT")
+            except Exception:
+                cursor.execute("ROLLBACK")
+                raise
+            batches += 1
+            logger.info("dedupe re-simhash progress: scanned=%d updated=%d last_id=%s", scanned, updated, last_id)
+            if batches % checkpoint_every == 0:
+                cursor.execute("PRAGMA wal_checkpoint(FULL)")
+
+        completed_at = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            UPDATE dedupe_resimhash_progress
+            SET completed_at = ?, updated_at = ?
+            WHERE migration_name = ?
+            """,
+            (completed_at, completed_at, migration_name),
+        )
+        cursor.execute("PRAGMA wal_checkpoint(FULL)")
+        return ResimhashResult(scanned=scanned, updated=updated, last_id=last_id or None, complete=True)
+    finally:
+        conn.close()
+
+
+def resimhash_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Recompute BrainLayer stored simhashes with content-only fingerprints.")
+    parser.add_argument("--db", default=get_db_path(), help="SQLite DB path to process")
+    parser.add_argument("--batch-size", type=int, default=5000)
+    parser.add_argument("--checkpoint-every", type=int, default=3, help="WAL checkpoint every N batches")
+    parser.add_argument("--allow-live", action="store_true", help="Allow processing the canonical live DB")
+    args = parser.parse_args(argv)
+    result = resimhash_dedupe_database(
+        args.db,
+        batch_size=args.batch_size,
+        checkpoint_every=args.checkpoint_every,
+        allow_live=args.allow_live,
+    )
+    print(json.dumps(result.__dict__, sort_keys=True))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
