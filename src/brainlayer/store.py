@@ -71,6 +71,9 @@ def store_memory(
     line_number: Optional[int] = None,
     chunk_id: Optional[str] = None,
     created_at: Optional[str] = None,
+    fallback_source_path: Optional[str] = None,
+    origin_repo_path: Optional[str] = None,
+    replayed_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -98,6 +101,9 @@ def store_memory(
         line_number: Optional line number reference. Only for type=issue.
         chunk_id: Optional caller-supplied chunk ID for durable queued writes.
         created_at: Optional caller-supplied reservation timestamp for queued writes.
+        fallback_source_path: Optional path to a local fallback file being replayed.
+        origin_repo_path: Optional git root for the fallback's originating repo.
+        replayed_by: Optional replay worker identifier.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -153,6 +159,12 @@ def store_memory(
         meta["function_name"] = function_name
     if line_number is not None:
         meta["line_number"] = line_number
+    if fallback_source_path is not None:
+        meta["fallback_source_path"] = fallback_source_path
+    if origin_repo_path is not None:
+        meta["origin_repo_path"] = origin_repo_path
+    if replayed_by is not None:
+        meta["replayed_by"] = replayed_by
 
     chunk_origin = detect_chunk_origin(content)
     content_class = classify_content_class(content, content_type=memory_type, tags=tags, source="manual")

@@ -38,6 +38,37 @@ async def test_busy_queue_fallback_returns_queued_chunk_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
+    """DB-busy fallback is a structured DEFERRED receipt, not quiet success."""
+    from brainlayer.mcp.store_handler import _store
+
+    queue_dir = tmp_path / "queue"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store"),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.store.store_memory", side_effect=apsw.BusyError("locked")),
+        patch("brainlayer.queue_io.get_queue_dir", return_value=queue_dir),
+    ):
+        texts, structured = await _store(
+            content="deferred receipt must be loud",
+            memory_type="note",
+            project="test",
+        )
+
+    queued_files = list(queue_dir.glob("mcp-*.jsonl"))
+    assert len(queued_files) == 1
+    queued_event = json.loads(queued_files[0].read_text())
+
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["reason"] == "DB_BUSY"
+    assert structured["deferred"]["chunk_id"] == queued_event["chunk_id"]
+    assert structured["deferred"]["queue_path"] == str(queued_files[0])
+    assert structured["deferred"]["action"] == "queued_for_drain"
+    assert any("DEFERRED" in item.text for item in texts)
+
+
+@pytest.mark.asyncio
 async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkeypatch):
     """The MCP handler promises one chunk ID before the first write attempt."""
     from brainlayer.mcp.store_handler import _store

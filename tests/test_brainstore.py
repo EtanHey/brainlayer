@@ -147,6 +147,30 @@ class TestStoreMemory:
         rows = list(cursor.execute("SELECT importance FROM chunks WHERE id = ?", (result["id"],)))
         assert rows[0][0] == 9.0
 
+    def test_store_persists_fallback_replay_metadata(self, store, mock_embed):
+        """Fallback replay provenance is stored as metadata, not as project drift."""
+        from brainlayer.store import store_memory
+
+        result = store_memory(
+            store=store,
+            embed_fn=mock_embed,
+            content="systems fallback replay should keep systems attribution",
+            memory_type="note",
+            project="systems",
+            fallback_source_path="/Users/etanheyman/Gits/systems/docs.local/decisions/pending.md",
+            origin_repo_path="/Users/etanheyman/Gits/systems",
+            replayed_by="brainlayer-phase-1",
+        )
+
+        cursor = store.conn.cursor()
+        row = cursor.execute("SELECT project, metadata FROM chunks WHERE id = ?", (result["id"],)).fetchone()
+        metadata = json.loads(row[1])
+
+        assert row[0] == "systems"
+        assert metadata["fallback_source_path"] == "/Users/etanheyman/Gits/systems/docs.local/decisions/pending.md"
+        assert metadata["origin_repo_path"] == "/Users/etanheyman/Gits/systems"
+        assert metadata["replayed_by"] == "brainlayer-phase-1"
+
     def test_store_creates_embedding(self, store, mock_embed):
         """Stored memory gets embedded at write time."""
         from brainlayer.store import store_memory

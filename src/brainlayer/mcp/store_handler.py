@@ -414,7 +414,7 @@ def _get_pending_store_path():
     return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
 
 
-def _queue_store(item: dict) -> None:
+def _queue_store(item: dict):
     """Buffer a store request to JSONL when DB is locked.
 
     Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
@@ -425,8 +425,7 @@ def _queue_store(item: dict) -> None:
     try:
         from ..queue_io import enqueue_store
 
-        enqueue_store(**item, source="mcp")
-        return
+        return enqueue_store(**item, source="mcp")
     except Exception:
         logger.debug("Unified queue write failed; falling back to pending-stores.jsonl", exc_info=True)
 
@@ -453,6 +452,23 @@ def _queue_store(item: dict) -> None:
             )
     except Exception:
         logger.debug("Queue trim failed (non-critical)", exc_info=True)
+    return path
+
+
+def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
+    return {
+        "chunk_id": chunk_id,
+        "queued": True,
+        "status": "DEFERRED",
+        "related": [],
+        "deferred": {
+            "status": "DEFERRED",
+            "reason": reason,
+            "chunk_id": chunk_id,
+            "queue_path": str(queue_path),
+            "action": "queued_for_drain",
+        },
+    }
 
 
 def _flush_pending_stores(store, embed_fn) -> int:
@@ -574,7 +590,7 @@ async def _store(
             reject_recursive_mcp_output(content)
             if looks_like_system_prompt(content):
                 raise ValueError("system prompt content is not stored in BrainLayer")
-            _queue_store(
+            queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
                     "content": content,
@@ -597,7 +613,7 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path)
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_pending_chunks, store_memory
@@ -691,7 +707,7 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if _is_lock_error(e):
-            _queue_store(
+            queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
                     "content": content,
@@ -713,7 +729,7 @@ async def _store(
                     "created_at": reservation_created_at,
                 }
             )
-            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path)
             formatted = format_store_result(promised_chunk_id, queued=True)
             return (
                 [TextContent(type="text", text=formatted)],

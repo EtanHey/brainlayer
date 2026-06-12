@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from copy import deepcopy
 from typing import Any
 
@@ -60,8 +61,15 @@ from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _sto
 from .store_handler import _brain_update as _brain_update
 from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
 
+def _mcp_query_timeout() -> float:
+    try:
+        return max(1.0, float(os.environ.get("BRAINLAYER_MCP_QUERY_TIMEOUT", "15")))
+    except ValueError:
+        return 15.0
+
+
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
-MCP_QUERY_TIMEOUT = 15  # seconds — fail fast, return error instead of hanging
+MCP_QUERY_TIMEOUT = _mcp_query_timeout()  # seconds — fail fast, return error instead of hanging
 
 
 async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
