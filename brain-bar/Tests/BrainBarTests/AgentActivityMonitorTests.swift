@@ -81,6 +81,17 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotDoesNotClassifyAgyByPromptMentioningModelFlag() {
+        let snapshot = """
+        19006 agy /Users/etanheyman/.local/bin/agy --prompt-interactive Please document why --model gemini should not be parsed from prompt text
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .gemini), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 
