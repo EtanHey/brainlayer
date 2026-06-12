@@ -537,7 +537,7 @@ def _brain_supersede(store, conn, old_chunk_id: str, new_chunk_id: str) -> bool:
     return True
 
 
-_PERSONAL_TYPES = {"journal", "note", "bookmark"}
+_PERSONAL_TYPES = {"journal"}
 _PERSONAL_KEYWORDS = ("health", "family", "relationship", "finance", "financial", "personal", "therapy", "medical")
 
 

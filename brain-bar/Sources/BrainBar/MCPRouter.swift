@@ -10,6 +10,8 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 1
+
     private struct ToolOutput {
         let text: String
         let metadata: [String: Any]
@@ -478,7 +480,15 @@ final class MCPRouter: @unchecked Sendable {
             return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
         }
         do {
-            switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp", project: project) {
+            switch try db.storeOrQueueWithinBudget(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                retries: 0
+            ) {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
                 return ToolOutput(

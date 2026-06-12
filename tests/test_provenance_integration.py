@@ -235,6 +235,7 @@ def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
             {
                 "chunk_id": "chunk-1",
                 "enrichment": {"summary": "summary"},
+                "entities": [{"name": "controlLayer"}],
                 "provenance_class": "AGENT-INFERENCE",
             }
         ],
@@ -247,6 +248,8 @@ def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
     row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-1'").fetchone()
     assert event["provenance_class"] == "AGENT-INFERENCE"
     assert row["provenance_class"] == "AGENT-INFERENCE"
+    queued = con.execute("SELECT entity, chunk_id, reason FROM provenance_resolve_queue").fetchone()
+    assert dict(queued) == {"entity": "controlLayer", "chunk_id": "chunk-1", "reason": "enrichment"}
 
 
 def test_resolve_entity_conflicts_defaults_to_dry_run(con):
@@ -699,3 +702,47 @@ def test_entity_authority_annotations_show_authoritative_and_superseded_values(c
     assert annotations["PRIMARY_BACKEND"]["authoritative"]["value"] == "Gemini"
     assert annotations["PRIMARY_BACKEND"]["authoritative"]["provenance_class"] == "RAW-ETAN-DIRECT"
     assert annotations["PRIMARY_BACKEND"]["superseded"][0]["value"] == "Groq"
+
+
+def test_generic_note_factual_chunk_can_be_superseded(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-note-old",
+                "PRIMARY_BACKEND: Groq",
+                "note",
+                "user",
+                "2026-03-26T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-direct-new",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-note-old",), ("c-direct-new",)],
+    )
+
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
+    sweep_provenance_queue(con)
+
+    row = con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-note-old'").fetchone()
+    assert tuple(row) == (
+        "superseded",
+        "c-direct-new",
+    )

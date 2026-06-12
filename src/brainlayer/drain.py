@@ -31,6 +31,7 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
+from .provenance_integration import enqueue_provenance_resolution_for_entities
 
 logger = logging.getLogger(__name__)
 
@@ -562,6 +563,7 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         return
     assignments = ", ".join(f"{col} = ?" for col in updates)
     conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+    enqueue_provenance_resolution_for_entities(conn, event.get("entities"), chunk_id=chunk_id)
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:

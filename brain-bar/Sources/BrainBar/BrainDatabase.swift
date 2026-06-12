@@ -958,7 +958,8 @@ final class BrainDatabase: @unchecked Sendable {
         importance: Int,
         source: String,
         project: String? = nil,
-        busyTimeoutMillis: Int32 = 30_000
+        busyTimeoutMillis: Int32 = 30_000,
+        retries: Int = 3
     ) throws -> StoreWriteOutcome {
         let chunkID = Self.makeChunkID()
         let createdAt = Self.timestamp()
@@ -976,7 +977,7 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: chunkID,
                 createdAt: createdAt,
                 refreshStatistics: true,
-                retries: 3,
+                retries: retries,
                 busyTimeoutMillis: busyTimeoutMillis
             )
             return .stored(stored)
