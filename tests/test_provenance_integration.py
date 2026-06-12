@@ -83,6 +83,66 @@ def test_enrichment_update_payload_derives_provenance_class():
     assert payload["provenance_class"] == "RAW-ETAN-DIRECT"
 
 
+def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classification():
+    from brainlayer import enrichment_controller as controller
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            source_file TEXT,
+            project TEXT,
+            content_type TEXT,
+            sender TEXT,
+            value_type TEXT,
+            tags TEXT,
+            importance INTEGER,
+            created_at TEXT,
+            summary TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "assistant-prior",
+                "controlLayer is an umbrella for the file schema and policies.",
+                "assistant_text",
+                "assistant",
+                "2026-06-12T10:00:00Z",
+            ),
+            (
+                "user-ack",
+                "yes exactly, controlLayer is the file schema and policies",
+                "user_message",
+                "user",
+                "2026-06-12T10:01:00Z",
+            ),
+        ],
+    )
+
+    class ReadonlyStore:
+        def _read_cursor(self):
+            return conn.cursor()
+
+    chunk = controller._get_chunk_readonly(ReadonlyStore(), "user-ack")
+    assert chunk is not None
+    payload = controller._enrichment_update_payload(chunk, {"summary": "summary", "entities": []})
+
+    assert chunk["prev_assistant_text"] == "controlLayer is an umbrella for the file schema and policies."
+    assert payload["provenance_class"] == "ETAN-ENDORSEMENT"
+
+
 def test_direct_apply_enrichment_persists_provenance_class(con):
     from brainlayer import enrichment_controller as controller
 

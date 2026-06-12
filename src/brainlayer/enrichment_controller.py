@@ -739,35 +739,77 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
     if not hasattr(store, "_read_cursor"):
         return store.get_chunk(chunk_id)
 
-    row = (
-        store._read_cursor()
-        .execute(
-            """SELECT id, content, metadata, source_file, project, content_type,
-                      value_type, tags, importance, created_at, summary,
-                      superseded_by, aggregated_into, archived_at
-               FROM chunks WHERE id = ?""",
-            (chunk_id,),
-        )
-        .fetchone()
-    )
+    cursor = store._read_cursor()
+    cols = _chunk_columns(cursor)
+
+    def chunk_expr(col: str, fallback: str = "NULL") -> str:
+        return col if col in cols else f"{fallback} AS {col}"
+
+    row = cursor.execute(
+        f"""SELECT id, content, {chunk_expr("metadata")}, {chunk_expr("source_file")},
+                  {chunk_expr("project")}, {chunk_expr("content_type")}, {chunk_expr("sender")},
+                  {chunk_expr("value_type")}, {chunk_expr("tags")}, {chunk_expr("importance")},
+                  {chunk_expr("created_at")}, {chunk_expr("summary")}, {chunk_expr("superseded_by")},
+                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")}
+           FROM chunks WHERE id = ?""",
+        (chunk_id,),
+    ).fetchone()
     if not row:
         return None
-    return {
+    chunk = {
         "id": row[0],
         "content": row[1],
         "metadata": row[2],
         "source_file": row[3],
         "project": row[4],
         "content_type": row[5],
-        "value_type": row[6],
-        "tags": row[7],
-        "importance": row[8],
-        "created_at": row[9],
-        "summary": row[10],
-        "superseded_by": row[11],
-        "aggregated_into": row[12],
-        "archived_at": row[13],
+        "sender": row[6],
+        "value_type": row[7],
+        "tags": row[8],
+        "importance": row[9],
+        "created_at": row[10],
+        "summary": row[11],
+        "superseded_by": row[12],
+        "aggregated_into": row[13],
+        "archived_at": row[14],
     }
+    chunk["prev_assistant_text"] = _previous_assistant_text(cursor, cols, chunk)
+    return chunk
+
+
+def _chunk_columns(cursor) -> set[str]:
+    return {str(row[1]) for row in cursor.execute("PRAGMA table_info(chunks)")}
+
+
+def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> str | None:
+    if "created_at" not in cols or "content" not in cols:
+        return None
+    created_at = str(chunk.get("created_at") or "").strip()
+    if not created_at:
+        return None
+
+    assistant_filters: list[str] = []
+    if "content_type" in cols:
+        assistant_filters.append("content_type = 'assistant_text'")
+    if "sender" in cols:
+        assistant_filters.append("lower(sender) = 'assistant'")
+    if not assistant_filters:
+        return None
+
+    row = cursor.execute(
+        f"""
+        SELECT content
+        FROM chunks
+        WHERE id != ?
+          AND created_at < ?
+          AND ({" OR ".join(assistant_filters)})
+          AND content IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (chunk["id"], created_at),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
 
 
 def _get_gemini_client():

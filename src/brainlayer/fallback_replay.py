@@ -78,7 +78,15 @@ def replay_entry(
             replayed_by=replayed_by,
         )
     except Exception as exc:
-        _write_replay_attempt(entry, chunk_id=entry.frontmatter.get("chunk_id") or None)
+        try:
+            _write_replay_attempt(entry, chunk_id=entry.frontmatter.get("chunk_id") or None)
+        except Exception as write_exc:
+            return ReplayResult(
+                path=entry.path,
+                attempted=True,
+                chunk_id=None,
+                error=f"store failed: {exc}; write_replay_attempt failed: {write_exc}",
+            )
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
 
     chunk_id = _extract_chunk_id(result)
