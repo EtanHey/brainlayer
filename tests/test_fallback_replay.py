@@ -142,6 +142,49 @@ def test_replay_wraps_scalar_frontmatter_tag_as_single_tag(tmp_path):
     assert calls[0]["tags"] == ["user-correction"]
 
 
+def test_replay_errors_when_store_result_has_no_chunk_id(tmp_path):
+    from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, replay_entry
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/missing-id.md")
+    entry = parse_fallback_file(path)
+
+    result = replay_entry(entry, store_func=lambda **_kwargs: {"related": []}, replayed_by="phase-1-test")
+    updated_entry = parse_fallback_file(path)
+
+    assert result.attempted is True
+    assert result.chunk_id is None
+    assert result.error == "store result did not include a chunk_id"
+    assert is_pending_entry(updated_entry) is True
+    assert updated_entry.frontmatter["retry_attempted"] is True
+
+
+def test_replay_preserves_stored_chunk_id_when_frontmatter_update_fails(tmp_path, monkeypatch):
+    import brainlayer.fallback_replay as fallback_replay
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/write-fails.md")
+    entry = fallback_replay.parse_fallback_file(path)
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("read-only fallback file")
+
+    monkeypatch.setattr(fallback_replay, "_write_frontmatter", fail_write)
+
+    result = fallback_replay.replay_entry(
+        entry, store_func=lambda **_kwargs: {"chunk_id": "manual-stored"}, replayed_by="phase-1-test"
+    )
+
+    assert result.attempted is True
+    assert result.chunk_id == "manual-stored"
+    assert (
+        result.error
+        == "stored chunk_id=manual-stored but failed to update fallback frontmatter: read-only fallback file"
+    )
+
+
 def test_replay_cli_apply_exits_nonzero_when_any_replay_errors(tmp_path, monkeypatch):
     script = Path(__file__).resolve().parents[1] / "scripts" / "replay_brain_store_fallbacks.py"
     spec = importlib.util.spec_from_file_location("replay_brain_store_fallbacks_test", script)

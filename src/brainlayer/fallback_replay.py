@@ -77,18 +77,34 @@ def replay_entry(
             origin_repo_path=str(entry.origin_repo_path),
             replayed_by=replayed_by,
         )
-        chunk_id = _extract_chunk_id(result)
-        updated = dict(entry.frontmatter)
-        updated["retry_attempted"] = True
-        updated["chunk_id"] = chunk_id or None
-        _write_frontmatter(entry.path, updated, entry.body)
-        return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
     except Exception as exc:
-        updated = dict(entry.frontmatter)
-        updated["retry_attempted"] = True
-        updated["chunk_id"] = entry.frontmatter.get("chunk_id") or None
-        _write_frontmatter(entry.path, updated, entry.body)
+        _write_replay_attempt(entry, chunk_id=entry.frontmatter.get("chunk_id") or None)
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+
+    chunk_id = _extract_chunk_id(result)
+    if not chunk_id:
+        error = "store result did not include a chunk_id"
+        _write_replay_attempt(entry, chunk_id=None)
+        return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error)
+
+    try:
+        _write_replay_attempt(entry, chunk_id=chunk_id)
+    except Exception as exc:
+        return ReplayResult(
+            path=entry.path,
+            attempted=True,
+            chunk_id=chunk_id,
+            error=f"stored chunk_id={chunk_id} but failed to update fallback frontmatter: {exc}",
+        )
+
+    return ReplayResult(path=entry.path, attempted=True, chunk_id=chunk_id)
+
+
+def _write_replay_attempt(entry: FallbackEntry, *, chunk_id: Any) -> None:
+    updated = dict(entry.frontmatter)
+    updated["retry_attempted"] = True
+    updated["chunk_id"] = chunk_id or None
+    _write_frontmatter(entry.path, updated, entry.body)
 
 
 def _normalize_tags(value: Any) -> list[Any]:
