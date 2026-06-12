@@ -102,11 +102,11 @@ final class FormattersTests: XCTestCase {
 
     func testFormatStoreResultQueued() {
         let out = Formatters.formatStoreResult(chunkId: "brainbar-queued123", queued: true, useColor: false)
-        XCTAssertTrue(out.contains("\u{23f3}"))  // ⏳
         XCTAssertTrue(out.contains("queued"))
+        XCTAssertTrue(out.contains("DEFERRED"))
         XCTAssertEqual(
             out,
-            "\u{23f3} Memory queued (DB busy) \u{2192} brainbar-queued123 \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} brainbar-queued123 \u{2500} drain will persist it."
         )
         XCTAssertFalse(out.contains("\u{1b}["))
     }

@@ -46,10 +46,7 @@ def test_attribution_uses_scopes_mapping_for_originating_repo(tmp_path):
     _git_init(narration)
     scopes_path = tmp_path / "scopes.yaml"
     scopes_path.write_text(
-        "scopes:\n"
-        f'  {systems}: "systems"\n'
-        f'  {narration}: "narrationlayer"\n'
-        'default: "all"\n',
+        f'scopes:\n  {systems}: "systems"\n  {narration}: "narrationlayer"\ndefault: "all"\n',
         encoding="utf-8",
     )
 
@@ -130,12 +127,7 @@ def test_replay_wraps_scalar_frontmatter_tag_as_single_tag(tmp_path):
     path = repo / "docs.local" / "decisions" / "pending.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "---\n"
-        "intended_brain_store: true\n"
-        "tags: user-correction\n"
-        "chunk_id:\n"
-        "---\n"
-        "scalar tag body\n",
+        "---\nintended_brain_store: true\ntags: user-correction\nchunk_id:\n---\nscalar tag body\n",
         encoding="utf-8",
     )
     calls = []

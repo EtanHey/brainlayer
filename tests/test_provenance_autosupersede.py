@@ -121,7 +121,13 @@ def test_detect_contradiction_requires_same_attribute_and_different_value():
 
     is_contradiction, attribute = detect_contradiction(
         _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
-        {"entity": "nanoClaw", "content": "IDENTITY: HERMES_ADJACENT", "context": None, "mention_type": None, "id": "c-old"},
+        {
+            "entity": "nanoClaw",
+            "content": "IDENTITY: HERMES_ADJACENT",
+            "context": None,
+            "mention_type": None,
+            "id": "c-old",
+        },
     )
 
     assert is_contradiction is True
@@ -226,7 +232,13 @@ def test_no_false_positive_for_cross_attribute_pairs(con):
 
     is_contradiction, _attribute = detect_contradiction(
         _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
-        {"entity": "voicelayer", "content": "REVIEW_CADENCE: weekly", "context": None, "mention_type": None, "id": "c-review"},
+        {
+            "entity": "voicelayer",
+            "content": "REVIEW_CADENCE: weekly",
+            "context": None,
+            "mention_type": None,
+            "id": "c-review",
+        },
     )
     report = auto_supersede(
         con,

@@ -41,7 +41,9 @@ def parse_fallback_file(path: Path, *, scope_map: dict[str, str] | None = None) 
     text = path.read_text(encoding="utf-8")
     frontmatter, body = _split_frontmatter(text)
     origin_repo_path = _git_root(path)
-    project = _resolve_project(path, frontmatter=frontmatter, origin_repo_path=origin_repo_path, scope_map=scope_map or {})
+    project = _resolve_project(
+        path, frontmatter=frontmatter, origin_repo_path=origin_repo_path, scope_map=scope_map or {}
+    )
     return FallbackEntry(
         path=path,
         frontmatter=frontmatter,
@@ -52,7 +54,9 @@ def parse_fallback_file(path: Path, *, scope_map: dict[str, str] | None = None) 
 
 
 def is_pending_entry(entry: FallbackEntry) -> bool:
-    return bool(entry.frontmatter.get("intended_brain_store")) and not str(entry.frontmatter.get("chunk_id") or "").strip()
+    return (
+        bool(entry.frontmatter.get("intended_brain_store")) and not str(entry.frontmatter.get("chunk_id") or "").strip()
+    )
 
 
 def replay_entry(
@@ -133,11 +137,7 @@ def _git_root(path: Path) -> Path:
 
 
 def _git_env() -> dict[str, str]:
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("GIT_")
-    }
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
 def _heuristic_repo_root(path: Path) -> Path:

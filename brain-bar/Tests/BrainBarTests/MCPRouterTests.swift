@@ -58,6 +58,30 @@ private func collectStringArrays(in schema: [String: Any], path: String = "") ->
 }
 
 final class MCPRouterTests: XCTestCase {
+    private func assertDeferredBrainStoreReceipt(
+        _ result: [String: Any],
+        chunkID: String,
+        queueID: String,
+        queuedAt: String,
+        queuePath: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(result["queued"] as? Bool, true, file: file, line: line)
+        XCTAssertEqual(result["status"] as? String, "DEFERRED", file: file, line: line)
+        XCTAssertEqual(result["chunk_id"] as? String, chunkID, file: file, line: line)
+        XCTAssertEqual(result["queue_id"] as? String, queueID, file: file, line: line)
+        XCTAssertEqual(result["queued_at"] as? String, queuedAt, file: file, line: line)
+
+        let deferred = result["deferred"] as? [String: Any]
+        XCTAssertEqual(deferred?["status"] as? String, "DEFERRED", file: file, line: line)
+        XCTAssertEqual(deferred?["reason"] as? String, "DB_BUSY", file: file, line: line)
+        XCTAssertEqual(deferred?["chunk_id"] as? String, chunkID, file: file, line: line)
+        XCTAssertEqual(deferred?["queue_id"] as? String, queueID, file: file, line: line)
+        XCTAssertEqual(deferred?["queued_at"] as? String, queuedAt, file: file, line: line)
+        XCTAssertEqual(deferred?["queue_path"] as? String, queuePath.path, file: file, line: line)
+        XCTAssertEqual(deferred?["action"] as? String, "queued_for_drain", file: file, line: line)
+    }
 
     // MARK: - Initialize
 
@@ -1478,9 +1502,16 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(queueID.isEmpty)
         XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -1522,11 +1553,20 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result["queued"] as? Bool, true)
         XCTAssertFalse((result["queue_id"] as? String ?? "").isEmpty)
         XCTAssertFalse((result["queued_at"] as? String ?? "").isEmpty)
+        let queueID = try XCTUnwrap(result["queue_id"] as? String)
+        let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
         let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
         let text = try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -1581,9 +1621,16 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(queueID.isEmpty)
         XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        assertDeferredBrainStoreReceipt(
+            try XCTUnwrap(result),
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))

@@ -1059,6 +1059,14 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
+    func pendingStoreQueuePathForReceipt() -> URL {
+        pendingStorePath()
+    }
+
+    static func pendingStoreQueuePathForReceipt(dbPath: String) -> URL {
+        pendingStorePath(forDBPath: dbPath)
+    }
+
     @discardableResult
     static func queuePendingStore(
         dbPath: String,

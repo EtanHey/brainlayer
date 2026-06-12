@@ -507,6 +507,7 @@ final class MCPRouter: @unchecked Sendable {
                     queueID: queueID,
                     queuedAt: queuedAt,
                     chunkID: chunkID,
+                    queuePath: db.pendingStoreQueuePathForReceipt(),
                     flushedStores: flushedStores
                 )
             }
@@ -527,22 +528,39 @@ final class MCPRouter: @unchecked Sendable {
             source: source,
             project: project
         )
-        return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
+        return queuedBrainStoreOutput(
+            queueID: queued.queueID,
+            queuedAt: queued.queuedAt,
+            chunkID: queued.chunkID,
+            queuePath: BrainDatabase.pendingStoreQueuePathForReceipt(dbPath: dbPath)
+        )
     }
 
     private func queuedBrainStoreOutput(
         queueID: String,
         queuedAt: String,
         chunkID: String,
+        queuePath: URL,
         flushedStores: [BrainDatabase.FlushedPendingStore] = []
     ) -> ToolOutput {
         ToolOutput(
             text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
             metadata: [
                 "queued": true,
+                "status": "DEFERRED",
                 "queue_id": queueID,
                 "queued_at": queuedAt,
                 "chunk_id": chunkID,
+                "related": [] as [String],
+                "deferred": [
+                    "status": "DEFERRED",
+                    "reason": "DB_BUSY",
+                    "chunk_id": chunkID,
+                    "queue_id": queueID,
+                    "queued_at": queuedAt,
+                    "queue_path": queuePath.path,
+                    "action": "queued_for_drain"
+                ] as [String: Any],
                 "flushed_count": flushedStores.count,
                 "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
                     [
