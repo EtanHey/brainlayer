@@ -480,12 +480,98 @@ def test_confirm_pending_promotes_inference_and_resolves_attribute(con):
     report = confirm_pending(con, "c-infer")
 
     assert report.resolutions["ARBITRATION"].authoritative.id == "c-infer"
-    assert con.execute("SELECT provenance_class FROM chunks WHERE id = 'c-infer'").fetchone()[0] == "RAW-ETAN-DIRECT"
+    assert con.execute("SELECT provenance_class FROM chunks WHERE id = 'c-infer'").fetchone()[0] == "AGENT-INFERENCE"
     assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-para'").fetchone()) == (
         "superseded",
         "c-infer",
     )
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
+
+
+def test_confirm_pending_scopes_confirmation_to_single_claim(con):
+    from brainlayer.provenance_integration import confirm_pending, list_pending_confirm, resolve_entity_conflicts
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-control-old",
+                "ARBITRATION: OLD_AGENT_FRAME",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:40:27Z",
+                "AGENT-PARAPHRASE",
+            ),
+            (
+                "c-user-backend",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "2026-06-05T21:41:27Z",
+                "RAW-ETAN-DIRECT",
+            ),
+            (
+                "c-shared-infer",
+                "inferred system state",
+                "assistant_text",
+                "assistant",
+                "2026-06-05T21:47:27Z",
+                "AGENT-INFERENCE",
+            ),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, context)
+        VALUES (?, ?, ?)
+        """,
+        [
+            ("e-control", "c-control-old", json.dumps({"attribute": "ARBITRATION", "value": "OLD_AGENT_FRAME"})),
+            (
+                "e-control",
+                "c-shared-infer",
+                json.dumps({"attribute": "ARBITRATION", "value": "CONFIRMED_SYSTEM_STATE"}),
+            ),
+            ("e-enrichment", "c-user-backend", json.dumps({"attribute": "PRIMARY_BACKEND", "value": "Gemini"})),
+            ("e-enrichment", "c-shared-infer", json.dumps({"attribute": "PRIMARY_BACKEND", "value": "Groq"})),
+        ],
+    )
+
+    resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+    pending = list_pending_confirm(con)
+    control_pending = next(item for item in pending if item["entity"] == "controlLayer")
+
+    control_report = confirm_pending(con, control_pending["id"])
+    enrichment_report = resolve_entity_conflicts(con, "enrichment", dry_run=False)
+
+    assert control_report.resolutions["ARBITRATION"].authoritative.id == "c-shared-infer"
+    assert (
+        con.execute("SELECT provenance_class FROM chunks WHERE id = 'c-shared-infer'").fetchone()[0]
+        == "AGENT-INFERENCE"
+    )
+    assert enrichment_report.resolutions["PRIMARY_BACKEND"].authoritative.id == "c-user-backend"
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-user-backend'").fetchone()) == (
+        "active",
+        None,
+    )
+    assert (
+        con.execute(
+            """
+        SELECT COUNT(*)
+        FROM provenance_confirmed_claims
+        WHERE entity = 'controlLayer'
+          AND attribute = 'ARBITRATION'
+          AND chunk_id = 'c-shared-infer'
+          AND provenance_class = 'RAW-ETAN-DIRECT'
+        """
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
@@ -532,6 +618,21 @@ def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
         "superseded",
         "c-gemini",
     )
+
+
+def test_provenance_sweep_keeps_unresolved_entity_queued(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "futureEntity", chunk_id="c-future")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.entities == ["futureEntity"]
+    assert "No kg_entities row matched entity id/name/alias" in result.notes
+    assert tuple(
+        con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue WHERE entity = 'futureEntity'").fetchone()
+    ) == ("futureEntity", "c-future")
 
 
 def test_provenance_sweep_does_not_auto_supersede_personal_data(con):

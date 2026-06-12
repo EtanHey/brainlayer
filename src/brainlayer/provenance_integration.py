@@ -73,7 +73,7 @@ def resolve_entity_conflicts(
         )
 
     rows = _entity_chunk_rows(conn, entity_ids)
-    claims = [_row_to_claim(row, canonical_name) for row in rows]
+    claims = _apply_confirmed_claim_overrides(conn, [_row_to_claim(row, canonical_name) for row in rows])
     actionable_claim_ids = {claim.id for row, claim in zip(rows, claims, strict=True) if _row_has_actionable_fact(row)}
     resolutions = resolve_entity(
         claims,
@@ -116,17 +116,20 @@ def resolve_entity_conflicts(
 def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
     """Confirm a pending inference and rerun resolution for its entity.
 
-    Confirmation promotes the chunk to RAW-ETAN-DIRECT, removes its queue row,
-    and lets the normal reversible supersede path resolve the affected
-    attribute. The caller controls when this user-confirmed write is allowed.
+    Confirmation promotes only the pending entity/attribute claim to
+    RAW-ETAN-DIRECT, removes its queue row, and lets the normal reversible
+    supersede path resolve the affected attribute. The caller controls when
+    this user-confirmed write is allowed.
     """
     conn = _conn(store)
     _ensure_pending_user_confirm_table(conn)
     row = conn.execute(
         """
-        SELECT entity, attribute, chunk_id
+        SELECT id, entity, attribute, chunk_id, value
         FROM provenance_pending_user_confirm
         WHERE chunk_id = ? OR id = ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
         """,
         (claim_id, claim_id),
     ).fetchone()
@@ -139,12 +142,29 @@ def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
             notes=[f"No pending provenance confirmation matched claim_id={claim_id}"],
         )
 
-    entity = str(row[0])
-    chunk_id = str(row[2])
-    if "provenance_class" not in _columns(conn, "chunks"):
-        conn.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
-    conn.execute("UPDATE chunks SET provenance_class = ? WHERE id = ?", (RAW_ETAN_DIRECT, chunk_id))
-    conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ? OR id = ?", (chunk_id, claim_id))
+    pending_id = str(row[0])
+    entity = str(row[1])
+    attribute = str(row[2])
+    chunk_id = str(row[3])
+    value = str(row[4])
+    _ensure_confirmed_claims_table(conn)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO provenance_confirmed_claims
+        (id, entity, attribute, chunk_id, value, provenance_class, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"{entity}:{attribute}:{chunk_id}:{value}",
+            entity,
+            attribute,
+            chunk_id,
+            value,
+            RAW_ETAN_DIRECT,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
     _commit_if_supported(conn)
     return resolve_entity_conflicts(store, entity, dry_run=False)
 
@@ -227,6 +247,8 @@ def sweep_provenance_queue(
         personal_notes = [note for note in entity_report.notes if "personal-data" in note]
         report.skipped_personal_count += len(personal_notes)
         report.notes.extend(entity_report.notes)
+        if _should_retry_provenance_queue_entity(entity_report):
+            continue
         conn.execute("DELETE FROM provenance_resolve_queue WHERE entity = ?", (entity,))
     _commit_if_supported(conn)
     return report
@@ -276,9 +298,12 @@ def get_entity_provenance_annotations(store, entity: str) -> dict[str, dict[str,
         return {}
 
     rows = _entity_chunk_rows(conn, entity_ids, include_archived=True)
-    active_claims = [_row_to_claim(row, canonical_name) for row in rows if _is_active_row(row)]
+    active_claims = _apply_confirmed_claim_overrides(
+        conn, [_row_to_claim(row, canonical_name) for row in rows if _is_active_row(row)]
+    )
     resolutions = resolve_entity(active_claims)
-    all_pairs = [(row, _row_to_claim(row, canonical_name)) for row in rows]
+    all_claims = _apply_confirmed_claim_overrides(conn, [_row_to_claim(row, canonical_name) for row in rows])
+    all_pairs = list(zip(rows, all_claims, strict=True))
 
     annotations: dict[str, dict[str, Any]] = {}
     for attribute, resolution in resolutions.items():
@@ -371,6 +396,10 @@ def _ensure_provenance_resolve_queue(conn) -> None:
     )
 
 
+def _should_retry_provenance_queue_entity(report: ProvenanceConflictReport) -> bool:
+    return not report.entity_ids or any(note.startswith("No kg_entities row matched") for note in report.notes)
+
+
 def _entity_name_from_payload(entity: Any) -> str:
     if isinstance(entity, dict):
         for key in ("name", "text", "entity", "label"):
@@ -459,6 +488,24 @@ def _row_to_claim(row: dict[str, Any], entity: str) -> Claim:
         user_anchored=provenance_class != AGENT_INFERENCE,
         text=str(row.get("content") or ""),
     )
+
+
+def _apply_confirmed_claim_overrides(conn, claims: list[Claim]) -> list[Claim]:
+    if not claims or "provenance_confirmed_claims" not in _tables(conn):
+        return claims
+    rows = conn.execute(
+        """
+        SELECT entity, attribute, chunk_id, value, provenance_class
+        FROM provenance_confirmed_claims
+        """
+    ).fetchall()
+    confirmed = {(str(row[0]), str(row[1]), str(row[2]), str(row[3])): str(row[4] or RAW_ETAN_DIRECT) for row in rows}
+    for claim in claims:
+        provenance_class = confirmed.get((claim.entity, claim.attribute, claim.id, claim.value))
+        if provenance_class:
+            claim.provenance_class = provenance_class
+            claim.user_anchored = True
+    return claims
 
 
 _ATTRIBUTE_VALUE_RE = re.compile(r"\s*([A-Za-z][A-Za-z0-9 _-]{1,40})\s*:\s*(.+?)\s*$", flags=re.S)
@@ -631,6 +678,23 @@ def _ensure_pending_user_confirm_table(conn) -> None:
             provenance_class TEXT NOT NULL,
             reason TEXT NOT NULL,
             created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _ensure_confirmed_claims_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provenance_confirmed_claims (
+            id TEXT PRIMARY KEY,
+            entity TEXT NOT NULL,
+            attribute TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            value TEXT NOT NULL,
+            provenance_class TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(entity, attribute, chunk_id, value)
         )
         """
     )
