@@ -179,7 +179,6 @@ final class AgentActivityMonitor {
             return true
         }
         if command.contains("/.bun/bin/codex")
-            || command.contains("cursor agent")
             || commandHasCursorAgentSession(command) {
             return true
         }
@@ -199,7 +198,7 @@ final class AgentActivityMonitor {
             || command.contains(" brainlayercodex") {
             return .codex
         }
-        if command.hasPrefix("cursor ") || command.contains("cursor agent") || command.contains(" brainlayercursor") {
+        if command.hasPrefix("cursor ") || command.contains(" brainlayercursor") {
             return .cursor
         }
         if command.hasPrefix("gemini ")
@@ -214,7 +213,7 @@ final class AgentActivityMonitor {
         let tokens = command.split { character in
             character.isWhitespace || character == "="
         }
-        let promptFlags = ["--prompt", "--prompt-interactive", "--message"]
+        let promptFlags = ["--prompt", "--prompt-interactive", "--message", "-p", "-i"]
         for index in tokens.indices {
             if promptFlags.contains(String(tokens[index])) {
                 return false
@@ -236,9 +235,6 @@ final class AgentActivityMonitor {
         }
         if command.contains("/.bun/bin/codex") {
             return .codex
-        }
-        if command.contains("cursor agent") {
-            return .cursor
         }
         if commandHasCursorAgentSession(command) {
             return .cursor

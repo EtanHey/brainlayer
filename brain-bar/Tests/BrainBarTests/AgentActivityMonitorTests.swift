@@ -46,6 +46,18 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotSkipsSearchCommandsThatMentionCursorAgentPhrase() {
+        let snapshot = """
+        42031 rg rg -n cursor agent /Users/etanheyman/Gits
+        42032 zsh /bin/zsh -lc ps -axo pid=,ucomm=,args= | rg cursor agent
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .cursor), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func testParseSnapshotCountsClaudeCliWhenPromptMentionsSearchCommands() {
         let snapshot = """
         13303 2.1.175 claude --dangerously-skip-permissions --append-system-prompt Use grep and ps -axo only as debugging examples
@@ -95,6 +107,18 @@ final class AgentActivityMonitorTests: XCTestCase {
     func testParseSnapshotDoesNotClassifyAgyByPromptMentioningModelFlag() {
         let snapshot = """
         19006 agy /Users/etanheyman/.local/bin/agy --prompt-interactive Please document why --model gemini should not be parsed from prompt text
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .gemini), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    func testParseSnapshotDoesNotClassifyAgyByPromptAliasMentioningModelFlag() {
+        let snapshot = """
+        19007 agy /Users/etanheyman/.local/bin/agy -i Please document why --model gemini should not be parsed from prompt text
+        19008 agy /Users/etanheyman/.local/bin/agy -p Please document why --model gemini should not be parsed from prompt text
         """
 
         let activity = AgentActivityMonitor.parse(snapshot)
