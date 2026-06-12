@@ -96,7 +96,7 @@ final class AgentActivityMonitor {
 
             guard !isIgnoredProcess(executable: executable, command: lowerCommand) else { continue }
 
-            if let family = detectActualFamily(command: lowerCommand) {
+            if let family = detectActualFamily(executable: executable, command: lowerCommand) {
                 actualCounts[family, default: 0] += 1
                 continue
             }
@@ -164,13 +164,13 @@ final class AgentActivityMonitor {
         return false
     }
 
-    private static func detectActualFamily(command: String) -> AgentFamily? {
+    private static func detectActualFamily(executable: String, command: String) -> AgentFamily? {
         if command.hasPrefix("claude ") || command.contains("/claude ") || command.contains(" brainlayerclaude") {
             return .claude
         }
         if command.hasPrefix("codex ")
             || command.contains("/codex/codex ")
-            || (command.contains("/bin/codex ") && !command.contains("/.bun/bin/codex "))
+            || (executable == "codex" && command.contains("/bin/codex "))
             || command.contains(" brainlayercodex") {
             return .codex
         }

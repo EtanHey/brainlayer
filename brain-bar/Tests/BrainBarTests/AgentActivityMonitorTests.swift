@@ -45,6 +45,18 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotDoesNotTreatNonCodexLauncherAsActualCodex() {
+        let snapshot = """
+        13908 node node /opt/homebrew/bin/codex --model gpt-5.4
+        13909 codex /Users/etanheyman/.bun/install/global/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex --model gpt-5.4
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .codex), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 
