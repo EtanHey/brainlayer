@@ -46,6 +46,17 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotCountsClaudeCliWhenPromptMentionsSearchCommands() {
+        let snapshot = """
+        13303 2.1.175 claude --dangerously-skip-permissions --append-system-prompt Use grep and ps -axo only as debugging examples
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .claude), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
     func testParseSnapshotDoesNotTreatNonCodexLauncherAsActualCodex() {
         let snapshot = """
         13908 node node /opt/homebrew/bin/codex --model gpt-5.4

@@ -145,6 +145,10 @@ final class AgentActivityMonitor {
     }
 
     private static func isIgnoredProcess(executable: String, command: String) -> Bool {
+        if isAgentEntrypoint(executable: executable, command: command) {
+            return false
+        }
+
         let noiseTokens = [
             "/applications/claude.app",
             "claude helper",
@@ -159,6 +163,24 @@ final class AgentActivityMonitor {
             return true
         }
         if executable == "rg" || executable == "awk" || executable == "grep" {
+            return true
+        }
+        return false
+    }
+
+    private static func isAgentEntrypoint(executable: String, command: String) -> Bool {
+        if executable == "agy" || executable == "codex" {
+            return true
+        }
+        if command.hasPrefix("claude ")
+            || command.hasPrefix("codex ")
+            || command.hasPrefix("cursor ")
+            || command.hasPrefix("gemini ") {
+            return true
+        }
+        if command.contains("/.bun/bin/codex")
+            || command.contains("cursor agent")
+            || commandHasCursorAgentSession(command) {
             return true
         }
         return false
