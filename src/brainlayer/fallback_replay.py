@@ -92,7 +92,10 @@ def replay_entry(
     chunk_id = _extract_chunk_id(result)
     if not chunk_id:
         error = "store result did not include a chunk_id"
-        _write_replay_attempt(entry, chunk_id=None)
+        try:
+            _write_replay_attempt(entry, chunk_id=None)
+        except Exception as exc:
+            error = f"{error}; write_replay_attempt failed: {exc}"
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=error)
 
     try:

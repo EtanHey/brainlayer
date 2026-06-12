@@ -123,24 +123,9 @@ def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
     """
     conn = _conn(store)
     _ensure_pending_user_confirm_table(conn)
-    row = conn.execute(
-        """
-        SELECT id, entity, attribute, chunk_id, value
-        FROM provenance_pending_user_confirm
-        WHERE chunk_id = ? OR id = ?
-        ORDER BY created_at ASC, id ASC
-        LIMIT 1
-        """,
-        (claim_id, claim_id),
-    ).fetchone()
-    if row is None:
-        return ProvenanceConflictReport(
-            entity="",
-            entity_ids=[],
-            resolutions={},
-            dry_run=False,
-            notes=[f"No pending provenance confirmation matched claim_id={claim_id}"],
-        )
+    row = _find_pending_confirmation(conn, claim_id)
+    if isinstance(row, ProvenanceConflictReport):
+        return row
 
     pending_id = str(row[0])
     entity = str(row[1])
@@ -167,6 +152,41 @@ def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
     conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
     _commit_if_supported(conn)
     return resolve_entity_conflicts(store, entity, dry_run=False)
+
+
+def _find_pending_confirmation(conn, claim_id: str):
+    row = conn.execute(
+        """
+        SELECT id, entity, attribute, chunk_id, value
+        FROM provenance_pending_user_confirm
+        WHERE id = ?
+        """,
+        (claim_id,),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    rows = list(
+        conn.execute(
+            """
+            SELECT id, entity, attribute, chunk_id, value
+            FROM provenance_pending_user_confirm
+            WHERE chunk_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (claim_id,),
+        )
+    )
+    if len(rows) != 1:
+        qualifier = "No" if not rows else "Ambiguous"
+        return ProvenanceConflictReport(
+            entity="",
+            entity_ids=[],
+            resolutions={},
+            dry_run=False,
+            notes=[f"{qualifier} pending provenance confirmation matched claim_id={claim_id}"],
+        )
+    return rows[0]
 
 
 def enqueue_provenance_resolution(
@@ -248,6 +268,7 @@ def sweep_provenance_queue(
         report.skipped_personal_count += len(personal_notes)
         report.notes.extend(entity_report.notes)
         if _should_retry_provenance_queue_entity(entity_report):
+            _bump_provenance_queue_retry(conn, entity)
             continue
         conn.execute("DELETE FROM provenance_resolve_queue WHERE entity = ?", (entity,))
     _commit_if_supported(conn)
@@ -398,6 +419,18 @@ def _ensure_provenance_resolve_queue(conn) -> None:
 
 def _should_retry_provenance_queue_entity(report: ProvenanceConflictReport) -> bool:
     return not report.entity_ids or any(note.startswith("No kg_entities row matched") for note in report.notes)
+
+
+def _bump_provenance_queue_retry(conn, entity: str) -> None:
+    conn.execute(
+        """
+        UPDATE provenance_resolve_queue
+        SET attempts = attempts + 1,
+            updated_at = ?
+        WHERE entity = ?
+        """,
+        (datetime.now(timezone.utc).isoformat(), entity),
+    )
 
 
 def _entity_name_from_payload(entity: Any) -> str:

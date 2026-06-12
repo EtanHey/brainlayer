@@ -634,6 +634,46 @@ def test_confirm_pending_scopes_confirmation_to_single_claim(con):
     )
 
 
+def test_confirm_pending_rejects_ambiguous_chunk_id(con):
+    from brainlayer.provenance_integration import _ensure_pending_user_confirm_table, confirm_pending
+
+    _ensure_pending_user_confirm_table(con)
+    con.executemany(
+        """
+        INSERT INTO provenance_pending_user_confirm
+        (id, entity, attribute, chunk_id, value, provenance_class, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "pending-arbitration",
+                "controlLayer",
+                "ARBITRATION",
+                "c-shared-infer",
+                "CONFIRMED_SYSTEM_STATE",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:47:27Z",
+            ),
+            (
+                "pending-backend",
+                "enrichment",
+                "PRIMARY_BACKEND",
+                "c-shared-infer",
+                "Groq",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:48:27Z",
+            ),
+        ],
+    )
+
+    report = confirm_pending(con, "c-shared-infer")
+
+    assert report.notes == ["Ambiguous pending provenance confirmation matched claim_id=c-shared-infer"]
+    assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 2
+
+
 def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
     from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
 
@@ -693,6 +733,23 @@ def test_provenance_sweep_keeps_unresolved_entity_queued(con):
     assert tuple(
         con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue WHERE entity = 'futureEntity'").fetchone()
     ) == ("futureEntity", "c-future")
+
+
+def test_provenance_sweep_bumps_unresolved_entity_retry_metadata(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "futureEntity", chunk_id="c-future")
+    before = con.execute(
+        "SELECT attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'futureEntity'"
+    ).fetchone()
+
+    sweep_provenance_queue(con)
+
+    after = con.execute(
+        "SELECT attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'futureEntity'"
+    ).fetchone()
+    assert after["attempts"] == before["attempts"] + 1
+    assert after["updated_at"] > before["updated_at"]
 
 
 def test_provenance_sweep_does_not_auto_supersede_personal_data(con):

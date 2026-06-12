@@ -185,6 +185,30 @@ def test_replay_preserves_stored_chunk_id_when_frontmatter_update_fails(tmp_path
     )
 
 
+def test_replay_returns_missing_chunk_id_error_when_marker_write_fails(tmp_path, monkeypatch):
+    import brainlayer.fallback_replay as fallback_replay
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = _pending_file(repo, "docs.local/decisions/missing-id-and-write-fail.md")
+    entry = fallback_replay.parse_fallback_file(path)
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("read-only fallback file")
+
+    monkeypatch.setattr(fallback_replay, "_write_frontmatter", fail_write)
+
+    result = fallback_replay.replay_entry(
+        entry, store_func=lambda **_kwargs: {"related": []}, replayed_by="phase-1-test"
+    )
+
+    assert result.attempted is True
+    assert result.chunk_id is None
+    assert (
+        result.error == "store result did not include a chunk_id; write_replay_attempt failed: read-only fallback file"
+    )
+
+
 def test_replay_returns_store_error_when_failed_attempt_marker_write_fails(tmp_path, monkeypatch):
     import brainlayer.fallback_replay as fallback_replay
 
