@@ -113,6 +113,7 @@ def _git_root(path: Path) -> Path:
     try:
         output = subprocess.check_output(
             ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+            env=_git_env(),
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
@@ -123,13 +124,27 @@ def _git_root(path: Path) -> Path:
     return _heuristic_repo_root(path)
 
 
+def _git_env() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
+
+
 def _heuristic_repo_root(path: Path) -> Path:
     current = path.resolve()
+    docs_local_root: Path | None = None
     for parent in [current.parent, *current.parents]:
-        if parent.name in {"docs.local", "decisions", "brain-store-fallback"}:
+        if parent.name == "docs.local":
+            docs_local_root = parent.parent
+            continue
+        if parent.name in {"decisions", "brain-store-fallback"}:
             continue
         if (parent / ".git").exists():
             return parent
+    if docs_local_root is not None:
+        return docs_local_root
     parts = current.parts
     if "Gits" in parts:
         index = parts.index("Gits")
