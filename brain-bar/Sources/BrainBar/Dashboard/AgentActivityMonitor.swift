@@ -180,7 +180,7 @@ final class AgentActivityMonitor {
         if command.hasPrefix("gemini ")
             || command.contains("/gemini ")
             || command.contains(" brainlayergemini")
-            || (command.hasPrefix("agy ") && command.contains("gemini")) {
+            || (executable == "agy" && command.contains("gemini")) {
             return .gemini
         }
         return nil

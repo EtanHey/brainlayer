@@ -10,6 +10,7 @@ final class AgentActivityMonitorTests: XCTestCase {
         18001 cursor cursor agent --resume session-123
         19001 gemini gemini --model gemini-2.5-pro
         19002 agy agy --dangerously-skip-permissions --model Gemini 3.1 Pro (High)
+        19003 agy /Users/etanheyman/.local/bin/agy --dangerously-skip-permissions --model Gemini 3.1 Pro (High)
          1355 Electron /Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler --monitor-self-annotation=ptype=crashpad-handler
          1588 Claude\\ Helper /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process
         """
@@ -19,8 +20,8 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.count(for: .claude), 1)
         XCTAssertEqual(activity.count(for: .codex), 1)
         XCTAssertEqual(activity.count(for: .cursor), 1)
-        XCTAssertEqual(activity.count(for: .gemini), 2)
-        XCTAssertEqual(activity.totalActiveAgents, 5)
+        XCTAssertEqual(activity.count(for: .gemini), 3)
+        XCTAssertEqual(activity.totalActiveAgents, 6)
     }
 
     func testParseSnapshotRetainsFamiliesWithZeroCounts() {
