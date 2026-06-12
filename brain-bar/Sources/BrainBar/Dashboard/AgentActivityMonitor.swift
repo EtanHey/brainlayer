@@ -192,7 +192,14 @@ final class AgentActivityMonitor {
         let tokens = command.split { character in
             character.isWhitespace || character == "="
         }
-        for index in tokens.indices where tokens[index] == "--model" && index + 1 < tokens.endIndex {
+        let promptFlags = ["--prompt", "--prompt-interactive", "--message"]
+        for index in tokens.indices {
+            if promptFlags.contains(String(tokens[index])) {
+                return false
+            }
+            guard tokens[index] == "--model" && index + 1 < tokens.endIndex else {
+                continue
+            }
             let model = tokens[index + 1]
             if model == familyToken || model.hasPrefix("\(familyToken)-") {
                 return true
