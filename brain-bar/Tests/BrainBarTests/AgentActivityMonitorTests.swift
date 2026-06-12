@@ -92,6 +92,18 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotClassifiesCursorAgentNodeLauncherAndSkipsWorkerServer() {
+        let snapshot = """
+        50008 node /Users/etanheyman/.local/bin/cursor-agent --use-system-ca /Users/etanheyman/.local/share/cursor-agent/versions/2026.06.12-01-15-52-7244546/index.js agent
+        52858 node /Users/etanheyman/.local/share/cursor-agent/versions/2026.06.12-01-15-52-7244546/node /Users/etanheyman/.local/share/cursor-agent/versions/2026.06.12-01-15-52-7244546/index.js worker-server
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .cursor), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 

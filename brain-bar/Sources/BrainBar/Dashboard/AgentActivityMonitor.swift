@@ -218,9 +218,29 @@ final class AgentActivityMonitor {
         if command.contains("cursor agent") {
             return .cursor
         }
+        if commandHasCursorAgentSession(command) {
+            return .cursor
+        }
         if command.contains(" gemini") {
             return .gemini
         }
         return nil
+    }
+
+    private static func commandHasCursorAgentSession(_ command: String) -> Bool {
+        guard command.contains("cursor-agent") else { return false }
+
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        for index in tokens.indices where tokens[index] == "agent" {
+            guard index > tokens.startIndex else { continue }
+            let launcher = tokens[tokens.index(before: index)]
+            if launcher == "index.js"
+                || launcher.hasSuffix("/index.js")
+                || launcher == "cursor-agent"
+                || launcher.hasSuffix("/cursor-agent") {
+                return true
+            }
+        }
+        return false
     }
 }
