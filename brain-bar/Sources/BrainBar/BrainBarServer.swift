@@ -900,12 +900,16 @@ final class BrainBarServer: @unchecked Sendable {
             publishStoredChunk(stored: stored, content: content, tags: tags, importance: arguments["importance"] as? Int ?? 5)
         }
 
-        for flushed in extractFlushedQueuedChunks(from: response) {
+        for flushed in extractFlushedQueuedChunkReceipts(from: response) {
+            guard let database,
+                  let details = try? database.storedChunkDetails(chunkID: flushed.chunkID, rowID: flushed.rowID) else {
+                continue
+            }
             publishStoredChunk(
-                stored: flushed.storedChunk,
-                content: flushed.content,
-                tags: flushed.tags,
-                importance: flushed.importance
+                stored: flushed,
+                content: details.content,
+                tags: details.tags,
+                importance: details.importance
             )
         }
     }
@@ -947,21 +951,13 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
-    private func extractFlushedQueuedChunks(from response: [String: Any]) -> [(storedChunk: StoreResultPayload, content: String, tags: [String], importance: Int)] {
+    private func extractFlushedQueuedChunkReceipts(from response: [String: Any]) -> [StoreResultPayload] {
         guard let result = response["result"] as? [String: Any],
               let items = result["_brainbarFlushedQueuedChunks"] as? [[String: Any]] else {
             return []
         }
 
-        return items.compactMap { item in
-            guard let stored = storedChunkPayload(from: item),
-                  let content = item["content"] as? String,
-                  let tags = item["tags"] as? [String] else {
-                return nil
-            }
-            let importance = item["importance"] as? Int ?? 5
-            return (stored, content, tags, importance)
-        }
+        return items.compactMap(storedChunkPayload)
     }
 
     private func extractStoredChunk(from response: [String: Any]) -> StoreResultPayload? {

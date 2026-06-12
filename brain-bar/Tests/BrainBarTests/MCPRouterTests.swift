@@ -1681,7 +1681,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path), "successful store should drain the pending queue")
 
         let contents = try chunkContents(path: dbPath)
@@ -1727,17 +1731,17 @@ final class MCPRouterTests: XCTestCase {
         let result = response["result"] as? [String: Any]
         XCTAssertNil(result?["isError"])
         XCTAssertEqual(result?["queued"] as? Bool, true)
-        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
+        XCTAssertEqual(result?["flushed_count"] as? Int, 0)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
-        XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush even when live write queues")
-
-        let queuedPayloadAfterFlush = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
-        XCTAssertEqual(queuedPayloadAfterFlush["content"] as? String, "Live write queues but still triggers flush")
+        XCTAssertEqual(flushed?.count, 0)
 
         let contents = try chunkContents(path: dbPath)
-        XCTAssertTrue(contents.contains("Queued item should flush even when live write queues"))
+        XCTAssertFalse(contents.contains("Queued item should flush even when live write queues"))
         XCTAssertFalse(contents.contains("Live write queues but still triggers flush"))
+
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertTrue(queuedText.contains("Queued item should flush even when live write queues"))
+        XCTAssertTrue(queuedText.contains("Live write queues but still triggers flush"))
     }
 
     func testBrainStoreFlushKeepsMalformedQueueLines() throws {
@@ -1780,7 +1784,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives malformed sibling")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertEqual(remainingText.trimmingCharacters(in: .whitespacesAndNewlines), "not-json")
@@ -1830,7 +1838,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives invalid utf8 sibling")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingData = try Data(contentsOf: queuePath)
         XCTAssertEqual(remainingData, invalidLine)

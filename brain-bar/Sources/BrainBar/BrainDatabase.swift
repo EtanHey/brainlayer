@@ -207,6 +207,12 @@ final class BrainDatabase: @unchecked Sendable {
         let rowID: Int64
     }
 
+    struct StoredChunkDetails: Sendable, Equatable {
+        let content: String
+        let tags: [String]
+        let importance: Int
+    }
+
     struct FlushedPendingStore: Sendable {
         let storedChunk: StoredChunk
         let content: String
@@ -1487,6 +1493,24 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(chunkID, to: stmt, index: 1)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         return sqlite3_column_int64(stmt, 0)
+    }
+
+    func storedChunkDetails(chunkID: String, rowID: Int64) throws -> StoredChunkDetails? {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT content, tags, importance FROM chunks WHERE id = ? AND rowid = ?", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText(chunkID, to: stmt, index: 1)
+        sqlite3_bind_int64(stmt, 2, rowID)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let content = columnText(stmt, 0) ?? ""
+        let tagsJSON = columnText(stmt, 1) ?? "[]"
+        let tagsData = Data(tagsJSON.utf8)
+        let tags = (try? JSONDecoder().decode([String].self, from: tagsData)) ?? []
+        let importance = Int(sqlite3_column_int(stmt, 2))
+        return StoredChunkDetails(content: content, tags: tags, importance: importance)
     }
 
     func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {
