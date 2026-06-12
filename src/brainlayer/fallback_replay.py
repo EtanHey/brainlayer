@@ -66,7 +66,7 @@ def replay_entry(
             content=entry.body,
             memory_type=str(entry.frontmatter.get("memory_type") or "note"),
             project=entry.project,
-            tags=list(entry.frontmatter.get("tags") or []),
+            tags=_normalize_tags(entry.frontmatter.get("tags")),
             importance=entry.frontmatter.get("importance"),
             created_at=str(entry.frontmatter.get("timestamp") or ""),
             fallback_source_path=str(entry.path),
@@ -85,6 +85,14 @@ def replay_entry(
         updated["chunk_id"] = entry.frontmatter.get("chunk_id") or None
         _write_frontmatter(entry.path, updated, entry.body)
         return ReplayResult(path=entry.path, attempted=True, chunk_id=None, error=str(exc))
+
+
+def _normalize_tags(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, str) or not isinstance(value, list | tuple | set):
+        return [value]
+    return list(value)
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:

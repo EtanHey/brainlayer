@@ -121,7 +121,7 @@ def test_detect_contradiction_requires_same_attribute_and_different_value():
 
     is_contradiction, attribute = detect_contradiction(
         _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
-        {"content": "IDENTITY: HERMES_ADJACENT", "context": None, "mention_type": None, "id": "c-old"},
+        {"entity": "nanoClaw", "content": "IDENTITY: HERMES_ADJACENT", "context": None, "mention_type": None, "id": "c-old"},
     )
 
     assert is_contradiction is True
@@ -129,14 +129,26 @@ def test_detect_contradiction_requires_same_attribute_and_different_value():
 
     same_value, _ = detect_contradiction(
         _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
-        {"content": "IDENTITY: DISTINCT", "context": None, "mention_type": None, "id": "c-agree"},
+        {"entity": "nanoClaw", "content": "IDENTITY: DISTINCT", "context": None, "mention_type": None, "id": "c-agree"},
     )
     different_attribute, _ = detect_contradiction(
         _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
-        {"content": "STATUS: ACTIVE", "context": None, "mention_type": None, "id": "c-status"},
+        {"entity": "nanoClaw", "content": "STATUS: ACTIVE", "context": None, "mention_type": None, "id": "c-status"},
     )
     assert same_value is False
     assert different_attribute is False
+
+
+def test_detect_contradiction_requires_entity_on_both_chunks():
+    from brainlayer.provenance_autosupersede import detect_contradiction
+
+    is_contradiction, attribute = detect_contradiction(
+        _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
+        {"content": "IDENTITY: HERMES_ADJACENT", "context": None, "mention_type": None, "id": "c-old"},
+    )
+
+    assert is_contradiction is False
+    assert attribute == ""
 
 
 def test_no_false_positive_for_agreeing_same_attribute_mentions(con):
@@ -214,7 +226,7 @@ def test_no_false_positive_for_cross_attribute_pairs(con):
 
     is_contradiction, _attribute = detect_contradiction(
         _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
-        {"content": "REVIEW_CADENCE: weekly", "context": None, "mention_type": None, "id": "c-review"},
+        {"entity": "voicelayer", "content": "REVIEW_CADENCE: weekly", "context": None, "mention_type": None, "id": "c-review"},
     )
     report = auto_supersede(
         con,
@@ -225,6 +237,46 @@ def test_no_false_positive_for_cross_attribute_pairs(con):
     assert is_contradiction is False
     assert report.superseded_count == 0
     assert report.pending_confirm_count == 0
+
+
+def test_apply_mode_skips_unstructured_mentions(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-repo", "BrainLayer")
+    _chunk(
+        con,
+        "c-old-mention",
+        "e-repo",
+        "BrainLayer uses local sqlite memory",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-01T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+    _chunk(
+        con,
+        "c-new-mention",
+        "e-repo",
+        "BrainLayer exposes MCP tools",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-mention", "BrainLayer", "BrainLayer exposes MCP tools"),
+        dry_run=False,
+    )
+
+    assert "MENTION" not in report.attribute_dispositions
+    assert report.superseded_count == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-mention'").fetchone()) == (
+        "active",
+        None,
+    )
 
 
 def test_multi_attribute_divergent_resolution_in_one_call(con):

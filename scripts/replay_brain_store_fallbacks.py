@@ -62,6 +62,10 @@ def main() -> int:
             {"path": str(item.path), "chunk_id": item.chunk_id, "error": item.error}
             for item in replayed
         ]
+        if any(item.error for item in replayed):
+            result["error"] = "one or more fallback replays failed"
+            _emit(result, as_json=args.json)
+            return 1
 
     _emit(result, as_json=args.json)
     return 0

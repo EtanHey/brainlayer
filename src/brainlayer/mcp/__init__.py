@@ -61,6 +61,7 @@ from .store_handler import _brain_archive, _brain_digest, _brain_supersede, _sto
 from .store_handler import _brain_update as _brain_update
 from .tags_handler import _brain_tags_mcp as _brain_tags_mcp
 
+
 def _mcp_query_timeout() -> float:
     try:
         return max(1.0, float(os.environ.get("BRAINLAYER_MCP_QUERY_TIMEOUT", "15")))

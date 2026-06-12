@@ -684,6 +684,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
         self._has_chunk_origin = True
         self._has_content_class = True
+        self._has_provenance_class = True
+        self._has_superseded_by = True
         ensure_dedupe_schema(self.conn)
 
         migration_name = "2026_05_16_fm6_chunk_origin"

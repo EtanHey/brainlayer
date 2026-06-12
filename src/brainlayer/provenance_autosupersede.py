@@ -95,7 +95,11 @@ def auto_supersede(
         report.notes.append("No kg_entities row matched normalized entity")
         return report
 
-    candidates = [row for row in _entity_chunk_rows(db, entity_ids) if str(row.get("id")) != _chunk_id(new_chunk)]
+    candidates = [
+        {**dict(row), "entity": canonical_entity}
+        for row in _entity_chunk_rows(db, entity_ids)
+        if str(row.get("id")) != _chunk_id(new_chunk)
+    ]
     report.candidate_count = len(candidates)
 
     if any(_is_personal_entity_or_chunk(canonical_entity, candidate) for candidate in candidates):
@@ -111,6 +115,9 @@ def auto_supersede(
             report.contradiction_count += 1
 
     for attribute, new_rows in new_claims_by_attribute.items():
+        if attribute == "MENTION":
+            report.notes.append("Skipped unstructured MENTION autosupersede group")
+            continue
         rows = [*new_rows, *candidates_by_attribute.get(attribute, [])]
         claims = [_chunk_to_claim(row, canonical_entity) for row in rows]
         resolution = resolve(
@@ -194,7 +201,7 @@ def _same_chunk_entity(new_chunk: dict[str, Any], candidate: dict[str, Any]) -> 
     new_entity = _chunk_entity(new_chunk)
     candidate_entity = _chunk_entity(candidate)
     if not new_entity or not candidate_entity:
-        return True
+        return False
     return normalize_entity(new_entity) == normalize_entity(candidate_entity)
 
 
