@@ -9,6 +9,7 @@ final class AgentActivityMonitorTests: XCTestCase {
         13909 codex /Users/etanheyman/.bun/install/global/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox
         18001 cursor cursor agent --resume session-123
         19001 gemini gemini --model gemini-2.5-pro
+        19002 agy agy --dangerously-skip-permissions --model Gemini 3.1 Pro (High)
          1355 Electron /Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler --monitor-self-annotation=ptype=crashpad-handler
          1588 Claude\\ Helper /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process
         """
@@ -18,8 +19,8 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.count(for: .claude), 1)
         XCTAssertEqual(activity.count(for: .codex), 1)
         XCTAssertEqual(activity.count(for: .cursor), 1)
-        XCTAssertEqual(activity.count(for: .gemini), 1)
-        XCTAssertEqual(activity.totalActiveAgents, 4)
+        XCTAssertEqual(activity.count(for: .gemini), 2)
+        XCTAssertEqual(activity.totalActiveAgents, 5)
     }
 
     func testParseSnapshotRetainsFamiliesWithZeroCounts() {

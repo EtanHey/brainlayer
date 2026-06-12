@@ -168,13 +168,19 @@ final class AgentActivityMonitor {
         if command.hasPrefix("claude ") || command.contains("/claude ") || command.contains(" brainlayerclaude") {
             return .claude
         }
-        if command.hasPrefix("codex ") || command.contains("/codex/codex ") || command.contains(" brainlayercodex") {
+        if command.hasPrefix("codex ")
+            || command.contains("/codex/codex ")
+            || (command.contains("/bin/codex ") && !command.contains("/.bun/bin/codex "))
+            || command.contains(" brainlayercodex") {
             return .codex
         }
         if command.hasPrefix("cursor ") || command.contains("cursor agent") || command.contains(" brainlayercursor") {
             return .cursor
         }
-        if command.hasPrefix("gemini ") || command.contains("/gemini ") || command.contains(" brainlayergemini") {
+        if command.hasPrefix("gemini ")
+            || command.contains("/gemini ")
+            || command.contains(" brainlayergemini")
+            || (command.hasPrefix("agy ") && command.contains("gemini")) {
             return .gemini
         }
         return nil
