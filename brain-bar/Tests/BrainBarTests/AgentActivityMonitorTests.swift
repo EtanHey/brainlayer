@@ -58,6 +58,29 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 1)
     }
 
+    func testParseSnapshotClassifiesAgyGeminiByExecutableBeforePromptMentionsClaude() {
+        let snapshot = """
+        19004 agy /Users/etanheyman/.local/bin/agy --dangerously-skip-permissions --model Gemini 3.1 Pro --prompt-interactive Adopt brainlayerClaude context for orchestration
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .claude), 0)
+        XCTAssertEqual(activity.count(for: .gemini), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
+    func testParseSnapshotDoesNotClassifyAgyByGeminiSubstringInsideArgument() {
+        let snapshot = """
+        19005 agy /Users/etanheyman/.local/bin/agy --config mygeminiconfig --prompt-interactive ordinary task
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .gemini), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 

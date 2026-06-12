@@ -165,6 +165,9 @@ final class AgentActivityMonitor {
     }
 
     private static func detectActualFamily(executable: String, command: String) -> AgentFamily? {
+        if executable == "agy" && commandHasModelToken(command, familyToken: "gemini") {
+            return .gemini
+        }
         if command.hasPrefix("claude ") || command.contains("/claude ") || command.contains(" brainlayerclaude") {
             return .claude
         }
@@ -179,11 +182,23 @@ final class AgentActivityMonitor {
         }
         if command.hasPrefix("gemini ")
             || command.contains("/gemini ")
-            || command.contains(" brainlayergemini")
-            || (executable == "agy" && command.contains("gemini")) {
+            || command.contains(" brainlayergemini") {
             return .gemini
         }
         return nil
+    }
+
+    private static func commandHasModelToken(_ command: String, familyToken: String) -> Bool {
+        let tokens = command.split { character in
+            character.isWhitespace || character == "="
+        }
+        for index in tokens.indices where tokens[index] == "--model" && index + 1 < tokens.endIndex {
+            let model = tokens[index + 1]
+            if model == familyToken || model.hasPrefix("\(familyToken)-") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func detectWrapperFamily(executable: String, command: String) -> AgentFamily? {
