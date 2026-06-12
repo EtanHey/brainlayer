@@ -165,6 +165,10 @@ def provenance_confirm(claim_id: str = typer.Argument(..., help="Pending chunk_i
         close = getattr(store, "close", None)
         if callable(close):
             close()
+    if not result.entity and result.notes:
+        for note in result.notes:
+            typer.echo(note, err=True)
+        raise typer.Exit(1)
     typer.echo(f"confirmed={claim_id} superseded={result.superseded_count} pending={result.pending_confirm_count}")
 
 

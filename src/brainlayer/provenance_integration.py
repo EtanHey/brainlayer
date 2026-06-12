@@ -293,20 +293,14 @@ def reject_pending(store, claim_id: str) -> bool:
     """Reject a pending inference by reversibly archiving its source chunk."""
     conn = _conn(store)
     _ensure_pending_user_confirm_table(conn)
-    row = conn.execute(
-        """
-        SELECT chunk_id
-        FROM provenance_pending_user_confirm
-        WHERE chunk_id = ? OR id = ?
-        """,
-        (claim_id, claim_id),
-    ).fetchone()
-    if row is None:
+    row = _find_pending_confirmation(conn, claim_id)
+    if isinstance(row, ProvenanceConflictReport):
         return False
-    chunk_id = str(row[0])
+    pending_id = str(row[0])
+    chunk_id = str(row[3])
     archived = _archive_chunk(store, conn, chunk_id)
     if archived:
-        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ? OR id = ?", (chunk_id, claim_id))
+        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
         _commit_if_supported(conn)
     return archived
 

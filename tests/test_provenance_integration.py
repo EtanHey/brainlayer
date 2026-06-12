@@ -674,6 +674,52 @@ def test_confirm_pending_rejects_ambiguous_chunk_id(con):
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 2
 
 
+def test_reject_pending_rejects_ambiguous_chunk_id_without_archiving(con):
+    from brainlayer.provenance_integration import _ensure_pending_user_confirm_table, reject_pending
+
+    _ensure_pending_user_confirm_table(con)
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("c-shared-infer", "inferred system state", "assistant_text", "assistant", "2026-06-05T21:47:27Z"),
+    )
+    con.executemany(
+        """
+        INSERT INTO provenance_pending_user_confirm
+        (id, entity, attribute, chunk_id, value, provenance_class, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "pending-arbitration",
+                "controlLayer",
+                "ARBITRATION",
+                "c-shared-infer",
+                "CONFIRMED_SYSTEM_STATE",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:47:27Z",
+            ),
+            (
+                "pending-backend",
+                "enrichment",
+                "PRIMARY_BACKEND",
+                "c-shared-infer",
+                "Groq",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:48:27Z",
+            ),
+        ],
+    )
+
+    assert reject_pending(con, "c-shared-infer") is False
+    assert con.execute("SELECT status FROM chunks WHERE id = 'c-shared-infer'").fetchone()[0] == "active"
+    assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 2
+
+
 def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
     from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
 
