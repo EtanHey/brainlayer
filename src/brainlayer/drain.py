@@ -694,9 +694,7 @@ def _select_burn_batch(
     return selected, scanned
 
 
-def _prefetch_enrichment_state(
-    conn: apsw.Connection, events: list[dict[str, Any]]
-) -> dict[str, tuple[str | None, str | None, str | None]]:
+def _prefetch_enrichment_state(conn: apsw.Connection, events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     cols = _columns(conn, "chunks")
     if not {"content_hash", "enrich_status", "enriched_at"}.issubset(cols):
         return {}
@@ -710,11 +708,16 @@ def _prefetch_enrichment_state(
     if not chunk_ids:
         return {}
     placeholders = ", ".join("?" for _ in chunk_ids)
+    selected_cols = ["id", "content_hash", "enrich_status", "enriched_at"]
+    if "provenance_class" in cols:
+        selected_cols.append("provenance_class")
+    if "raw_entities_json" in cols:
+        selected_cols.append("raw_entities_json")
     rows = conn.execute(
-        f"SELECT id, content_hash, enrich_status, enriched_at FROM chunks WHERE id IN ({placeholders})",
+        f"SELECT {', '.join(selected_cols)} FROM chunks WHERE id IN ({placeholders})",
         chunk_ids,
     )
-    return {str(row[0]): (row[1], row[2], row[3]) for row in rows}
+    return {str(row[0]): dict(zip(selected_cols[1:], row[1:], strict=False)) for row in rows}
 
 
 def _already_enriched(enrich_status: str | None, enriched_at: str | None) -> bool:
@@ -723,7 +726,7 @@ def _already_enriched(enrich_status: str | None, enriched_at: str | None) -> boo
 
 def _is_verified_redundant_enrichment(
     event: dict[str, Any],
-    prefetched_state: dict[str, tuple[str | None, str | None, str | None]],
+    prefetched_state: dict[str, dict[str, Any]],
 ) -> bool:
     payload = _event_payload(event)
     if payload.get("kind") != "enrichment_update":
@@ -735,8 +738,24 @@ def _is_verified_redundant_enrichment(
     state = prefetched_state.get(str(chunk_id))
     if state is None:
         return False
-    content_hash, enrich_status, enriched_at = state
-    return content_hash == expected_hash and _already_enriched(enrich_status, enriched_at)
+    if state.get("content_hash") != expected_hash or not _already_enriched(
+        state.get("enrich_status"), state.get("enriched_at")
+    ):
+        return False
+
+    provenance_class = str(payload.get("provenance_class") or "").strip()
+    if provenance_class and "provenance_class" in state:
+        current_provenance_class = str(state.get("provenance_class") or "").strip()
+        if current_provenance_class != provenance_class:
+            return False
+
+    if payload.get("entities") is not None and "raw_entities_json" in state:
+        current_entities = str(state.get("raw_entities_json") or "").strip()
+        queued_entities = json.dumps(payload["entities"])
+        if current_entities != queued_entities:
+            return False
+
+    return True
 
 
 def burn_drain_once(

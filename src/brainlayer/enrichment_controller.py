@@ -750,7 +750,8 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
                   {chunk_expr("project")}, {chunk_expr("content_type")}, {chunk_expr("sender")},
                   {chunk_expr("value_type")}, {chunk_expr("tags")}, {chunk_expr("importance")},
                   {chunk_expr("created_at")}, {chunk_expr("summary")}, {chunk_expr("superseded_by")},
-                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")}
+                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")},
+                  {chunk_expr("conversation_id")}
            FROM chunks WHERE id = ?""",
         (chunk_id,),
     ).fetchone()
@@ -772,6 +773,7 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
         "superseded_by": row[12],
         "aggregated_into": row[13],
         "archived_at": row[14],
+        "conversation_id": row[15],
     }
     chunk["prev_assistant_text"] = _previous_assistant_text(cursor, cols, chunk)
     return chunk
@@ -796,6 +798,18 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
     if not assistant_filters:
         return None
 
+    scope_filters: list[str] = []
+    params: list[Any] = [chunk["id"], created_at]
+    conversation_id = str(chunk.get("conversation_id") or "").strip()
+    source_file = str(chunk.get("source_file") or "").strip()
+    if "conversation_id" in cols and conversation_id:
+        scope_filters.append("conversation_id = ?")
+        params.append(conversation_id)
+    elif "source_file" in cols and source_file:
+        scope_filters.append("source_file = ?")
+        params.append(source_file)
+
+    scope_clause = f" AND {' AND '.join(scope_filters)}" if scope_filters else ""
     row = cursor.execute(
         f"""
         SELECT content
@@ -804,10 +818,11 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
           AND created_at < ?
           AND ({" OR ".join(assistant_filters)})
           AND content IS NOT NULL
+          {scope_clause}
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (chunk["id"], created_at),
+        params,
     ).fetchone()
     return str(row[0]) if row and row[0] else None
 
