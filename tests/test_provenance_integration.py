@@ -263,6 +263,32 @@ def test_direct_apply_enrichment_persists_provenance_class(con):
     assert row["provenance_class"] == "AGENT-PARAPHRASE"
 
 
+def test_direct_apply_enrichment_preserves_manual_note_authority(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("chunk-manual", "PRIMARY_BACKEND: Groq", "note", None, "manual", "2026-06-08T16:40:00Z"),
+    )
+    store = Store(con)
+
+    controller._apply_enrichment(
+        store,
+        {
+            "id": "chunk-manual",
+            "content": "PRIMARY_BACKEND: Groq",
+            "content_type": "note",
+            "sender": None,
+            "source": "manual",
+        },
+        {"summary": "summary", "entities": []},
+    )
+
+    row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-manual'").fetchone()
+    assert row["provenance_class"] == "RAW-ETAN-DIRECT"
+
+
 def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
     from brainlayer import enrichment_controller as controller
 

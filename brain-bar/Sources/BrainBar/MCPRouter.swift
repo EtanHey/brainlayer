@@ -571,7 +571,10 @@ final class MCPRouter: @unchecked Sendable {
         flushedStores.map { flushed in
             [
                 "chunk_id": flushed.storedChunk.chunkID,
-                "rowid": flushed.storedChunk.rowID
+                "rowid": flushed.storedChunk.rowID,
+                "content": flushed.content,
+                "tags": flushed.tags,
+                "importance": flushed.importance
             ] as [String: Any]
         }
     }

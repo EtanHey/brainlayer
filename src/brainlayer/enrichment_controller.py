@@ -564,18 +564,14 @@ def _enrichment_update_payload(
         normalized_origin = _current_enrichment_chunk_origin()
     else:
         normalized_origin = str(chunk_origin or "").strip() or None
+    provenance_class = _derive_chunk_provenance_class(chunk, content)
     return {
         "chunk_id": chunk["id"],
         "enrichment": enrichment,
         "content_hash": _content_hash(content) if content else None,
         "entities": enrichment.get("entities", []),
         "chunk_origin": normalized_origin,
-        "provenance_class": derive_provenance_class(
-            content_type=chunk.get("content_type"),
-            sender=chunk.get("sender"),
-            text=content,
-            prev_assistant_text=chunk.get("prev_assistant_text"),
-        ),
+        "provenance_class": provenance_class,
     }
 
 
@@ -755,7 +751,7 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
                   {chunk_expr("project")}, {chunk_expr("content_type")}, {chunk_expr("sender")},
                   {chunk_expr("value_type")}, {chunk_expr("tags")}, {chunk_expr("importance")},
                   {chunk_expr("created_at")}, {chunk_expr("summary")}, {chunk_expr("superseded_by")},
-                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")},
+                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")}, {chunk_expr("source")},
                   {chunk_expr("conversation_id")}
            FROM chunks WHERE id = ?""",
         (chunk_id,),
@@ -778,7 +774,8 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
         "superseded_by": row[12],
         "aggregated_into": row[13],
         "archived_at": row[14],
-        "conversation_id": row[15],
+        "source": row[15],
+        "conversation_id": row[16],
     }
     chunk["prev_assistant_text"] = _previous_assistant_text(cursor, cols, chunk)
     return chunk
@@ -1065,6 +1062,18 @@ def _ensure_provenance_class_column(store) -> bool:
             return False
 
 
+def _derive_chunk_provenance_class(chunk: dict[str, Any], content: str | None = None) -> str:
+    if str(chunk.get("source") or "").strip().lower() == "manual":
+        return "RAW-ETAN-DIRECT"
+    text = chunk.get("content", "") if content is None else content
+    return derive_provenance_class(
+        content_type=chunk.get("content_type"),
+        sender=chunk.get("sender"),
+        text=text,
+        prev_assistant_text=chunk.get("prev_assistant_text"),
+    )
+
+
 def _normalize_chunk_tags(tags: Any) -> list[str]:
     if isinstance(tags, str):
         try:
@@ -1220,12 +1229,7 @@ def _apply_enrichment(
             store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
         except Exception:
             pass  # Non-critical — dedup still works on next index
-    provenance_class = derive_provenance_class(
-        content_type=chunk.get("content_type"),
-        sender=chunk.get("sender"),
-        text=content,
-        prev_assistant_text=chunk.get("prev_assistant_text"),
-    )
+    provenance_class = _derive_chunk_provenance_class(chunk, content)
     if _ensure_provenance_class_column(store):
         store.conn.cursor().execute(
             "UPDATE chunks SET provenance_class = ? WHERE id = ?",

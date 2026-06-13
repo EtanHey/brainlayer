@@ -70,11 +70,12 @@ def _mcp_query_timeout() -> float:
 
 
 # MCP query timeout prevents indefinite hangs when DB is locked by enrichment.
-MCP_QUERY_TIMEOUT = _mcp_query_timeout()  # seconds — fail fast, return error instead of hanging
+MCP_QUERY_TIMEOUT = _mcp_query_timeout()  # Back-compat constant for callers that inspect the configured default.
 
 
-async def _with_timeout(coro, timeout: float = MCP_QUERY_TIMEOUT):
+async def _with_timeout(coro, timeout: float | None = None):
     """Wrap an async operation with a timeout. Returns error result on timeout."""
+    timeout = _mcp_query_timeout() if timeout is None else timeout
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:

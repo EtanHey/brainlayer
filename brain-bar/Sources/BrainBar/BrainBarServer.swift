@@ -81,10 +81,16 @@ final class BrainBarServer: @unchecked Sendable {
     private struct StoreResultPayload: Decodable {
         let chunkID: String
         let rowID: Int64
+        let content: String?
+        let tags: [String]?
+        let importance: Int?
 
         enum CodingKeys: String, CodingKey {
             case chunkID = "chunk_id"
             case rowID = "rowid"
+            case content
+            case tags
+            case importance
         }
     }
 
@@ -901,8 +907,15 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         for flushed in extractFlushedQueuedChunkReceipts(from: response) {
-            guard let database,
-                  let details = try? database.storedChunkDetails(chunkID: flushed.chunkID, rowID: flushed.rowID) else {
+            let details: BrainDatabase.StoredChunkDetails?
+            if let content = flushed.content,
+               let tags = flushed.tags,
+               let importance = flushed.importance {
+                details = BrainDatabase.StoredChunkDetails(content: content, tags: tags, importance: importance)
+            } else {
+                details = try? database?.storedChunkDetails(chunkID: flushed.chunkID, rowID: flushed.rowID)
+            }
+            guard let details else {
                 continue
             }
             publishStoredChunk(
@@ -989,7 +1002,13 @@ final class BrainBarServer: @unchecked Sendable {
         } else {
             return nil
         }
-        return StoreResultPayload(chunkID: chunkID, rowID: rowID)
+        return StoreResultPayload(
+            chunkID: chunkID,
+            rowID: rowID,
+            content: payload["content"] as? String,
+            tags: payload["tags"] as? [String],
+            importance: payload["importance"] as? Int
+        )
     }
 
     private func jsonString<T: Encodable>(_ payload: T) -> String {
