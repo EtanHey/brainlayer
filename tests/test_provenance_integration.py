@@ -263,7 +263,7 @@ def test_direct_apply_enrichment_persists_provenance_class(con):
     assert row["provenance_class"] == "AGENT-PARAPHRASE"
 
 
-def test_direct_apply_enrichment_preserves_manual_note_authority(con):
+def test_direct_apply_enrichment_does_not_promote_manual_agent_note(con):
     from brainlayer import enrichment_controller as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
@@ -286,6 +286,32 @@ def test_direct_apply_enrichment_preserves_manual_note_authority(con):
     )
 
     row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-manual'").fetchone()
+    assert row["provenance_class"] == "AGENT-INFERENCE"
+
+
+def test_direct_apply_enrichment_preserves_explicit_user_authority(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("chunk-manual-user", "PRIMARY_BACKEND: Groq", "user_message", "user", "manual", "2026-06-08T16:40:00Z"),
+    )
+    store = Store(con)
+
+    controller._apply_enrichment(
+        store,
+        {
+            "id": "chunk-manual-user",
+            "content": "PRIMARY_BACKEND: Groq",
+            "content_type": "user_message",
+            "sender": "user",
+            "source": "manual",
+        },
+        {"summary": "summary", "entities": []},
+    )
+
+    row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-manual-user'").fetchone()
     assert row["provenance_class"] == "RAW-ETAN-DIRECT"
 
 
@@ -1134,7 +1160,7 @@ def test_generic_note_factual_chunk_can_be_superseded(con):
     )
 
 
-def test_manual_note_without_provenance_class_is_user_anchored(con):
+def test_manual_note_without_provenance_class_does_not_outrank_direct_user(con):
     from brainlayer.provenance_integration import (
         enqueue_provenance_resolution,
         list_pending_confirm,
@@ -1178,11 +1204,13 @@ def test_manual_note_without_provenance_class_is_user_anchored(con):
     enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
     result = sweep_provenance_queue(con)
 
-    assert result.superseded_count == 1
-    assert list_pending_confirm(con) == []
+    assert result.superseded_count == 0
+    pending = list_pending_confirm(con)
+    assert len(pending) == 1
+    assert pending[0]["chunk_id"] == "c-manual-old"
     assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-manual-old'").fetchone()) == (
-        "superseded",
-        "c-direct-new",
+        "active",
+        None,
     )
 
 

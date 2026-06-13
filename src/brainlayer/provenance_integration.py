@@ -504,14 +504,11 @@ def _row_to_claim(row: dict[str, Any], entity: str) -> Claim:
     attribute, value = _attribute_value(row.get("content") or "", row.get("context"), row.get("mention_type"))
     provenance_class = str(row.get("provenance_class") or "").strip()
     if not provenance_class:
-        if str(row.get("source") or "").strip().lower() == "manual":
-            provenance_class = RAW_ETAN_DIRECT
-        else:
-            provenance_class = derive_provenance_class(
-                content_type=row.get("content_type"),
-                sender=row.get("sender"),
-                text=str(row.get("content") or ""),
-            )
+        provenance_class = derive_provenance_class(
+            content_type=row.get("content_type"),
+            sender=row.get("sender"),
+            text=str(row.get("content") or ""),
+        )
     return Claim(
         id=str(row["id"]),
         entity=entity,
