@@ -108,7 +108,7 @@ def test_gather_same_entity_uses_normalized_aliases(con):
     assert [row["id"] for row in rows] == ["c-old"]
 
 
-def test_gather_same_entity_returns_all_normalized_entity_spellings(con):
+def test_gather_same_entity_isolates_exact_name_from_normalized_spellings(con):
     from brainlayer.provenance_autosupersede import gather_same_entity
 
     _entity(con, "e-nano-spaced", "nano claw")
@@ -118,7 +118,52 @@ def test_gather_same_entity_returns_all_normalized_entity_spellings(con):
 
     rows = gather_same_entity(con, "Nano Claw")
 
-    assert {row["id"] for row in rows} == {"c-spaced", "c-camel"}
+    assert [row["id"] for row in rows] == ["c-spaced"]
+
+
+def test_gather_same_entity_keeps_exact_entity_match_isolated_from_normalized_fanout(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, gather_same_entity
+
+    _entity(con, "e-c", "C")
+    _entity(con, "e-cpp", "C++")
+    _entity(con, "e-csharp", "C#")
+    _chunk(con, "c-c", "e-c", "PRIMARY_BACKEND: C")
+    _chunk(con, "c-cpp", "e-cpp", "PRIMARY_BACKEND: C++")
+    _chunk(con, "c-csharp", "e-csharp", "PRIMARY_BACKEND: C#")
+
+    rows = gather_same_entity(con, "C++")
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-cpp", "C++", "PRIMARY_BACKEND: C++", provenance_class="RAW-ETAN-DIRECT"),
+        dry_run=False,
+    )
+
+    assert [row["id"] for row in rows] == ["c-cpp"]
+    assert report.candidate_count == 1
+    assert report.superseded_count == 0
+    status_rows = con.execute("SELECT id, status, superseded_by FROM chunks ORDER BY id").fetchall()
+    assert all(row["status"] == "active" and row["superseded_by"] is None for row in status_rows)
+
+
+def test_gather_same_entity_treats_ambiguous_normalized_fanout_as_noop(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, gather_same_entity
+
+    _entity(con, "e-c", "C")
+    _entity(con, "e-csharp", "C#")
+    _chunk(con, "c-c", "e-c", "PRIMARY_BACKEND: C")
+    _chunk(con, "c-csharp", "e-csharp", "PRIMARY_BACKEND: C#")
+
+    rows = gather_same_entity(con, "C!!!")
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-c", "C!!!", "PRIMARY_BACKEND: C", provenance_class="RAW-ETAN-DIRECT"),
+        dry_run=False,
+    )
+
+    assert rows == []
+    assert report.candidate_count == 0
+    assert report.superseded_count == 0
+    assert any("Ambiguous normalized entity fan-out" in note for note in report.notes)
 
 
 def test_detect_contradiction_requires_same_attribute_and_different_value():

@@ -14,6 +14,7 @@ from typing import Any
 from .content_class import _PERSONAL_RE, _PERSONAL_RISK_RE
 from .provenance import AGENT_INFERENCE, Claim, derive_provenance_class, normalize_entity, resolve
 from .provenance_integration import (
+    AmbiguousEntityError,
     _attribute_value,
     _brain_supersede,
     _commit_if_supported,
@@ -98,7 +99,12 @@ def auto_supersede(
         return _skip_personal(report, new_chunk)
 
     if not entity_ids:
-        report.notes.append("No kg_entities row matched normalized entity")
+        note = (
+            canonical_entity
+            if canonical_entity.startswith("Ambiguous normalized entity fan-out")
+            else "No kg_entities row matched normalized entity"
+        )
+        report.notes.append(note)
         return report
 
     all_candidates = [
@@ -165,10 +171,16 @@ def auto_supersede(
 
 
 def _normalized_entity_ids(conn, entity: str) -> tuple[list[str], str]:
-    entity_ids, canonical_name = _entity_ids(conn, entity)
+    try:
+        entity_ids, canonical_name = _entity_ids(conn, entity)
+    except AmbiguousEntityError:
+        return [], f"Ambiguous normalized entity fan-out for {entity}"
+    if entity_ids:
+        return entity_ids, canonical_name
+
     target = normalize_entity(entity)
-    seen = set(entity_ids)
-    matched_names: dict[str, str] = {entity_id: canonical_name for entity_id in entity_ids}
+    seen: set[str] = set()
+    matched_names: dict[str, str] = {}
 
     for entity_id, name in _iter_entity_names(conn):
         if normalize_entity(name) == target and entity_id not in seen:
@@ -176,13 +188,9 @@ def _normalized_entity_ids(conn, entity: str) -> tuple[list[str], str]:
             entity_ids.append(entity_id)
             matched_names[entity_id] = name
 
-    for entity_id, name, alias in _iter_entity_aliases(conn):
-        if normalize_entity(alias) == target and entity_id not in seen:
-            seen.add(entity_id)
-            entity_ids.append(entity_id)
-            matched_names[entity_id] = name
-
     if entity_ids:
+        if len(entity_ids) > 1:
+            return [], f"Ambiguous normalized entity fan-out for {entity}"
         return entity_ids, matched_names.get(entity_ids[0], canonical_name)
     return [], entity
 
