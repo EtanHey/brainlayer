@@ -53,6 +53,7 @@ class SessionMixin:
             return []
 
         cursor = self._read_cursor()
+        cols = {str(row[1]) for row in cursor.execute("PRAGMA table_info(chunks)")}
         effective_min = max(min_content_length, source_aware_min_chars(source))
         where = ["enriched_at IS NULL", "enrich_status IS NULL", "char_count >= ?"]
         params: list[Any] = [effective_min]
@@ -81,7 +82,8 @@ class SessionMixin:
             cursor.execute(
                 f"""
                 SELECT id, content, source_file, project, content_type,
-                       conversation_id, position, char_count, source, created_at
+                       conversation_id, position, char_count, source, created_at,
+                       {"sender" if "sender" in cols else "NULL AS sender"}
                 FROM chunks
                 WHERE {" AND ".join(where)}
                 ORDER BY rowid {order_clause}
@@ -91,7 +93,7 @@ class SessionMixin:
             )
         )
 
-        return [
+        candidates = [
             {
                 "id": row[0],
                 "content": row[1],
@@ -103,9 +105,64 @@ class SessionMixin:
                 "char_count": row[7],
                 "source": row[8],
                 "created_at": row[9],
+                "sender": row[10],
             }
             for row in results
         ]
+        for candidate in candidates:
+            candidate["prev_assistant_text"] = self._previous_assistant_text_for_enrichment_candidate(
+                cursor, cols, candidate
+            )
+        return candidates
+
+    def _previous_assistant_text_for_enrichment_candidate(
+        self, cursor, cols: set[str], chunk: Dict[str, Any]
+    ) -> str | None:
+        if "created_at" not in cols or "content" not in cols:
+            return None
+        created_at = str(chunk.get("created_at") or "").strip()
+        if not created_at:
+            return None
+
+        assistant_filters: list[str] = []
+        if "content_type" in cols:
+            assistant_filters.append("content_type = 'assistant_text'")
+        if "sender" in cols:
+            assistant_filters.append("lower(sender) = 'assistant'")
+        if not assistant_filters:
+            return None
+
+        scope_filters: list[str] = []
+        params: list[Any] = [chunk["id"], created_at]
+        conversation_id = str(chunk.get("conversation_id") or "").strip()
+        source_file = str(chunk.get("source_file") or "").strip()
+        if "conversation_id" in cols and conversation_id:
+            scope_filters.append("conversation_id = ?")
+            params.append(conversation_id)
+        elif "source_file" in cols and "project" in cols and source_file and str(chunk.get("project") or "").strip():
+            scope_filters.append("source_file = ?")
+            params.append(source_file)
+            scope_filters.append("project = ?")
+            params.append(str(chunk.get("project") or "").strip())
+        else:
+            return None
+
+        scope_clause = f" AND {' AND '.join(scope_filters)}" if scope_filters else ""
+        row = cursor.execute(
+            f"""
+            SELECT content
+            FROM chunks
+            WHERE id != ?
+              AND julianday(created_at) < julianday(?)
+              AND ({" OR ".join(assistant_filters)})
+              AND content IS NOT NULL
+              {scope_clause}
+            ORDER BY julianday(created_at) DESC, created_at DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
 
     def update_enrichment(
         self,

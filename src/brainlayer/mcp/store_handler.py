@@ -537,7 +537,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                     store=store,
                     embed_fn=embed_fn,
                     content=item["content"],
-                    memory_type=item["memory_type"],
+                    memory_type=item.get("memory_type", "note"),
                     project=item.get("project"),
                     tags=item.get("tags"),
                     importance=item.get("importance"),

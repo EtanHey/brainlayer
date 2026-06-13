@@ -309,6 +309,33 @@ class TestFlushPendingStores:
         assert flushed == 1
         assert mock_store_memory.call_args.kwargs["chunk_id"] == "manual-promised1234"
 
+    def test_flush_defaults_brainbar_pending_line_without_memory_type_to_note(self, tmp_path):
+        """BrainBar pending-store lines omit memory_type but must still replay through Python."""
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "chunk_id": "manual-brainbar1234",
+                    "content": "queued from BrainBar",
+                    "project": "brainlayer",
+                    "source": "manual",
+                }
+            )
+            + "\n"
+        )
+
+        with patch(
+            "brainlayer.mcp.store_handler._get_pending_store_path",
+            return_value=pending_path,
+        ):
+            with patch("brainlayer.store.store_memory") as mock_store_memory:
+                mock_store_memory.return_value = {"id": "manual-brainbar1234", "related": []}
+                flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flushed == 1
+        assert mock_store_memory.call_args.kwargs["memory_type"] == "note"
+        assert not pending_path.exists()
+
     def test_flush_preserves_legacy_pending_created_at_and_project(self, tmp_path):
         """Legacy pending-stores flush must replay reservation metadata."""
         pending_path = tmp_path / "pending-stores.jsonl"

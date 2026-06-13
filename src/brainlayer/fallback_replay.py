@@ -135,6 +135,8 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
     frontmatter_text = match.group(1)
     frontmatter = yaml.safe_load(frontmatter_text) or {}
+    if not isinstance(frontmatter, dict):
+        frontmatter = {}
     raw_timestamp = _raw_frontmatter_scalar(frontmatter_text, "timestamp")
     if raw_timestamp:
         frontmatter["timestamp"] = raw_timestamp

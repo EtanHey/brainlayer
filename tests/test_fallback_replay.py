@@ -168,6 +168,22 @@ def test_parse_fallback_file_accepts_frontmatter_closing_delimiter_at_eof(tmp_pa
     assert entry.body == ""
 
 
+def test_parse_fallback_file_ignores_non_mapping_frontmatter(tmp_path):
+    from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = repo / "docs.local" / "decisions" / "bad-frontmatter.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\n42\n---\nbody\n", encoding="utf-8")
+
+    entry = parse_fallback_file(path)
+
+    assert entry.frontmatter == {}
+    assert entry.body == "body\n"
+    assert is_pending_entry(entry) is False
+
+
 def test_replay_errors_when_store_result_has_no_chunk_id(tmp_path):
     from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, replay_entry
 
