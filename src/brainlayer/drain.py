@@ -806,6 +806,12 @@ def burn_drain_once(
             for _, events in batch:
                 for event in events:
                     if _is_verified_redundant_enrichment(event, prefetched_state):
+                        payload = _event_payload(event)
+                        enqueue_provenance_resolution_for_entities(
+                            conn,
+                            payload.get("entities"),
+                            chunk_id=payload.get("chunk_id"),
+                        )
                         result.skipped_verified_stale += 1
                         continue
                     applied = _apply_event(conn, event)

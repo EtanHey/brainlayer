@@ -708,6 +708,75 @@ def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_pa
     assert queued_entity == ("controlLayer", "already-done", "enrichment")
 
 
+def test_burn_drain_redundant_enrichment_preserves_provenance_enqueue(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    entities = [{"name": "controlLayer"}]
+    conn = apsw.Connection(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT,
+            provenance_class TEXT,
+            raw_entities_json TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (
+            id, content, summary, enriched_at, enrich_status,
+            content_hash, provenance_class, raw_entities_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "already-done",
+            "content 1",
+            "redundant summary",
+            "2026-05-30T00:00:00Z",
+            "success",
+            "h1",
+            "RAW-ETAN-DIRECT",
+            json.dumps(entities),
+        ),
+    )
+    conn.close()
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "already-done",
+                "content_hash": "h1",
+                "enrichment": {"summary": "redundant summary"},
+                "entities": entities,
+                "provenance_class": "RAW-ETAN-DIRECT",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 0
+    assert result.skipped_verified_stale == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        queued_entity = conn.execute("SELECT entity, chunk_id, reason FROM provenance_resolve_queue").fetchone()
+    finally:
+        conn.close()
+    assert queued_entity == ("controlLayer", "already-done", "enrichment")
+
+
 def test_burn_drain_default_write_batch_is_bounded(tmp_path):
     from brainlayer.drain import burn_drain_once
 
