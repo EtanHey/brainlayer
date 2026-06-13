@@ -1065,7 +1065,7 @@ def _ensure_provenance_class_column(store) -> bool:
 def _derive_chunk_provenance_class(chunk: dict[str, Any], content: str | None = None) -> str:
     if str(chunk.get("source") or "").strip().lower() == "manual":
         return "RAW-ETAN-DIRECT"
-    text = chunk.get("content", "") if content is None else content
+    text = (chunk.get("content") or "") if content is None else (content or "")
     return derive_provenance_class(
         content_type=chunk.get("content_type"),
         sender=chunk.get("sender"),

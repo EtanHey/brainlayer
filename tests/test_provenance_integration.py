@@ -1184,3 +1184,18 @@ def test_manual_note_without_provenance_class_is_user_anchored(con):
         "superseded",
         "c-direct-new",
     )
+
+
+def test_derive_chunk_provenance_class_tolerates_null_content():
+    from brainlayer.enrichment_controller import _derive_chunk_provenance_class
+
+    assert (
+        _derive_chunk_provenance_class(
+            {
+                "content": None,
+                "content_type": "assistant_text",
+                "sender": "assistant",
+            }
+        )
+        == "AGENT-INFERENCE"
+    )
