@@ -64,8 +64,9 @@ def resolve_entity_conflicts(
 
     V1 attribute heuristic: prefer structured `kg_entity_chunks.context`
     attributes when present; otherwise parse deterministic `ATTRIBUTE: value`
-    content prefixes; otherwise group as `MENTION`. This intentionally avoids
-    LLM calls in the resolver consumer.
+    content prefixes; otherwise group as `MENTION`. Plain KG link context prose
+    is not a claim source. This intentionally avoids LLM calls in the resolver
+    consumer.
     """
     conn = _conn(store)
     try:
@@ -668,10 +669,7 @@ def _row_has_actionable_fact(row: dict[str, Any]) -> bool:
         if attr and value:
             return True
 
-    return any(
-        bool(_ATTRIBUTE_VALUE_RE.match(candidate))
-        for candidate in (str(row.get("context") or ""), str(row.get("content") or ""))
-    )
+    return bool(_ATTRIBUTE_VALUE_RE.match(str(row.get("content") or "")))
 
 
 def _attribute_value(content: str, context: Any, mention_type: Any) -> tuple[str, str]:
@@ -682,13 +680,10 @@ def _attribute_value(content: str, context: Any, mention_type: Any) -> tuple[str
         if attr and value:
             return _normalize_attribute(str(attr)), _normalize_value(str(value))
 
-    for candidate in (str(context or ""), content):
-        match = _ATTRIBUTE_VALUE_RE.match(candidate)
-        if match:
-            return _normalize_attribute(match.group(1)), _normalize_value(match.group(2))
+    match = _ATTRIBUTE_VALUE_RE.match(content)
+    if match:
+        return _normalize_attribute(match.group(1)), _normalize_value(match.group(2))
 
-    if mention_type:
-        return _normalize_attribute(str(mention_type)), _normalize_value(content)
     return "MENTION", _normalize_value(content)
 
 

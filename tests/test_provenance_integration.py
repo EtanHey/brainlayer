@@ -1550,6 +1550,62 @@ def test_provenance_sweep_does_not_auto_supersede_unstructured_tag_mentions(con)
     )
 
 
+def test_provenance_sweep_does_not_treat_link_context_prose_as_fact_attribute(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-brain-store-link",
+                "Brain store linked note",
+                "note",
+                "user",
+                "2026-06-01T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+            (
+                "c-promotion-link",
+                "Promoted raw entity mention",
+                "assistant_text",
+                "assistant",
+                "2026-06-09T00:00:00Z",
+                "AGENT-PARAPHRASE",
+            ),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO kg_entity_chunks (entity_id, chunk_id, context)
+        VALUES ('e-control', ?, ?)
+        """,
+        [
+            ("c-brain-store-link", "Stored via brain_store: note"),
+            ("c-promotion-link", "raw_entities_json promotion: identity_tag"),
+        ],
+    )
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-promotion-link")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.superseded_count == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-promotion-link'").fetchone()) == (
+        "active",
+        None,
+    )
+    assert tuple(
+        con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-brain-store-link'").fetchone()
+    ) == (
+        "active",
+        None,
+    )
+
+
 def test_pending_reject_archives_inference_and_removes_queue_row(con):
     from brainlayer.provenance_integration import list_pending_confirm, reject_pending, resolve_entity_conflicts
 
