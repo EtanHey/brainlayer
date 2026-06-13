@@ -81,8 +81,7 @@ def _ensure_db_initialized(db_path: Path) -> None:
 
 def _set_drain_embed_env(enabled: bool) -> str | None:
     previous = os.environ.get("BRAINLAYER_DRAIN_EMBED")
-    if not enabled:
-        os.environ["BRAINLAYER_DRAIN_EMBED"] = "0"
+    os.environ["BRAINLAYER_DRAIN_EMBED"] = "1" if enabled else "0"
     return previous
 
 
@@ -106,11 +105,11 @@ def queue_metrics(*, queue_dir: Path, now: float | None = None) -> dict[str, flo
         for line in lines:
             if not line.strip():
                 continue
-            event_count += 1
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            event_count += 1
             queued_at = event.get("queued_at")
             if isinstance(queued_at, int | float):
                 oldest_queued_at = (
@@ -150,6 +149,20 @@ def embedding_backlog_metrics(*, db_path: Path) -> dict[str, Any]:
 
 def _poll(timeout_s: float, poll_interval_s: float, predicate: Callable[[], bool]) -> float | None:
     start = _now()
+    deadline = start + timeout_s
+    while _now() <= deadline:
+        if predicate():
+            return _latency_ms(start)
+        time.sleep(poll_interval_s)
+    return None
+
+
+def _poll_from(
+    start: float,
+    timeout_s: float,
+    poll_interval_s: float,
+    predicate: Callable[[], bool],
+) -> float | None:
     deadline = start + timeout_s
     while _now() <= deadline:
         if predicate():
@@ -248,7 +261,8 @@ def run_store_probe(
                 embedding_latency = round((_now() - embed_start) * 1000.0, 3)
 
         if query_embedding is not None:
-            hybrid_latency = _poll(
+            hybrid_latency = _poll_from(
+                call_start,
                 timeout_s,
                 poll_interval_s,
                 lambda: (
@@ -363,7 +377,8 @@ def run_queue_drain_scenario(
             tags=["hot-currentness-benchmark", "queue-drain"],
             importance=5,
             chunk_id=chunk_id,
-            source=label,
+            benchmark_label=label,
+            source="mcp",
             queue_dir=benchmark_queue_dir,
         )
     queued = queue_metrics(queue_dir=benchmark_queue_dir)

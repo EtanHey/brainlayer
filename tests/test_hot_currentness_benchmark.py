@@ -1,6 +1,9 @@
 import importlib.util
 import json
+import os
+import sqlite3
 import sys
+import time
 from pathlib import Path
 
 
@@ -59,15 +62,38 @@ def test_queue_metrics_report_depth_oldest_age_and_throughput(tmp_path):
         + "\n",
         encoding="utf-8",
     )
+    (queue_dir / "bad.jsonl").write_text("{not-json}\n", encoding="utf-8")
 
     metrics = benchmark.queue_metrics(queue_dir=queue_dir, now=110.0)
 
     assert metrics == {
-        "queue_depth_files": 1,
+        "queue_depth_files": 2,
         "queue_depth_events": 1,
         "oldest_queued_age_s": 10.0,
     }
     assert benchmark.drain_throughput(events=5, elapsed_s=2.0) == 2.5
+
+
+def test_store_probe_measures_hybrid_latency_from_original_write(tmp_path):
+    benchmark = _load_benchmark_module()
+    db_path = tmp_path / "hot-currentness.db"
+
+    def slow_embed(text: str) -> list[float]:
+        time.sleep(0.05)
+        return _fake_embed(text)
+
+    result = benchmark.run_store_probe(
+        db_path=db_path,
+        content="hybrid latency should include embedding work from write time",
+        project="brainlayer-test",
+        embed_fn=slow_embed,
+        embed_after_store=True,
+        timeout_s=3.0,
+        poll_interval_s=0.01,
+    )
+
+    assert result["hybrid_rrf_visible_with_embedding"] is True
+    assert result["hybrid_rrf_visibility_latency_ms"] >= 100.0
 
 
 def test_queue_drain_scenario_uses_isolated_queue_when_parent_has_backlog(tmp_path):
@@ -98,6 +124,9 @@ def test_queue_drain_scenario_uses_isolated_queue_when_parent_has_backlog(tmp_pa
     assert result["drained_events"] == 1
     assert (queue_dir / "aaa-backlog.jsonl").exists()
     assert Path(result["benchmark_queue_dir"]).parent == queue_dir
+    with sqlite3.connect(db_path) as conn:
+        source = conn.execute("SELECT source FROM chunks WHERE id = ?", (result["queued_ids"][0],)).fetchone()
+    assert source == ("mcp",)
 
 
 def test_queue_drain_scenario_can_disable_real_drain_embeddings(tmp_path, monkeypatch):
@@ -125,6 +154,27 @@ def test_queue_drain_scenario_can_disable_real_drain_embeddings(tmp_path, monkey
 
     assert result["durable_rows"] == 1
     assert result["embedded_rows"] == 0
+
+
+def test_queue_drain_scenario_enables_embeddings_even_when_env_disables_drain(tmp_path, monkeypatch):
+    benchmark = _load_benchmark_module()
+    db_path = tmp_path / "hot-currentness.db"
+    queue_dir = tmp_path / "queue"
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+
+    result = benchmark.run_queue_drain_scenario(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        project="brainlayer-test",
+        count=1,
+        embed_fn=_fake_embed,
+        embed_after_drain=True,
+        label="queue-drain",
+    )
+
+    assert result["durable_rows"] == 1
+    assert result["embedded_rows"] == 1
+    assert os.environ["BRAINLAYER_DRAIN_EMBED"] == "0"
 
 
 def test_main_accepts_fresh_database_for_backlog_metrics(tmp_path, monkeypatch, capsys):
