@@ -143,6 +143,25 @@ def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classificati
     assert payload["provenance_class"] == "ETAN-ENDORSEMENT"
 
 
+def test_get_chunk_readonly_fallback_includes_prev_assistant_key():
+    from brainlayer import enrichment_controller as controller
+
+    class StoreWithoutReadCursor:
+        def get_chunk(self, chunk_id):
+            assert chunk_id == "user-ack"
+            return {
+                "id": "user-ack",
+                "content": "yes exactly",
+                "content_type": "user_message",
+                "sender": "user",
+            }
+
+    chunk = controller._get_chunk_readonly(StoreWithoutReadCursor(), "user-ack")
+
+    assert chunk is not None
+    assert chunk["prev_assistant_text"] is None
+
+
 def test_get_chunk_readonly_scopes_prev_assistant_to_same_conversation():
     from brainlayer import enrichment_controller as controller
 

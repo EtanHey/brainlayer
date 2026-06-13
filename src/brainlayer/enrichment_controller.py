@@ -737,7 +737,12 @@ def _get_store_rate_limiter(
 
 def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
     if not hasattr(store, "_read_cursor"):
-        return store.get_chunk(chunk_id)
+        chunk = store.get_chunk(chunk_id)
+        if chunk is None:
+            return None
+        chunk = dict(chunk)
+        chunk.setdefault("prev_assistant_text", None)
+        return chunk
 
     cursor = store._read_cursor()
     cols = _chunk_columns(cursor)
