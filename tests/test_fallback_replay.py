@@ -142,6 +142,32 @@ def test_replay_wraps_scalar_frontmatter_tag_as_single_tag(tmp_path):
     assert calls[0]["tags"] == ["user-correction"]
 
 
+def test_parse_fallback_file_accepts_frontmatter_closing_delimiter_at_eof(tmp_path):
+    from brainlayer.fallback_replay import parse_fallback_file
+
+    repo = tmp_path / "systems"
+    _git_init(repo)
+    path = repo / "docs.local" / "decisions" / "frontmatter-only.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "intended_brain_store: true\n"
+        "memory_type: decision\n"
+        "project: systems\n"
+        "tags: [fallback]\n"
+        "timestamp: 2026-06-12T19:54:07+03:00\n"
+        "---",
+        encoding="utf-8",
+    )
+
+    entry = parse_fallback_file(path)
+
+    assert entry.frontmatter["memory_type"] == "decision"
+    assert entry.frontmatter["tags"] == ["fallback"]
+    assert entry.frontmatter["timestamp"] == "2026-06-12T19:54:07+03:00"
+    assert entry.body == ""
+
+
 def test_replay_errors_when_store_result_has_no_chunk_id(tmp_path):
     from brainlayer.fallback_replay import is_pending_entry, parse_fallback_file, replay_entry
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,17 +128,17 @@ def _normalize_tags(value: Any) -> list[Any]:
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---\n"):
+    if not re.match(r"\A---\r?\n", text):
         return {}, text
-    parts = text.split("---\n", 2)
-    if len(parts) != 3:
+    match = re.match(r"\A---\r?\n(.*?)(?:\r?\n---(?:\r?\n|\Z))(.*)\Z", text, flags=re.S)
+    if not match:
         return {}, text
-    frontmatter_text = parts[1]
+    frontmatter_text = match.group(1)
     frontmatter = yaml.safe_load(frontmatter_text) or {}
     raw_timestamp = _raw_frontmatter_scalar(frontmatter_text, "timestamp")
     if raw_timestamp:
         frontmatter["timestamp"] = raw_timestamp
-    return frontmatter, parts[2]
+    return frontmatter, match.group(2)
 
 
 def _raw_frontmatter_scalar(frontmatter_text: str, key: str) -> str | None:

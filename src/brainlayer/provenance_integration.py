@@ -479,7 +479,7 @@ def _ensure_provenance_resolve_queue(conn) -> None:
 
 
 def _should_retry_provenance_queue_entity(report: ProvenanceConflictReport) -> bool:
-    return not report.entity_ids or any(note.startswith("No kg_entities row matched") for note in report.notes)
+    return any(note.startswith("No kg_entities row matched") for note in report.notes)
 
 
 def _bump_provenance_queue_retry(conn, entity: str) -> None:

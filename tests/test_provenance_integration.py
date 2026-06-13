@@ -1333,6 +1333,23 @@ def test_provenance_sweep_bumps_unresolved_entity_retry_metadata(con):
     assert after["updated_at"] > before["updated_at"]
 
 
+def test_provenance_sweep_drops_ambiguous_entity_instead_of_requeueing_forever(con):
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-control-duplicate', 'controlLayer')")
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-control")
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert result.entities == ["controlLayer"]
+    assert result.notes == [
+        "Ambiguous entity lookup for 'controlLayer' via id/name: e-control:controlLayer, "
+        "e-control-duplicate:controlLayer"
+    ]
+    assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue WHERE entity = 'controlLayer'").fetchone()[0] == 0
+
+
 def test_provenance_sweep_claims_rows_before_processing(con, monkeypatch):
     from brainlayer import provenance_integration
     from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
