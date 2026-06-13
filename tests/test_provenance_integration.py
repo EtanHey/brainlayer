@@ -1106,3 +1106,55 @@ def test_generic_note_factual_chunk_can_be_superseded(con):
         "superseded",
         "c-direct-new",
     )
+
+
+def test_manual_note_without_provenance_class_is_user_anchored(con):
+    from brainlayer.provenance_integration import (
+        enqueue_provenance_resolution,
+        list_pending_confirm,
+        sweep_provenance_queue,
+    )
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-manual-old",
+                "PRIMARY_BACKEND: Groq",
+                "note",
+                None,
+                "manual",
+                "2026-03-26T00:00:00Z",
+                None,
+            ),
+            (
+                "c-direct-new",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "claude_code",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-manual-old",), ("c-direct-new",)],
+    )
+
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
+    result = sweep_provenance_queue(con)
+
+    assert result.superseded_count == 1
+    assert list_pending_confirm(con) == []
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-manual-old'").fetchone()) == (
+        "superseded",
+        "c-direct-new",
+    )
