@@ -421,6 +421,30 @@ class TestFlushPendingStores:
 
         assert flushed == 0
 
+    def test_legacy_pending_store_receipt_reports_replay_not_drain(self, tmp_path):
+        from brainlayer.mcp.store_handler import _deferred_store_receipt
+
+        pending_path = tmp_path / "pending-stores.jsonl"
+
+        receipt = _deferred_store_receipt("manual-promised", pending_path)
+
+        assert receipt["deferred"]["action"] == "queued_for_replay"
+
+    def test_legacy_pending_store_enqueue_and_flush_use_shared_file_lock(self, tmp_path):
+        pending_path = tmp_path / "pending-stores.jsonl"
+
+        with (
+            patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("queue unavailable")),
+            patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+            patch("brainlayer.mcp.store_handler.fcntl.flock") as flock,
+        ):
+            _queue_store({"content": "queued item", "memory_type": "note"})
+            pending_path.write_text(json.dumps({"content": "queued item", "memory_type": "note"}) + "\n")
+            with patch("brainlayer.store.store_memory", return_value={"id": "test-123", "related": []}):
+                _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flock.call_count >= 4
+
 
 # ---------------------------------------------------------------------------
 # MCP handler resilience tests

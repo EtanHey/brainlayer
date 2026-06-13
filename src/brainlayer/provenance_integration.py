@@ -253,17 +253,7 @@ def sweep_provenance_queue(
     """Drain queued entities and apply reversible provenance resolution."""
     conn = _conn(store)
     _ensure_provenance_resolve_queue(conn)
-    rows = list(
-        conn.execute(
-            """
-            SELECT entity
-            FROM provenance_resolve_queue
-            ORDER BY updated_at ASC, entity ASC
-            LIMIT ?
-            """,
-            (limit,),
-        )
-    )
+    rows = _claim_provenance_queue_rows(conn, limit)
     report = ProvenanceSweepReport()
     for row in rows:
         entity = str(row[0])
@@ -281,9 +271,8 @@ def sweep_provenance_queue(
         report.skipped_personal_count += len(personal_notes)
         report.notes.extend(entity_report.notes)
         if _should_retry_provenance_queue_entity(entity_report):
-            _bump_provenance_queue_retry(conn, entity)
+            _requeue_claimed_provenance_row(conn, row)
             continue
-        conn.execute("DELETE FROM provenance_resolve_queue WHERE entity = ?", (entity,))
     _commit_if_supported(conn)
     return report
 
@@ -313,7 +302,7 @@ def reject_pending(store, claim_id: str) -> bool:
     chunk_id = str(row[3])
     archived = _archive_chunk(store, conn, chunk_id)
     if archived:
-        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
+        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE chunk_id = ?", (chunk_id,))
         _commit_if_supported(conn)
     return archived
 
@@ -437,6 +426,50 @@ def _bump_provenance_queue_retry(conn, entity: str) -> None:
         WHERE entity = ?
         """,
         (datetime.now(timezone.utc).isoformat(), entity),
+    )
+
+
+def _claim_provenance_queue_rows(conn, limit: int) -> list[Any]:
+    if limit <= 0:
+        return []
+    return list(
+        conn.execute(
+            """
+            WITH claimed AS (
+                SELECT entity
+                FROM provenance_resolve_queue
+                ORDER BY updated_at ASC, entity ASC
+                LIMIT ?
+            )
+            DELETE FROM provenance_resolve_queue
+            WHERE entity IN (SELECT entity FROM claimed)
+            RETURNING entity, chunk_id, reason, created_at, updated_at, attempts
+            """,
+            (limit,),
+        )
+    )
+
+
+def _requeue_claimed_provenance_row(conn, row: Any) -> None:
+    entity, chunk_id, reason, created_at, _updated_at, attempts = tuple(row)
+    conn.execute(
+        """
+        INSERT INTO provenance_resolve_queue (entity, chunk_id, reason, created_at, updated_at, attempts)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(entity) DO UPDATE SET
+            chunk_id = COALESCE(excluded.chunk_id, provenance_resolve_queue.chunk_id),
+            reason = excluded.reason,
+            updated_at = excluded.updated_at,
+            attempts = excluded.attempts
+        """,
+        (
+            entity,
+            chunk_id,
+            reason,
+            created_at,
+            datetime.now(timezone.utc).isoformat(),
+            int(attempts or 0) + 1,
+        ),
     )
 
 

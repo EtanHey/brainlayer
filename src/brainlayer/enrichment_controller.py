@@ -807,9 +807,11 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
     if "conversation_id" in cols and conversation_id:
         scope_filters.append("conversation_id = ?")
         params.append(conversation_id)
-    elif "source_file" in cols and source_file:
+    elif "source_file" in cols and "project" in cols and source_file and str(chunk.get("project") or "").strip():
         scope_filters.append("source_file = ?")
         params.append(source_file)
+        scope_filters.append("project = ?")
+        params.append(str(chunk.get("project") or "").strip())
     else:
         return None
 

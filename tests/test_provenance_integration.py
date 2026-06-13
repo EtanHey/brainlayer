@@ -110,14 +110,15 @@ def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_class
     )
     conn.executemany(
         """
-        INSERT INTO chunks (id, content, source_file, content_type, sender, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO chunks (id, content, source_file, project, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 "assistant-prior",
                 "controlLayer is an umbrella for the file schema and policies.",
                 "session.jsonl",
+                "brainlayer",
                 "assistant_text",
                 "assistant",
                 "2026-06-12T10:00:00Z",
@@ -126,6 +127,7 @@ def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_class
                 "user-ack",
                 "yes exactly, controlLayer is the file schema and policies",
                 "session.jsonl",
+                "brainlayer",
                 "user_message",
                 "user",
                 "2026-06-12T10:01:00Z",
@@ -143,6 +145,68 @@ def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_class
 
     assert chunk["prev_assistant_text"] == "controlLayer is an umbrella for the file schema and policies."
     assert payload["provenance_class"] == "ETAN-ENDORSEMENT"
+
+
+def test_get_chunk_readonly_does_not_scope_prev_assistant_by_source_file_alone():
+    from brainlayer import enrichment_controller as controller
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            source_file TEXT,
+            project TEXT,
+            content_type TEXT,
+            sender TEXT,
+            value_type TEXT,
+            tags TEXT,
+            importance INTEGER,
+            created_at TEXT,
+            summary TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO chunks (id, content, source_file, project, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "other-project-assistant",
+                "controlLayer is an umbrella for the file schema and policies.",
+                "session.jsonl",
+                "other-project",
+                "assistant_text",
+                "assistant",
+                "2026-06-12T10:00:00Z",
+            ),
+            (
+                "user-ack",
+                "yes exactly, controlLayer is the file schema and policies",
+                "session.jsonl",
+                "brainlayer",
+                "user_message",
+                "user",
+                "2026-06-12T10:01:00Z",
+            ),
+        ],
+    )
+
+    class ReadonlyStore:
+        def _read_cursor(self):
+            return conn.cursor()
+
+    chunk = controller._get_chunk_readonly(ReadonlyStore(), "user-ack")
+
+    assert chunk is not None
+    assert chunk["prev_assistant_text"] is None
 
 
 def test_get_chunk_readonly_does_not_use_global_prev_assistant_without_scope():
@@ -1007,6 +1071,52 @@ def test_reject_pending_rejects_ambiguous_chunk_id_without_archiving(con):
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 2
 
 
+def test_reject_pending_deletes_all_pending_rows_for_archived_chunk(con):
+    from brainlayer.provenance_integration import _ensure_pending_user_confirm_table, reject_pending
+
+    _ensure_pending_user_confirm_table(con)
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("c-shared-infer", "inferred system state", "assistant_text", "assistant", "2026-06-05T21:47:27Z"),
+    )
+    con.executemany(
+        """
+        INSERT INTO provenance_pending_user_confirm
+        (id, entity, attribute, chunk_id, value, provenance_class, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "pending-arbitration",
+                "controlLayer",
+                "ARBITRATION",
+                "c-shared-infer",
+                "CONFIRMED_SYSTEM_STATE",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:47:27Z",
+            ),
+            (
+                "pending-backend",
+                "enrichment",
+                "PRIMARY_BACKEND",
+                "c-shared-infer",
+                "Groq",
+                "AGENT-INFERENCE",
+                "needs-direct-confirmation",
+                "2026-06-05T21:48:27Z",
+            ),
+        ],
+    )
+
+    assert reject_pending(con, "pending-arbitration") is True
+    assert con.execute("SELECT status FROM chunks WHERE id = 'c-shared-infer'").fetchone()[0] == "archived"
+    assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
+
+
 def test_provenance_sweep_drains_queue_and_supersedes_stale_lower_class(con):
     from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
 
@@ -1083,6 +1193,34 @@ def test_provenance_sweep_bumps_unresolved_entity_retry_metadata(con):
     ).fetchone()
     assert after["attempts"] == before["attempts"] + 1
     assert after["updated_at"] > before["updated_at"]
+
+
+def test_provenance_sweep_claims_rows_before_processing(con, monkeypatch):
+    from brainlayer import provenance_integration
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-control")
+    seen = {}
+
+    def fake_resolve_entity_conflicts(store, entity, **kwargs):
+        seen["queued_during_processing"] = store.execute(
+            "SELECT 1 FROM provenance_resolve_queue WHERE entity = ?",
+            (entity,),
+        ).fetchone()
+        return provenance_integration.ProvenanceConflictReport(
+            entity=entity,
+            entity_ids=["e-control"],
+            resolutions={},
+            dry_run=False,
+        )
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", fake_resolve_entity_conflicts)
+
+    result = sweep_provenance_queue(con)
+
+    assert result.swept == 1
+    assert seen["queued_during_processing"] is None
+    assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] == 0
 
 
 def test_provenance_sweep_does_not_auto_supersede_personal_data(con):
