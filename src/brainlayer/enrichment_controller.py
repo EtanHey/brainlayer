@@ -1067,7 +1067,7 @@ def _ensure_provenance_class_column(store) -> bool:
 def _derive_chunk_provenance_class(chunk: dict[str, Any], content: str | None = None) -> str:
     source = str(chunk.get("source") or "").strip().lower()
     source_file = str(chunk.get("source_file") or "").strip().lower()
-    if source == "manual" and source_file in {"brainlayer-store", "brainbar-store"}:
+    if source == "manual" and source_file in {"brainlayer-store", "brainbar-store", "brainlayer-queue"}:
         return "RAW-ETAN-DIRECT"
     text = (chunk.get("content") or "") if content is None else (content or "")
     return derive_provenance_class(

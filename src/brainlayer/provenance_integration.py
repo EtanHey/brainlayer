@@ -521,7 +521,7 @@ def _row_to_claim(row: dict[str, Any], entity: str) -> Claim:
     if not provenance_class:
         source = str(row.get("source") or "").strip().lower()
         source_file = str(row.get("source_file") or "").strip().lower()
-        if source == "manual" and source_file in {"brainlayer-store", "brainbar-store"}:
+        if source == "manual" and source_file in {"brainlayer-store", "brainbar-store", "brainlayer-queue"}:
             provenance_class = RAW_ETAN_DIRECT
         else:
             provenance_class = derive_provenance_class(

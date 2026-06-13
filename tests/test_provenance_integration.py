@@ -389,6 +389,45 @@ def test_direct_apply_enrichment_preserves_brainlayer_store_authority(con):
     assert row["provenance_class"] == "RAW-ETAN-DIRECT"
 
 
+def test_direct_apply_enrichment_preserves_queued_brain_store_authority(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, source_file, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "chunk-brain-queue",
+            "PRIMARY_BACKEND: Groq",
+            "note",
+            None,
+            "manual",
+            "brainlayer-queue",
+            "2026-06-08T16:40:00Z",
+        ),
+    )
+    store = Store(con)
+
+    controller._apply_enrichment(
+        store,
+        {
+            "id": "chunk-brain-queue",
+            "content": "PRIMARY_BACKEND: Groq",
+            "content_type": "note",
+            "sender": None,
+            "source": "manual",
+            "source_file": "brainlayer-queue",
+        },
+        {"summary": "summary", "entities": []},
+    )
+
+    row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-brain-queue'").fetchone()
+    assert row["provenance_class"] == "RAW-ETAN-DIRECT"
+
+
 def test_direct_apply_enrichment_preserves_explicit_user_authority(con):
     from brainlayer import enrichment_controller as controller
 
@@ -1364,6 +1403,61 @@ def test_brainlayer_store_note_without_provenance_class_is_user_anchored(con):
     assert result.superseded_count == 1
     assert list_pending_confirm(con) == []
     assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-brain-store-old'").fetchone()) == (
+        "superseded",
+        "c-direct-new",
+    )
+
+
+def test_queued_brain_store_note_without_provenance_class_is_user_anchored(con):
+    from brainlayer.provenance_integration import (
+        enqueue_provenance_resolution,
+        list_pending_confirm,
+        sweep_provenance_queue,
+    )
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, source_file, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-brain-queue-old",
+                "PRIMARY_BACKEND: Groq",
+                "note",
+                None,
+                "manual",
+                "brainlayer-queue",
+                "2026-03-26T00:00:00Z",
+                None,
+            ),
+            (
+                "c-direct-new",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "claude_code",
+                "session.jsonl",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-brain-queue-old",), ("c-direct-new",)],
+    )
+
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
+    result = sweep_provenance_queue(con)
+
+    assert result.superseded_count == 1
+    assert list_pending_confirm(con) == []
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-brain-queue-old'").fetchone()) == (
         "superseded",
         "c-direct-new",
     )
