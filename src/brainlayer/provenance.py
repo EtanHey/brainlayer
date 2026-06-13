@@ -177,12 +177,15 @@ _ACK_FILLER = {
 def _echoes(short_user_text: str, prev_assistant_text: str) -> bool:
     """Cheap lexical overlap: does the short user turn restate the assistant's
     framing? Used to demote echo-acks to ENDORSEMENT."""
-    user_toks = {t for t in re.findall(r"[a-z0-9]{4,}", short_user_text.lower()) if t not in _ACK_FILLER}
-    if not user_toks:
+    raw_user_toks = set(re.findall(r"[^\W_]+", short_user_text.casefold(), flags=re.UNICODE))
+    user_toks = {t for t in raw_user_toks if t not in _ACK_FILLER}
+    if raw_user_toks and not user_toks:
         # pure ack like "yeah exactly, that" with no content words -> it can only
         # be endorsing the thing just said.
         return True
-    asst_toks = set(re.findall(r"[a-z0-9]{4,}", prev_assistant_text.lower()))
+    if not user_toks:
+        return False
+    asst_toks = set(re.findall(r"[^\W_]+", prev_assistant_text.casefold(), flags=re.UNICODE))
     overlap = user_toks & asst_toks
     return len(overlap) >= max(1, len(user_toks) // 2)
 

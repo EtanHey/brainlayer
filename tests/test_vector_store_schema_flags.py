@@ -15,3 +15,10 @@ def test_writer_init_marks_provenance_columns_available(tmp_path, monkeypatch):
         assert _optional_chunk_expr(store, "superseded_by") == "superseded_by"
     finally:
         store.close()
+
+    readonly_store = VectorStore(tmp_path / "brainlayer.db", readonly=True)
+    try:
+        assert _optional_chunk_expr(readonly_store, "provenance_class") == "provenance_class"
+        assert _optional_chunk_expr(readonly_store, "superseded_by") == "superseded_by"
+    finally:
+        readonly_store.close()

@@ -527,7 +527,7 @@ def _maybe_auto_supersede_ingested_chunk(
         new_chunk["entity"] = entity_name
         new_chunk["provenance_class"] = provenance_class
         try:
-            report = auto_supersede(store, new_chunk, dry_run=dry_run)
+            report = auto_supersede(store, new_chunk, dry_run=dry_run, commit=False)
         except Exception:
             logger.exception("auto_supersede failed for chunk=%s entity=%s", chunk.get("id"), entity_name)
             continue
@@ -821,16 +821,30 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
         SELECT content
         FROM chunks
         WHERE id != ?
-          AND created_at < ?
+          AND julianday(created_at) < julianday(?)
           AND ({" OR ".join(assistant_filters)})
           AND content IS NOT NULL
           {scope_clause}
-        ORDER BY created_at DESC
+        ORDER BY julianday(created_at) DESC, created_at DESC
         LIMIT 1
         """,
         params,
     ).fetchone()
     return str(row[0]) if row and row[0] else None
+
+
+@contextmanager
+def _savepoint(conn, name: str):
+    cursor = conn.cursor()
+    cursor.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except Exception:
+        cursor.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        cursor.execute(f"RELEASE SAVEPOINT {name}")
+        raise
+    else:
+        cursor.execute(f"RELEASE SAVEPOINT {name}")
 
 
 def _get_gemini_client():
@@ -1186,63 +1200,70 @@ def _apply_enrichment(
     *,
     chunk_origin: str | None = None,
 ) -> None:
-    resolved_queries = enrichment.get("resolved_queries")
-    legacy_resolved_query = enrichment.get("resolved_query")
-    if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
-        legacy_resolved_query = resolved_queries[0]
-    normalized_origin = str(chunk_origin or _current_enrichment_chunk_origin()).strip()
+    should_promote_raw_entities = False
+    with _savepoint(store.conn, "enrichment_apply_provenance"):
+        resolved_queries = enrichment.get("resolved_queries")
+        legacy_resolved_query = enrichment.get("resolved_query")
+        if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
+            legacy_resolved_query = resolved_queries[0]
+        normalized_origin = str(chunk_origin or _current_enrichment_chunk_origin()).strip()
 
-    store.update_enrichment(
-        chunk_id=chunk["id"],
-        summary=enrichment.get("summary"),
-        tags=enrichment.get("tags"),
-        importance=enrichment.get("importance"),
-        intent=enrichment.get("intent"),
-        primary_symbols=enrichment.get("primary_symbols"),
-        resolved_query=legacy_resolved_query,
-        epistemic_level=enrichment.get("epistemic_level"),
-        version_scope=enrichment.get("version_scope"),
-        debt_impact=enrichment.get("debt_impact"),
-        external_deps=enrichment.get("external_deps"),
-        key_facts=enrichment.get("key_facts"),
-        resolved_queries=resolved_queries,
-        sentiment_label=enrichment.get("sentiment_label"),
-        sentiment_score=enrichment.get("sentiment_score"),
-        sentiment_signals=enrichment.get("sentiment_signals"),
-        chunk_origin=normalized_origin or None,
-    )
-    entities = enrichment.get("entities", [])
-    # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
-    # R84b canonicalization pipeline will consume and populate kg_entities downstream.
-    if _ensure_raw_entities_json_column(store):
-        store.conn.cursor().execute(
-            "UPDATE chunks SET raw_entities_json = ? WHERE id = ?",
-            (json.dumps(entities), chunk["id"]),
+        store.update_enrichment(
+            chunk_id=chunk["id"],
+            summary=enrichment.get("summary"),
+            tags=enrichment.get("tags"),
+            importance=enrichment.get("importance"),
+            intent=enrichment.get("intent"),
+            primary_symbols=enrichment.get("primary_symbols"),
+            resolved_query=legacy_resolved_query,
+            epistemic_level=enrichment.get("epistemic_level"),
+            version_scope=enrichment.get("version_scope"),
+            debt_impact=enrichment.get("debt_impact"),
+            external_deps=enrichment.get("external_deps"),
+            key_facts=enrichment.get("key_facts"),
+            resolved_queries=resolved_queries,
+            sentiment_label=enrichment.get("sentiment_label"),
+            sentiment_score=enrichment.get("sentiment_score"),
+            sentiment_signals=enrichment.get("sentiment_signals"),
+            chunk_origin=normalized_origin or None,
         )
+        entities = enrichment.get("entities", [])
+        # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
+        # R84b canonicalization pipeline will consume and populate kg_entities downstream.
+        if _ensure_raw_entities_json_column(store):
+            store.conn.cursor().execute(
+                "UPDATE chunks SET raw_entities_json = ? WHERE id = ?",
+                (json.dumps(entities), chunk["id"]),
+            )
+            try:
+                from .vector_store import VectorStore
+
+                should_promote_raw_entities = isinstance(store, VectorStore)
+            except Exception:
+                should_promote_raw_entities = False
+        # Set content_hash after enrichment so dedup works next time
+        content = chunk.get("content", "")
+        if content:
+            try:
+                h = _content_hash(content)
+                store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
+            except Exception:
+                pass  # Non-critical — dedup still works on next index
+        provenance_class = _derive_chunk_provenance_class(chunk, content)
+        if _ensure_provenance_class_column(store):
+            store.conn.cursor().execute(
+                "UPDATE chunks SET provenance_class = ? WHERE id = ?",
+                (provenance_class, chunk["id"]),
+            )
+        _maybe_auto_supersede_ingested_chunk(store, chunk, entities, provenance_class=provenance_class)
+        enqueue_provenance_resolution_for_entities(store, entities, chunk_id=chunk["id"], commit=False)
+    if should_promote_raw_entities:
         try:
             from .kg_promotion import promote_chunk_raw_entities
-            from .vector_store import VectorStore
 
-            if isinstance(store, VectorStore):
-                promote_chunk_raw_entities(store, chunk["id"])
+            promote_chunk_raw_entities(store, chunk["id"])
         except Exception:
             logger.debug("raw entity KG promotion skipped for %s", chunk["id"], exc_info=True)
-    # Set content_hash after enrichment so dedup works next time
-    content = chunk.get("content", "")
-    if content:
-        try:
-            h = _content_hash(content)
-            store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
-        except Exception:
-            pass  # Non-critical — dedup still works on next index
-    provenance_class = _derive_chunk_provenance_class(chunk, content)
-    if _ensure_provenance_class_column(store):
-        store.conn.cursor().execute(
-            "UPDATE chunks SET provenance_class = ? WHERE id = ?",
-            (provenance_class, chunk["id"]),
-        )
-    _maybe_auto_supersede_ingested_chunk(store, chunk, entities, provenance_class=provenance_class)
-    enqueue_provenance_resolution_for_entities(store, entities, chunk_id=chunk["id"])
 
 
 def _enrich_single_chunk(

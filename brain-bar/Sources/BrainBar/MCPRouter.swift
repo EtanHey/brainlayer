@@ -567,7 +567,8 @@ final class MCPRouter: @unchecked Sendable {
         reason: String = "DB_BUSY",
         flushedStores: [BrainDatabase.FlushedPendingStore] = []
     ) -> ToolOutput {
-        ToolOutput(
+        let action = Self.deferredQueueAction(for: queuePath)
+        return ToolOutput(
             text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
             metadata: [
                 "queued": true,
@@ -583,12 +584,16 @@ final class MCPRouter: @unchecked Sendable {
                     "queue_id": queueID,
                     "queued_at": queuedAt,
                     "queue_path": queuePath.path,
-                    "action": "queued_for_drain"
+                    "action": action
                 ] as [String: Any],
                 "flushed_count": flushedStores.count,
                 "_brainbarFlushedQueuedChunks": Self.flushedQueuedChunkReceipts(flushedStores)
             ]
         )
+    }
+
+    private static func deferredQueueAction(for queuePath: URL) -> String {
+        queuePath.lastPathComponent == "pending-stores.jsonl" ? "queued_for_replay" : "queued_for_drain"
     }
 
     private static func flushedQueuedChunkReceipts(_ flushedStores: [BrainDatabase.FlushedPendingStore]) -> [[String: Any]] {

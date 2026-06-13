@@ -547,6 +547,95 @@ def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
     assert [tuple(row) for row in rows] == [("enrichment", "chunk-1"), ("orc", "chunk-1")]
 
 
+def test_apply_enrichment_rolls_back_chunk_updates_when_provenance_enqueue_fails(con, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("chunk-rollback", "PRIMARY_BACKEND: Gemini", "assistant_text", "assistant", "2026-06-09T10:00:00Z"),
+    )
+
+    def fail_enqueue(*args, **kwargs):
+        raise RuntimeError("queue write failed")
+
+    monkeypatch.setattr(controller, "enqueue_provenance_resolution_for_entities", fail_enqueue)
+
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        controller._apply_enrichment(
+            Store(con),
+            {
+                "id": "chunk-rollback",
+                "content": "PRIMARY_BACKEND: Gemini",
+                "content_type": "assistant_text",
+                "sender": "assistant",
+            },
+            {"summary": "summary", "entities": [{"name": "enrichment"}]},
+        )
+
+    cols = {row["name"] for row in con.execute("PRAGMA table_info(chunks)")}
+    assert "raw_entities_json" not in cols
+    assert "provenance_class" not in cols
+    assert "provenance_resolve_queue" not in {
+        row["name"] for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+
+
+def test_previous_assistant_text_orders_mixed_iso_timestamps_by_time(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN project TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, source_file, project)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "assistant-local-offset",
+                "newer absolute assistant text",
+                "assistant_text",
+                "assistant",
+                "2026-06-08T12:00:00+02:00",
+                "session.jsonl",
+                "brainlayer",
+            ),
+            (
+                "assistant-z",
+                "older assistant text",
+                "assistant_text",
+                "assistant",
+                "2026-06-08T09:45:00Z",
+                "session.jsonl",
+                "brainlayer",
+            ),
+            (
+                "user-current",
+                "MLX",
+                "user_message",
+                "user",
+                "2026-06-08T10:30:00Z",
+                "session.jsonl",
+                "brainlayer",
+            ),
+        ],
+    )
+    cols = controller._chunk_columns(con.cursor())
+
+    previous = controller._previous_assistant_text(
+        con.cursor(),
+        cols,
+        {
+            "id": "user-current",
+            "created_at": "2026-06-08T10:30:00Z",
+            "source_file": "session.jsonl",
+            "project": "brainlayer",
+        },
+    )
+
+    assert previous == "newer absolute assistant text"
+
+
 def test_apply_enrichment_auto_supersede_flag_defaults_off(con, monkeypatch):
     from brainlayer import enrichment_controller as controller
 
@@ -1281,11 +1370,11 @@ def test_provenance_sweep_claims_only_one_row_per_transaction(con, monkeypatch):
     seen = {}
 
     def fake_resolve_entity_conflicts(store, entity, **kwargs):
+        assert kwargs["commit"] is False
         if entity == "controlLayer":
             seen["sibling_still_queued"] = store.execute(
                 "SELECT 1 FROM provenance_resolve_queue WHERE entity = 'enrichment'",
             ).fetchone()
-            store.commit()
         return provenance_integration.ProvenanceConflictReport(
             entity=entity,
             entity_ids=[f"e-{entity}"],
@@ -1324,8 +1413,49 @@ def test_provenance_sweep_requeues_claimed_row_when_resolver_raises(con, monkeyp
     after = con.execute(
         "SELECT entity, chunk_id, attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
     ).fetchone()
-    assert tuple(after[:3]) == ("controlLayer", "c-control", before["attempts"] + 1)
-    assert after["updated_at"] > before["updated_at"]
+    assert tuple(after) == ("controlLayer", "c-control", before["attempts"], before["updated_at"])
+
+
+def test_provenance_sweep_restores_claimed_row_when_requeue_also_raises(con, monkeypatch):
+    from brainlayer import provenance_integration
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-control")
+    before = con.execute(
+        "SELECT entity, chunk_id, attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
+    ).fetchone()
+
+    def raise_busy(*args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    def raise_requeue(*args, **kwargs):
+        raise RuntimeError("requeue failed")
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", raise_busy)
+    monkeypatch.setattr(provenance_integration, "_requeue_claimed_provenance_row", raise_requeue)
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        sweep_provenance_queue(con)
+
+    after = con.execute(
+        "SELECT entity, chunk_id, attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
+    ).fetchone()
+    assert tuple(after) == tuple(before)
+
+
+def test_resolver_skips_writes_when_entity_lookup_is_ambiguous(con):
+    from brainlayer.provenance_integration import resolve_entity_conflicts
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-control-duplicate', 'controlLayer')")
+
+    result = resolve_entity_conflicts(con, "controlLayer", dry_run=False)
+
+    assert result.superseded_count == 0
+    assert result.pending_confirm_count == 0
+    assert result.notes == [
+        "Ambiguous entity lookup for 'controlLayer' via id/name: e-control:controlLayer, "
+        "e-control-duplicate:controlLayer"
+    ]
 
 
 def test_provenance_sweep_does_not_auto_supersede_personal_data(con):

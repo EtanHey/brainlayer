@@ -63,10 +63,14 @@ def test_cli_provenance_pending_lists_confirm_and_reject_actions(monkeypatch):
         "brainlayer.provenance_integration.list_pending_confirm",
         lambda store: [
             {
+                "id": "pending-control",
                 "entity": "controlLayer",
                 "attribute": "ARBITRATION",
                 "value": "CONTROLLAYER_DECIDES",
                 "chunk_id": "c-infer",
+                "provenance_class": "AGENT-INFERENCE",
+                "reason": "test reason",
+                "created_at": "2026-06-01T00:00:00Z",
             }
         ],
     )

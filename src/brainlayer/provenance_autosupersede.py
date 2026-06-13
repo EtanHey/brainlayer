@@ -86,6 +86,7 @@ def auto_supersede(
     dry_run: bool = True,
     enable_operational_evidence: bool = False,
     system_state_attributes: set[str] | None = None,
+    commit: bool = True,
 ) -> AutoSupersedeReport:
     """Detect and optionally apply reversible supersedes for one newly-ingested chunk."""
     db = _conn(store)
@@ -158,7 +159,7 @@ def auto_supersede(
         for claim in resolution.flagged_pending_user_confirm:
             _record_pending(report, db, claim, dry_run=dry_run)
 
-    if not dry_run:
+    if not dry_run and commit:
         _commit_if_supported(db)
     return report
 

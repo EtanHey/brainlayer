@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -46,6 +47,10 @@ class ProvenanceSweepReport:
     notes: list[str] = field(default_factory=list)
 
 
+class AmbiguousEntityError(ValueError):
+    """Raised when a resolver lookup could merge distinct KG entities."""
+
+
 def resolve_entity_conflicts(
     store,
     entity: str,
@@ -63,7 +68,16 @@ def resolve_entity_conflicts(
     LLM calls in the resolver consumer.
     """
     conn = _conn(store)
-    entity_ids, canonical_name = _entity_ids(conn, entity)
+    try:
+        entity_ids, canonical_name = _entity_ids(conn, entity)
+    except AmbiguousEntityError as exc:
+        return ProvenanceConflictReport(
+            entity=entity,
+            entity_ids=[],
+            resolutions={},
+            dry_run=dry_run,
+            notes=[str(exc)],
+        )
     if not entity_ids:
         return ProvenanceConflictReport(
             entity=entity,
@@ -266,39 +280,39 @@ def sweep_provenance_queue(
     report = ProvenanceSweepReport()
     processed_entities: set[str] = set()
     while report.swept < limit:
-        rows = _claim_provenance_queue_rows(conn, 1)
-        if not rows:
+        stop_after_commit = False
+        rows: list[Any] = []
+        with _savepoint(conn, "provenance_sweep_row"):
+            rows = _claim_provenance_queue_rows(conn, 1)
+            if not rows:
+                break
+            row = rows[0]
+            entity = str(row[0])
+            if entity in processed_entities:
+                _requeue_claimed_provenance_row(conn, row, increment_attempts=False)
+                stop_after_commit = True
+            processed_entities.add(entity)
+            if not stop_after_commit:
+                entity_report = resolve_entity_conflicts(
+                    store,
+                    entity,
+                    dry_run=False,
+                    enable_operational_evidence=enable_operational_evidence,
+                    commit=False,
+                )
+                report.swept += 1
+                report.entities.append(entity)
+                report.superseded_count += entity_report.superseded_count
+                report.pending_confirm_count += entity_report.pending_confirm_count
+                personal_notes = [note for note in entity_report.notes if "personal-data" in note]
+                report.skipped_personal_count += len(personal_notes)
+                report.notes.extend(entity_report.notes)
+                if _should_retry_provenance_queue_entity(entity_report):
+                    _requeue_claimed_provenance_row(conn, row)
+        if rows:
+            _commit_if_supported(conn)
+        if stop_after_commit:
             break
-        row = rows[0]
-        entity = str(row[0])
-        if entity in processed_entities:
-            _requeue_claimed_provenance_row(conn, row, increment_attempts=False)
-            _commit_if_supported(conn)
-            break
-        processed_entities.add(entity)
-        try:
-            entity_report = resolve_entity_conflicts(
-                store,
-                entity,
-                dry_run=False,
-                enable_operational_evidence=enable_operational_evidence,
-            )
-        except Exception:
-            _requeue_claimed_provenance_row(conn, row)
-            _commit_if_supported(conn)
-            raise
-        report.swept += 1
-        report.entities.append(entity)
-        report.superseded_count += entity_report.superseded_count
-        report.pending_confirm_count += entity_report.pending_confirm_count
-        personal_notes = [note for note in entity_report.notes if "personal-data" in note]
-        report.skipped_personal_count += len(personal_notes)
-        report.notes.extend(entity_report.notes)
-        if _should_retry_provenance_queue_entity(entity_report):
-            _requeue_claimed_provenance_row(conn, row)
-            _commit_if_supported(conn)
-            continue
-        _commit_if_supported(conn)
     return report
 
 
@@ -382,16 +396,40 @@ def _conn(store):
     return getattr(store, "conn", store)
 
 
+@contextmanager
+def _savepoint(conn, name: str):
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+        raise
+    else:
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+
+
 def _columns(conn, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _single_entity_match(rows: list[Any], entity: str, source: str) -> tuple[list[str], str]:
+    if len(rows) == 1:
+        row = rows[0]
+        return [str(row[0])], str(row[1])
+    candidates = ", ".join(f"{row[0]}:{row[1]}" for row in rows)
+    raise AmbiguousEntityError(f"Ambiguous entity lookup for {entity!r} via {source}: {candidates}")
+
+
 def _entity_ids(conn, entity: str) -> tuple[list[str], str]:
     rows = list(
-        conn.execute("SELECT id, name FROM kg_entities WHERE id = ? OR lower(name) = lower(?)", (entity, entity))
+        conn.execute(
+            "SELECT id, name FROM kg_entities WHERE id = ? OR lower(name) = lower(?) ORDER BY id ASC",
+            (entity, entity),
+        )
     )
     if rows:
-        return [str(row[0]) for row in rows], str(rows[0][1])
+        return _single_entity_match(rows, entity, "id/name")
 
     if "kg_entity_aliases" in _tables(conn):
         alias_rows = list(
@@ -401,21 +439,22 @@ def _entity_ids(conn, entity: str) -> tuple[list[str], str]:
                 FROM kg_entity_aliases a
                 JOIN kg_entities e ON e.id = a.entity_id
                 WHERE lower(a.alias) = lower(?)
+                ORDER BY e.id ASC
                 """,
                 (entity,),
             )
         )
         if alias_rows:
-            return [str(row[0]) for row in alias_rows], str(alias_rows[0][1])
+            return _single_entity_match(alias_rows, entity, "alias")
 
     target = normalize_entity(entity)
     normalized_rows = [
         (str(row[0]), str(row[1]))
-        for row in conn.execute("SELECT id, name FROM kg_entities")
+        for row in conn.execute("SELECT id, name FROM kg_entities ORDER BY id ASC")
         if normalize_entity(str(row[1])) == target
     ]
     if normalized_rows:
-        return [row[0] for row in normalized_rows], normalized_rows[0][1]
+        return _single_entity_match(normalized_rows, entity, "normalized-name")
     return [], entity
 
 

@@ -162,6 +162,7 @@ def enqueue_enrichment_update(
     enrichment: dict[str, Any],
     content_hash: str | None = None,
     entities: list[Any] | None = None,
+    provenance_class: str | None = None,
     chunk_origin: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
@@ -172,6 +173,7 @@ def enqueue_enrichment_update(
                 "enrichment": enrichment,
                 "content_hash": content_hash,
                 "entities": entities,
+                "provenance_class": provenance_class,
                 "chunk_origin": chunk_origin,
             }
         ],

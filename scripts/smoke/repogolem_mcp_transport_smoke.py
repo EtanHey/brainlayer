@@ -49,7 +49,9 @@ async def smoke_context(name: str, *, cwd: Path, timeout: float, live_store: boo
     env = dict(os.environ)
     env["PYTHONPATH"] = f"{SRC}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env["BRAINLAYER_MCP_QUERY_TIMEOUT"] = str(max(1.0, timeout - 5.0))
-    if not live_store:
+    if live_store:
+        env.pop("BRAINLAYER_ARBITRATED", None)
+    else:
         env["BRAINLAYER_ARBITRATED"] = "1"
     server = StdioServerParameters(
         command=sys.executable,

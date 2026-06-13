@@ -65,6 +65,7 @@ final class MCPRouterTests: XCTestCase {
         queuedAt: String,
         queuePath: URL,
         reason: String = "DB_BUSY",
+        expectedAction: String = "queued_for_replay",
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -81,7 +82,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(deferred?["queue_id"] as? String, queueID, file: file, line: line)
         XCTAssertEqual(deferred?["queued_at"] as? String, queuedAt, file: file, line: line)
         XCTAssertEqual(deferred?["queue_path"] as? String, queuePath.path, file: file, line: line)
-        XCTAssertEqual(deferred?["action"] as? String, "queued_for_drain", file: file, line: line)
+        XCTAssertEqual(deferred?["action"] as? String, expectedAction, file: file, line: line)
     }
 
     // MARK: - Initialize
@@ -1687,7 +1688,8 @@ final class MCPRouterTests: XCTestCase {
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertNil(result["isError"])
         XCTAssertEqual(result["queued"] as? Bool, true)
-        XCTAssertLessThan(elapsed, 3.0)
+        let mcpWriteBudget: TimeInterval = 1.0
+        XCTAssertLessThan(elapsed, mcpWriteBudget)
         assertDeferredBrainStoreReceipt(
             result,
             chunkID: try XCTUnwrap(result["chunk_id"] as? String),

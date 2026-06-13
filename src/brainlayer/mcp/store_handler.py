@@ -423,6 +423,18 @@ def _atomic_rewrite_pending_store(path, lines: list[str]) -> None:
         f.flush()
         os.fsync(f.fileno())
     tmp.replace(path)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -461,15 +473,15 @@ def _queue_store(item: dict):
         # Legacy fallback file shares this lock with the flusher to avoid append/rewrite loss.
         with open(path, "a") as f:
             f.write(json.dumps(item) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
         # Enforce max size — read, trim oldest, atomic rewrite via tempfile
         try:
             lines = path.read_text().strip().splitlines()
             if len(lines) > _QUEUE_MAX_SIZE:
                 trimmed = lines[-_QUEUE_MAX_SIZE:]
-                tmp = path.with_suffix(".tmp")
-                tmp.write_text("\n".join(trimmed) + "\n")
-                tmp.rename(path)  # atomic on POSIX
+                _atomic_rewrite_pending_store(path, trimmed)
                 logger.warning(
                     "Pending store queue trimmed: %d -> %d (dropped %d oldest)",
                     len(lines),

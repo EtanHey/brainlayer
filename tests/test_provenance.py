@@ -64,6 +64,26 @@ def test_short_user_correction_without_echo_is_raw_direct():
     assert cls == "RAW-ETAN-DIRECT"
 
 
+def test_short_factual_token_is_not_demoted_to_endorsement():
+    cls = derive_provenance_class(
+        content_type="user_message",
+        sender="user",
+        text="MLX",
+        prev_assistant_text="The active backend options are Groq and Gemini.",
+    )
+    assert cls == "RAW-ETAN-DIRECT"
+
+
+def test_short_non_ascii_reply_is_not_demoted_to_endorsement():
+    cls = derive_provenance_class(
+        content_type="user_message",
+        sender="user",
+        text="כן",
+        prev_assistant_text="The active backend is Gemini.",
+    )
+    assert cls == "RAW-ETAN-DIRECT"
+
+
 def test_assistant_quoting_user_is_paraphrase():
     cls = derive_provenance_class(
         content_type="assistant_text",

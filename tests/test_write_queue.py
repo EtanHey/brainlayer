@@ -6,6 +6,8 @@ gracefully — retry with backoff, queue to JSONL on failure, flush on success.
 All tests use tmp_path fixtures (no real DB contention).
 """
 
+import builtins
+import fcntl
 import json
 import sqlite3
 import threading
@@ -74,6 +76,20 @@ class TestQueueStore:
         item = json.loads(path.read_text())
 
         assert item["timestamp"] == 0.0
+
+    def test_single_enrichment_update_preserves_provenance_class(self, tmp_path):
+        from brainlayer.queue_io import enqueue_enrichment_update
+
+        path = enqueue_enrichment_update(
+            chunk_id="chunk-1",
+            enrichment={"summary": "summary"},
+            provenance_class="RAW-ETAN-DIRECT",
+            queue_dir=tmp_path,
+        )
+
+        item = json.loads(path.read_text())
+
+        assert item["provenance_class"] == "RAW-ETAN-DIRECT"
 
     def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
         """Hook/realtime queue events must replay reservation metadata, not flush time."""
@@ -430,10 +446,18 @@ class TestFlushPendingStores:
 
     def test_legacy_pending_store_enqueue_and_flush_use_shared_file_lock(self, tmp_path):
         pending_path = tmp_path / "pending-stores.jsonl"
+        fileno_to_path = {}
+        real_open = builtins.open
+
+        def tracking_open(file, *args, **kwargs):
+            handle = real_open(file, *args, **kwargs)
+            fileno_to_path[handle.fileno()] = str(file)
+            return handle
 
         with (
             patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("queue unavailable")),
             patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+            patch("brainlayer.mcp.store_handler.open", side_effect=tracking_open),
             patch("brainlayer.mcp.store_handler.fcntl.flock") as flock,
         ):
             _queue_store({"content": "queued item", "memory_type": "note"})
@@ -441,7 +465,10 @@ class TestFlushPendingStores:
             with patch("brainlayer.store.store_memory", return_value={"id": "test-123", "related": []}):
                 _flush_pending_stores(MagicMock(), MagicMock())
 
-        assert flock.call_count >= 4
+        exclusive_lock_paths = [
+            fileno_to_path[call.args[0]] for call in flock.call_args_list if call.args[1] == fcntl.LOCK_EX
+        ]
+        assert exclusive_lock_paths == [str(tmp_path / ".pending-stores.jsonl.lock")] * 2
 
     def test_legacy_pending_store_lock_path_matches_brainbar_dotfile(self, tmp_path):
         from brainlayer.mcp.store_handler import _pending_store_lock_path
