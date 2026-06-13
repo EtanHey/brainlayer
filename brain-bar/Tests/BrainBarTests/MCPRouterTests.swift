@@ -1640,6 +1640,66 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(queuedText.contains(chunkID))
     }
 
+    func testBrainStoreMCPWriteBudgetQueuesPromptlyUnderSQLiteLock() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(dbPath, &lockDB, flags, nil), SQLITE_OK)
+        let lockHandle = try XCTUnwrap(lockDB)
+        defer { sqlite3_close(lockHandle) }
+        XCTAssertEqual(sqlite3_exec(lockHandle, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        var lockHeld = true
+        defer {
+            if lockHeld {
+                sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+            }
+        }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let started = Date()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 220,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "MCP store should queue promptly while SQLite is locked",
+                    "tags": ["queue-fallback"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+        let elapsed = Date().timeIntervalSince(started)
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        XCTAssertLessThan(elapsed, 3.0)
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: try XCTUnwrap(result["chunk_id"] as? String),
+            queueID: try XCTUnwrap(result["queue_id"] as? String),
+            queuedAt: try XCTUnwrap(result["queued_at"] as? String),
+            queuePath: queuePath
+        )
+
+        sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+        lockHeld = false
+    }
+
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

@@ -10,6 +10,9 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 250
+    private static let mcpStoreRetries = 1
+
     private struct ToolOutput {
         let text: String
         let metadata: [String: Any]
@@ -490,7 +493,9 @@ final class MCPRouter: @unchecked Sendable {
                 tags: tags,
                 importance: importance,
                 source: "mcp",
-                project: project
+                project: project,
+                busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                retries: Self.mcpStoreRetries
             ) {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
