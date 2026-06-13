@@ -1430,7 +1430,9 @@ def test_provenance_sweep_requeues_claimed_row_when_resolver_raises(con, monkeyp
     after = con.execute(
         "SELECT entity, chunk_id, attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
     ).fetchone()
-    assert tuple(after) == ("controlLayer", "c-control", before["attempts"], before["updated_at"])
+    assert tuple(after)[:2] == ("controlLayer", "c-control")
+    assert after["attempts"] == before["attempts"] + 1
+    assert after["updated_at"] > before["updated_at"]
 
 
 def test_provenance_sweep_restores_claimed_row_when_requeue_also_raises(con, monkeypatch):

@@ -165,3 +165,33 @@ def test_get_enrichment_candidates_include_scoped_previous_assistant_text(tmp_pa
     assert len(results) == 1
     assert results[0]["sender"] == "user"
     assert results[0]["prev_assistant_text"] == "controlLayer is the fleet policy layer, not a separate runtime."
+
+
+def test_get_enrichment_candidates_uses_position_for_same_timestamp_previous_assistant(tmp_path):
+    store = VectorStore(tmp_path / "test.db")
+    timestamp = "2026-06-01T10:00:00Z"
+    _insert_chunk(
+        store,
+        "assistant-before",
+        "Same timestamp assistant context should still hydrate.",
+        created_at=timestamp,
+        content_type="assistant_text",
+        sender="assistant",
+        conversation_id="conv-1",
+        position=1,
+    )
+    _insert_chunk(
+        store,
+        "user-ack",
+        "yes exactly " * 8,
+        created_at=timestamp,
+        content_type="user_message",
+        sender="user",
+        conversation_id="conv-1",
+        position=2,
+    )
+
+    results = store.get_enrichment_candidates(limit=10, chunk_ids=["user-ack"])
+
+    assert len(results) == 1
+    assert results[0]["prev_assistant_text"] == "Same timestamp assistant context should still hydrate."

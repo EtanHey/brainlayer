@@ -283,35 +283,45 @@ def sweep_provenance_queue(
     while report.swept < limit:
         stop_after_commit = False
         rows: list[Any] = []
-        with _savepoint(conn, "provenance_sweep_row"):
-            rows = _claim_provenance_queue_rows(conn, 1)
-            if not rows:
-                break
-            row = rows[0]
-            entity = str(row[0])
-            if entity in processed_entities:
-                _requeue_claimed_provenance_row(conn, row, increment_attempts=False)
-                stop_after_commit = True
-            processed_entities.add(entity)
-            if not stop_after_commit:
-                entity_report = resolve_entity_conflicts(
-                    store,
-                    entity,
-                    dry_run=False,
-                    enable_operational_evidence=enable_operational_evidence,
-                    commit=False,
-                )
-                report.swept += 1
-                report.entities.append(entity)
-                report.superseded_count += entity_report.superseded_count
-                report.pending_confirm_count += entity_report.pending_confirm_count
-                personal_notes = [note for note in entity_report.notes if "personal-data" in note]
-                report.skipped_personal_count += len(personal_notes)
-                report.notes.extend(entity_report.notes)
-                if _should_retry_provenance_queue_entity(entity_report):
-                    _requeue_claimed_provenance_row(conn, row)
-        if rows:
-            _commit_if_supported(conn)
+        try:
+            with _savepoint(conn, "provenance_sweep_row"):
+                rows = _claim_provenance_queue_rows(conn, 1)
+                if not rows:
+                    break
+                row = rows[0]
+                entity = str(row[0])
+                if entity in processed_entities:
+                    _requeue_claimed_provenance_row(conn, row, increment_attempts=False)
+                    stop_after_commit = True
+                processed_entities.add(entity)
+                if not stop_after_commit:
+                    entity_report = resolve_entity_conflicts(
+                        store,
+                        entity,
+                        dry_run=False,
+                        enable_operational_evidence=enable_operational_evidence,
+                        commit=False,
+                    )
+                    report.swept += 1
+                    report.entities.append(entity)
+                    report.superseded_count += entity_report.superseded_count
+                    report.pending_confirm_count += entity_report.pending_confirm_count
+                    personal_notes = [note for note in entity_report.notes if "personal-data" in note]
+                    report.skipped_personal_count += len(personal_notes)
+                    report.notes.extend(entity_report.notes)
+                    if _should_retry_provenance_queue_entity(entity_report):
+                        _requeue_claimed_provenance_row(conn, row)
+            if rows:
+                _commit_if_supported(conn)
+        except Exception:
+            if rows:
+                try:
+                    with _savepoint(conn, "provenance_sweep_retry_bump"):
+                        _requeue_claimed_provenance_row(conn, rows[0])
+                    _commit_if_supported(conn)
+                except Exception:
+                    pass
+            raise
         if stop_after_commit:
             break
     return report
