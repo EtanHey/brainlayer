@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 
@@ -67,3 +68,90 @@ def test_queue_metrics_report_depth_oldest_age_and_throughput(tmp_path):
         "oldest_queued_age_s": 10.0,
     }
     assert benchmark.drain_throughput(events=5, elapsed_s=2.0) == 2.5
+
+
+def test_queue_drain_scenario_uses_isolated_queue_when_parent_has_backlog(tmp_path):
+    benchmark = _load_benchmark_module()
+    db_path = tmp_path / "hot-currentness.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    backlog = {
+        "kind": "store_memory",
+        "chunk_id": "manual-backlog",
+        "content": "older unrelated backlog should not be drained by benchmark",
+        "project": "brainlayer-test",
+        "source": "mcp",
+    }
+    (queue_dir / "aaa-backlog.jsonl").write_text(json.dumps(backlog) + "\n", encoding="utf-8")
+
+    result = benchmark.run_queue_drain_scenario(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        project="brainlayer-test",
+        count=1,
+        embed_fn=_fake_embed,
+        label="queue-drain",
+    )
+
+    assert result["durable_rows"] == 1
+    assert result["embedded_rows"] == 1
+    assert result["drained_events"] == 1
+    assert (queue_dir / "aaa-backlog.jsonl").exists()
+    assert Path(result["benchmark_queue_dir"]).parent == queue_dir
+
+
+def test_queue_drain_scenario_can_disable_real_drain_embeddings(tmp_path, monkeypatch):
+    benchmark = _load_benchmark_module()
+    db_path = tmp_path / "hot-currentness.db"
+    queue_dir = tmp_path / "queue"
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1")
+
+    def fail_if_loaded():
+        raise AssertionError("real embedding model should not be loaded")
+
+    import brainlayer.drain as drain
+
+    monkeypatch.setattr(drain, "_default_embed_fn", fail_if_loaded)
+
+    result = benchmark.run_queue_drain_scenario(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        project="brainlayer-test",
+        count=1,
+        embed_fn=None,
+        embed_after_drain=False,
+        label="queue-drain",
+    )
+
+    assert result["durable_rows"] == 1
+    assert result["embedded_rows"] == 0
+
+
+def test_main_accepts_fresh_database_for_backlog_metrics(tmp_path, monkeypatch, capsys):
+    benchmark = _load_benchmark_module()
+    db_path = tmp_path / "fresh.db"
+    queue_dir = tmp_path / "queue"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "hot_currentness_benchmark.py",
+            "--db",
+            str(db_path),
+            "--queue-dir",
+            str(queue_dir),
+            "--scenario",
+            "store-no-embed",
+            "--count",
+            "0",
+            "--timeout-s",
+            "0.01",
+            "--no-real-embed",
+        ],
+    )
+
+    assert benchmark.main() == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert db_path.exists()
+    assert output["embedding_backlog_before"]["pending_manual_mcp_embeddings"] == 0

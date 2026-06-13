@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -71,6 +72,25 @@ def drain_throughput(*, events: int, elapsed_s: float) -> float | None:
     if elapsed_s <= 0:
         return None
     return round(events / elapsed_s, 3)
+
+
+def _ensure_db_initialized(db_path: Path) -> None:
+    store = VectorStore(db_path)
+    store.close()
+
+
+def _set_drain_embed_env(enabled: bool) -> str | None:
+    previous = os.environ.get("BRAINLAYER_DRAIN_EMBED")
+    if not enabled:
+        os.environ["BRAINLAYER_DRAIN_EMBED"] = "0"
+    return previous
+
+
+def _restore_drain_embed_env(previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop("BRAINLAYER_DRAIN_EMBED", None)
+    else:
+        os.environ["BRAINLAYER_DRAIN_EMBED"] = previous
 
 
 def queue_metrics(*, queue_dir: Path, now: float | None = None) -> dict[str, float | int | None]:
@@ -293,6 +313,7 @@ def run_fake_load_scenario(
     label: str,
     timeout_s: float,
 ) -> dict[str, Any]:
+    """Issue concurrent stores; SQLite still serializes writes through BEGIN IMMEDIATE."""
     probes: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
@@ -323,10 +344,14 @@ def run_queue_drain_scenario(
     project: str,
     count: int,
     embed_fn: EmbedFn | None,
+    embed_after_drain: bool = True,
     label: str,
 ) -> dict[str, Any]:
     queue_dir.mkdir(parents=True, exist_ok=True)
-    before = queue_metrics(queue_dir=queue_dir)
+    _ensure_db_initialized(db_path)
+    benchmark_queue_dir = queue_dir / f"{label}-{uuid.uuid4().hex[:12]}"
+    benchmark_queue_dir.mkdir(parents=True, exist_ok=True)
+    before = queue_metrics(queue_dir=benchmark_queue_dir)
     expected_ids: list[str] = []
     for index in range(count):
         chunk_id = f"manual-{uuid.uuid4().hex[:16]}"
@@ -339,13 +364,17 @@ def run_queue_drain_scenario(
             importance=5,
             chunk_id=chunk_id,
             source=label,
-            queue_dir=queue_dir,
+            queue_dir=benchmark_queue_dir,
         )
-    queued = queue_metrics(queue_dir=queue_dir)
+    queued = queue_metrics(queue_dir=benchmark_queue_dir)
     start = _now()
-    drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=count, embed_fn=embed_fn)
+    previous_drain_embed = _set_drain_embed_env(embed_after_drain)
+    try:
+        drained = drain_once(db_path=db_path, queue_dir=benchmark_queue_dir, batch_size=count, embed_fn=embed_fn)
+    finally:
+        _restore_drain_embed_env(previous_drain_embed)
     elapsed = _now() - start
-    after = queue_metrics(queue_dir=queue_dir)
+    after = queue_metrics(queue_dir=benchmark_queue_dir)
     store = VectorStore(db_path)
     try:
         durable = sum(
@@ -358,6 +387,7 @@ def run_queue_drain_scenario(
         store.close()
     return {
         "label": label,
+        "benchmark_queue_dir": str(benchmark_queue_dir),
         "queued_ids": expected_ids,
         "queue_before": before,
         "queue_after_enqueue": queued,
@@ -465,6 +495,7 @@ def main() -> int:
     args = parser.parse_args()
 
     embed_fn = None if args.no_real_embed else _load_default_embed_fn()
+    _ensure_db_initialized(args.db)
     output: dict[str, Any] = {
         "db_path": str(args.db),
         "queue_dir": str(args.queue_dir),
@@ -508,6 +539,7 @@ def main() -> int:
                 project=args.project,
                 count=args.count,
                 embed_fn=embed_fn,
+                embed_after_drain=embed_fn is not None,
                 label="queue-drain",
             )
         )
