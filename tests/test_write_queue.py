@@ -349,8 +349,8 @@ class TestFlushPendingStores:
         assert flushed == 1
         mock_store.supersede_chunk.assert_called_once_with("manual-old1234", "manual-new1234")
 
-    def test_flush_keeps_item_when_legacy_supersedes_fails(self, tmp_path):
-        """A failed queued supersedes transition must not drop the pending store item."""
+    def test_flush_does_not_requeue_after_durable_store_when_legacy_supersedes_fails(self, tmp_path):
+        """A failed supersede must not replay an already stored replacement."""
         pending_path = tmp_path / "pending-stores.jsonl"
         pending_path.write_text(
             json.dumps(
@@ -374,10 +374,8 @@ class TestFlushPendingStores:
                 mock_store_memory.return_value = {"id": "manual-new1234", "related": []}
                 flushed = _flush_pending_stores(mock_store, MagicMock())
 
-        assert flushed == 0
-        remaining = pending_path.read_text().strip().splitlines()
-        assert len(remaining) == 1
-        assert json.loads(remaining[0])["chunk_id"] == "manual-new1234"
+        assert flushed == 1
+        assert not pending_path.exists()
         mock_store.supersede_chunk.assert_called_once_with("manual-old1234", "manual-new1234")
 
     def test_flush_keeps_failed_items(self, tmp_path):
@@ -451,6 +449,45 @@ class TestFlushPendingStores:
         pending_path = tmp_path / "pending-stores.jsonl"
 
         assert _pending_store_lock_path(pending_path) == tmp_path / ".pending-stores.jsonl.lock"
+
+    def test_legacy_pending_store_path_follows_active_db_env(self, tmp_path, monkeypatch):
+        from brainlayer.mcp.store_handler import _get_pending_store_path
+
+        active_db = tmp_path / "active" / "brainlayer.db"
+        monkeypatch.setenv("BRAINLAYER_DB", str(active_db))
+
+        assert _get_pending_store_path() == active_db.parent / "pending-stores.jsonl"
+
+    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(self, tmp_path, monkeypatch):
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps({"content": "good", "memory_type": "note"})
+            + "\n"
+            + json.dumps({"content": "bad", "memory_type": "note"})
+            + "\n"
+        )
+        replaced = {}
+        original_replace = type(pending_path).replace
+
+        def track_replace(self, target):
+            replaced["source"] = self
+            replaced["target"] = target
+            return original_replace(self, target)
+
+        def side_effect(**kwargs):
+            if kwargs["content"] == "bad":
+                raise apsw.BusyError("still locked")
+            return {"id": "test-123", "related": []}
+
+        monkeypatch.setattr(type(pending_path), "replace", track_replace)
+        with patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path):
+            with patch("brainlayer.store.store_memory", side_effect=side_effect):
+                flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flushed == 1
+        assert replaced["source"] == pending_path.with_suffix(".jsonl.tmp")
+        assert replaced["target"] == pending_path
+        assert json.loads(pending_path.read_text().strip())["content"] == "bad"
 
 
 # ---------------------------------------------------------------------------

@@ -411,9 +411,18 @@ async def _brain_archive(
 
 def _get_pending_store_path():
     """Path for the store queue buffer file."""
-    from ..paths import DEFAULT_DB_PATH
+    from ..paths import get_db_path
 
-    return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
+    return get_db_path().parent / "pending-stores.jsonl"
+
+
+def _atomic_rewrite_pending_store(path, lines: list[str]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
 
 
 @contextmanager
@@ -535,7 +544,11 @@ def _flush_pending_stores(store, embed_fn) -> int:
                 )
                 if item.get("supersedes"):
                     if not store.supersede_chunk(item["supersedes"], result["id"]):
-                        raise RuntimeError(f"failed to supersede queued chunk {item['supersedes']} with {result['id']}")
+                        logger.error(
+                            "Failed to supersede queued chunk %s with durable replacement %s",
+                            item["supersedes"],
+                            result["id"],
+                        )
                 flushed += 1
             except Exception as e:
                 logger.warning("Failed to flush pending store item: %s", e)
@@ -543,7 +556,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
 
         # Legacy fallback file shares this lock with appends to avoid dropping late arrivals.
         if remaining:
-            path.write_text("\n".join(remaining) + "\n")
+            _atomic_rewrite_pending_store(path, remaining)
         else:
             path.unlink(missing_ok=True)
 

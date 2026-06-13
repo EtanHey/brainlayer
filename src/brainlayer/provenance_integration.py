@@ -53,6 +53,7 @@ def resolve_entity_conflicts(
     dry_run: bool = True,
     enable_operational_evidence: bool = False,
     system_state_attributes: set[str] | None = None,
+    commit: bool = True,
 ) -> ProvenanceConflictReport:
     """Resolve conflicting chunk claims for one KG entity.
 
@@ -109,7 +110,8 @@ def resolve_entity_conflicts(
                 continue
             if _enqueue_pending_user_confirm(conn, claim):
                 report.pending_confirm_count += 1
-    _commit_if_supported(conn)
+    if commit:
+        _commit_if_supported(conn)
     return report
 
 
@@ -133,25 +135,33 @@ def confirm_pending(store, claim_id: str) -> ProvenanceConflictReport:
     chunk_id = str(row[3])
     value = str(row[4])
     _ensure_confirmed_claims_table(conn)
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO provenance_confirmed_claims
-        (id, entity, attribute, chunk_id, value, provenance_class, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            f"{entity}:{attribute}:{chunk_id}:{value}",
-            entity,
-            attribute,
-            chunk_id,
-            value,
-            RAW_ETAN_DIRECT,
-            datetime.now(timezone.utc).isoformat(),
-        ),
-    )
-    conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
+    conn.execute("SAVEPOINT provenance_confirm_pending")
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO provenance_confirmed_claims
+            (id, entity, attribute, chunk_id, value, provenance_class, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"{entity}:{attribute}:{chunk_id}:{value}",
+                entity,
+                attribute,
+                chunk_id,
+                value,
+                RAW_ETAN_DIRECT,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.execute("DELETE FROM provenance_pending_user_confirm WHERE id = ?", (pending_id,))
+        report = resolve_entity_conflicts(store, entity, dry_run=False, commit=False)
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT provenance_confirm_pending")
+        conn.execute("RELEASE SAVEPOINT provenance_confirm_pending")
+        raise
+    conn.execute("RELEASE SAVEPOINT provenance_confirm_pending")
     _commit_if_supported(conn)
-    return resolve_entity_conflicts(store, entity, dry_run=False)
+    return report
 
 
 def _find_pending_confirmation(conn, claim_id: str):
@@ -253,10 +263,19 @@ def sweep_provenance_queue(
     """Drain queued entities and apply reversible provenance resolution."""
     conn = _conn(store)
     _ensure_provenance_resolve_queue(conn)
-    rows = _claim_provenance_queue_rows(conn, limit)
     report = ProvenanceSweepReport()
-    for index, row in enumerate(rows):
+    processed_entities: set[str] = set()
+    while report.swept < limit:
+        rows = _claim_provenance_queue_rows(conn, 1)
+        if not rows:
+            break
+        row = rows[0]
         entity = str(row[0])
+        if entity in processed_entities:
+            _requeue_claimed_provenance_row(conn, row, increment_attempts=False)
+            _commit_if_supported(conn)
+            break
+        processed_entities.add(entity)
         try:
             entity_report = resolve_entity_conflicts(
                 store,
@@ -266,8 +285,6 @@ def sweep_provenance_queue(
             )
         except Exception:
             _requeue_claimed_provenance_row(conn, row)
-            for unprocessed_row in rows[index + 1 :]:
-                _requeue_claimed_provenance_row(conn, unprocessed_row, increment_attempts=False)
             _commit_if_supported(conn)
             raise
         report.swept += 1
@@ -279,8 +296,9 @@ def sweep_provenance_queue(
         report.notes.extend(entity_report.notes)
         if _should_retry_provenance_queue_entity(entity_report):
             _requeue_claimed_provenance_row(conn, row)
+            _commit_if_supported(conn)
             continue
-    _commit_if_supported(conn)
+        _commit_if_supported(conn)
     return report
 
 

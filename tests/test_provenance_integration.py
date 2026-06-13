@@ -899,6 +899,55 @@ def test_confirm_pending_promotes_inference_and_resolves_attribute(con):
     assert con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm").fetchone()[0] == 0
 
 
+def test_confirm_pending_rolls_back_promotion_when_resolution_raises(con, monkeypatch):
+    from brainlayer import provenance_integration
+    from brainlayer.provenance_integration import (
+        _ensure_confirmed_claims_table,
+        _ensure_pending_user_confirm_table,
+        confirm_pending,
+    )
+
+    _ensure_pending_user_confirm_table(con)
+    _ensure_confirmed_claims_table(con)
+    con.execute(
+        """
+        INSERT INTO provenance_pending_user_confirm
+        (id, entity, attribute, chunk_id, value, provenance_class, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "pending-arbitration",
+            "controlLayer",
+            "ARBITRATION",
+            "c-infer",
+            "CONFIRMED_SYSTEM_STATE",
+            "AGENT-INFERENCE",
+            "needs-direct-confirmation",
+            "2026-06-05T21:47:27Z",
+        ),
+    )
+    con.commit()
+
+    original_resolve = provenance_integration.resolve_entity_conflicts
+
+    def raise_after_pending_delete(*args, **kwargs):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", raise_after_pending_delete)
+
+    with pytest.raises(RuntimeError, match="resolver failed"):
+        confirm_pending(con, "pending-arbitration")
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", original_resolve)
+    assert (
+        con.execute("SELECT COUNT(*) FROM provenance_pending_user_confirm WHERE id = 'pending-arbitration'").fetchone()[
+            0
+        ]
+        == 1
+    )
+    assert con.execute("SELECT COUNT(*) FROM provenance_confirmed_claims").fetchone()[0] == 0
+
+
 def test_confirm_pending_scopes_confirmation_to_single_claim(con):
     from brainlayer.provenance_integration import confirm_pending, list_pending_confirm, resolve_entity_conflicts
 
@@ -1221,6 +1270,38 @@ def test_provenance_sweep_claims_rows_before_processing(con, monkeypatch):
     assert result.swept == 1
     assert seen["queued_during_processing"] is None
     assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] == 0
+
+
+def test_provenance_sweep_claims_only_one_row_per_transaction(con, monkeypatch):
+    from brainlayer import provenance_integration
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-control")
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-enrichment")
+    seen = {}
+
+    def fake_resolve_entity_conflicts(store, entity, **kwargs):
+        if entity == "controlLayer":
+            seen["sibling_still_queued"] = store.execute(
+                "SELECT 1 FROM provenance_resolve_queue WHERE entity = 'enrichment'",
+            ).fetchone()
+            store.commit()
+        return provenance_integration.ProvenanceConflictReport(
+            entity=entity,
+            entity_ids=[f"e-{entity}"],
+            resolutions={},
+            dry_run=False,
+        )
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", fake_resolve_entity_conflicts)
+
+    result = sweep_provenance_queue(con, limit=1)
+
+    assert result.swept == 1
+    assert seen["sibling_still_queued"] is not None
+    assert tuple(
+        con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue WHERE entity = 'enrichment'").fetchone()
+    ) == ("enrichment", "c-enrichment")
 
 
 def test_provenance_sweep_requeues_claimed_row_when_resolver_raises(con, monkeypatch):

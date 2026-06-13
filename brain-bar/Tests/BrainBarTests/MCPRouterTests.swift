@@ -1589,12 +1589,7 @@ final class MCPRouterTests: XCTestCase {
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
-        db.exec("PRAGMA busy_timeout = 1")
-
-        let lockDB = try openSQLiteConnection(path: dbPath)
-        defer { sqlite3_close(lockDB) }
-        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
-        defer { sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil) }
+        db.failNextStoreWithBusyForTesting = true
 
         let router = MCPRouter()
         router.setDatabase(db)
@@ -1686,9 +1681,9 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(flushed?.count, 1)
         XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
         XCTAssertNotNil(flushed?.first?["rowid"])
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush")
-        XCTAssertEqual(flushed?.first?["tags"] as? [String], ["queued"])
-        XCTAssertEqual(flushed?.first?["importance"] as? Int, 4)
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path), "successful store should drain the pending queue")
 
         let contents = try chunkContents(path: dbPath)
@@ -1789,9 +1784,9 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(flushed?.count, 1)
         XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
         XCTAssertNotNil(flushed?.first?["rowid"])
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives malformed sibling")
-        XCTAssertEqual(flushed?.first?["tags"] as? [String], ["queued"])
-        XCTAssertEqual(flushed?.first?["importance"] as? Int, 4)
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertEqual(remainingText.trimmingCharacters(in: .whitespacesAndNewlines), "not-json")
@@ -1843,9 +1838,9 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(flushed?.count, 1)
         XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
         XCTAssertNotNil(flushed?.first?["rowid"])
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives invalid utf8 sibling")
-        XCTAssertEqual(flushed?.first?["tags"] as? [String], ["queued"])
-        XCTAssertEqual(flushed?.first?["importance"] as? Int, 4)
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingData = try Data(contentsOf: queuePath)
         XCTAssertEqual(remainingData, invalidLine)
