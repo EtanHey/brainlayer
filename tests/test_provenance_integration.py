@@ -1426,8 +1426,7 @@ def test_provenance_sweep_drops_ambiguous_entity_instead_of_requeueing_forever(c
     assert result.swept == 1
     assert result.entities == ["controlLayer"]
     assert result.notes == [
-        "Ambiguous entity lookup for 'controlLayer' via id/name: e-control:controlLayer, "
-        "e-control-duplicate:controlLayer"
+        "Ambiguous entity lookup for 'controlLayer' via name: e-control:controlLayer, e-control-duplicate:controlLayer"
     ]
     assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue WHERE entity = 'controlLayer'").fetchone()[0] == 0
 
@@ -1554,8 +1553,7 @@ def test_resolver_skips_writes_when_entity_lookup_is_ambiguous(con):
     assert result.superseded_count == 0
     assert result.pending_confirm_count == 0
     assert result.notes == [
-        "Ambiguous entity lookup for 'controlLayer' via id/name: e-control:controlLayer, "
-        "e-control-duplicate:controlLayer"
+        "Ambiguous entity lookup for 'controlLayer' via name: e-control:controlLayer, e-control-duplicate:controlLayer"
     ]
 
 
@@ -2065,6 +2063,18 @@ def test_deferred_mcp_store_enrichment_derives_direct_provenance():
         )
         == "RAW-ETAN-DIRECT"
     )
+
+
+def test_entity_lookup_prefers_exact_id_before_exact_name_collision(con):
+    from brainlayer.provenance_integration import _entity_ids
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('controllayer', 'Control Layer ID')")
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-control-name', 'controlLayer')")
+
+    entity_ids, canonical_name = _entity_ids(con, "controllayer")
+
+    assert entity_ids == ["controllayer"]
+    assert canonical_name == "Control Layer ID"
 
 
 def test_derive_chunk_provenance_class_tolerates_null_content():

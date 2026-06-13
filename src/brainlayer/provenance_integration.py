@@ -433,14 +433,23 @@ def _single_entity_match(rows: list[Any], entity: str, source: str) -> tuple[lis
 
 
 def _entity_ids(conn, entity: str) -> tuple[list[str], str]:
-    rows = list(
+    id_rows = list(
         conn.execute(
-            "SELECT id, name FROM kg_entities WHERE id = ? OR lower(name) = lower(?) ORDER BY id ASC",
-            (entity, entity),
+            "SELECT id, name FROM kg_entities WHERE id = ? ORDER BY id ASC",
+            (entity,),
         )
     )
-    if rows:
-        return _single_entity_match(rows, entity, "id/name")
+    if id_rows:
+        return _single_entity_match(id_rows, entity, "id")
+
+    name_rows = list(
+        conn.execute(
+            "SELECT id, name FROM kg_entities WHERE lower(name) = lower(?) ORDER BY id ASC",
+            (entity,),
+        )
+    )
+    if name_rows:
+        return _single_entity_match(name_rows, entity, "name")
 
     if "kg_entity_aliases" in _tables(conn):
         alias_rows = list(
