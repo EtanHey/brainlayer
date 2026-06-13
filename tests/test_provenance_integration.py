@@ -1223,6 +1223,30 @@ def test_provenance_sweep_claims_rows_before_processing(con, monkeypatch):
     assert con.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] == 0
 
 
+def test_provenance_sweep_requeues_claimed_row_when_resolver_raises(con, monkeypatch):
+    from brainlayer import provenance_integration
+    from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
+
+    enqueue_provenance_resolution(con, "controlLayer", chunk_id="c-control")
+    before = con.execute(
+        "SELECT attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
+    ).fetchone()
+
+    def raise_busy(*args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(provenance_integration, "resolve_entity_conflicts", raise_busy)
+
+    with pytest.raises(RuntimeError, match="database is locked"):
+        sweep_provenance_queue(con)
+
+    after = con.execute(
+        "SELECT entity, chunk_id, attempts, updated_at FROM provenance_resolve_queue WHERE entity = 'controlLayer'"
+    ).fetchone()
+    assert tuple(after[:3]) == ("controlLayer", "c-control", before["attempts"] + 1)
+    assert after["updated_at"] > before["updated_at"]
+
+
 def test_provenance_sweep_does_not_auto_supersede_personal_data(con):
     from brainlayer.provenance_integration import enqueue_provenance_resolution, sweep_provenance_queue
 

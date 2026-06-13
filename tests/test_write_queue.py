@@ -445,6 +445,13 @@ class TestFlushPendingStores:
 
         assert flock.call_count >= 4
 
+    def test_legacy_pending_store_lock_path_matches_brainbar_dotfile(self, tmp_path):
+        from brainlayer.mcp.store_handler import _pending_store_lock_path
+
+        pending_path = tmp_path / "pending-stores.jsonl"
+
+        assert _pending_store_lock_path(pending_path) == tmp_path / ".pending-stores.jsonl.lock"
+
 
 # ---------------------------------------------------------------------------
 # MCP handler resilience tests

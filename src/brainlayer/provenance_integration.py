@@ -255,14 +255,21 @@ def sweep_provenance_queue(
     _ensure_provenance_resolve_queue(conn)
     rows = _claim_provenance_queue_rows(conn, limit)
     report = ProvenanceSweepReport()
-    for row in rows:
+    for index, row in enumerate(rows):
         entity = str(row[0])
-        entity_report = resolve_entity_conflicts(
-            store,
-            entity,
-            dry_run=False,
-            enable_operational_evidence=enable_operational_evidence,
-        )
+        try:
+            entity_report = resolve_entity_conflicts(
+                store,
+                entity,
+                dry_run=False,
+                enable_operational_evidence=enable_operational_evidence,
+            )
+        except Exception:
+            _requeue_claimed_provenance_row(conn, row)
+            for unprocessed_row in rows[index + 1 :]:
+                _requeue_claimed_provenance_row(conn, unprocessed_row, increment_attempts=False)
+            _commit_if_supported(conn)
+            raise
         report.swept += 1
         report.entities.append(entity)
         report.superseded_count += entity_report.superseded_count
@@ -450,8 +457,9 @@ def _claim_provenance_queue_rows(conn, limit: int) -> list[Any]:
     )
 
 
-def _requeue_claimed_provenance_row(conn, row: Any) -> None:
+def _requeue_claimed_provenance_row(conn, row: Any, *, increment_attempts: bool = True) -> None:
     entity, chunk_id, reason, created_at, _updated_at, attempts = tuple(row)
+    next_attempts = int(attempts or 0) + 1 if increment_attempts else int(attempts or 0)
     conn.execute(
         """
         INSERT INTO provenance_resolve_queue (entity, chunk_id, reason, created_at, updated_at, attempts)
@@ -468,7 +476,7 @@ def _requeue_claimed_provenance_row(conn, row: Any) -> None:
             reason,
             created_at,
             datetime.now(timezone.utc).isoformat(),
-            int(attempts or 0) + 1,
+            next_attempts,
         ),
     )
 

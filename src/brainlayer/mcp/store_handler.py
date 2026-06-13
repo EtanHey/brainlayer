@@ -419,13 +419,17 @@ def _get_pending_store_path():
 @contextmanager
 def _pending_store_file_lock(path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path = _pending_store_lock_path(path)
     with open(lock_path, "a") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _pending_store_lock_path(path):
+    return path.parent / f".{path.name}.lock"
 
 
 def _queue_store(item: dict):
