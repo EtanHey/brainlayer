@@ -1993,6 +1993,80 @@ def test_queued_brain_store_note_without_provenance_class_is_user_anchored(con):
     )
 
 
+def test_deferred_mcp_store_note_without_provenance_class_is_user_anchored(con):
+    from brainlayer.provenance_integration import (
+        enqueue_provenance_resolution,
+        list_pending_confirm,
+        sweep_provenance_queue,
+    )
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, source_file, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-brain-queue-mcp-old",
+                "PRIMARY_BACKEND: Groq",
+                "note",
+                None,
+                "mcp",
+                "brainlayer-queue",
+                "2026-03-26T00:00:00Z",
+                None,
+            ),
+            (
+                "c-direct-new",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "claude_code",
+                "session.jsonl",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-brain-queue-mcp-old",), ("c-direct-new",)],
+    )
+
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
+    result = sweep_provenance_queue(con)
+
+    assert result.superseded_count == 1
+    assert list_pending_confirm(con) == []
+    assert tuple(
+        con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-brain-queue-mcp-old'").fetchone()
+    ) == (
+        "superseded",
+        "c-direct-new",
+    )
+
+
+def test_deferred_mcp_store_enrichment_derives_direct_provenance():
+    from brainlayer.enrichment_controller import _derive_chunk_provenance_class
+
+    assert (
+        _derive_chunk_provenance_class(
+            {
+                "content": "PRIMARY_BACKEND: Gemini",
+                "content_type": "note",
+                "sender": None,
+                "source": "mcp",
+                "source_file": "brainlayer-queue",
+            }
+        )
+        == "RAW-ETAN-DIRECT"
+    )
+
+
 def test_derive_chunk_provenance_class_tolerates_null_content():
     from brainlayer.enrichment_controller import _derive_chunk_provenance_class
 
