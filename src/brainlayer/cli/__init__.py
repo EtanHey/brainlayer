@@ -150,7 +150,10 @@ def provenance_pending() -> None:
         typer.echo("No pending provenance confirmations.")
         return
     for row in pending:
-        typer.echo(f"{row['entity']} · {row['attribute']} · {row['value']} · {row['chunk_id']} · confirm|reject")
+        typer.echo(
+            f"{row['id']} · {row['entity']} · {row['attribute']} · {row['value']} · "
+            f"chunk={row['chunk_id']} · confirm|reject"
+        )
 
 
 @provenance_app.command("confirm")

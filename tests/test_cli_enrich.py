@@ -78,7 +78,10 @@ def test_cli_provenance_pending_lists_confirm_and_reject_actions(monkeypatch):
     result = runner.invoke(app, ["provenance", "pending"])
 
     assert result.exit_code == 0
-    assert "controlLayer · ARBITRATION · CONTROLLAYER_DECIDES · c-infer · confirm|reject" in result.stdout
+    assert (
+        "pending-control · controlLayer · ARBITRATION · CONTROLLAYER_DECIDES · chunk=c-infer · confirm|reject"
+        in result.stdout
+    )
 
 
 def test_cli_enrich_supervisor_routes_to_controller(monkeypatch):
