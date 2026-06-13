@@ -21,6 +21,7 @@ from .provenance_integration import (
     _enqueue_pending_user_confirm,
     _entity_chunk_rows,
     _entity_ids,
+    _row_has_actionable_fact,
 )
 
 
@@ -65,9 +66,13 @@ def detect_contradiction(new_chunk: dict[str, Any], candidate: dict[str, Any]) -
     """V1 contradiction: same normalized entity and attribute, different value."""
     if not _same_chunk_entity(new_chunk, candidate):
         return False, ""
+    if not _chunk_has_actionable_fact(candidate):
+        return False, ""
 
     candidate_attribute, candidate_value = _chunk_attribute_value(candidate)
     for claim_chunk in _chunk_claim_chunks(new_chunk):
+        if not _chunk_has_actionable_fact(claim_chunk):
+            continue
         new_attribute, new_value = _chunk_attribute_value(claim_chunk)
         if new_attribute == candidate_attribute:
             return new_value != candidate_value, new_attribute
@@ -95,17 +100,27 @@ def auto_supersede(
         report.notes.append("No kg_entities row matched normalized entity")
         return report
 
-    candidates = [
+    all_candidates = [
         {**dict(row), "entity": canonical_entity}
         for row in _entity_chunk_rows(db, entity_ids)
         if str(row.get("id")) != _chunk_id(new_chunk)
     ]
-    report.candidate_count = len(candidates)
+    report.candidate_count = len(all_candidates)
 
-    if any(_is_personal_entity_or_chunk(canonical_entity, candidate) for candidate in candidates):
+    if any(_is_personal_entity_or_chunk(canonical_entity, candidate) for candidate in all_candidates):
         return _skip_personal(report, new_chunk)
 
-    new_claim_chunks = _chunk_claim_chunks(new_chunk)
+    candidates = [candidate for candidate in all_candidates if _chunk_has_actionable_fact(candidate)]
+    skipped_unstructured = len(all_candidates) - len(candidates)
+    if skipped_unstructured:
+        report.notes.append(f"Skipped {skipped_unstructured} unstructured candidate row(s)")
+
+    new_claim_chunks = [
+        claim_chunk for claim_chunk in _chunk_claim_chunks(new_chunk) if _chunk_has_actionable_fact(claim_chunk)
+    ]
+    if not new_claim_chunks:
+        report.notes.append("Skipped unstructured new chunk")
+        return report
     new_claims_by_attribute = _chunks_by_attribute(new_claim_chunks)
     candidates_by_attribute = _chunks_by_attribute(candidates)
 
@@ -233,6 +248,12 @@ def _chunk_attribute_value(chunk: dict[str, Any]) -> tuple[str, str]:
         chunk.get("context"),
         chunk.get("mention_type"),
     )
+
+
+def _chunk_has_actionable_fact(chunk: dict[str, Any]) -> bool:
+    if chunk.get("attribute") is not None and chunk.get("value") is not None:
+        return True
+    return _row_has_actionable_fact(chunk)
 
 
 def _chunk_claim_chunks(chunk: dict[str, Any]) -> list[dict[str, Any]]:

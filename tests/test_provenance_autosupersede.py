@@ -68,6 +68,8 @@ def _chunk(
     created_at="2026-06-01T00:00:00Z",
     provenance_class="AGENT-INFERENCE",
     link=True,
+    context=None,
+    mention_type=None,
 ):
     conn.execute(
         """
@@ -77,7 +79,10 @@ def _chunk(
         (chunk_id, content, content_type, sender, created_at, provenance_class),
     )
     if link:
-        conn.execute("INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES (?, ?)", (entity_id, chunk_id))
+        conn.execute(
+            "INSERT INTO kg_entity_chunks (entity_id, chunk_id, context, mention_type) VALUES (?, ?, ?, ?)",
+            (entity_id, chunk_id, context, mention_type),
+        )
 
 
 def _new_chunk(chunk_id, entity, content, *, provenance_class="RAW-ETAN-DIRECT", created_at="2026-06-09T00:00:00Z"):
@@ -286,6 +291,46 @@ def test_apply_mode_skips_unstructured_mentions(con):
     assert "MENTION" not in report.attribute_dispositions
     assert report.superseded_count == 0
     assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-mention'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_apply_mode_skips_mention_type_only_tag_links(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-repo", "BrainLayer")
+    _chunk(
+        con,
+        "c-old-tag",
+        "e-repo",
+        "BrainLayer sqlite memory",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-01T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+        mention_type="tag",
+    )
+
+    report = auto_supersede(
+        con,
+        {
+            "id": "c-new-tag",
+            "entity": "BrainLayer",
+            "content": "BrainLayer MCP tools",
+            "content_type": "user_message",
+            "sender": "user",
+            "created_at": "2026-06-09T00:00:00Z",
+            "mention_type": "tag",
+        },
+        dry_run=False,
+    )
+
+    assert report.contradiction_count == 0
+    assert "TAG" not in report.attribute_dispositions
+    assert report.superseded_count == 0
+    assert "Skipped unstructured new chunk" in report.notes
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-tag'").fetchone()) == (
         "active",
         None,
     )
