@@ -936,6 +936,85 @@ def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeyp
     assert summary is None
 
 
+def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "must roll back"},
+                "entities": [{"name": "controlLayer"}],
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    monkeypatch.setattr(drain, "_embedding_enabled", lambda: True)
+
+    def fail_after_events(*_args, **_kwargs):
+        raise RuntimeError("synthetic post-event batch failure")
+
+    monkeypatch.setattr(drain, "_embed_store_chunks", fail_after_events)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 1
+    assert result.files_deleted == 0
+    assert queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        summary = conn.execute("SELECT summary FROM chunks WHERE id = 'needs-update'").fetchone()[0]
+        has_queue_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'provenance_resolve_queue'"
+        ).fetchone()
+        queue_count = (
+            conn.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] if has_queue_table else 0
+        )
+    finally:
+        conn.close()
+    assert summary is None
+    assert queue_count == 0
+
+
+def test_burn_drain_enqueues_provenance_without_helper_commit(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "committed by drain only"},
+                "entities": [{"name": "controlLayer"}],
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+    calls = []
+
+    def record_enqueue(*_args, **kwargs):
+        calls.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(drain, "enqueue_provenance_resolution_for_entities", record_enqueue)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 1
+    assert not queued.exists()
+    assert calls == [{"chunk_id": "needs-update", "commit": False}]
+
+
 class TestBrainUpdateRetryOnLock:
     """brain_update should retry on BusyError before failing."""
 

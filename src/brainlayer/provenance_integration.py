@@ -190,7 +190,12 @@ def _find_pending_confirmation(conn, claim_id: str):
 
 
 def enqueue_provenance_resolution(
-    store, entity: str, *, chunk_id: str | None = None, reason: str = "enrichment"
+    store,
+    entity: str,
+    *,
+    chunk_id: str | None = None,
+    reason: str = "enrichment",
+    commit: bool = True,
 ) -> bool:
     """Debounced enqueue for an entity whose claims should be re-resolved."""
     normalized = str(entity or "").strip()
@@ -211,7 +216,8 @@ def enqueue_provenance_resolution(
         """,
         (normalized, chunk_id, reason, now, now),
     )
-    _commit_if_supported(conn)
+    if commit:
+        _commit_if_supported(conn)
     return inserted
 
 
@@ -221,12 +227,19 @@ def enqueue_provenance_resolution_for_entities(
     *,
     chunk_id: str | None = None,
     reason: str = "enrichment",
+    commit: bool = True,
 ) -> int:
     """Extract entity names from enrichment payloads and enqueue each once."""
     count = 0
     for entity in entities or []:
         name = _entity_name_from_payload(entity)
-        if name and enqueue_provenance_resolution(store, name, chunk_id=chunk_id, reason=reason):
+        if name and enqueue_provenance_resolution(
+            store,
+            name,
+            chunk_id=chunk_id,
+            reason=reason,
+            commit=commit,
+        ):
             count += 1
     return count
 

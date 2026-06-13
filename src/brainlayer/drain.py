@@ -563,7 +563,7 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         return
     assignments = ", ".join(f"{col} = ?" for col in updates)
     conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    enqueue_provenance_resolution_for_entities(conn, event.get("entities"), chunk_id=chunk_id)
+    enqueue_provenance_resolution_for_entities(conn, event.get("entities"), chunk_id=chunk_id, commit=False)
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -811,6 +811,7 @@ def burn_drain_once(
                             conn,
                             payload.get("entities"),
                             chunk_id=payload.get("chunk_id"),
+                            commit=False,
                         )
                         result.skipped_verified_stale += 1
                         continue
