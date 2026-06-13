@@ -251,6 +251,42 @@ def test_stale_queue_quarantine_preserves_entity_bearing_redundant_enrichment(tm
     assert not quarantine_root.exists()
 
 
+def test_stale_queue_quarantine_preserves_empty_entity_redundant_enrichment(tmp_path):
+    from brainlayer.maintenance import quarantine_stale_queue_files
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    quarantine_root = tmp_path / "quarantine"
+    _create_enrichment_db(db_path)
+    provenance_empty = queue_dir / "enrichment-empty-entities.jsonl"
+    _write_jsonl(
+        provenance_empty,
+        [
+            {
+                "kind": "enrichment_update",
+                "chunk_id": "already-done",
+                "content_hash": "hash-ok",
+                "enrichment": {"summary": "redundant summary"},
+                "entities": [],
+            }
+        ],
+    )
+
+    result = quarantine_stale_queue_files(
+        db_path=db_path,
+        queue_dir=queue_dir,
+        quarantine_root=quarantine_root,
+        dry_run=False,
+        now=dt.datetime(2026, 5, 30, 4, 10, tzinfo=dt.timezone.utc),
+    )
+
+    assert result.scanned_files == 1
+    assert result.candidate_files == 0
+    assert result.quarantined_files == 0
+    assert provenance_empty.exists()
+    assert not quarantine_root.exists()
+
+
 def test_maintenance_launchd_plists_and_installer_wiring():
     nightly_path = REPO_ROOT / "scripts/launchd/com.brainlayer.maintenance-nightly.plist"
     weekly_path = REPO_ROOT / "scripts/launchd/com.brainlayer.maintenance-weekly.plist"

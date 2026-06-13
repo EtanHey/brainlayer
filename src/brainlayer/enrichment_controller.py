@@ -752,7 +752,7 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
                   {chunk_expr("value_type")}, {chunk_expr("tags")}, {chunk_expr("importance")},
                   {chunk_expr("created_at")}, {chunk_expr("summary")}, {chunk_expr("superseded_by")},
                   {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")}, {chunk_expr("source")},
-                  {chunk_expr("conversation_id")}
+                  {chunk_expr("conversation_id")}, {chunk_expr("position")}
            FROM chunks WHERE id = ?""",
         (chunk_id,),
     ).fetchone()
@@ -776,6 +776,7 @@ def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
         "archived_at": row[14],
         "source": row[15],
         "conversation_id": row[16],
+        "position": row[17],
     }
     chunk["prev_assistant_text"] = _previous_assistant_text(cursor, cols, chunk)
     return chunk
@@ -801,7 +802,29 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
         return None
 
     scope_filters: list[str] = []
-    params: list[Any] = [chunk["id"], created_at]
+    params: list[Any] = [chunk["id"]]
+    position = chunk.get("position")
+    position_filter = ""
+    try:
+        position_value = int(position) if position is not None else None
+    except (TypeError, ValueError):
+        position_value = None
+    if "position" in cols and position_value is not None:
+        created_at_filter = """
+          AND (
+              julianday(created_at) < julianday(?)
+              OR (
+                  julianday(created_at) = julianday(?)
+                  AND position IS NOT NULL
+                  AND position < ?
+              )
+          )
+        """
+        params.extend([created_at, created_at, position_value])
+        position_filter = ", position DESC"
+    else:
+        created_at_filter = "AND julianday(created_at) < julianday(?)"
+        params.append(created_at)
     conversation_id = str(chunk.get("conversation_id") or "").strip()
     source_file = str(chunk.get("source_file") or "").strip()
     if "conversation_id" in cols and conversation_id:
@@ -821,11 +844,11 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
         SELECT content
         FROM chunks
         WHERE id != ?
-          AND julianday(created_at) < julianday(?)
+          {created_at_filter}
           AND ({" OR ".join(assistant_filters)})
           AND content IS NOT NULL
           {scope_clause}
-        ORDER BY julianday(created_at) DESC, created_at DESC
+        ORDER BY julianday(created_at) DESC, created_at DESC{position_filter}
         LIMIT 1
         """,
         params,

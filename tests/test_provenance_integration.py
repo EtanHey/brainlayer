@@ -147,6 +147,88 @@ def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_class
     assert payload["provenance_class"] == "ETAN-ENDORSEMENT"
 
 
+def test_get_chunk_readonly_uses_position_for_same_timestamp_previous_assistant():
+    from brainlayer import enrichment_controller as controller
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            source_file TEXT,
+            project TEXT,
+            content_type TEXT,
+            sender TEXT,
+            value_type TEXT,
+            tags TEXT,
+            importance INTEGER,
+            created_at TEXT,
+            summary TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived_at TEXT,
+            conversation_id TEXT,
+            position INTEGER
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO chunks (
+            id, content, source_file, project, content_type, sender,
+            created_at, conversation_id, position
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "assistant-prior",
+                "controlLayer is the fleet policy layer.",
+                "session.jsonl",
+                "brainlayer",
+                "assistant_text",
+                "assistant",
+                "2026-06-12T10:00:00Z",
+                "conv-1",
+                1,
+            ),
+            (
+                "user-ack",
+                "yes exactly",
+                "session.jsonl",
+                "brainlayer",
+                "user_message",
+                "user",
+                "2026-06-12T10:00:00Z",
+                "conv-1",
+                2,
+            ),
+            (
+                "assistant-after",
+                "This later same-timestamp assistant must not be selected.",
+                "session.jsonl",
+                "brainlayer",
+                "assistant_text",
+                "assistant",
+                "2026-06-12T10:00:00Z",
+                "conv-1",
+                3,
+            ),
+        ],
+    )
+
+    class ReadonlyStore:
+        def _read_cursor(self):
+            return conn.cursor()
+
+    chunk = controller._get_chunk_readonly(ReadonlyStore(), "user-ack")
+
+    assert chunk is not None
+    assert chunk["prev_assistant_text"] == "controlLayer is the fleet policy layer."
+
+
 def test_get_chunk_readonly_does_not_scope_prev_assistant_by_source_file_alone():
     from brainlayer import enrichment_controller as controller
 
