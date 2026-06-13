@@ -477,7 +477,14 @@ final class MCPRouter: @unchecked Sendable {
         let importance = args["importance"] as? Int ?? 5
         let project = args["project"] as? String
         guard let db = database else {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
+            return try queueBrainStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                reason: "DB_NOT_OPEN"
+            )
         }
         do {
             switch try db.storeOrQueueWithinBudget(
@@ -512,11 +519,25 @@ final class MCPRouter: @unchecked Sendable {
                 )
             }
         } catch BrainDatabase.DBError.notOpen {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
+            return try queueBrainStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                reason: "DB_NOT_OPEN"
+            )
         }
     }
 
-    private func queueBrainStore(content: String, tags: [String], importance: Int, source: String, project: String?) throws -> ToolOutput {
+    private func queueBrainStore(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        project: String?,
+        reason: String
+    ) throws -> ToolOutput {
         guard let dbPath else {
             throw ToolError.noDatabase
         }
@@ -532,7 +553,8 @@ final class MCPRouter: @unchecked Sendable {
             queueID: queued.queueID,
             queuedAt: queued.queuedAt,
             chunkID: queued.chunkID,
-            queuePath: BrainDatabase.pendingStoreQueuePathForReceipt(dbPath: dbPath)
+            queuePath: BrainDatabase.pendingStoreQueuePathForReceipt(dbPath: dbPath),
+            reason: reason
         )
     }
 
@@ -541,6 +563,7 @@ final class MCPRouter: @unchecked Sendable {
         queuedAt: String,
         chunkID: String,
         queuePath: URL,
+        reason: String = "DB_BUSY",
         flushedStores: [BrainDatabase.FlushedPendingStore] = []
     ) -> ToolOutput {
         ToolOutput(
@@ -554,7 +577,7 @@ final class MCPRouter: @unchecked Sendable {
                 "related": [] as [String],
                 "deferred": [
                     "status": "DEFERRED",
-                    "reason": "DB_BUSY",
+                    "reason": reason,
                     "chunk_id": chunkID,
                     "queue_id": queueID,
                     "queued_at": queuedAt,

@@ -64,6 +64,7 @@ final class MCPRouterTests: XCTestCase {
         queueID: String,
         queuedAt: String,
         queuePath: URL,
+        reason: String = "DB_BUSY",
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -75,7 +76,7 @@ final class MCPRouterTests: XCTestCase {
 
         let deferred = result["deferred"] as? [String: Any]
         XCTAssertEqual(deferred?["status"] as? String, "DEFERRED", file: file, line: line)
-        XCTAssertEqual(deferred?["reason"] as? String, "DB_BUSY", file: file, line: line)
+        XCTAssertEqual(deferred?["reason"] as? String, reason, file: file, line: line)
         XCTAssertEqual(deferred?["chunk_id"] as? String, chunkID, file: file, line: line)
         XCTAssertEqual(deferred?["queue_id"] as? String, queueID, file: file, line: line)
         XCTAssertEqual(deferred?["queued_at"] as? String, queuedAt, file: file, line: line)
@@ -1507,7 +1508,8 @@ final class MCPRouterTests: XCTestCase {
             chunkID: chunkID,
             queueID: queueID,
             queuedAt: queuedAt,
-            queuePath: queuePath
+            queuePath: queuePath,
+            reason: "DB_NOT_OPEN"
         )
         XCTAssertEqual(
             text,
@@ -1562,7 +1564,8 @@ final class MCPRouterTests: XCTestCase {
             chunkID: chunkID,
             queueID: queueID,
             queuedAt: queuedAt,
-            queuePath: queuePath
+            queuePath: queuePath,
+            reason: "DB_NOT_OPEN"
         )
         XCTAssertEqual(
             text,
