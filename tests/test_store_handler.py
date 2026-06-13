@@ -307,4 +307,7 @@ async def test_arbitrated_queue_fallback_returns_queued_chunk_id(tmp_path, monke
     assert expected_chunk_id != "queued"
     assert structured["chunk_id"] == expected_chunk_id
     assert structured["queued"] is True
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["reason"] == "ARBITRATED"
+    assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert any(expected_chunk_id in item.text for item in texts)

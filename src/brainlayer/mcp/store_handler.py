@@ -613,7 +613,7 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = _deferred_store_receipt(promised_chunk_id, queue_path)
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason="ARBITRATED")
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_pending_chunks, store_memory
