@@ -810,6 +810,8 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
     elif "source_file" in cols and source_file:
         scope_filters.append("source_file = ?")
         params.append(source_file)
+    else:
+        return None
 
     scope_clause = f" AND {' AND '.join(scope_filters)}" if scope_filters else ""
     row = cursor.execute(
@@ -1063,6 +1065,10 @@ def _ensure_provenance_class_column(store) -> bool:
 
 
 def _derive_chunk_provenance_class(chunk: dict[str, Any], content: str | None = None) -> str:
+    source = str(chunk.get("source") or "").strip().lower()
+    source_file = str(chunk.get("source_file") or "").strip().lower()
+    if source == "manual" and source_file in {"brainlayer-store", "brainbar-store"}:
+        return "RAW-ETAN-DIRECT"
     text = (chunk.get("content") or "") if content is None else (content or "")
     return derive_provenance_class(
         content_type=chunk.get("content_type"),

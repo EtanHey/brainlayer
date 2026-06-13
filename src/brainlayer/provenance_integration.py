@@ -471,6 +471,7 @@ def _entity_chunk_rows(conn, entity_ids: list[str], *, include_archived: bool = 
             {chunk_expr("created_at", "'1970-01-01T00:00:00Z'")},
             {chunk_expr("provenance_class")},
             {chunk_expr("source")},
+            {chunk_expr("source_file")},
             {chunk_expr("status", "'active'")},
             {chunk_expr("superseded_by")},
             {chunk_expr("archived", "0")},
@@ -490,6 +491,7 @@ def _entity_chunk_rows(conn, entity_ids: list[str], *, include_archived: bool = 
         "created_at",
         "provenance_class",
         "source",
+        "source_file",
         "status",
         "superseded_by",
         "archived",
@@ -504,11 +506,16 @@ def _row_to_claim(row: dict[str, Any], entity: str) -> Claim:
     attribute, value = _attribute_value(row.get("content") or "", row.get("context"), row.get("mention_type"))
     provenance_class = str(row.get("provenance_class") or "").strip()
     if not provenance_class:
-        provenance_class = derive_provenance_class(
-            content_type=row.get("content_type"),
-            sender=row.get("sender"),
-            text=str(row.get("content") or ""),
-        )
+        source = str(row.get("source") or "").strip().lower()
+        source_file = str(row.get("source_file") or "").strip().lower()
+        if source == "manual" and source_file in {"brainlayer-store", "brainbar-store"}:
+            provenance_class = RAW_ETAN_DIRECT
+        else:
+            provenance_class = derive_provenance_class(
+                content_type=row.get("content_type"),
+                sender=row.get("sender"),
+                text=str(row.get("content") or ""),
+            )
     return Claim(
         id=str(row["id"]),
         entity=entity,

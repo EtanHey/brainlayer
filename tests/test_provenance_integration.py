@@ -83,7 +83,7 @@ def test_enrichment_update_payload_derives_provenance_class():
     assert payload["provenance_class"] == "RAW-ETAN-DIRECT"
 
 
-def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classification():
+def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_classification():
     from brainlayer import enrichment_controller as controller
 
     conn = sqlite3.connect(":memory:")
@@ -110,13 +110,14 @@ def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classificati
     )
     conn.executemany(
         """
-        INSERT INTO chunks (id, content, content_type, sender, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO chunks (id, content, source_file, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 "assistant-prior",
                 "controlLayer is an umbrella for the file schema and policies.",
+                "session.jsonl",
                 "assistant_text",
                 "assistant",
                 "2026-06-12T10:00:00Z",
@@ -124,6 +125,7 @@ def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classificati
             (
                 "user-ack",
                 "yes exactly, controlLayer is the file schema and policies",
+                "session.jsonl",
                 "user_message",
                 "user",
                 "2026-06-12T10:01:00Z",
@@ -141,6 +143,65 @@ def test_get_chunk_readonly_hydrates_prev_assistant_for_endorsement_classificati
 
     assert chunk["prev_assistant_text"] == "controlLayer is an umbrella for the file schema and policies."
     assert payload["provenance_class"] == "ETAN-ENDORSEMENT"
+
+
+def test_get_chunk_readonly_does_not_use_global_prev_assistant_without_scope():
+    from brainlayer import enrichment_controller as controller
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            metadata TEXT,
+            source_file TEXT,
+            project TEXT,
+            content_type TEXT,
+            sender TEXT,
+            value_type TEXT,
+            tags TEXT,
+            importance INTEGER,
+            created_at TEXT,
+            summary TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived_at TEXT,
+            conversation_id TEXT
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "unrelated-assistant",
+                "controlLayer is an umbrella for the file schema and policies.",
+                "assistant_text",
+                "assistant",
+                "2026-06-12T10:00:00Z",
+            ),
+            (
+                "manual-note",
+                "yes exactly, controlLayer is the file schema and policies",
+                "note",
+                None,
+                "2026-06-12T10:01:00Z",
+            ),
+        ],
+    )
+
+    class ReadonlyStore:
+        def _read_cursor(self):
+            return conn.cursor()
+
+    chunk = controller._get_chunk_readonly(ReadonlyStore(), "manual-note")
+
+    assert chunk is not None
+    assert chunk["prev_assistant_text"] is None
 
 
 def test_get_chunk_readonly_fallback_includes_prev_assistant_key():
@@ -287,6 +348,45 @@ def test_direct_apply_enrichment_does_not_promote_manual_agent_note(con):
 
     row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-manual'").fetchone()
     assert row["provenance_class"] == "AGENT-INFERENCE"
+
+
+def test_direct_apply_enrichment_preserves_brainlayer_store_authority(con):
+    from brainlayer import enrichment_controller as controller
+
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, source_file, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "chunk-brain-store",
+            "PRIMARY_BACKEND: Groq",
+            "note",
+            None,
+            "manual",
+            "brainlayer-store",
+            "2026-06-08T16:40:00Z",
+        ),
+    )
+    store = Store(con)
+
+    controller._apply_enrichment(
+        store,
+        {
+            "id": "chunk-brain-store",
+            "content": "PRIMARY_BACKEND: Groq",
+            "content_type": "note",
+            "sender": None,
+            "source": "manual",
+            "source_file": "brainlayer-store",
+        },
+        {"summary": "summary", "entities": []},
+    )
+
+    row = con.execute("SELECT provenance_class FROM chunks WHERE id = 'chunk-brain-store'").fetchone()
+    assert row["provenance_class"] == "RAW-ETAN-DIRECT"
 
 
 def test_direct_apply_enrichment_preserves_explicit_user_authority(con):
@@ -1211,6 +1311,61 @@ def test_manual_note_without_provenance_class_does_not_outrank_direct_user(con):
     assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-manual-old'").fetchone()) == (
         "active",
         None,
+    )
+
+
+def test_brainlayer_store_note_without_provenance_class_is_user_anchored(con):
+    from brainlayer.provenance_integration import (
+        enqueue_provenance_resolution,
+        list_pending_confirm,
+        sweep_provenance_queue,
+    )
+
+    con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-enrichment', 'enrichment')")
+    con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
+    con.executemany(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, source, source_file, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "c-brain-store-old",
+                "PRIMARY_BACKEND: Groq",
+                "note",
+                None,
+                "manual",
+                "brainlayer-store",
+                "2026-03-26T00:00:00Z",
+                None,
+            ),
+            (
+                "c-direct-new",
+                "PRIMARY_BACKEND: Gemini",
+                "user_message",
+                "user",
+                "claude_code",
+                "session.jsonl",
+                "2026-06-09T00:00:00Z",
+                "RAW-ETAN-DIRECT",
+            ),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kg_entity_chunks (entity_id, chunk_id) VALUES ('e-enrichment', ?)",
+        [("c-brain-store-old",), ("c-direct-new",)],
+    )
+
+    enqueue_provenance_resolution(con, "enrichment", chunk_id="c-direct-new")
+    result = sweep_provenance_queue(con)
+
+    assert result.superseded_count == 1
+    assert list_pending_confirm(con) == []
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-brain-store-old'").fetchone()) == (
+        "superseded",
+        "c-direct-new",
     )
 
 
