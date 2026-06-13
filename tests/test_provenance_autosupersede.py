@@ -1,0 +1,647 @@
+"""Fixture-only tests for ingest-time provenance autosupersession.
+
+No live BrainLayer DB. The module under test is intentionally standalone:
+it gathers same-entity chunks, detects same-attribute contradictions, delegates
+authority to the provenance class gate, and only writes reversible supersedes
+when dry_run=False.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+
+@pytest.fixture
+def con(tmp_path):
+    conn = sqlite3.connect(tmp_path / "autosupersede_fixture.db")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            content_type TEXT,
+            sender TEXT,
+            created_at TEXT,
+            provenance_class TEXT,
+            status TEXT DEFAULT 'active',
+            superseded_by TEXT
+        );
+        CREATE TABLE kg_entities (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE kg_entity_aliases (
+            alias TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            PRIMARY KEY (alias, entity_id)
+        );
+        CREATE TABLE kg_entity_chunks (
+            entity_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            context TEXT,
+            mention_type TEXT,
+            PRIMARY KEY (entity_id, chunk_id)
+        );
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def _entity(conn, entity_id, name, *aliases):
+    conn.execute("INSERT INTO kg_entities (id, name) VALUES (?, ?)", (entity_id, name))
+    for alias in aliases:
+        conn.execute("INSERT INTO kg_entity_aliases (alias, entity_id) VALUES (?, ?)", (alias, entity_id))
+
+
+def _chunk(
+    conn,
+    chunk_id,
+    entity_id,
+    content,
+    *,
+    content_type="assistant_text",
+    sender="assistant",
+    created_at="2026-06-01T00:00:00Z",
+    provenance_class="AGENT-INFERENCE",
+    link=True,
+    context=None,
+    mention_type=None,
+):
+    conn.execute(
+        """
+        INSERT INTO chunks (id, content, content_type, sender, created_at, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (chunk_id, content, content_type, sender, created_at, provenance_class),
+    )
+    if link:
+        conn.execute(
+            "INSERT INTO kg_entity_chunks (entity_id, chunk_id, context, mention_type) VALUES (?, ?, ?, ?)",
+            (entity_id, chunk_id, context, mention_type),
+        )
+
+
+def _new_chunk(chunk_id, entity, content, *, provenance_class="RAW-ETAN-DIRECT", created_at="2026-06-09T00:00:00Z"):
+    return {
+        "id": chunk_id,
+        "entity": entity,
+        "content": content,
+        "content_type": "user_message",
+        "sender": "user",
+        "created_at": created_at,
+        "provenance_class": provenance_class,
+    }
+
+
+def test_gather_same_entity_uses_normalized_aliases(con):
+    from brainlayer.provenance_autosupersede import gather_same_entity
+
+    _entity(con, "e-nano", "nano claw")
+    _chunk(con, "c-old", "e-nano", "IDENTITY: HERMES_ADJACENT")
+
+    rows = gather_same_entity(con, "nanoClaw")
+
+    assert [row["id"] for row in rows] == ["c-old"]
+
+
+def test_gather_same_entity_isolates_exact_name_from_normalized_spellings(con):
+    from brainlayer.provenance_autosupersede import gather_same_entity
+
+    _entity(con, "e-nano-spaced", "nano claw")
+    _entity(con, "e-nano-camel", "nanoClaw")
+    _chunk(con, "c-spaced", "e-nano-spaced", "IDENTITY: HERMES_ADJACENT")
+    _chunk(con, "c-camel", "e-nano-camel", "IDENTITY: DISTINCT")
+
+    rows = gather_same_entity(con, "Nano Claw")
+
+    assert [row["id"] for row in rows] == ["c-spaced"]
+
+
+def test_gather_same_entity_keeps_exact_entity_match_isolated_from_normalized_fanout(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, gather_same_entity
+
+    _entity(con, "e-c", "C")
+    _entity(con, "e-cpp", "C++")
+    _entity(con, "e-csharp", "C#")
+    _chunk(con, "c-c", "e-c", "PRIMARY_BACKEND: C")
+    _chunk(con, "c-cpp", "e-cpp", "PRIMARY_BACKEND: C++")
+    _chunk(con, "c-csharp", "e-csharp", "PRIMARY_BACKEND: C#")
+
+    rows = gather_same_entity(con, "C++")
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-cpp", "C++", "PRIMARY_BACKEND: C++", provenance_class="RAW-ETAN-DIRECT"),
+        dry_run=False,
+    )
+
+    assert [row["id"] for row in rows] == ["c-cpp"]
+    assert report.candidate_count == 1
+    assert report.superseded_count == 0
+    status_rows = con.execute("SELECT id, status, superseded_by FROM chunks ORDER BY id").fetchall()
+    assert all(row["status"] == "active" and row["superseded_by"] is None for row in status_rows)
+
+
+def test_gather_same_entity_treats_ambiguous_normalized_fanout_as_noop(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, gather_same_entity
+
+    _entity(con, "e-c", "C")
+    _entity(con, "e-csharp", "C#")
+    _chunk(con, "c-c", "e-c", "PRIMARY_BACKEND: C")
+    _chunk(con, "c-csharp", "e-csharp", "PRIMARY_BACKEND: C#")
+
+    rows = gather_same_entity(con, "C!!!")
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-c", "C!!!", "PRIMARY_BACKEND: C", provenance_class="RAW-ETAN-DIRECT"),
+        dry_run=False,
+    )
+
+    assert rows == []
+    assert report.candidate_count == 0
+    assert report.superseded_count == 0
+    assert any("Ambiguous normalized entity fan-out" in note for note in report.notes)
+
+
+def test_detect_contradiction_requires_same_attribute_and_different_value():
+    from brainlayer.provenance_autosupersede import detect_contradiction
+
+    is_contradiction, attribute = detect_contradiction(
+        _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
+        {
+            "entity": "nanoClaw",
+            "content": "IDENTITY: HERMES_ADJACENT",
+            "context": None,
+            "mention_type": None,
+            "id": "c-old",
+        },
+    )
+
+    assert is_contradiction is True
+    assert attribute == "IDENTITY"
+
+    same_value, _ = detect_contradiction(
+        _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
+        {"entity": "nanoClaw", "content": "IDENTITY: DISTINCT", "context": None, "mention_type": None, "id": "c-agree"},
+    )
+    different_attribute, _ = detect_contradiction(
+        _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
+        {"entity": "nanoClaw", "content": "STATUS: ACTIVE", "context": None, "mention_type": None, "id": "c-status"},
+    )
+    assert same_value is False
+    assert different_attribute is False
+
+
+def test_detect_contradiction_requires_entity_on_both_chunks():
+    from brainlayer.provenance_autosupersede import detect_contradiction
+
+    is_contradiction, attribute = detect_contradiction(
+        _new_chunk("c-new", "nanoClaw", "IDENTITY: DISTINCT"),
+        {"content": "IDENTITY: HERMES_ADJACENT", "context": None, "mention_type": None, "id": "c-old"},
+    )
+
+    assert is_contradiction is False
+    assert attribute == ""
+
+
+def test_no_false_positive_for_agreeing_same_attribute_mentions(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-voice", "voicelayer")
+    for chunk_id, content_type, sender, provenance_class, created_at in [
+        ("c-direct", "user_message", "user", "RAW-ETAN-DIRECT", "2026-06-01T00:00:00Z"),
+        ("c-para-a", "assistant_text", "assistant", "AGENT-PARAPHRASE", "2026-06-02T00:00:00Z"),
+        ("c-para-b", "assistant_text", "assistant", "AGENT-PARAPHRASE", "2026-06-03T00:00:00Z"),
+    ]:
+        _chunk(
+            con,
+            chunk_id,
+            "e-voice",
+            "ENGINE: Theo voice via n4a zero-shot clone",
+            content_type=content_type,
+            sender=sender,
+            created_at=created_at,
+            provenance_class=provenance_class,
+        )
+    _chunk(
+        con,
+        "c-new",
+        "e-voice",
+        "ENGINE: Theo voice via n4a zero-shot clone",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk(
+            "c-new",
+            "voicelayer",
+            "ENGINE: Theo voice via n4a zero-shot clone",
+            provenance_class="AGENT-PARAPHRASE",
+        ),
+        dry_run=False,
+    )
+
+    assert report.contradiction_count == 0
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 0
+    assert report.authoritative_by_attribute["ENGINE"] == "c-direct"
+    rows = con.execute("SELECT id, status, superseded_by FROM chunks ORDER BY id").fetchall()
+    assert all(row["status"] == "active" and row["superseded_by"] is None for row in rows)
+
+
+def test_no_false_positive_for_cross_attribute_pairs(con):
+    from brainlayer.provenance_autosupersede import auto_supersede, detect_contradiction
+
+    _entity(con, "e-voice", "voicelayer")
+    _chunk(
+        con,
+        "c-engine",
+        "e-voice",
+        "ENGINE: Theo voice via n4a zero-shot clone",
+        content_type="user_message",
+        sender="user",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+    _chunk(
+        con,
+        "c-review",
+        "e-voice",
+        "REVIEW_CADENCE: weekly",
+        content_type="assistant_text",
+        sender="assistant",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+
+    is_contradiction, _attribute = detect_contradiction(
+        _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
+        {
+            "entity": "voicelayer",
+            "content": "REVIEW_CADENCE: weekly",
+            "context": None,
+            "mention_type": None,
+            "id": "c-review",
+        },
+    )
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new", "voicelayer", "ENGINE: Theo voice via n4a zero-shot clone"),
+        dry_run=False,
+    )
+
+    assert is_contradiction is False
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 0
+
+
+def test_apply_mode_skips_unstructured_mentions(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-repo", "BrainLayer")
+    _chunk(
+        con,
+        "c-old-mention",
+        "e-repo",
+        "BrainLayer uses local sqlite memory",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-01T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+    _chunk(
+        con,
+        "c-new-mention",
+        "e-repo",
+        "BrainLayer exposes MCP tools",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk("c-new-mention", "BrainLayer", "BrainLayer exposes MCP tools"),
+        dry_run=False,
+    )
+
+    assert "MENTION" not in report.attribute_dispositions
+    assert report.superseded_count == 0
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-mention'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_apply_mode_skips_mention_type_only_tag_links(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-repo", "BrainLayer")
+    _chunk(
+        con,
+        "c-old-tag",
+        "e-repo",
+        "BrainLayer sqlite memory",
+        content_type="assistant_text",
+        sender="assistant",
+        created_at="2026-06-01T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+        mention_type="tag",
+    )
+
+    report = auto_supersede(
+        con,
+        {
+            "id": "c-new-tag",
+            "entity": "BrainLayer",
+            "content": "BrainLayer MCP tools",
+            "content_type": "user_message",
+            "sender": "user",
+            "created_at": "2026-06-09T00:00:00Z",
+            "mention_type": "tag",
+        },
+        dry_run=False,
+    )
+
+    assert report.contradiction_count == 0
+    assert "TAG" not in report.attribute_dispositions
+    assert report.superseded_count == 0
+    assert "Skipped unstructured new chunk" in report.notes
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-tag'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_multi_attribute_divergent_resolution_in_one_call(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-control", "controlLayer")
+    _chunk(
+        con,
+        "c-definition",
+        "e-control",
+        "DEFINITION: FILE_SCHEMA_AND_POLICIES",
+        content_type="user_message",
+        sender="user",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+
+    report = auto_supersede(
+        con,
+        {
+            "id": "c-new",
+            "entity": "controlLayer",
+            "content": "controlLayer definition and arbitration update",
+            "content_type": "user_message",
+            "sender": "user",
+            "created_at": "2026-06-09T00:00:00Z",
+            "claims": [
+                {
+                    "attribute": "DEFINITION",
+                    "value": "FILE_SCHEMA_AND_POLICIES",
+                    "provenance_class": "RAW-ETAN-DIRECT",
+                },
+                {
+                    "attribute": "ARBITRATION",
+                    "value": "CONTROLLAYER_DECIDES_VOICEBAR_ENFORCES",
+                    "provenance_class": "AGENT-INFERENCE",
+                },
+            ],
+        },
+        dry_run=True,
+    )
+
+    assert report.superseded_count == 0
+    assert report.pending_confirm_count == 1
+    assert report.attribute_dispositions["DEFINITION"] == "RESOLVED"
+    assert report.attribute_dispositions["ARBITRATION"] == "PENDING-USER-CONFIRM"
+    assert report.authoritative_by_attribute["DEFINITION"] == "c-new"
+    assert report.authoritative_by_attribute["ARBITRATION"] is None
+
+
+def test_nanoclaw_supersedes_stale_direct_and_flags_agent_inference(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-nano", "nano claw")
+    _chunk(
+        con,
+        "c-old-direct",
+        "e-nano",
+        "IDENTITY: HERMES_ADJACENT",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-08T14:31:46Z",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+    _chunk(
+        con,
+        "c-inference",
+        "e-nano",
+        "IDENTITY: GROWS_TOWARD_HERMES",
+        created_at="2026-06-08T15:50:38Z",
+        provenance_class="AGENT-INFERENCE",
+    )
+    _chunk(
+        con,
+        "c-new-direct",
+        "e-nano",
+        "IDENTITY: DISTINCT",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-08T18:50:44Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(con, _new_chunk("c-new-direct", "nanoClaw", "IDENTITY: DISTINCT"), dry_run=False)
+
+    assert report.superseded_count == 1
+    assert report.pending_confirm_count == 1
+    assert report.would_supersede_count == 1
+    assert (report.entity, report.contradiction_count) == ("nano claw", 2)
+    assert {decision.action for decision in report.decisions} == {"SUPERSEDE", "PENDING-USER-CONFIRM"}
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-old-direct'").fetchone()) == (
+        "superseded",
+        "c-new-direct",
+    )
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-inference'").fetchone()) == (
+        "active",
+        None,
+    )
+
+
+def test_groq_to_gemini_operational_evidence_can_supersede_stale_status(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-provider", "provider router")
+    _chunk(
+        con,
+        "c-groq",
+        "e-provider",
+        "PRIMARY_BACKEND: Groq",
+        created_at="2026-03-26T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+    _chunk(
+        con,
+        "c-gemini",
+        "e-provider",
+        "PRIMARY_BACKEND: Gemini",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="OPERATIONAL-EVIDENCE",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk(
+            "c-gemini",
+            "provider router",
+            "PRIMARY_BACKEND: Gemini",
+            provenance_class="OPERATIONAL-EVIDENCE",
+        ),
+        dry_run=False,
+        enable_operational_evidence=True,
+    )
+
+    assert report.superseded_count == 1
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-groq'").fetchone()) == (
+        "superseded",
+        "c-gemini",
+    )
+
+
+def test_db_path_canonical_brainlayer_supersedes_old_zikaron(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-db", "BrainLayer database")
+    _chunk(
+        con,
+        "c-zikaron",
+        "e-db",
+        "DB_PATH: ~/.local/share/zikaron/zikaron.db",
+        created_at="2026-01-01T00:00:00Z",
+        provenance_class="AGENT-PARAPHRASE",
+    )
+    _chunk(
+        con,
+        "c-brainlayer",
+        "e-db",
+        "DB_PATH: ~/.local/share/brainlayer/brainlayer.db",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk("c-brainlayer", "BrainLayer database", "DB_PATH: ~/.local/share/brainlayer/brainlayer.db"),
+        dry_run=False,
+    )
+
+    assert report.superseded_count == 1
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-zikaron'").fetchone()) == (
+        "superseded",
+        "c-brainlayer",
+    )
+
+
+def test_mcp_tool_count_same_class_uses_recency_and_supersedes_prior_counts(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-mcp", "MCP tool count")
+    for chunk_id, value, created_at in [
+        ("c-14", "14", "2026-06-01T00:00:00Z"),
+        ("c-3", "3", "2026-06-02T00:00:00Z"),
+        ("c-12", "12", "2026-06-03T00:00:00Z"),
+    ]:
+        _chunk(
+            con,
+            chunk_id,
+            "e-mcp",
+            f"MCP_TOOL_COUNT: {value}",
+            content_type="user_message",
+            sender="user",
+            created_at=created_at,
+            provenance_class="RAW-ETAN-DIRECT",
+        )
+    _chunk(
+        con,
+        "c-13",
+        "e-mcp",
+        "MCP_TOOL_COUNT: 13",
+        content_type="user_message",
+        sender="user",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(con, _new_chunk("c-13", "MCP tool count", "MCP_TOOL_COUNT: 13"), dry_run=False)
+
+    assert report.superseded_count == 3
+    superseded = con.execute(
+        """
+        SELECT id, status, superseded_by
+        FROM chunks
+        WHERE id IN ('c-14', 'c-3', 'c-12')
+        ORDER BY id
+        """
+    ).fetchall()
+    assert [tuple(row) for row in superseded] == [
+        ("c-12", "superseded", "c-13"),
+        ("c-14", "superseded", "c-13"),
+        ("c-3", "superseded", "c-13"),
+    ]
+
+
+def test_personal_entity_is_skipped_and_never_auto_superseded(con):
+    from brainlayer.provenance_autosupersede import auto_supersede
+
+    _entity(con, "e-journal", "journal")
+    _chunk(
+        con,
+        "c-health-old",
+        "e-journal",
+        "HEALTH_STATUS: recovering",
+        content_type="journal",
+        sender="user",
+        created_at="2026-06-01T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+    )
+    _chunk(
+        con,
+        "c-health-new",
+        "e-journal",
+        "HEALTH_STATUS: recovered",
+        content_type="journal",
+        sender="user",
+        created_at="2026-06-09T00:00:00Z",
+        provenance_class="RAW-ETAN-DIRECT",
+        link=False,
+    )
+
+    report = auto_supersede(
+        con,
+        _new_chunk("c-health-new", "journal", "HEALTH_STATUS: recovered"),
+        dry_run=False,
+    )
+
+    assert report.skipped_reason == "skipped: personal"
+    assert report.superseded_count == 0
+    assert report.decisions[0].action == "SKIP"
+    assert tuple(con.execute("SELECT status, superseded_by FROM chunks WHERE id = 'c-health-old'").fetchone()) == (
+        "active",
+        None,
+    )

@@ -53,6 +53,7 @@ class SessionMixin:
             return []
 
         cursor = self._read_cursor()
+        cols = {str(row[1]) for row in cursor.execute("PRAGMA table_info(chunks)")}
         effective_min = max(min_content_length, source_aware_min_chars(source))
         where = ["enriched_at IS NULL", "enrich_status IS NULL", "char_count >= ?"]
         params: list[Any] = [effective_min]
@@ -77,21 +78,25 @@ class SessionMixin:
         order_clause = "DESC" if order != "oldest" else "ASC"
         params.append(limit)
 
+        prev_assistant_expr = self._previous_assistant_text_candidate_expr(cols)
+
         results = list(
             cursor.execute(
                 f"""
-                SELECT id, content, source_file, project, content_type,
-                       conversation_id, position, char_count, source, created_at
-                FROM chunks
+                SELECT c.id, c.content, c.source_file, c.project, c.content_type,
+                       c.conversation_id, c.position, c.char_count, c.source, c.created_at,
+                       {"c.sender" if "sender" in cols else "NULL AS sender"},
+                       {prev_assistant_expr}
+                FROM chunks c
                 WHERE {" AND ".join(where)}
-                ORDER BY rowid {order_clause}
+                ORDER BY c.rowid {order_clause}
                 LIMIT ?
                 """,
                 params,
             )
         )
 
-        return [
+        candidates = [
             {
                 "id": row[0],
                 "content": row[1],
@@ -103,9 +108,85 @@ class SessionMixin:
                 "char_count": row[7],
                 "source": row[8],
                 "created_at": row[9],
+                "sender": row[10],
+                "prev_assistant_text": row[11],
             }
             for row in results
         ]
+        return candidates
+
+    def _previous_assistant_text_candidate_expr(self, cols: set[str]) -> str:
+        if "created_at" not in cols or "content" not in cols:
+            return "NULL AS prev_assistant_text"
+
+        assistant_filters: list[str] = []
+        if "content_type" in cols:
+            assistant_filters.append("pa.content_type = 'assistant_text'")
+        if "sender" in cols:
+            assistant_filters.append("lower(pa.sender) = 'assistant'")
+        if not assistant_filters:
+            return "NULL AS prev_assistant_text"
+
+        scope_filters: list[str] = []
+        if "conversation_id" in cols:
+            scope_filters.append(
+                """
+                (
+                    c.conversation_id IS NOT NULL
+                    AND trim(c.conversation_id) != ''
+                    AND pa.conversation_id = c.conversation_id
+                )
+                """
+            )
+        if "source_file" in cols and "project" in cols:
+            fallback_requires_missing_conversation = (
+                "(c.conversation_id IS NULL OR trim(c.conversation_id) = '')" if "conversation_id" in cols else "1 = 1"
+            )
+            scope_filters.append(
+                f"""
+                (
+                    {fallback_requires_missing_conversation}
+                    AND c.source_file IS NOT NULL
+                    AND trim(c.source_file) != ''
+                    AND c.project IS NOT NULL
+                    AND trim(c.project) != ''
+                    AND pa.source_file = c.source_file
+                    AND pa.project = c.project
+                )
+                """
+            )
+        if not scope_filters:
+            return "NULL AS prev_assistant_text"
+
+        position_tie_break = (
+            """
+            OR (
+                julianday(pa.created_at) = julianday(c.created_at)
+                AND c.position IS NOT NULL
+                AND pa.position IS NOT NULL
+                AND pa.position < c.position
+            )
+            """
+            if "position" in cols
+            else ""
+        )
+        position_order = ", pa.position DESC" if "position" in cols else ""
+        return f"""
+            (
+                SELECT pa.content
+                FROM chunks pa
+                WHERE pa.id != c.id
+                  AND (
+                      julianday(pa.created_at) < julianday(c.created_at)
+                      {position_tie_break}
+                  )
+                  AND ({" OR ".join(assistant_filters)})
+                  AND pa.content IS NOT NULL
+                  AND ({" OR ".join(scope_filters)})
+                ORDER BY julianday(pa.created_at) DESC, pa.created_at DESC{position_order}
+                LIMIT 1
+            ) AS prev_assistant_text
+        """
 
     def update_enrichment(
         self,

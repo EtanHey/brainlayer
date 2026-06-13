@@ -207,6 +207,12 @@ final class BrainDatabase: @unchecked Sendable {
         let rowID: Int64
     }
 
+    struct StoredChunkDetails: Sendable, Equatable {
+        let content: String
+        let tags: [String]
+        let importance: Int
+    }
+
     struct FlushedPendingStore: Sendable {
         let storedChunk: StoredChunk
         let content: String
@@ -324,6 +330,7 @@ final class BrainDatabase: @unchecked Sendable {
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
     var failNextStoreAfterInsertForTesting = false
+    var failNextStoreWithBusyForTesting = false
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -957,11 +964,16 @@ final class BrainDatabase: @unchecked Sendable {
         importance: Int,
         source: String,
         project: String? = nil,
-        busyTimeoutMillis: Int32 = 50
+        busyTimeoutMillis: Int32 = 30_000,
+        retries: Int = 3
     ) throws -> StoreWriteOutcome {
         let chunkID = Self.makeChunkID()
         let createdAt = Self.timestamp()
         do {
+            if failNextStoreWithBusyForTesting {
+                failNextStoreWithBusyForTesting = false
+                throw DBError.exec(SQLITE_BUSY, "simulated busy store for queue fallback")
+            }
             let stored = try store(
                 content: content,
                 tags: tags,
@@ -971,7 +983,7 @@ final class BrainDatabase: @unchecked Sendable {
                 chunkID: chunkID,
                 createdAt: createdAt,
                 refreshStatistics: true,
-                retries: 0,
+                retries: retries,
                 busyTimeoutMillis: busyTimeoutMillis
             )
             return .stored(stored)
@@ -1054,6 +1066,14 @@ final class BrainDatabase: @unchecked Sendable {
         )
     }
 
+    func pendingStoreQueuePathForReceipt() -> URL {
+        pendingStorePath()
+    }
+
+    static func pendingStoreQueuePathForReceipt(dbPath: String) -> URL {
+        pendingStorePath(forDBPath: dbPath)
+    }
+
     @discardableResult
     static func queuePendingStore(
         dbPath: String,
@@ -1094,7 +1114,7 @@ final class BrainDatabase: @unchecked Sendable {
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
-    func flushPendingStores() -> [FlushedPendingStore] {
+    func flushPendingStores(excludingChunkIDs excludedChunkIDs: Set<String> = []) -> [FlushedPendingStore] {
         let path = pendingStorePath()
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
@@ -1126,6 +1146,10 @@ final class BrainDatabase: @unchecked Sendable {
                     let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
                     let chunkID = item.chunkID ?? Self.makeChunkID()
                     let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID, chunkID: chunkID) ?? line
+                    if excludedChunkIDs.contains(chunkID) {
+                        remaining.append(replayLine)
+                        continue
+                    }
                     do {
                         if try hasStoredQueuedItem(queueID: queueID) {
                             continue
@@ -1469,6 +1493,24 @@ final class BrainDatabase: @unchecked Sendable {
         bindText(chunkID, to: stmt, index: 1)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         return sqlite3_column_int64(stmt, 0)
+    }
+
+    func storedChunkDetails(chunkID: String, rowID: Int64) throws -> StoredChunkDetails? {
+        guard let db else { throw DBError.notOpen }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(db, "SELECT content, tags, importance FROM chunks WHERE id = ? AND rowid = ?", -1, &stmt, nil)
+        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
+        defer { sqlite3_finalize(stmt) }
+        bindText(chunkID, to: stmt, index: 1)
+        sqlite3_bind_int64(stmt, 2, rowID)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let content = columnText(stmt, 0) ?? ""
+        let tagsJSON = columnText(stmt, 1) ?? "[]"
+        let tagsData = Data(tagsJSON.utf8)
+        let tags = (try? JSONDecoder().decode([String].self, from: tagsData)) ?? []
+        let importance = Int(sqlite3_column_int(stmt, 2))
+        return StoredChunkDetails(content: content, tags: tags, importance: importance)
     }
 
     func unreadCount(agentID: String, tags: [String]? = nil) throws -> Int {

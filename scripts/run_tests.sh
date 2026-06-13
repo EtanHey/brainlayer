@@ -8,11 +8,22 @@ BRAINLAYER_USE_UV="${BRAINLAYER_USE_UV:-1}"
 UNIT_MARK_EXPR="${BRAINLAYER_PYTEST_MARK_EXPR:-not integration and not live}"
 BRAINLAYER_PREPUSH="${BRAINLAYER_PREPUSH:-0}"
 BRAINLAYER_PREPUSH_SCOPE="${BRAINLAYER_PREPUSH_SCOPE:-full}"
-BRAINLAYER_PREPUSH_CACHE_DIR="${BRAINLAYER_PREPUSH_CACHE_DIR:-$ROOT_DIR/.git/brainlayer-prepush-cache}"
 exit_status=0
 declare -a targeted_pytest_files=()
 changed_source_unmapped=0
 changed_files_seen=0
+
+default_prepush_cache_dir() {
+  local git_dir
+  git_dir="$(git -C "$ROOT_DIR" rev-parse --git-path brainlayer-prepush-cache 2>/dev/null || true)"
+  if [ -n "$git_dir" ]; then
+    printf '%s\n' "$git_dir"
+  else
+    printf '%s\n' "$ROOT_DIR/.git/brainlayer-prepush-cache"
+  fi
+}
+
+BRAINLAYER_PREPUSH_CACHE_DIR="${BRAINLAYER_PREPUSH_CACHE_DIR:-$(default_prepush_cache_dir)}"
 
 REAL_DB_TEST_FILES=(
   "test_vector_store.py"

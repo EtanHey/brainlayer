@@ -284,6 +284,8 @@ def _file_is_redundant_enrichment(conn: apsw.Connection, events: list[dict[str, 
         return False
     states = _chunk_states(conn, chunk_ids)
     for event in events:
+        if "entities" in event:
+            return False
         chunk_id = str(event["chunk_id"])
         expected_hash = event.get("content_hash")
         if not expected_hash:

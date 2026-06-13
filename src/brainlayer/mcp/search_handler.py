@@ -1622,6 +1622,8 @@ async def _search(
                         "date": meta.get("created_at", "")[:10] if meta.get("created_at") else None,
                         "importance": meta.get("importance"),
                         "summary": meta.get("summary"),
+                        "provenance_class": meta.get("provenance_class"),
+                        "superseded_by": meta.get("superseded_by"),
                         "tags": [str(t) for t in meta["tags"][:5]]
                         if meta.get("tags") and isinstance(meta["tags"], list)
                         else None,
@@ -1653,6 +1655,10 @@ async def _search(
                 item["source"] = meta["source"]
             if meta.get("summary"):
                 item["summary"] = meta["summary"]
+            if meta.get("provenance_class"):
+                item["provenance_class"] = meta["provenance_class"]
+            if meta.get("superseded_by"):
+                item["superseded_by"] = meta["superseded_by"]
             if meta.get("tags") and isinstance(meta["tags"], list):
                 item["tags"] = [str(t) for t in meta["tags"][:5]]
             if meta.get("intent"):

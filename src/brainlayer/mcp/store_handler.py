@@ -1,10 +1,12 @@
 """Store, update, and digest MCP handlers."""
 
 import asyncio
+import fcntl
 import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import apsw
@@ -409,12 +411,49 @@ async def _brain_archive(
 
 def _get_pending_store_path():
     """Path for the store queue buffer file."""
-    from ..paths import DEFAULT_DB_PATH
+    from ..paths import get_db_path
 
-    return DEFAULT_DB_PATH.parent / "pending-stores.jsonl"
+    return get_db_path().parent / "pending-stores.jsonl"
 
 
-def _queue_store(item: dict) -> None:
+def _atomic_rewrite_pending_store(path, lines: list[str]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _pending_store_file_lock(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _pending_store_lock_path(path)
+    with open(lock_path, "a") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _pending_store_lock_path(path):
+    return path.parent / f".{path.name}.lock"
+
+
+def _queue_store(item: dict):
     """Buffer a store request to JSONL when DB is locked.
 
     Enforces _QUEUE_MAX_SIZE: if the file exceeds the limit, oldest lines
@@ -425,34 +464,50 @@ def _queue_store(item: dict) -> None:
     try:
         from ..queue_io import enqueue_store
 
-        enqueue_store(**item, source="mcp")
-        return
+        return enqueue_store(**item, source="mcp")
     except Exception:
         logger.debug("Unified queue write failed; falling back to pending-stores.jsonl", exc_info=True)
 
     path = _get_pending_store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    with _pending_store_file_lock(path):
+        # Legacy fallback file shares this lock with the flusher to avoid append/rewrite loss.
+        with open(path, "a") as f:
+            f.write(json.dumps(item) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
-    # Append the new item
-    with open(path, "a") as f:
-        f.write(json.dumps(item) + "\n")
+        # Enforce max size — read, trim oldest, atomic rewrite via tempfile
+        try:
+            lines = path.read_text().strip().splitlines()
+            if len(lines) > _QUEUE_MAX_SIZE:
+                trimmed = lines[-_QUEUE_MAX_SIZE:]
+                _atomic_rewrite_pending_store(path, trimmed)
+                logger.warning(
+                    "Pending store queue trimmed: %d -> %d (dropped %d oldest)",
+                    len(lines),
+                    _QUEUE_MAX_SIZE,
+                    len(lines) - _QUEUE_MAX_SIZE,
+                )
+        except Exception:
+            logger.debug("Queue trim failed (non-critical)", exc_info=True)
+    return path
 
-    # Enforce max size — read, trim oldest, atomic rewrite via tempfile
-    try:
-        lines = path.read_text().strip().splitlines()
-        if len(lines) > _QUEUE_MAX_SIZE:
-            trimmed = lines[-_QUEUE_MAX_SIZE:]
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text("\n".join(trimmed) + "\n")
-            tmp.rename(path)  # atomic on POSIX
-            logger.warning(
-                "Pending store queue trimmed: %d -> %d (dropped %d oldest)",
-                len(lines),
-                _QUEUE_MAX_SIZE,
-                len(lines) - _QUEUE_MAX_SIZE,
-            )
-    except Exception:
-        logger.debug("Queue trim failed (non-critical)", exc_info=True)
+
+def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY") -> dict:
+    action = "queued_for_replay" if str(queue_path).endswith("pending-stores.jsonl") else "queued_for_drain"
+    return {
+        "chunk_id": chunk_id,
+        "queued": True,
+        "status": "DEFERRED",
+        "related": [],
+        "deferred": {
+            "status": "DEFERRED",
+            "reason": reason,
+            "chunk_id": chunk_id,
+            "queue_path": str(queue_path),
+            "action": action,
+        },
+    }
 
 
 def _flush_pending_stores(store, embed_fn) -> int:
@@ -460,58 +515,64 @@ def _flush_pending_stores(store, embed_fn) -> int:
     from ..store import store_memory
 
     path = _get_pending_store_path()
-    if not path.exists():
-        return 0
+    with _pending_store_file_lock(path):
+        if not path.exists():
+            return 0
 
-    try:
-        lines = path.read_text().strip().splitlines()
-    except Exception:
-        logger.warning("Failed to read pending stores file: %s", path)
-        return 0
-
-    if not lines:
-        return 0
-
-    flushed = 0
-    remaining = []
-    for line in lines:
         try:
-            item = json.loads(line)
-            result = store_memory(
-                store=store,
-                embed_fn=embed_fn,
-                content=item["content"],
-                memory_type=item["memory_type"],
-                project=item.get("project"),
-                tags=item.get("tags"),
-                importance=item.get("importance"),
-                confidence_score=item.get("confidence_score"),
-                outcome=item.get("outcome"),
-                reversibility=item.get("reversibility"),
-                files_changed=item.get("files_changed"),
-                entity_id=item.get("entity_id"),
-                status=item.get("status"),
-                severity=item.get("severity"),
-                file_path=item.get("file_path"),
-                function_name=item.get("function_name"),
-                line_number=item.get("line_number"),
-                chunk_id=item.get("chunk_id"),
-                created_at=_reservation_created_at(item),
-            )
-            if item.get("supersedes"):
-                if not store.supersede_chunk(item["supersedes"], result["id"]):
-                    raise RuntimeError(f"failed to supersede queued chunk {item['supersedes']} with {result['id']}")
-            flushed += 1
-        except Exception as e:
-            logger.warning("Failed to flush pending store item: %s", e)
-            remaining.append(line)
+            lines = path.read_text().strip().splitlines()
+        except Exception:
+            logger.warning("Failed to read pending stores file: %s", path)
+            return 0
 
-    if remaining:
-        path.write_text("\n".join(remaining) + "\n")
-    else:
-        path.unlink(missing_ok=True)
+        if not lines:
+            return 0
 
-    return flushed
+        flushed = 0
+        remaining = []
+        for line in lines:
+            try:
+                item = json.loads(line)
+                result = store_memory(
+                    store=store,
+                    embed_fn=embed_fn,
+                    content=item["content"],
+                    memory_type=item.get("memory_type", "note"),
+                    project=item.get("project"),
+                    tags=item.get("tags"),
+                    importance=item.get("importance"),
+                    confidence_score=item.get("confidence_score"),
+                    outcome=item.get("outcome"),
+                    reversibility=item.get("reversibility"),
+                    files_changed=item.get("files_changed"),
+                    entity_id=item.get("entity_id"),
+                    status=item.get("status"),
+                    severity=item.get("severity"),
+                    file_path=item.get("file_path"),
+                    function_name=item.get("function_name"),
+                    line_number=item.get("line_number"),
+                    chunk_id=item.get("chunk_id"),
+                    created_at=_reservation_created_at(item),
+                )
+                if item.get("supersedes"):
+                    if not store.supersede_chunk(item["supersedes"], result["id"]):
+                        logger.error(
+                            "Failed to supersede queued chunk %s with durable replacement %s",
+                            item["supersedes"],
+                            result["id"],
+                        )
+                flushed += 1
+            except Exception as e:
+                logger.warning("Failed to flush pending store item: %s", e)
+                remaining.append(line)
+
+        # Legacy fallback file shares this lock with appends to avoid dropping late arrivals.
+        if remaining:
+            _atomic_rewrite_pending_store(path, remaining)
+        else:
+            path.unlink(missing_ok=True)
+
+        return flushed
 
 
 async def _store_memory_with_retries(store_memory, **kwargs):
@@ -574,7 +635,7 @@ async def _store(
             reject_recursive_mcp_output(content)
             if looks_like_system_prompt(content):
                 raise ValueError("system prompt content is not stored in BrainLayer")
-            _queue_store(
+            queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
                     "content": content,
@@ -597,7 +658,7 @@ async def _store(
                 }
             )
             clear_hybrid_search_cache()
-            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason="ARBITRATED")
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
         from ..store import embed_pending_chunks, store_memory
@@ -691,7 +752,7 @@ async def _store(
         return _error_result(f"Validation error: {str(e)}")
     except Exception as e:
         if _is_lock_error(e):
-            _queue_store(
+            queue_path = _queue_store(
                 {
                     "chunk_id": promised_chunk_id,
                     "content": content,
@@ -713,7 +774,7 @@ async def _store(
                     "created_at": reservation_created_at,
                 }
             )
-            structured = {"chunk_id": promised_chunk_id, "queued": True, "related": []}
+            structured = _deferred_store_receipt(promised_chunk_id, queue_path)
             formatted = format_store_result(promised_chunk_id, queued=True)
             return (
                 [TextContent(type="text", text=formatted)],

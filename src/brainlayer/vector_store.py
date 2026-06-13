@@ -493,6 +493,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
         self._has_chunk_origin = "chunk_origin" in chunk_columns
         self._has_content_class = "content_class" in chunk_columns
+        self._has_provenance_class = "provenance_class" in chunk_columns
+        self._has_superseded_by = "superseded_by" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._chunk_tags_available = "chunk_tags" in existing_tables
@@ -586,6 +588,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 position INTEGER,
                 context_summary TEXT,
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                provenance_class TEXT,
                 chunk_origin TEXT DEFAULT 'unknown',
                 content_class TEXT DEFAULT 'knowledge'
             )
@@ -638,6 +641,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("key_facts", "TEXT"),
             ("resolved_queries", "TEXT"),
             ("raw_entities_json", "TEXT"),
+            ("provenance_class", "TEXT"),
             ("epistemic_level", "TEXT"),
             ("version_scope", "TEXT"),
             ("debt_impact", "TEXT"),
@@ -680,6 +684,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 cursor.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
         self._has_chunk_origin = True
         self._has_content_class = True
+        self._has_provenance_class = True
+        self._has_superseded_by = True
         ensure_dedupe_schema(self.conn)
 
         migration_name = "2026_05_16_fm6_chunk_origin"

@@ -30,6 +30,60 @@ def test_cli_enrich_mode_realtime_routes_to_controller(monkeypatch):
     assert called["since_hours"] == 12
 
 
+def test_cli_provenance_sweep_routes_to_answer_leg(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
+    called = {}
+
+    def fake_sweep(store, limit=100, enable_operational_evidence=False):
+        called.update(
+            {
+                "store": store,
+                "limit": limit,
+                "enable_operational_evidence": enable_operational_evidence,
+            }
+        )
+        return SimpleNamespace(swept=2, superseded_count=1, pending_confirm_count=1, skipped_personal_count=0)
+
+    monkeypatch.setattr("brainlayer.provenance_integration.sweep_provenance_queue", fake_sweep)
+
+    result = runner.invoke(app, ["provenance", "sweep", "--limit", "2", "--operational-evidence"])
+
+    assert result.exit_code == 0
+    assert called["limit"] == 2
+    assert called["enable_operational_evidence"] is True
+    assert "swept=2" in result.stdout
+    assert "superseded=1" in result.stdout
+
+
+def test_cli_provenance_pending_lists_confirm_and_reject_actions(monkeypatch):
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
+    monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
+    monkeypatch.setattr(
+        "brainlayer.provenance_integration.list_pending_confirm",
+        lambda store: [
+            {
+                "id": "pending-control",
+                "entity": "controlLayer",
+                "attribute": "ARBITRATION",
+                "value": "CONTROLLAYER_DECIDES",
+                "chunk_id": "c-infer",
+                "provenance_class": "AGENT-INFERENCE",
+                "reason": "test reason",
+                "created_at": "2026-06-01T00:00:00Z",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["provenance", "pending"])
+
+    assert result.exit_code == 0
+    assert (
+        "pending-control · controlLayer · ARBITRATION · CONTROLLAYER_DECIDES · chunk=c-infer · confirm|reject"
+        in result.stdout
+    )
+
+
 def test_cli_enrich_supervisor_routes_to_controller(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}

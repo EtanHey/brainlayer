@@ -58,6 +58,32 @@ private func collectStringArrays(in schema: [String: Any], path: String = "") ->
 }
 
 final class MCPRouterTests: XCTestCase {
+    private func assertDeferredBrainStoreReceipt(
+        _ result: [String: Any],
+        chunkID: String,
+        queueID: String,
+        queuedAt: String,
+        queuePath: URL,
+        reason: String = "DB_BUSY",
+        expectedAction: String = "queued_for_replay",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(result["queued"] as? Bool, true, file: file, line: line)
+        XCTAssertEqual(result["status"] as? String, "DEFERRED", file: file, line: line)
+        XCTAssertEqual(result["chunk_id"] as? String, chunkID, file: file, line: line)
+        XCTAssertEqual(result["queue_id"] as? String, queueID, file: file, line: line)
+        XCTAssertEqual(result["queued_at"] as? String, queuedAt, file: file, line: line)
+
+        let deferred = result["deferred"] as? [String: Any]
+        XCTAssertEqual(deferred?["status"] as? String, "DEFERRED", file: file, line: line)
+        XCTAssertEqual(deferred?["reason"] as? String, reason, file: file, line: line)
+        XCTAssertEqual(deferred?["chunk_id"] as? String, chunkID, file: file, line: line)
+        XCTAssertEqual(deferred?["queue_id"] as? String, queueID, file: file, line: line)
+        XCTAssertEqual(deferred?["queued_at"] as? String, queuedAt, file: file, line: line)
+        XCTAssertEqual(deferred?["queue_path"] as? String, queuePath.path, file: file, line: line)
+        XCTAssertEqual(deferred?["action"] as? String, expectedAction, file: file, line: line)
+    }
 
     // MARK: - Initialize
 
@@ -1478,9 +1504,17 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(queueID.isEmpty)
         XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath,
+            reason: "DB_NOT_OPEN"
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -1522,11 +1556,21 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result["queued"] as? Bool, true)
         XCTAssertFalse((result["queue_id"] as? String ?? "").isEmpty)
         XCTAssertFalse((result["queued_at"] as? String ?? "").isEmpty)
+        let queueID = try XCTUnwrap(result["queue_id"] as? String)
+        let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
         let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
         let text = try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath,
+            reason: "DB_NOT_OPEN"
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
 
@@ -1546,12 +1590,7 @@ final class MCPRouterTests: XCTestCase {
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
-        db.exec("PRAGMA busy_timeout = 1")
-
-        let lockDB = try openSQLiteConnection(path: dbPath)
-        defer { sqlite3_close(lockDB) }
-        XCTAssertEqual(sqlite3_exec(lockDB, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
-        defer { sqlite3_exec(lockDB, "ROLLBACK", nil, nil, nil) }
+        db.failNextStoreWithBusyForTesting = true
 
         let router = MCPRouter()
         router.setDatabase(db)
@@ -1581,9 +1620,16 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(queueID.isEmpty)
         XCTAssertTrue(chunkID.hasPrefix("brainbar-"))
         XCTAssertNotNil(ISO8601DateFormatter().date(from: queuedAt))
+        assertDeferredBrainStoreReceipt(
+            try XCTUnwrap(result),
+            chunkID: chunkID,
+            queueID: queueID,
+            queuedAt: queuedAt,
+            queuePath: queuePath
+        )
         XCTAssertEqual(
             text,
-            "\u{23f3} Memory queued (DB busy) \u{2192} \(chunkID) \u{2014} will flush on next successful store."
+            "\u{2502} DEFERRED: Memory queued (DB busy) \u{2192} \(chunkID) \u{2500} drain will persist it."
         )
         XCTAssertFalse(text.contains("\u{1b}["))
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path))
@@ -1593,6 +1639,67 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(queuedText.contains(queueID))
         XCTAssertTrue(queuedText.contains(queuedAt))
         XCTAssertTrue(queuedText.contains(chunkID))
+    }
+
+    func testBrainStoreMCPWriteBudgetQueuesPromptlyUnderSQLiteLock() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+
+        var lockDB: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        XCTAssertEqual(sqlite3_open_v2(dbPath, &lockDB, flags, nil), SQLITE_OK)
+        let lockHandle = try XCTUnwrap(lockDB)
+        defer { sqlite3_close(lockHandle) }
+        XCTAssertEqual(sqlite3_exec(lockHandle, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+        var lockHeld = true
+        defer {
+            if lockHeld {
+                sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+            }
+        }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let started = Date()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 220,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "MCP store should queue promptly while SQLite is locked",
+                    "tags": ["queue-fallback"],
+                    "importance": 7
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+        let elapsed = Date().timeIntervalSince(started)
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"])
+        XCTAssertEqual(result["queued"] as? Bool, true)
+        let mcpWriteBudget: TimeInterval = 1.0
+        XCTAssertLessThan(elapsed, mcpWriteBudget)
+        assertDeferredBrainStoreReceipt(
+            result,
+            chunkID: try XCTUnwrap(result["chunk_id"] as? String),
+            queueID: try XCTUnwrap(result["queue_id"] as? String),
+            queuedAt: try XCTUnwrap(result["queued_at"] as? String),
+            queuePath: queuePath
+        )
+
+        sqlite3_exec(lockHandle, "ROLLBACK", nil, nil, nil)
+        lockHeld = false
     }
 
     func testBrainStoreFlushesPendingQueueAfterSuccessfulStore() throws {
@@ -1634,12 +1741,67 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued item should flush")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path), "successful store should drain the pending queue")
 
         let contents = try chunkContents(path: dbPath)
         XCTAssertTrue(contents.contains("Queued item should flush"))
         XCTAssertTrue(contents.contains("Live write triggers flush"))
+    }
+
+    func testBrainStoreFlushesPendingQueueWhenCurrentStoreQueues() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+
+        let queuedPayload = """
+        {"content":"Queued item should flush even when live write queues","tags":["queued"],"importance":4,"source":"mcp"}
+        """
+        try (queuedPayload + "\n").write(to: queuePath, atomically: true, encoding: .utf8)
+
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        db.failNextStoreWithBusyForTesting = true
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_store",
+                "arguments": [
+                    "content": "Live write queues but still triggers flush",
+                    "tags": ["live"],
+                    "importance": 5
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        XCTAssertNil(result?["isError"])
+        XCTAssertEqual(result?["queued"] as? Bool, true)
+        XCTAssertEqual(result?["flushed_count"] as? Int, 0)
+        let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
+        XCTAssertEqual(flushed?.count, 0)
+
+        let contents = try chunkContents(path: dbPath)
+        XCTAssertFalse(contents.contains("Queued item should flush even when live write queues"))
+        XCTAssertFalse(contents.contains("Live write queues but still triggers flush"))
+
+        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
+        XCTAssertTrue(queuedText.contains("Queued item should flush even when live write queues"))
+        XCTAssertTrue(queuedText.contains("Live write queues but still triggers flush"))
     }
 
     func testBrainStoreFlushKeepsMalformedQueueLines() throws {
@@ -1682,7 +1844,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives malformed sibling")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingText = try String(contentsOf: queuePath, encoding: .utf8)
         XCTAssertEqual(remainingText.trimmingCharacters(in: .whitespacesAndNewlines), "not-json")
@@ -1732,7 +1898,11 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
         XCTAssertEqual(flushed?.count, 1)
-        XCTAssertEqual(flushed?.first?["content"] as? String, "Queued valid item survives invalid utf8 sibling")
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
         let remainingData = try Data(contentsOf: queuePath)
         XCTAssertEqual(remainingData, invalidLine)

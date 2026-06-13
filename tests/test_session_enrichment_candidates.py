@@ -17,6 +17,9 @@ def _insert_chunk(
     created_at: str | None = None,
     source: str = "claude_code",
     content_type: str = "assistant_text",
+    sender: str = "assistant",
+    conversation_id: str | None = None,
+    position: int | None = None,
 ) -> None:
     store.upsert_chunks(
         [
@@ -27,6 +30,9 @@ def _insert_chunk(
                 "source_file": "test.jsonl",
                 "project": "brainlayer",
                 "content_type": content_type,
+                "sender": sender,
+                "conversation_id": conversation_id,
+                "position": position,
                 "char_count": len(content),
                 "source": source,
                 "created_at": created_at,
@@ -119,3 +125,73 @@ def test_get_enrichment_candidates_returns_empty_list_when_nothing_needs_enrichm
     results = store.get_enrichment_candidates(limit=10)
 
     assert results == []
+
+
+def test_get_enrichment_candidates_include_scoped_previous_assistant_text(tmp_path):
+    store = VectorStore(tmp_path / "test.db")
+    _insert_chunk(
+        store,
+        "assistant-before",
+        "controlLayer is the fleet policy layer, not a separate runtime.",
+        created_at="2026-06-01T10:00:00Z",
+        content_type="assistant_text",
+        sender="assistant",
+        conversation_id="conv-1",
+        position=1,
+    )
+    _insert_chunk(
+        store,
+        "user-ack",
+        "yes exactly " * 8,
+        created_at="2026-06-01T10:01:00Z",
+        content_type="user_message",
+        sender="user",
+        conversation_id="conv-1",
+        position=2,
+    )
+    _insert_chunk(
+        store,
+        "assistant-other-conversation",
+        "This assistant turn belongs to another conversation.",
+        created_at="2026-06-01T10:00:30Z",
+        content_type="assistant_text",
+        sender="assistant",
+        conversation_id="conv-2",
+        position=1,
+    )
+
+    results = store.get_enrichment_candidates(limit=10, chunk_ids=["user-ack"])
+
+    assert len(results) == 1
+    assert results[0]["sender"] == "user"
+    assert results[0]["prev_assistant_text"] == "controlLayer is the fleet policy layer, not a separate runtime."
+
+
+def test_get_enrichment_candidates_uses_position_for_same_timestamp_previous_assistant(tmp_path):
+    store = VectorStore(tmp_path / "test.db")
+    timestamp = "2026-06-01T10:00:00Z"
+    _insert_chunk(
+        store,
+        "assistant-before",
+        "Same timestamp assistant context should still hydrate.",
+        created_at=timestamp,
+        content_type="assistant_text",
+        sender="assistant",
+        conversation_id="conv-1",
+        position=1,
+    )
+    _insert_chunk(
+        store,
+        "user-ack",
+        "yes exactly " * 8,
+        created_at=timestamp,
+        content_type="user_message",
+        sender="user",
+        conversation_id="conv-1",
+        position=2,
+    )
+
+    results = store.get_enrichment_candidates(limit=10, chunk_ids=["user-ack"])
+
+    assert len(results) == 1
+    assert results[0]["prev_assistant_text"] == "Same timestamp assistant context should still hydrate."

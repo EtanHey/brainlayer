@@ -133,7 +133,7 @@ def format_recalled_context(query: str, chunks: list[dict]) -> str:
 def format_store_result(chunk_id: str, superseded: str | None = None, queued: bool = False) -> str:
     """Format store confirmation as a clean one-liner."""
     if queued:
-        return f"\u2502 \u23f3 Memory queued (DB busy) \u2192 {chunk_id} \u2500 will flush on next successful store."
+        return f"\u2502 DEFERRED: Memory queued (DB busy) \u2192 {chunk_id} \u2500 drain will persist it."
 
     parts = [f"\u2714 Stored \u2192 {chunk_id}"]
     if superseded:
@@ -231,6 +231,40 @@ def format_entity_simple(entity: dict) -> str:
             lines.append(line)
     if not facts and not semantic_rels:
         lines.append("- None")
+
+    provenance = entity.get("provenance_resolutions")
+    if isinstance(provenance, dict) and provenance:
+        lines.extend(["", "### Provenance Authority"])
+        for attribute, resolution in sorted(provenance.items()):
+            if not isinstance(resolution, dict):
+                continue
+            authoritative = resolution.get("authoritative")
+            if isinstance(authoritative, dict):
+                value = authoritative.get("value", "")
+                provenance_class = authoritative.get("provenance_class", "")
+                evidence = authoritative.get("evidence") or authoritative.get("chunk_id") or ""
+                parts = ["AUTHORITATIVE"]
+                if provenance_class:
+                    parts.append(str(provenance_class))
+                if evidence:
+                    parts.append(str(evidence))
+                lines.append(f"- {attribute}: {value} [{' · '.join(parts)}]")
+            for superseded in resolution.get("superseded") or []:
+                if not isinstance(superseded, dict):
+                    continue
+                value = superseded.get("value", "")
+                provenance_class = superseded.get("provenance_class", "")
+                chunk_id = superseded.get("chunk_id", "")
+                details = ", ".join(str(part) for part in (provenance_class, chunk_id) if part)
+                suffix = f" ({details})" if details else ""
+                lines.append(f'  - superseded: "{value}"{suffix} — reversible')
+            for pending in resolution.get("pending") or []:
+                if not isinstance(pending, dict):
+                    continue
+                lines.append(
+                    f"  - pending-confirm: {pending.get('value', '')} "
+                    f"({pending.get('provenance_class', '')}, {pending.get('chunk_id', '')})"
+                )
 
     # Chunks / memories
     lines.extend(["", "### Recent context"])

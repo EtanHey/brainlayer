@@ -10,6 +10,9 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 250
+    private static let mcpStoreRetries = 1
+
     private struct ToolOutput {
         let text: String
         let metadata: [String: Any]
@@ -475,10 +478,25 @@ final class MCPRouter: @unchecked Sendable {
         let importance = args["importance"] as? Int ?? 5
         let project = args["project"] as? String
         guard let db = database else {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
+            return try queueBrainStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                reason: "DB_NOT_OPEN"
+            )
         }
         do {
-            switch try db.storeOrQueueWithinBudget(content: content, tags: tags, importance: importance, source: "mcp", project: project) {
+            switch try db.storeOrQueueWithinBudget(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                busyTimeoutMillis: Self.mcpStoreBusyTimeoutMillis,
+                retries: Self.mcpStoreRetries
+            ) {
             case .stored(let stored):
                 let flushedStores = db.flushPendingStores()
                 return ToolOutput(
@@ -490,26 +508,37 @@ final class MCPRouter: @unchecked Sendable {
                             "chunk_id": stored.chunkID,
                             "rowid": stored.rowID
                         ],
-                        "_brainbarFlushedQueuedChunks": flushedStores.map { flushed in
-                            [
-                                "chunk_id": flushed.storedChunk.chunkID,
-                                "rowid": flushed.storedChunk.rowID,
-                                "content": flushed.content,
-                                "tags": flushed.tags,
-                                "importance": flushed.importance
-                            ] as [String: Any]
-                        }
+                        "_brainbarFlushedQueuedChunks": Self.flushedQueuedChunkReceipts(flushedStores)
                     ]
                 )
             case .queued(let queueID, let queuedAt, let chunkID):
-                return queuedBrainStoreOutput(queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
+                return queuedBrainStoreOutput(
+                    queueID: queueID,
+                    queuedAt: queuedAt,
+                    chunkID: chunkID,
+                    queuePath: db.pendingStoreQueuePathForReceipt()
+                )
             }
         } catch BrainDatabase.DBError.notOpen {
-            return try queueBrainStore(content: content, tags: tags, importance: importance, source: "mcp", project: project)
+            return try queueBrainStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                reason: "DB_NOT_OPEN"
+            )
         }
     }
 
-    private func queueBrainStore(content: String, tags: [String], importance: Int, source: String, project: String?) throws -> ToolOutput {
+    private func queueBrainStore(
+        content: String,
+        tags: [String],
+        importance: Int,
+        source: String,
+        project: String?,
+        reason: String
+    ) throws -> ToolOutput {
         guard let dbPath else {
             throw ToolError.noDatabase
         }
@@ -521,19 +550,59 @@ final class MCPRouter: @unchecked Sendable {
             source: source,
             project: project
         )
-        return queuedBrainStoreOutput(queueID: queued.queueID, queuedAt: queued.queuedAt, chunkID: queued.chunkID)
+        return queuedBrainStoreOutput(
+            queueID: queued.queueID,
+            queuedAt: queued.queuedAt,
+            chunkID: queued.chunkID,
+            queuePath: BrainDatabase.pendingStoreQueuePathForReceipt(dbPath: dbPath),
+            reason: reason
+        )
     }
 
-    private func queuedBrainStoreOutput(queueID: String, queuedAt: String, chunkID: String) -> ToolOutput {
-        ToolOutput(
+    private func queuedBrainStoreOutput(
+        queueID: String,
+        queuedAt: String,
+        chunkID: String,
+        queuePath: URL,
+        reason: String = "DB_BUSY",
+        flushedStores: [BrainDatabase.FlushedPendingStore] = []
+    ) -> ToolOutput {
+        let action = Self.deferredQueueAction(for: queuePath)
+        return ToolOutput(
             text: Formatters.formatStoreResult(chunkId: chunkID, queued: true, useColor: false),
             metadata: [
                 "queued": true,
+                "status": "DEFERRED",
                 "queue_id": queueID,
                 "queued_at": queuedAt,
-                "chunk_id": chunkID
+                "chunk_id": chunkID,
+                "related": [] as [String],
+                "deferred": [
+                    "status": "DEFERRED",
+                    "reason": reason,
+                    "chunk_id": chunkID,
+                    "queue_id": queueID,
+                    "queued_at": queuedAt,
+                    "queue_path": queuePath.path,
+                    "action": action
+                ] as [String: Any],
+                "flushed_count": flushedStores.count,
+                "_brainbarFlushedQueuedChunks": Self.flushedQueuedChunkReceipts(flushedStores)
             ]
         )
+    }
+
+    private static func deferredQueueAction(for queuePath: URL) -> String {
+        queuePath.lastPathComponent == "pending-stores.jsonl" ? "queued_for_replay" : "queued_for_drain"
+    }
+
+    private static func flushedQueuedChunkReceipts(_ flushedStores: [BrainDatabase.FlushedPendingStore]) -> [[String: Any]] {
+        flushedStores.map { flushed in
+            [
+                "chunk_id": flushed.storedChunk.chunkID,
+                "rowid": flushed.storedChunk.rowID
+            ] as [String: Any]
+        }
     }
 
     private func handleBrainGetPerson(_ args: [String: Any]) throws -> ToolOutput {

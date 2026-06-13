@@ -173,7 +173,7 @@ enum Formatters {
     ) -> String {
         if queued {
             let idSuffix = chunkId.isEmpty ? "" : " \u{2192} \(val(chunkId, useColor))"
-            return "\u{23f3} Memory queued (DB busy)\(idSuffix) \u{2014} will flush on next successful store."
+            return "\u{2502} DEFERRED: Memory queued (DB busy)\(idSuffix) \u{2500} drain will persist it."
         }
         var parts = ["\u{2714} Stored \u{2192} \(val(chunkId, useColor))"]
         if !tags.isEmpty {

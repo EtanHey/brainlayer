@@ -6,6 +6,8 @@ gracefully — retry with backoff, queue to JSONL on failure, flush on success.
 All tests use tmp_path fixtures (no real DB contention).
 """
 
+import builtins
+import fcntl
 import json
 import sqlite3
 import threading
@@ -74,6 +76,20 @@ class TestQueueStore:
         item = json.loads(path.read_text())
 
         assert item["timestamp"] == 0.0
+
+    def test_single_enrichment_update_preserves_provenance_class(self, tmp_path):
+        from brainlayer.queue_io import enqueue_enrichment_update
+
+        path = enqueue_enrichment_update(
+            chunk_id="chunk-1",
+            enrichment={"summary": "summary"},
+            provenance_class="RAW-ETAN-DIRECT",
+            queue_dir=tmp_path,
+        )
+
+        item = json.loads(path.read_text())
+
+        assert item["provenance_class"] == "RAW-ETAN-DIRECT"
 
     def test_drain_preserves_hook_event_created_at_and_project(self, tmp_path, monkeypatch):
         """Hook/realtime queue events must replay reservation metadata, not flush time."""
@@ -293,6 +309,33 @@ class TestFlushPendingStores:
         assert flushed == 1
         assert mock_store_memory.call_args.kwargs["chunk_id"] == "manual-promised1234"
 
+    def test_flush_defaults_brainbar_pending_line_without_memory_type_to_note(self, tmp_path):
+        """BrainBar pending-store lines omit memory_type but must still replay through Python."""
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "chunk_id": "manual-brainbar1234",
+                    "content": "queued from BrainBar",
+                    "project": "brainlayer",
+                    "source": "manual",
+                }
+            )
+            + "\n"
+        )
+
+        with patch(
+            "brainlayer.mcp.store_handler._get_pending_store_path",
+            return_value=pending_path,
+        ):
+            with patch("brainlayer.store.store_memory") as mock_store_memory:
+                mock_store_memory.return_value = {"id": "manual-brainbar1234", "related": []}
+                flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flushed == 1
+        assert mock_store_memory.call_args.kwargs["memory_type"] == "note"
+        assert not pending_path.exists()
+
     def test_flush_preserves_legacy_pending_created_at_and_project(self, tmp_path):
         """Legacy pending-stores flush must replay reservation metadata."""
         pending_path = tmp_path / "pending-stores.jsonl"
@@ -349,8 +392,8 @@ class TestFlushPendingStores:
         assert flushed == 1
         mock_store.supersede_chunk.assert_called_once_with("manual-old1234", "manual-new1234")
 
-    def test_flush_keeps_item_when_legacy_supersedes_fails(self, tmp_path):
-        """A failed queued supersedes transition must not drop the pending store item."""
+    def test_flush_does_not_requeue_after_durable_store_when_legacy_supersedes_fails(self, tmp_path):
+        """A failed supersede must not replay an already stored replacement."""
         pending_path = tmp_path / "pending-stores.jsonl"
         pending_path.write_text(
             json.dumps(
@@ -374,10 +417,8 @@ class TestFlushPendingStores:
                 mock_store_memory.return_value = {"id": "manual-new1234", "related": []}
                 flushed = _flush_pending_stores(mock_store, MagicMock())
 
-        assert flushed == 0
-        remaining = pending_path.read_text().strip().splitlines()
-        assert len(remaining) == 1
-        assert json.loads(remaining[0])["chunk_id"] == "manual-new1234"
+        assert flushed == 1
+        assert not pending_path.exists()
         mock_store.supersede_chunk.assert_called_once_with("manual-old1234", "manual-new1234")
 
     def test_flush_keeps_failed_items(self, tmp_path):
@@ -420,6 +461,87 @@ class TestFlushPendingStores:
             flushed = _flush_pending_stores(MagicMock(), MagicMock())
 
         assert flushed == 0
+
+    def test_legacy_pending_store_receipt_reports_replay_not_drain(self, tmp_path):
+        from brainlayer.mcp.store_handler import _deferred_store_receipt
+
+        pending_path = tmp_path / "pending-stores.jsonl"
+
+        receipt = _deferred_store_receipt("manual-promised", pending_path)
+
+        assert receipt["deferred"]["action"] == "queued_for_replay"
+
+    def test_legacy_pending_store_enqueue_and_flush_use_shared_file_lock(self, tmp_path):
+        pending_path = tmp_path / "pending-stores.jsonl"
+        fileno_to_path = {}
+        real_open = builtins.open
+
+        def tracking_open(file, *args, **kwargs):
+            handle = real_open(file, *args, **kwargs)
+            fileno_to_path[handle.fileno()] = str(file)
+            return handle
+
+        with (
+            patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("queue unavailable")),
+            patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+            patch("brainlayer.mcp.store_handler.open", side_effect=tracking_open),
+            patch("brainlayer.mcp.store_handler.fcntl.flock") as flock,
+        ):
+            _queue_store({"content": "queued item", "memory_type": "note"})
+            pending_path.write_text(json.dumps({"content": "queued item", "memory_type": "note"}) + "\n")
+            with patch("brainlayer.store.store_memory", return_value={"id": "test-123", "related": []}):
+                _flush_pending_stores(MagicMock(), MagicMock())
+
+        exclusive_lock_paths = [
+            fileno_to_path[call.args[0]] for call in flock.call_args_list if call.args[1] == fcntl.LOCK_EX
+        ]
+        assert exclusive_lock_paths == [str(tmp_path / ".pending-stores.jsonl.lock")] * 2
+
+    def test_legacy_pending_store_lock_path_matches_brainbar_dotfile(self, tmp_path):
+        from brainlayer.mcp.store_handler import _pending_store_lock_path
+
+        pending_path = tmp_path / "pending-stores.jsonl"
+
+        assert _pending_store_lock_path(pending_path) == tmp_path / ".pending-stores.jsonl.lock"
+
+    def test_legacy_pending_store_path_follows_active_db_env(self, tmp_path, monkeypatch):
+        from brainlayer.mcp.store_handler import _get_pending_store_path
+
+        active_db = tmp_path / "active" / "brainlayer.db"
+        monkeypatch.setenv("BRAINLAYER_DB", str(active_db))
+
+        assert _get_pending_store_path() == active_db.parent / "pending-stores.jsonl"
+
+    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(self, tmp_path, monkeypatch):
+        pending_path = tmp_path / "pending-stores.jsonl"
+        pending_path.write_text(
+            json.dumps({"content": "good", "memory_type": "note"})
+            + "\n"
+            + json.dumps({"content": "bad", "memory_type": "note"})
+            + "\n"
+        )
+        replaced = {}
+        original_replace = type(pending_path).replace
+
+        def track_replace(self, target):
+            replaced["source"] = self
+            replaced["target"] = target
+            return original_replace(self, target)
+
+        def side_effect(**kwargs):
+            if kwargs["content"] == "bad":
+                raise apsw.BusyError("still locked")
+            return {"id": "test-123", "related": []}
+
+        monkeypatch.setattr(type(pending_path), "replace", track_replace)
+        with patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path):
+            with patch("brainlayer.store.store_memory", side_effect=side_effect):
+                flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+        assert flushed == 1
+        assert replaced["source"] == pending_path.with_suffix(".jsonl.tmp")
+        assert replaced["target"] == pending_path
+        assert json.loads(pending_path.read_text().strip())["content"] == "bad"
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +767,138 @@ def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_
     assert rows == {"already-done": "old summary", "needs-update": "real summary"}
 
 
+def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    conn = apsw.Connection(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT,
+            provenance_class TEXT,
+            raw_entities_json TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (id, content, summary, enriched_at, enrich_status, content_hash, provenance_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("already-done", "content 1", "old summary", "2026-05-30T00:00:00Z", "success", "h1", None),
+    )
+    conn.close()
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "already-done",
+                "content_hash": "h1",
+                "enrichment": {"summary": "redundant summary"},
+                "entities": [{"name": "controlLayer"}],
+                "provenance_class": "RAW-ETAN-DIRECT",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 1
+    assert result.skipped_verified_stale == 0
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT summary, provenance_class, raw_entities_json FROM chunks WHERE id = ?",
+            ("already-done",),
+        ).fetchone()
+        queued_entity = conn.execute("SELECT entity, chunk_id, reason FROM provenance_resolve_queue").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "redundant summary"
+    assert row[1] == "RAW-ETAN-DIRECT"
+    assert json.loads(row[2]) == [{"name": "controlLayer"}]
+    assert queued_entity == ("controlLayer", "already-done", "enrichment")
+
+
+def test_burn_drain_redundant_enrichment_preserves_provenance_enqueue(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    entities = [{"name": "controlLayer"}]
+    conn = apsw.Connection(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT,
+            provenance_class TEXT,
+            raw_entities_json TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO chunks (
+            id, content, summary, enriched_at, enrich_status,
+            content_hash, provenance_class, raw_entities_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "already-done",
+            "content 1",
+            "redundant summary",
+            "2026-05-30T00:00:00Z",
+            "success",
+            "h1",
+            "RAW-ETAN-DIRECT",
+            json.dumps(entities),
+        ),
+    )
+    conn.close()
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "already-done",
+                "content_hash": "h1",
+                "enrichment": {"summary": "redundant summary"},
+                "entities": entities,
+                "provenance_class": "RAW-ETAN-DIRECT",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 0
+    assert result.skipped_verified_stale == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        queued_entity = conn.execute("SELECT entity, chunk_id, reason FROM provenance_resolve_queue").fetchone()
+    finally:
+        conn.close()
+    assert queued_entity == ("controlLayer", "already-done", "enrichment")
+
+
 def test_burn_drain_default_write_batch_is_bounded(tmp_path):
     from brainlayer.drain import burn_drain_once
 
@@ -802,6 +1056,85 @@ def test_burn_drain_preserves_queue_file_when_batch_rolls_back(tmp_path, monkeyp
     finally:
         conn.close()
     assert summary is None
+
+
+def test_burn_drain_rolls_back_provenance_enqueue_with_batch(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "must roll back"},
+                "entities": [{"name": "controlLayer"}],
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    monkeypatch.setattr(drain, "_embedding_enabled", lambda: True)
+
+    def fail_after_events(*_args, **_kwargs):
+        raise RuntimeError("synthetic post-event batch failure")
+
+    monkeypatch.setattr(drain, "_embed_store_chunks", fail_after_events)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.failed_files == 1
+    assert result.files_deleted == 0
+    assert queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        summary = conn.execute("SELECT summary FROM chunks WHERE id = 'needs-update'").fetchone()[0]
+        has_queue_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'provenance_resolve_queue'"
+        ).fetchone()
+        queue_count = (
+            conn.execute("SELECT COUNT(*) FROM provenance_resolve_queue").fetchone()[0] if has_queue_table else 0
+        )
+    finally:
+        conn.close()
+    assert summary is None
+    assert queue_count == 0
+
+
+def test_burn_drain_enqueues_provenance_without_helper_commit(tmp_path, monkeypatch):
+    from brainlayer import drain
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "needs-update",
+                "content_hash": "h2",
+                "enrichment": {"summary": "committed by drain only"},
+                "entities": [{"name": "controlLayer"}],
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+    calls = []
+
+    def record_enqueue(*_args, **kwargs):
+        calls.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(drain, "enqueue_provenance_resolution_for_entities", record_enqueue)
+
+    result = drain.burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 1
+    assert not queued.exists()
+    assert calls == [{"chunk_id": "needs-update", "commit": False}]
 
 
 class TestBrainUpdateRetryOnLock:

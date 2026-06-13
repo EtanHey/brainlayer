@@ -48,6 +48,19 @@ def _make_stub_bin(tmp_path: Path, *, pytest_exit: int, bun_exit: int | None) ->
     return pytest_log, bun_log
 
 
+def _script_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in (
+        "BRAINLAYER_CHANGED_FILES",
+        "BRAINLAYER_PREPUSH",
+        "BRAINLAYER_PREPUSH_CACHE_DIR",
+        "BRAINLAYER_PREPUSH_SCOPE",
+        "BRAINLAYER_PREPUSH_TREE_HASH",
+    ):
+        env.pop(key, None)
+    return env
+
+
 def test_run_tests_aggregates_exit_codes_and_keeps_running(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
@@ -55,7 +68,7 @@ def test_run_tests_aggregates_exit_codes_and_keeps_running(tmp_path: Path) -> No
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=2, bun_exit=4)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -75,7 +88,7 @@ def test_run_tests_skips_bun_when_no_typescript_tests_exist(tmp_path: Path) -> N
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -109,7 +122,7 @@ def test_run_tests_executes_regression_shell_scripts(tmp_path: Path) -> None:
         ),
     )
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -130,7 +143,7 @@ def test_prepush_cache_skips_same_tree_hash_after_success(tmp_path: Path) -> Non
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -158,7 +171,7 @@ def test_prepush_cache_does_not_skip_after_failure(tmp_path: Path) -> None:
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=2, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -186,7 +199,7 @@ def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -212,7 +225,7 @@ def test_changed_only_scope_falls_back_when_mapped_and_unmapped_sources_change(t
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -238,7 +251,7 @@ def test_changed_only_scope_falls_back_to_full_suite_for_unmapped_source(tmp_pat
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -262,7 +275,7 @@ def test_changed_only_scope_falls_back_to_full_suite_for_empty_diff(tmp_path: Pa
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -286,7 +299,7 @@ def test_changed_only_scope_falls_back_to_full_suite_for_nested_hook_source(tmp_
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -312,7 +325,7 @@ def test_changed_files_env_preserves_paths_with_spaces(tmp_path: Path) -> None:
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -338,7 +351,7 @@ def test_changed_only_scope_runs_nested_pytest_file(tmp_path: Path) -> None:
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -364,7 +377,7 @@ def test_changed_only_scope_falls_back_for_excluded_real_db_test_edit(tmp_path: 
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
@@ -392,11 +405,12 @@ def test_worker_prepush_excludes_real_db_test_files(tmp_path: Path) -> None:
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
 
-    env = os.environ.copy()
+    env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"
     env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_CACHE_DIR"] = str(tmp_path / "cache")
     env["BRAINLAYER_PREPUSH_SCOPE"] = "full"
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
