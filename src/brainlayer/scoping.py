@@ -17,7 +17,7 @@ _SCOPES_PATH = Path.home() / ".config" / "brainlayer" / "scopes.yaml"
 # Cache parsed config
 _cached_scopes: Optional[dict] = None
 _cached_mtime: float = 0.0
-_VALID_CONSUMERS = frozenset({"orchestrator", "worker", "coach"})
+_VALID_CONSUMERS = frozenset({"orchestrator", "lead", "worker", "coach"})
 _DEFAULT_CONSUMER = "worker"
 _COACH_PROJECT = "personal"
 
@@ -121,6 +121,7 @@ class ConsumerScope:
 
     role: str
     project_filter: Optional[str]
+    project_filters: tuple[str, ...] = ()
     source_filter: Optional[str] = None
     include_checkpoints: bool = False
     allow_null_project: bool = False
@@ -137,10 +138,30 @@ class ConsumerScope:
         return cls(
             role="worker",
             project_filter=project,
+            project_filters=_worker_project_filters(project),
             source_filter=source_filter,
             include_checkpoints=include_checkpoints,
             allow_null_project=False,
             deny_all=project is None,
+        )
+
+    @classmethod
+    def for_lead(
+        cls,
+        project: Optional[str],
+        *,
+        source_filter: Optional[str] = None,
+        include_checkpoints: bool = False,
+    ) -> "ConsumerScope":
+        root_project = _main_project_for(project)
+        return cls(
+            role="lead",
+            project_filter=root_project,
+            project_filters=_lead_project_filters(root_project),
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+            allow_null_project=False,
+            deny_all=root_project is None,
         )
 
     @classmethod
@@ -179,6 +200,7 @@ class ConsumerScope:
         return (
             self.role,
             self.project_filter,
+            self.project_filters,
             self.source_filter,
             self.include_checkpoints,
             self.allow_null_project,
@@ -213,6 +235,12 @@ def resolve_consumer_scope(
             source_filter=source_filter,
             include_checkpoints=include_checkpoints,
         )
+    if role == "lead":
+        return ConsumerScope.for_lead(
+            project,
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+        )
     if role == "coach":
         return ConsumerScope.for_coach(source_filter=source_filter, include_checkpoints=True)
     return ConsumerScope.for_worker(
@@ -220,6 +248,82 @@ def resolve_consumer_scope(
         source_filter=source_filter,
         include_checkpoints=include_checkpoints,
     )
+
+
+def _worktree_map(config: Optional[dict] = None) -> dict[str, str]:
+    """Return configured worktree-project -> main-project mappings."""
+    raw = (config or _load_scopes()).get("worktrees", {})
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, str] = {}
+    for worktree_project, main_project in raw.items():
+        if isinstance(worktree_project, str) and isinstance(main_project, str):
+            worktree = worktree_project.strip()
+            main = main_project.strip()
+            if worktree and main:
+                result[worktree] = main
+    return result
+
+
+def _main_project_for(project: Optional[str], config: Optional[dict] = None) -> Optional[str]:
+    if project is None:
+        return None
+    return _worktree_map(config).get(project, project)
+
+
+def _worktrees_for_main(main_project: Optional[str], config: Optional[dict] = None) -> tuple[str, ...]:
+    if main_project is None:
+        return ()
+    mapping = _worktree_map(config)
+    return tuple(sorted(worktree for worktree, main in mapping.items() if main == main_project))
+
+
+def _parallel_projects_for_lead(main_project: Optional[str], config: Optional[dict] = None) -> tuple[str, ...]:
+    if main_project is None:
+        return ()
+    cfg = config or _load_scopes()
+    raw = cfg.get("lead_parallel_projects", cfg.get("parallel_repos", {}))
+    if not isinstance(raw, dict):
+        return ()
+    configured = raw.get(main_project, ())
+    if isinstance(configured, str):
+        configured = [configured]
+    if not isinstance(configured, (list, tuple)):
+        return ()
+    projects: list[str] = []
+    for project in configured:
+        if isinstance(project, str) and project.strip():
+            projects.append(_main_project_for(project.strip(), cfg) or project.strip())
+    return tuple(projects)
+
+
+def _dedupe_projects(projects: list[str | None]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for project in projects:
+        if project is None or project in seen:
+            continue
+        seen.add(project)
+        deduped.append(project)
+    return tuple(deduped)
+
+
+def _worker_project_filters(project: Optional[str]) -> tuple[str, ...]:
+    if project is None:
+        return ()
+    main_project = _main_project_for(project)
+    if main_project and main_project != project:
+        return _dedupe_projects([project, main_project])
+    return (project,)
+
+
+def _lead_project_filters(main_project: Optional[str]) -> tuple[str, ...]:
+    if main_project is None:
+        return ()
+    projects: list[str | None] = [main_project, *_worktrees_for_main(main_project)]
+    for parallel_project in _parallel_projects_for_lead(main_project):
+        projects.extend([parallel_project, *_worktrees_for_main(parallel_project)])
+    return _dedupe_projects(projects)
 
 
 def _cwd_heuristic() -> Optional[str]:

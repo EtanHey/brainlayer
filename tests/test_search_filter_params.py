@@ -577,7 +577,7 @@ class TestInputSchemaPresence:
         consumer = props["consumer"]
 
         assert consumer["type"] == "string"
-        assert consumer["enum"] == ["orchestrator", "worker", "coach"]
+        assert consumer["enum"] == ["orchestrator", "lead", "worker", "coach"]
 
 
 # ── Alias resolution in call_tool ────────────────────────────────────────────

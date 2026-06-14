@@ -414,7 +414,7 @@ async def list_tools() -> list[Tool]:
                         },
                         "consumer": {
                             "type": "string",
-                            "enum": ["orchestrator", "worker", "coach"],
+                            "enum": ["orchestrator", "lead", "worker", "coach"],
                             "description": "Per-request consumer role for shared MCP servers. Overrides BRAINLAYER_CONSUMER for this search.",
                         },
                         "file_path": {
@@ -757,7 +757,7 @@ async def list_tools() -> list[Tool]:
                         },
                         "consumer": {
                             "type": "string",
-                            "enum": ["orchestrator", "worker", "coach"],
+                            "enum": ["orchestrator", "lead", "worker", "coach"],
                             "description": "Per-request consumer role for shared MCP servers in search mode. Overrides BRAINLAYER_CONSUMER for this request.",
                         },
                         "hours": {

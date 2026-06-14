@@ -145,6 +145,78 @@ def test_worker_without_project_denies_all(monkeypatch):
     assert scope.allow_null_project is False
 
 
+def test_lead_scope_expands_repo_to_all_configured_worktrees(monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {
+            "worktrees": {
+                "repo-a.worktree.feature-x": "repo-a",
+                "repo-a.worktree.feature-y": "repo-a",
+                "repo-b.worktree.other": "repo-b",
+            }
+        },
+    )
+
+    scope = resolve_consumer_scope(project="repo-a", consumer="lead")
+
+    assert scope.role == "lead"
+    assert scope.project_filter == "repo-a"
+    assert scope.project_filters == (
+        "repo-a",
+        "repo-a.worktree.feature-x",
+        "repo-a.worktree.feature-y",
+    )
+    assert scope.allow_null_project is False
+
+
+def test_lead_scope_includes_user_configured_parallel_repos(monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {
+            "worktrees": {
+                "repo-a.worktree.feature-x": "repo-a",
+                "repo-b.worktree.other": "repo-b",
+            },
+            "lead_parallel_projects": {"repo-a": ["repo-b"]},
+        },
+    )
+
+    scope = resolve_consumer_scope(project="repo-a.worktree.feature-x", consumer="lead")
+
+    assert scope.project_filter == "repo-a"
+    assert scope.project_filters == (
+        "repo-a",
+        "repo-a.worktree.feature-x",
+        "repo-b",
+        "repo-b.worktree.other",
+    )
+
+
+def test_worker_on_worktree_sees_worktree_and_main(monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+
+    scope = resolve_consumer_scope(project="repo-a.worktree.feature-x", consumer="worker")
+
+    assert scope.role == "worker"
+    assert scope.project_filter == "repo-a.worktree.feature-x"
+    assert scope.project_filters == ("repo-a.worktree.feature-x", "repo-a")
+
+
+def test_worker_on_main_sees_main_only(monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+
+    scope = resolve_consumer_scope(project="repo-a", consumer="worker")
+
+    assert scope.project_filter == "repo-a"
+    assert scope.project_filters == ("repo-a",)
+
+
 def test_worker_consumer_scope_blocks_foreign_and_null_projects_across_rrf(store):
     query_embedding = _embed("repo b semantic target")
     _insert_chunk(
@@ -179,6 +251,80 @@ def test_worker_consumer_scope_blocks_foreign_and_null_projects_across_rrf(store
     assert "repo-b-vector-and-fts" not in _ids(results)
     assert "null-vector-and-fts" not in _ids(results)
     assert set(_projects(results)) <= {"repo-a"}
+
+
+def test_lead_consumer_scope_includes_repo_worktrees_and_parallel_repos(store, monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {
+            "worktrees": {
+                "repo-a.worktree.feature-x": "repo-a",
+                "repo-b.worktree.parallel": "repo-b",
+            },
+            "lead_parallel_projects": {"repo-a": ["repo-b"]},
+        },
+    )
+    for chunk_id, project in [
+        ("repo-a-main", "repo-a"),
+        ("repo-a-worktree", "repo-a.worktree.feature-x"),
+        ("repo-b-main", "repo-b"),
+        ("repo-b-worktree", "repo-b.worktree.parallel"),
+        ("repo-c-foreign", "repo-c"),
+        ("null-user-local", None),
+    ]:
+        _insert_chunk(
+            store,
+            chunk_id=chunk_id,
+            content="lead worktree visibility sentinel",
+            embedding=_embed("lead worktree visibility sentinel"),
+            project=project,
+        )
+
+    scope = resolve_consumer_scope(project="repo-a", consumer="lead")
+    results = store.hybrid_search(
+        query_embedding=_embed("lead worktree visibility sentinel"),
+        query_text="lead worktree visibility sentinel",
+        n_results=10,
+        consumer_scope=scope,
+    )
+
+    assert set(_ids(results)) == {
+        "repo-a-main",
+        "repo-a-worktree",
+        "repo-b-main",
+        "repo-b-worktree",
+    }
+
+
+def test_worker_worktree_consumer_scope_includes_worktree_and_main_only(store, monkeypatch):
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+    for chunk_id, project in [
+        ("repo-a-main", "repo-a"),
+        ("repo-a-worktree", "repo-a.worktree.feature-x"),
+        ("repo-a-other-worktree", "repo-a.worktree.other"),
+        ("repo-b-main", "repo-b"),
+        ("null-user-local", None),
+    ]:
+        _insert_chunk(
+            store,
+            chunk_id=chunk_id,
+            content="worker worktree visibility sentinel",
+            embedding=_embed("worker worktree visibility sentinel"),
+            project=project,
+        )
+
+    scope = resolve_consumer_scope(project="repo-a.worktree.feature-x", consumer="worker")
+    results = store.hybrid_search(
+        query_embedding=_embed("worker worktree visibility sentinel"),
+        query_text="worker worktree visibility sentinel",
+        n_results=10,
+        consumer_scope=scope,
+    )
+
+    assert set(_ids(results)) == {"repo-a-main", "repo-a-worktree"}
 
 
 def test_worker_consumer_scope_closes_null_project_fts_only_leak(store):
