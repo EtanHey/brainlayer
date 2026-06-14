@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -799,6 +800,84 @@ async def test_lead_file_timeline_skips_single_project_prefilter(monkeypatch):
     assert "main-ses" in text
     assert "worktree" in text
     assert "foreign" not in text
+
+
+@pytest.mark.asyncio
+async def test_current_context_filters_files_and_plan_from_scoped_sessions(monkeypatch):
+    from brainlayer.engine import SessionInfo
+    from brainlayer.mcp.search_handler import _current_context
+
+    def fake_current_context(**_kwargs):
+        return SimpleNamespace(
+            active_projects=["repo-a", "repo-b"],
+            active_branches=["main", "foreign"],
+            active_plan="foreign-plan",
+            recent_files=["foreign.py"],
+            recent_sessions=[
+                SessionInfo(
+                    session_id="repo-a-session",
+                    project="repo-a",
+                    branch="main",
+                    plan_name="allowed-plan",
+                    files_changed=["allowed.py"],
+                ),
+                SessionInfo(
+                    session_id="repo-b-session",
+                    project="repo-b",
+                    branch="foreign",
+                    plan_name="foreign-plan",
+                    files_changed=["foreign.py"],
+                ),
+            ],
+            format=lambda: "context",
+        )
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
+    monkeypatch.setattr("brainlayer.engine.current_context", fake_current_context)
+
+    _parts, structured = await _current_context(
+        project="repo-a",
+        consumer_scope=ConsumerScope.for_worker("repo-a"),
+    )
+
+    assert structured["active_projects"] == ["repo-a"]
+    assert structured["active_branches"] == ["main"]
+    assert structured["active_plan"] == "allowed-plan"
+    assert structured["recent_files"] == ["allowed.py"]
+    assert [session["project"] for session in structured["recent_sessions"]] == ["repo-a"]
+
+
+@pytest.mark.asyncio
+async def test_sessions_route_honors_deny_all_and_expanded_scope(monkeypatch):
+    from brainlayer.engine import SessionInfo
+    from brainlayer.mcp.search_handler import _sessions
+
+    captured_projects = []
+
+    def fake_sessions(**kwargs):
+        captured_projects.append(kwargs.get("project"))
+        return [
+            SessionInfo(session_id="main-session", project="repo-a", branch="main"),
+            SessionInfo(session_id="worktree-session", project="repo-a.worktree.feature-x", branch="feature-x"),
+            SessionInfo(session_id="foreign-session", project="repo-c", branch="foreign"),
+        ]
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
+    monkeypatch.setattr("brainlayer.engine.sessions", fake_sessions)
+
+    lead_scope = ConsumerScope.for_lead("repo-a")
+    object.__setattr__(lead_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
+
+    parts = await _sessions(project="repo-a", consumer_scope=lead_scope)
+    text = _text_parts(parts)
+
+    assert captured_projects[-1] is None
+    assert "main-ses" in text
+    assert "worktree" in text
+    assert "repo-c" not in text
+
+    parts = await _sessions(project=None, consumer_scope=ConsumerScope.for_worker(None))
+    assert "No sessions found" in _text_parts(parts)
 
 
 @pytest.mark.asyncio

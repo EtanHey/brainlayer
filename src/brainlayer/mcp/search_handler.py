@@ -134,6 +134,7 @@ def _filter_think_result_for_consumer_scope(result: Any, project: str | None, co
 def _filter_current_context_for_consumer_scope(result: Any, project: str | None, consumer_scope: Any | None) -> Any:
     if consumer_scope is None:
         return result
+    filtered_sessions = []
     if hasattr(result, "recent_sessions"):
         filtered_sessions = [
             session
@@ -144,6 +145,13 @@ def _filter_current_context_for_consumer_scope(result: Any, project: str | None,
         result.active_branches = sorted(
             {session.branch for session in filtered_sessions if getattr(session, "branch", None)}
         )
+        scoped_files: list[str] = []
+        for session in filtered_sessions:
+            for file_path in getattr(session, "files_changed", []) or []:
+                if file_path and file_path not in scoped_files:
+                    scoped_files.append(file_path)
+        result.recent_files = scoped_files
+        result.active_plan = next((session.plan_name for session in filtered_sessions if session.plan_name), "")
     if hasattr(result, "active_projects"):
         result.active_projects = [
             active_project
@@ -151,6 +159,20 @@ def _filter_current_context_for_consumer_scope(result: Any, project: str | None,
             if _row_matches_consumer_scope({"project": active_project}, project, consumer_scope)
         ]
     return result
+
+
+def _filter_sessions_for_consumer_scope(
+    sessions: list[Any], project: str | None, consumer_scope: Any | None
+) -> list[Any]:
+    if consumer_scope is None:
+        return sessions
+    if getattr(consumer_scope, "deny_all", False):
+        return []
+    return [
+        session
+        for session in sessions
+        if _row_matches_consumer_scope({"project": getattr(session, "project", None)}, project, consumer_scope)
+    ]
 
 
 def _helper_sentinel_path() -> Path:
@@ -1568,7 +1590,12 @@ async def _brain_recall(
     if resolved_mode == "context":
         return await _current_context(hours=hours, project=project, consumer_scope=consumer_scope)
     elif resolved_mode == "sessions":
-        return await _sessions(project=project, days=max(1, min(days, 365)), limit=max(1, min(limit, 100)))
+        return await _sessions(
+            project=project,
+            days=max(1, min(days, 365)),
+            limit=max(1, min(limit, 100)),
+            consumer_scope=consumer_scope,
+        )
     elif resolved_mode == "operations":
         if not session_id:
             return _error_result("session_id required for mode=operations")
@@ -2153,14 +2180,21 @@ async def _recall(
         return _error_result(f"Recall error: {str(e)}")
 
 
-async def _sessions(project: str | None = None, days: int = 7, limit: int = 20) -> list[TextContent]:
+async def _sessions(
+    project: str | None = None,
+    days: int = 7,
+    limit: int = 20,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """List recent sessions."""
     try:
         from ..engine import format_sessions, sessions
 
         store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
-        result = sessions(store=store, project=normalized_project, days=days, limit=limit)
+        prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
+        result = sessions(store=store, project=prefilter_project, days=days, limit=limit)
+        result = _filter_sessions_for_consumer_scope(result, normalized_project, consumer_scope)
         return [TextContent(type="text", text=format_sessions(result, days=days))]
     except Exception as e:
         return _error_result(f"Sessions error: {str(e)}")
