@@ -187,9 +187,7 @@ def find_heavy_ml_processes() -> list[str]:
         executable_name = Path(executable).name.lower()
         argv0_name = Path(argv0).name.lower()
         lower = command.lower()
-        executable_match = any(
-            pattern in executable_name or pattern in argv0_name for pattern in HEAVY_ML_EXECUTABLES
-        )
+        executable_match = any(pattern in executable_name or pattern in argv0_name for pattern in HEAVY_ML_EXECUTABLES)
         python_executable = "python" in executable_name or "python" in argv0_name
         python_mlx = python_executable and any(marker in lower for marker in HEAVY_ML_PYTHON_MARKERS)
         python_entrypoint = ""
