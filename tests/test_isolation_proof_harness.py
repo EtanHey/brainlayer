@@ -48,3 +48,25 @@ def test_full_isolation_proof_db_exercises_extension_roles(tmp_path):
         **EXTENSION_PROOF_EXPECTATIONS,
     }
     assert report.failures == []
+
+
+def test_extension_isolation_proof_reports_expectation_failures(tmp_path):
+    db_path = tmp_path / "happy-camper-extension-failure-proof.db"
+
+    fixture = seed_isolation_proof_db(db_path)
+    report = run_basic_isolation_proof(
+        fixture.db_path,
+        probes=[
+            ScopeProbe(
+                name="lead-repo-a",
+                consumer="lead",
+                project="repo-a",
+                project_filters=("repo-a",),
+            )
+        ],
+    )
+
+    assert report.failures == [
+        "lead-repo-a: expected ['repo-a-main-proof', 'repo-a-worktree-proof', "
+        "'repo-b-main-proof', 'repo-b-worktree-proof'], got ['repo-a-main-proof']"
+    ]

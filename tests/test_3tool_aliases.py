@@ -235,7 +235,11 @@ class TestBackwardCompatRecallModes:
         ) as mock_ctx:
             asyncio.run(_brain_recall(mode="context"))
 
-        mock_ctx.assert_called_once_with(hours=24)
+        mock_ctx.assert_called_once()
+        call_kwargs = mock_ctx.call_args.kwargs
+        assert call_kwargs["hours"] == 24
+        assert call_kwargs["consumer_scope"].role == "worker"
+        assert call_kwargs["consumer_scope"].allow_null_project is False
 
     def test_sessions_mode_still_works(self):
         """mode=sessions still routes to _sessions."""

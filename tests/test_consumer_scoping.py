@@ -124,6 +124,20 @@ class _FakeRecallResult:
         return "\n".join(parts)
 
 
+@dataclass
+class _FakeThinkResult:
+    query: str = "scope"
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    patterns: list[dict[str, Any]] = field(default_factory=list)
+    bugs: list[dict[str, Any]] = field(default_factory=list)
+    context: list[dict[str, Any]] = field(default_factory=list)
+    total: int = 0
+
+    def format(self) -> str:
+        rows = [*self.decisions, *self.patterns, *self.bugs, *self.context]
+        return "\n".join(f"{row.get('project')}:{row.get('content')}" for row in rows)
+
+
 def test_resolve_consumer_scope_defaults_to_worker_fail_closed(monkeypatch):
     monkeypatch.delenv("BRAINLAYER_CONSUMER", raising=False)
 
@@ -676,6 +690,115 @@ async def test_worker_recall_filters_foreign_and_null_rows(monkeypatch):
     assert [chunk["project"] for chunk in structured["related_chunks"]] == ["repo-a"]
     assert "repo-b" not in text
     assert "null related" not in text
+
+
+@pytest.mark.asyncio
+async def test_recall_signal_route_passes_consumer_scope(monkeypatch):
+    from brainlayer.mcp.search_handler import _brain_search
+
+    calls = []
+
+    async def fake_recall(**kwargs):
+        calls.append(kwargs)
+        return ([], {"target": kwargs.get("topic")})
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._query_signals_recall", lambda _query: True)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._recall", fake_recall)
+
+    await _brain_search(
+        query="recall scoped work",
+        project="repo-a",
+        consumer="worker",
+        allow_helper_route=False,
+    )
+
+    assert calls[0]["consumer_scope"].project_filter == "repo-a"
+    assert calls[0]["consumer_scope"].allow_null_project is False
+
+
+@pytest.mark.asyncio
+async def test_think_filters_with_expanded_lead_scope(monkeypatch):
+    from brainlayer.mcp.search_handler import _think
+
+    captured = {}
+
+    def fake_think(**kwargs):
+        captured["project"] = kwargs.get("project")
+        return _FakeThinkResult(
+            decisions=[
+                {"content": "main allowed", "project": "repo-a"},
+                {"content": "worktree allowed", "project": "repo-a.worktree.feature-x"},
+                {"content": "foreign blocked", "project": "repo-c"},
+                {"content": "null blocked", "project": None},
+            ],
+            total=4,
+        )
+
+    consumer_scope = ConsumerScope.for_lead("repo-a")
+    object.__setattr__(consumer_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: _ScopedEmbeddingModel())
+    monkeypatch.setattr("brainlayer.engine.think", fake_think)
+
+    parts, structured = await _think(
+        context="think scoped work",
+        project="repo-a",
+        consumer_scope=consumer_scope,
+    )
+
+    assert captured["project"] is None
+    assert [item["project"] for item in structured["decisions"]] == ["repo-a", "repo-a.worktree.feature-x"]
+    assert "foreign blocked" not in _text_parts(parts)
+
+
+@pytest.mark.asyncio
+async def test_lead_file_timeline_skips_single_project_prefilter(monkeypatch):
+    from brainlayer.mcp.search_handler import _file_timeline
+
+    class FakeStore:
+        def get_file_timeline(self, file_path, project=None, limit=50):  # noqa: ANN001, ARG002
+            assert project is None
+            return [
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T00:00:00Z",
+                    "session_id": "main-session",
+                    "action": "edit",
+                    "project": "repo-a",
+                },
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T01:00:00Z",
+                    "session_id": "worktree-session",
+                    "action": "edit",
+                    "project": "repo-a.worktree.feature-x",
+                },
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T02:00:00Z",
+                    "session_id": "foreign-session",
+                    "action": "read",
+                    "project": "repo-c",
+                },
+            ]
+
+    consumer_scope = ConsumerScope.for_lead("repo-a")
+    object.__setattr__(consumer_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeStore())
+
+    parts = await _file_timeline(
+        file_path="src/app.py",
+        project="repo-a",
+        consumer_scope=consumer_scope,
+    )
+
+    text = _text_parts(parts)
+    assert "Found 2 interactions" in text
+    assert "main-ses" in text
+    assert "worktree" in text
+    assert "foreign" not in text
 
 
 @pytest.mark.asyncio

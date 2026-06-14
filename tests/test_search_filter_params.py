@@ -744,6 +744,28 @@ class TestAliasResolution:
         call_kwargs = mock_recall.call_args[1]
         assert call_kwargs["consumer"] == "orchestrator"
 
+    def test_consumer_passes_from_direct_brain_recall_call_tool(self):
+        """consumer is forwarded through the direct brain_recall route too."""
+        from brainlayer.mcp import call_tool
+
+        with patch(
+            "brainlayer.mcp._brain_recall",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_recall:
+            asyncio.run(
+                call_tool(
+                    "brain_recall",
+                    {
+                        "topic": "test",
+                        "consumer": "lead",
+                    },
+                )
+            )
+
+        call_kwargs = mock_recall.call_args[1]
+        assert call_kwargs["consumer"] == "lead"
+
 
 class TestBrainResumeSchema:
     """Verify the explicit checkpoint resume tool is exposed."""

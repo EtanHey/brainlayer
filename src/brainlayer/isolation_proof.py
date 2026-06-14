@@ -213,13 +213,18 @@ def _scope_for_probe(probe: ScopeProbe) -> ConsumerScope:
     )
 
 
-def run_basic_isolation_proof(db_path: str | Path, probes: list[ScopeProbe] | None = None) -> IsolationProofReport:
+def run_basic_isolation_proof(
+    db_path: str | Path,
+    probes: list[ScopeProbe] | None = None,
+    expectations: dict[str, set[str]] | None = None,
+) -> IsolationProofReport:
     """Run role probes against the seeded DB and compare them with expected IDs."""
     selected_probes = probes or [
         ScopeProbe(name="worker-repo-a", consumer="worker", project="repo-a"),
         ScopeProbe(name="orchestrator", consumer="orchestrator", project=None, include_checkpoints=True),
         ScopeProbe(name="coach", consumer="coach", project=None),
     ]
+    expected_by_probe = expectations or {**BASIC_PROOF_EXPECTATIONS, **EXTENSION_PROOF_EXPECTATIONS}
     visible_ids_by_probe: dict[str, set[str]] = {}
     failures: list[str] = []
 
@@ -236,7 +241,7 @@ def run_basic_isolation_proof(db_path: str | Path, probes: list[ScopeProbe] | No
             )
             visible_ids = set(results["ids"][0])
             visible_ids_by_probe[probe.name] = visible_ids
-            expected = BASIC_PROOF_EXPECTATIONS.get(probe.name)
+            expected = expected_by_probe.get(probe.name)
             if expected is not None and visible_ids != expected:
                 failures.append(f"{probe.name}: expected {sorted(expected)}, got {sorted(visible_ids)}")
     finally:
@@ -268,6 +273,7 @@ def run_extension_isolation_proof(db_path: str | Path) -> IsolationProofReport:
                 project_filters=("repo-a.worktree.feature-x", "repo-a"),
             ),
         ],
+        expectations=EXTENSION_PROOF_EXPECTATIONS,
     )
 
 
