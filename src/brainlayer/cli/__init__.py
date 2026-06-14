@@ -289,6 +289,62 @@ def context(
         raise typer.Exit(1)
 
 
+@app.command("reembed-backfill")
+def reembed_backfill_command(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
+    batch_size: int = typer.Option(64, "--batch-size", help="Model encode batch size", min=1),
+    limit: Optional[int] = typer.Option(None, "--limit", help="Maximum chunks to embed in this run", min=1),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count pending chunks without loading the model"),
+    include_inactive: bool = typer.Option(
+        False,
+        "--include-inactive",
+        help="Also embed archived, superseded, and aggregated chunks",
+    ),
+    progress_every: int = typer.Option(10, "--progress-every", help="Log progress every N batches", min=1),
+    model_name: str = typer.Option("BAAI/bge-large-en-v1.5", "--model", help="Sentence-transformers model name"),
+    skip_heavy_ml_check: bool = typer.Option(
+        False,
+        "--skip-heavy-ml-check",
+        help="Bypass the local heavy-ML process mutex check",
+    ),
+) -> None:
+    """Batch-embed active chunks that are missing semantic vectors."""
+    from ..reembed_backfill import find_heavy_ml_processes, run_reembed_backfill
+
+    db_path = db or get_db_path()
+
+    if not dry_run and not skip_heavy_ml_check:
+        conflicts = find_heavy_ml_processes()
+        if conflicts:
+            rprint("[red]Heavy-ML mutex blocked reembed-backfill.[/]")
+            rprint("[yellow]Stop these processes or rerun only when they are idle:[/]")
+            for conflict in conflicts:
+                rprint(f"  {conflict}")
+            raise typer.Exit(2)
+
+    result = run_reembed_backfill(
+        db_path=db_path,
+        model_name=model_name,
+        batch_size=batch_size,
+        limit=limit,
+        dry_run=dry_run,
+        include_inactive=include_inactive,
+        progress_every=progress_every,
+    )
+
+    scope = "all chunks" if include_inactive else "active chunks"
+    if dry_run:
+        rprint(f"Unvectored {scope}: {result.before_count}")
+        return
+
+    rprint(f"Before unvectored {scope}: {result.before_count}")
+    rprint(f"After unvectored {scope}: {result.after_count}")
+    rprint(f"Processed: {result.processed}")
+    rprint(f"Failed: {result.failed}")
+    rprint(f"Throughput: {result.chunks_per_second:.1f} chunks/sec")
+    rprint(f"Wall-clock: {result.elapsed_seconds:.1f}s")
+
+
 # Known project renames/aliases - map old names to canonical names
 # Example: pre-monorepo standalone repos → monorepo
 PROJECT_ALIASES: dict[str, str] = {
