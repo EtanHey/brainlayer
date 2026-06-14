@@ -26,7 +26,6 @@ HEAVY_ML_PYTHON_MARKERS = (
     "mlx_audio.tts.generate",
     "mlx_lm.server",
     "brainlayer.reembed_backfill",
-    "python.*embed",
 )
 
 
@@ -173,11 +172,16 @@ def find_heavy_ml_processes() -> list[str]:
         pid, executable, command = parts
         if pid == current_pid:
             continue
+        argv0 = command.split(None, 1)[0] if command else ""
         executable_name = Path(executable).name.lower()
+        argv0_name = Path(argv0).name.lower()
         lower = command.lower()
-        executable_match = any(pattern in executable_name for pattern in HEAVY_ML_EXECUTABLES)
-        python_mlx = "python" in executable_name and any(marker in lower for marker in HEAVY_ML_PYTHON_MARKERS)
-        python_embed = "python" in executable_name and "embed" in lower
+        executable_match = any(
+            pattern in executable_name or pattern in argv0_name for pattern in HEAVY_ML_EXECUTABLES
+        )
+        python_executable = "python" in executable_name or "python" in argv0_name
+        python_mlx = python_executable and any(marker in lower for marker in HEAVY_ML_PYTHON_MARKERS)
+        python_embed = python_executable and "embed" in lower
         if executable_match or python_mlx or python_embed:
             matches.append(stripped)
     return matches
