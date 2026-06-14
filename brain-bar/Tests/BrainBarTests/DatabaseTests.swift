@@ -1008,6 +1008,15 @@ final class DatabaseTests: XCTestCase {
         // Verify it's searchable
         let results = try db.search(query: "GRDB SQLite", limit: 10)
         XCTAssertFalse(results.isEmpty)
+
+        let createdAt = try XCTUnwrap(sqliteScalarString(
+            path: tempDBPath,
+            sql: "SELECT created_at FROM chunks WHERE id = '\(stored.chunkID)'"
+        ))
+        XCTAssertNotNil(ISO8601DateFormatter().date(from: createdAt))
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 5, bucketCount: 5)
+        XCTAssertGreaterThan(stats.recentWriteFiveMinuteCount, 0)
     }
 
     func testAnalyzePopulatesStatsForSearchIndexes() throws {
