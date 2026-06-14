@@ -202,11 +202,12 @@ class TestBrainExpand:
         text = result.content[0].text if hasattr(result, "content") else result[0].text
         assert "Unknown tool" not in text
 
-    def test_brain_expand_manual_chunk_id_returns_target_content(self, tmp_path):
+    def test_brain_expand_manual_chunk_id_returns_target_content(self, tmp_path, monkeypatch):
         """brain_expand should expand manual-* chunk IDs created via brain_store."""
         from brainlayer.mcp import call_tool
         from brainlayer.store import store_memory
 
+        monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
         store = VectorStore(tmp_path / "test.db")
 
         with patch(

@@ -2431,6 +2431,7 @@ class SearchMixin:
         *,
         include_checkpoints: bool = False,
         include_audit: bool = False,
+        consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, Any]:
         """Get surrounding chunks from the same conversation."""
         read_conn = self._get_read_conn()
@@ -2441,7 +2442,7 @@ class SearchMixin:
         target = list(
             cursor.execute(
                 """
-            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin
+            SELECT conversation_id, position, content, metadata, content_type, tags, chunk_origin, project, source_file
             FROM chunks WHERE id = ?
         """,
                 (chunk_id,),
@@ -2451,7 +2452,9 @@ class SearchMixin:
         if not target:
             return {"target": None, "context": [], "error": "Chunk not found"}
 
-        conv_id, position, content, metadata, content_type, tags, chunk_origin = target[0]
+        conv_id, position, content, metadata, content_type, tags, chunk_origin, project, source_file = target[0]
+        if not _metadata_matches_project_scope({"project": project}, None, consumer_scope):
+            return {"target": None, "context": [], "error": "Chunk not found"}
         if self._context_chunk_is_filtered(
             content=content,
             tags=tags,
@@ -2466,13 +2469,21 @@ class SearchMixin:
             # have no conversation_id/position. They should still be expandable as a
             # single target chunk instead of being treated as missing.
             return {
-                "target": {"id": chunk_id, "content": content, "position": None},
+                "target": {
+                    "id": chunk_id,
+                    "content": content,
+                    "position": None,
+                    "project": project,
+                    "source_file": source_file,
+                },
                 "context": [
                     {
                         "id": chunk_id,
                         "content": content,
                         "position": None,
                         "content_type": content_type,
+                        "project": project,
+                        "source_file": source_file,
                         "is_target": True,
                     }
                 ],
@@ -2482,7 +2493,7 @@ class SearchMixin:
         context_rows = list(
             cursor.execute(
                 """
-            SELECT id, content, position, content_type, tags, chunk_origin
+            SELECT id, content, position, content_type, tags, chunk_origin, project, source_file
             FROM chunks
             WHERE conversation_id = ?
               AND position BETWEEN ? AND ?
@@ -2494,6 +2505,9 @@ class SearchMixin:
 
         context = []
         for row in context_rows:
+            row_project = row[6]
+            if not _metadata_matches_project_scope({"project": row_project}, None, consumer_scope):
+                continue
             if self._context_chunk_is_filtered(
                 content=row[1],
                 tags=row[4],
@@ -2508,11 +2522,19 @@ class SearchMixin:
                     "content": row[1],
                     "position": row[2],
                     "content_type": row[3],
+                    "project": row_project,
+                    "source_file": row[7],
                     "is_target": row[0] == chunk_id,
                 }
             )
 
         return {
-            "target": {"id": chunk_id, "content": content, "position": position},
+            "target": {
+                "id": chunk_id,
+                "content": content,
+                "position": position,
+                "project": project,
+                "source_file": source_file,
+            },
             "context": context,
         }

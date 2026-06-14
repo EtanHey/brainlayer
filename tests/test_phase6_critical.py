@@ -13,7 +13,7 @@ Covers:
 import asyncio
 import json
 import threading
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import apsw
 import pytest
@@ -159,6 +159,7 @@ class TestSearchRouting:
             after=3,
             include_checkpoints=False,
             include_audit=False,
+            consumer_scope=ANY,
         )
 
     def test_search_routing_file_path(self):

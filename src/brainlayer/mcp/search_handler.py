@@ -64,6 +64,48 @@ def _is_sqlite_vec_knn_error(exc: Exception) -> bool:
     return "sqlite-vec" in message or ("knn" in message and ("limit" in message or "too large" in message))
 
 
+def _row_matches_consumer_scope(row: dict[str, Any], project: str | None, consumer_scope: Any | None) -> bool:
+    return _metadata_matches_project_scope({"project": row.get("project")}, project, consumer_scope)
+
+
+def _filter_rows_for_consumer_scope(
+    rows: list[dict[str, Any]],
+    project: str | None,
+    consumer_scope: Any | None,
+) -> list[dict[str, Any]]:
+    return [row for row in rows if _row_matches_consumer_scope(row, project, consumer_scope)]
+
+
+def _filter_recall_result_for_consumer_scope(result: Any, project: str | None, consumer_scope: Any | None) -> Any:
+    if consumer_scope is None:
+        return result
+    if hasattr(result, "file_history"):
+        result.file_history = _filter_rows_for_consumer_scope(result.file_history, project, consumer_scope)
+    if hasattr(result, "related_chunks"):
+        result.related_chunks = _filter_rows_for_consumer_scope(result.related_chunks, project, consumer_scope)
+    if hasattr(result, "session_summaries"):
+        result.session_summaries = _filter_rows_for_consumer_scope(result.session_summaries, project, consumer_scope)
+    return result
+
+
+def _filter_regression_for_consumer_scope(result: dict[str, Any], project: str | None, consumer_scope: Any | None) -> dict[str, Any]:
+    if consumer_scope is None:
+        return result
+    filtered = dict(result)
+    timeline = _filter_rows_for_consumer_scope(list(result.get("timeline") or []), project, consumer_scope)
+    filtered["timeline"] = timeline
+    last_success = result.get("last_success")
+    filtered["last_success"] = (
+        last_success if isinstance(last_success, dict) and _row_matches_consumer_scope(last_success, project, consumer_scope) else None
+    )
+    filtered["changes_after"] = _filter_rows_for_consumer_scope(
+        list(result.get("changes_after") or []),
+        project,
+        consumer_scope,
+    )
+    return filtered
+
+
 def _helper_sentinel_path() -> Path:
     return Path("~/.local/share/brainlayer/use-helper-socket").expanduser()
 
@@ -762,7 +804,7 @@ async def _brain_search_dispatch(
         )
 
     consumer_scope = None
-    if project is None and entity_id is None:
+    if project is None:
         try:
             from ..scoping import resolve_project_scope
 
@@ -849,16 +891,18 @@ async def _brain_search_dispatch(
             after=after,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            consumer_scope=consumer_scope,
         )
 
     if file_path is not None and _query_has_regression_signal(query):
-        regression_result = await _regression(file_path=file_path, project=project)
+        regression_result = await _regression(file_path=file_path, project=project, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
             project=project,
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
         merged_text = []
         if isinstance(regression_result, list):
@@ -870,13 +914,14 @@ async def _brain_search_dispatch(
         return merged_text
 
     if file_path is not None:
-        timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
+        timeline = await _file_timeline(file_path=file_path, project=project, limit=50, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
             project=project,
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
         merged_text = []
         if isinstance(timeline, list):
@@ -1774,6 +1819,7 @@ async def _context(
     *,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    consumer_scope: Any | None = None,
 ) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
@@ -1784,6 +1830,7 @@ async def _context(
             after=after,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            consumer_scope=consumer_scope,
         )
         if result.get("error"):
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
@@ -1807,11 +1854,17 @@ async def _context(
         return _error_result(f"Context error: {str(e)}")
 
 
-async def _file_timeline(file_path: str, project: str | None = None, limit: int = 50) -> list[TextContent]:
+async def _file_timeline(
+    file_path: str,
+    project: str | None = None,
+    limit: int = 50,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """Get interaction timeline for a file."""
     try:
         store = _get_vector_store()
         interactions = store.get_file_timeline(file_path, project=project, limit=limit)
+        interactions = _filter_rows_for_consumer_scope(interactions, project, consumer_scope)
         if not interactions:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
         output_parts = [f"## File Timeline: {file_path}\n", f"Found {len(interactions)} interactions:\n"]
@@ -1846,11 +1899,16 @@ async def _operations(session_id: str) -> list[TextContent]:
         return _error_result(f"Operations error: {str(e)}")
 
 
-async def _regression(file_path: str, project: str | None = None) -> list[TextContent]:
+async def _regression(
+    file_path: str,
+    project: str | None = None,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """Analyze a file for regressions."""
     try:
         store = _get_vector_store()
         result = store.get_file_regression(file_path, project=project)
+        result = _filter_regression_for_consumer_scope(result, project, consumer_scope)
         if not result["timeline"]:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
         parts = [f"## Regression Analysis: {file_path}\n", f"Timeline: {len(result['timeline'])} interactions\n"]
@@ -1965,6 +2023,7 @@ async def _recall(
     max_results: int = 10,
     include_audit: bool = False,
     agent_id: str | None = None,
+    consumer_scope: Any | None = None,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1991,6 +2050,7 @@ async def _recall(
                 agent_id=agent_id,
             ),
         )
+        result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)
         structured = {
             "target": result.target,
             "file_history": [

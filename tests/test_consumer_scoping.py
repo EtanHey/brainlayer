@@ -1,6 +1,8 @@
 """Consumer-role scoping guards for retrieval-time BrainLayer search."""
 
 import json
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
@@ -63,6 +65,32 @@ def _insert_chunk(
     )
 
 
+def _insert_context_chunk(
+    store: VectorStore,
+    *,
+    chunk_id: str,
+    content: str,
+    project: str | None,
+    conversation_id: str,
+    position: int,
+) -> None:
+    store.conn.cursor().execute(
+        """INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type,
+            char_count, source, conversation_id, position
+        ) VALUES (?, ?, ?, 'scope-context.jsonl', ?, 'assistant_text', ?, 'claude_code', ?, ?)""",
+        (
+            chunk_id,
+            content,
+            json.dumps({}),
+            project,
+            len(content),
+            conversation_id,
+            position,
+        ),
+    )
+
+
 def _ids(results: dict) -> list[str]:
     return results["ids"][0]
 
@@ -71,9 +99,29 @@ def _projects(results: dict) -> list[str | None]:
     return [meta.get("project") for meta in results["metadatas"][0]]
 
 
+def _text_parts(parts: list[Any]) -> str:
+    return "\n".join(getattr(part, "text", str(part)) for part in parts)
+
+
 class _ScopedEmbeddingModel:
     def embed_query(self, query: str) -> list[float]:
         return _embed(query)
+
+
+@dataclass
+class _FakeRecallResult:
+    target: str = "src/app.py"
+    file_history: list[dict[str, Any]] = field(default_factory=list)
+    related_chunks: list[dict[str, Any]] = field(default_factory=list)
+    session_summaries: list[dict[str, Any]] = field(default_factory=list)
+
+    def format(self) -> str:
+        parts = [f"## Recall: {self.target}"]
+        for row in self.file_history:
+            parts.append(f"{row.get('project')}:{row.get('action')}:{row.get('session_id')}")
+        for row in self.related_chunks:
+            parts.append(f"{row.get('project')}:{row.get('content')}")
+        return "\n".join(parts)
 
 
 def test_resolve_consumer_scope_defaults_to_worker_fail_closed(monkeypatch):
@@ -228,6 +276,252 @@ def test_coach_consumer_scope_uses_personal_lane_and_recency_checkpoints(store):
     assert set(_projects(results)) <= {"personal", None}
 
 
+def test_worker_direct_context_filters_foreign_and_null_neighbors(store):
+    conversation_id = "mixed-session"
+    _insert_context_chunk(
+        store,
+        chunk_id="repo-b-before",
+        content="foreign repo neighbor must not leak",
+        project="repo-b",
+        conversation_id=conversation_id,
+        position=1,
+    )
+    _insert_context_chunk(
+        store,
+        chunk_id="repo-a-target",
+        content="allowed repo target",
+        project="repo-a",
+        conversation_id=conversation_id,
+        position=2,
+    )
+    _insert_context_chunk(
+        store,
+        chunk_id="null-after",
+        content="user-local neighbor must not leak",
+        project=None,
+        conversation_id=conversation_id,
+        position=3,
+    )
+    _insert_context_chunk(
+        store,
+        chunk_id="repo-a-after",
+        content="allowed repo neighbor",
+        project="repo-a",
+        conversation_id=conversation_id,
+        position=4,
+    )
+
+    worker_context = store.get_context(
+        "repo-a-target",
+        before=3,
+        after=3,
+        consumer_scope=ConsumerScope.for_worker("repo-a"),
+    )
+
+    assert worker_context["target"]["id"] == "repo-a-target"
+    assert [chunk["id"] for chunk in worker_context["context"]] == ["repo-a-target", "repo-a-after"]
+
+
+def test_orchestrator_direct_context_preserves_mixed_project_neighbors(store):
+    conversation_id = "mixed-session"
+    _insert_context_chunk(
+        store,
+        chunk_id="repo-b-before",
+        content="foreign repo neighbor is visible to orchestrator",
+        project="repo-b",
+        conversation_id=conversation_id,
+        position=1,
+    )
+    _insert_context_chunk(
+        store,
+        chunk_id="repo-a-target",
+        content="allowed repo target",
+        project="repo-a",
+        conversation_id=conversation_id,
+        position=2,
+    )
+    _insert_context_chunk(
+        store,
+        chunk_id="null-after",
+        content="user-local neighbor is visible to orchestrator",
+        project=None,
+        conversation_id=conversation_id,
+        position=3,
+    )
+
+    orchestrator_context = store.get_context(
+        "repo-a-target",
+        before=3,
+        after=3,
+        consumer_scope=ConsumerScope.for_orchestrator(),
+    )
+
+    assert [chunk["id"] for chunk in orchestrator_context["context"]] == [
+        "repo-b-before",
+        "repo-a-target",
+        "null-after",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_file_timeline_filters_foreign_and_null_rows(monkeypatch):
+    from brainlayer.mcp.search_handler import _file_timeline
+
+    class FakeStore:
+        def get_file_timeline(self, file_path, project=None, limit=50):  # noqa: ANN001, ARG002
+            return [
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T00:00:00Z",
+                    "session_id": "repo-a-session",
+                    "action": "edit",
+                    "project": "repo-a",
+                },
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T01:00:00Z",
+                    "session_id": "repo-b-session",
+                    "action": "edit",
+                    "project": "repo-b",
+                },
+                {
+                    "file_path": "src/app.py",
+                    "timestamp": "2026-06-01T02:00:00Z",
+                    "session_id": "null-session",
+                    "action": "read",
+                    "project": None,
+                },
+            ]
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeStore())
+
+    parts = await _file_timeline(
+        file_path="src/app.py",
+        project="repo-a",
+        consumer_scope=ConsumerScope.for_worker("repo-a"),
+    )
+
+    text = _text_parts(parts)
+    assert "Found 1 interactions" in text
+    assert "repo-a-session"[:8] in text
+    assert "repo-b" not in text
+    assert "null-session"[:8] not in text
+
+
+@pytest.mark.asyncio
+async def test_worker_regression_filters_foreign_and_null_rows(monkeypatch):
+    from brainlayer.mcp.search_handler import _regression
+
+    class FakeStore:
+        def get_file_regression(self, file_path, project=None):  # noqa: ANN001, ARG002
+            return {
+                "timeline": [
+                    {
+                        "file_path": "src/app.py",
+                        "timestamp": "2026-06-01T00:00:00Z",
+                        "session_id": "repo-a-session",
+                        "action": "test-pass",
+                        "project": "repo-a",
+                        "branch": "main",
+                    },
+                    {
+                        "file_path": "src/app.py",
+                        "timestamp": "2026-06-01T01:00:00Z",
+                        "session_id": "repo-b-session",
+                        "action": "edit",
+                        "project": "repo-b",
+                        "branch": "foreign",
+                    },
+                    {
+                        "file_path": "src/app.py",
+                        "timestamp": "2026-06-01T02:00:00Z",
+                        "session_id": "null-session",
+                        "action": "edit",
+                        "project": None,
+                        "branch": "local",
+                    },
+                ],
+                "last_success": {
+                    "timestamp": "2026-06-01T00:00:00Z",
+                    "session_id": "repo-a-session",
+                    "branch": "main",
+                    "project": "repo-a",
+                },
+                "changes_after": [
+                    {
+                        "timestamp": "2026-06-01T01:00:00Z",
+                        "session_id": "repo-b-session",
+                        "action": "edit",
+                        "project": "repo-b",
+                        "branch": "foreign",
+                    },
+                    {
+                        "timestamp": "2026-06-01T02:00:00Z",
+                        "session_id": "null-session",
+                        "action": "edit",
+                        "project": None,
+                        "branch": "local",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeStore())
+
+    parts = await _regression(
+        file_path="src/app.py",
+        project="repo-a",
+        consumer_scope=ConsumerScope.for_worker("repo-a"),
+    )
+
+    text = _text_parts(parts)
+    assert "Timeline: 1 interactions" in text
+    assert "repo-a-s" in text
+    assert "repo-b" not in text
+    assert "null-session"[:8] not in text
+
+
+@pytest.mark.asyncio
+async def test_worker_recall_filters_foreign_and_null_rows(monkeypatch):
+    from brainlayer.mcp.search_handler import _recall
+
+    def fake_recall(**_kwargs):
+        return _FakeRecallResult(
+            file_history=[
+                {"timestamp": "2026-06-01T00:00:00Z", "session_id": "repo-a-session", "action": "edit", "project": "repo-a"},
+                {"timestamp": "2026-06-01T01:00:00Z", "session_id": "repo-b-session", "action": "edit", "project": "repo-b"},
+                {"timestamp": "2026-06-01T02:00:00Z", "session_id": "null-session", "action": "read", "project": None},
+            ],
+            related_chunks=[
+                {"content": "allowed related", "project": "repo-a"},
+                {"content": "foreign related", "project": "repo-b"},
+                {"content": "null related", "project": None},
+            ],
+        )
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: _ScopedEmbeddingModel())
+    monkeypatch.setattr("brainlayer.engine.recall", fake_recall)
+
+    parts, structured = await _recall(
+        file_path="src/app.py",
+        project="repo-a",
+        consumer_scope=ConsumerScope.for_worker("repo-a"),
+    )
+
+    text = _text_parts(parts)
+    assert structured["file_history"] == [
+        {
+            "timestamp": "2026-06-01T00:00:00",
+            "action": "edit",
+            "session_id": "repo-a-session",
+            "file_path": "",
+        }
+    ]
+    assert [chunk["project"] for chunk in structured["related_chunks"]] == ["repo-a"]
+    assert "repo-b" not in text
+    assert "null related" not in text
+
+
 @pytest.mark.asyncio
 async def test_mcp_roundtrip_applies_worker_and_orchestrator_scopes_on_seeded_store(store, monkeypatch):
     from brainlayer.mcp.search_handler import _brain_search
@@ -301,3 +595,21 @@ async def test_mcp_roundtrip_applies_worker_and_orchestrator_scopes_on_seeded_st
         allow_helper_route=False,
     )
     assert orchestrator_exact_structured["results"][0]["chunk_id"] == "null-handler"
+
+
+@pytest.mark.asyncio
+async def test_entity_id_search_resolves_project_before_worker_scope(monkeypatch):
+    from brainlayer.mcp.search_handler import _brain_search
+
+    async def fake_search(**kwargs):
+        return ([], kwargs)
+
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "worker")
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "repo-a")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._search", fake_search)
+
+    _content, kwargs = await _brain_search(query="entity lookup", entity_id="entity-1")
+
+    assert kwargs["project"] == "repo-a"
+    assert kwargs["consumer_scope"].project_filter == "repo-a"
+    assert kwargs["consumer_scope"].deny_all is False
