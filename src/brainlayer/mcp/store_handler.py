@@ -663,7 +663,7 @@ async def _store(
             structured = _deferred_store_receipt(promised_chunk_id, queue_path, reason="ARBITRATED")
             return ([TextContent(type="text", text=format_store_result(promised_chunk_id, queued=True))], structured)
 
-        from ..store import embed_pending_chunks, store_memory
+        from ..store import embed_hot_chunk, embed_pending_chunks, store_memory
 
         store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
@@ -712,6 +712,8 @@ async def _store(
                 bg_store = _VS(db_path)
                 model = _get_embedding_model()
                 embed_fn = model.embed_query
+                if embed_hot_chunk(store=bg_store, embed_fn=embed_fn, chunk_id=chunk_id):
+                    logger.info("Hot-embedded chunk %s", chunk_id)
                 count = embed_pending_chunks(
                     store=bg_store,
                     embed_fn=embed_fn,
