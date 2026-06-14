@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -181,7 +182,17 @@ def find_heavy_ml_processes() -> list[str]:
         )
         python_executable = "python" in executable_name or "python" in argv0_name
         python_mlx = python_executable and any(marker in lower for marker in HEAVY_ML_PYTHON_MARKERS)
-        python_embed = python_executable and "embed" in lower
+        python_entrypoint = ""
+        if python_executable:
+            try:
+                tokens = shlex.split(command)
+            except ValueError:
+                tokens = command.split()
+            if len(tokens) >= 3 and tokens[1] == "-m":
+                python_entrypoint = tokens[2]
+            elif len(tokens) >= 2:
+                python_entrypoint = Path(tokens[1]).name
+        python_embed = python_executable and "embed" in python_entrypoint.lower()
         if executable_match or python_mlx or python_embed:
             matches.append(stripped)
     return matches

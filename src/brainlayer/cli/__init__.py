@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re as _re
 import sys
 import time
@@ -312,6 +313,8 @@ def reembed_backfill_command(
     from ..reembed_backfill import find_heavy_ml_processes, run_reembed_backfill
 
     db_path = db or get_db_path()
+    if not dry_run:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     if not dry_run and not skip_heavy_ml_check:
         conflicts = find_heavy_ml_processes()

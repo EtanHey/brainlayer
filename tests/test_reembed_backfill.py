@@ -175,6 +175,9 @@ def test_heavy_ml_mutex_ignores_agent_prompt_text(monkeypatch):
                 "222 /opt/homebrew/bin/llama-server /opt/homebrew/bin/llama-server --model local.gguf",
                 "333 /usr/bin/python3 python -m mlx_audio.tts.generate --model voice",
                 "444 /usr/bin/python3 python scripts/embed_backfill.py",
+                "555 /opt/homebrew/bi /opt/homebrew/bin/whisper-server -m ggml-large-v3-turbo.bin",
+                "666 /Library/Framewo /Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /Library/Frameworks/Python.framework/Versions/3.13/bin/mlx_lm.server --model local",
+                "777 /usr/bin/python3 python -m pytest tests/test_deferred_embedding.py -q",
             ]
         )
 
@@ -183,8 +186,10 @@ def test_heavy_ml_mutex_ignores_agent_prompt_text(monkeypatch):
 
     matches = reembed_backfill.find_heavy_ml_processes()
 
-    assert len(matches) == 3
+    assert len(matches) == 5
     assert not any("claude --append-system-prompt" in match for match in matches)
     assert any("llama-server" in match for match in matches)
     assert any("mlx_audio.tts.generate" in match for match in matches)
     assert any("embed_backfill.py" in match for match in matches)
+    assert any("whisper-server" in match for match in matches)
+    assert any("mlx_lm.server" in match for match in matches)
