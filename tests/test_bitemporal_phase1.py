@@ -175,10 +175,14 @@ def test_store_memory_populates_content_hash_and_temporal_columns(tmp_path):
             memory_type="note",
             project="brainlayer",
         )
-        row = store.conn.cursor().execute(
-            "SELECT content_hash, valid_from, invalid_at, sys_period_start, sys_period_end FROM chunks WHERE id = ?",
-            (result["id"],),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT content_hash, valid_from, invalid_at, sys_period_start, sys_period_end FROM chunks WHERE id = ?",
+                (result["id"],),
+            )
+            .fetchone()
+        )
     finally:
         store.close()
 
