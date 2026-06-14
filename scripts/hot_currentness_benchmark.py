@@ -30,7 +30,7 @@ from brainlayer.drain import drain_once
 from brainlayer.fallback_replay import load_scope_map, parse_fallback_file, replay_entry
 from brainlayer.paths import DEFAULT_DB_PATH
 from brainlayer.queue_io import enqueue_store, get_queue_dir
-from brainlayer.store import embed_pending_chunks, store_memory
+from brainlayer.store import embed_hot_chunk, embed_pending_chunks, store_memory
 from brainlayer.vector_store import VectorStore
 # isort: on
 
@@ -208,6 +208,10 @@ def _hybrid_visible(
     return bool(ids and ids[0] and chunk_id in ids[0])
 
 
+def _vector_only_query_text(chunk_id: str) -> str:
+    return f"vector_only_currentness_probe_{chunk_id.replace('-', '_')}"
+
+
 def run_store_probe(
     *,
     db_path: Path,
@@ -247,10 +251,13 @@ def run_store_probe(
 
         embedding_latency = None
         hybrid_latency = None
+        hybrid_vector_latency = None
         hybrid_visible_with_embedding = False
+        hybrid_vector_visible_with_embedding = False
         query_embedding = embed_fn(content) if embed_fn is not None else None
         if embed_after_store and embed_fn is not None:
             embed_start = _now()
+            embed_hot_chunk(store=store, embed_fn=embed_fn, chunk_id=chunk_id)
             embed_pending_chunks(store=store, embed_fn=embed_fn, batch_size=1)
             embedding_latency = _poll(
                 timeout_s,
@@ -277,6 +284,24 @@ def run_store_probe(
                 ),
             )
             hybrid_visible_with_embedding = hybrid_latency is not None and _embedding_visible(store, chunk_id)
+            hybrid_vector_latency = _poll_from(
+                call_start,
+                timeout_s,
+                poll_interval_s,
+                lambda: (
+                    _embedding_visible(store, chunk_id)
+                    and _hybrid_visible(
+                        store,
+                        chunk_id=chunk_id,
+                        query_text=_vector_only_query_text(chunk_id),
+                        query_embedding=query_embedding,
+                        project=project,
+                    )
+                ),
+            )
+            hybrid_vector_visible_with_embedding = hybrid_vector_latency is not None and _embedding_visible(
+                store, chunk_id
+            )
 
         return {
             "chunk_id": chunk_id,
@@ -287,6 +312,8 @@ def run_store_probe(
             "embedding_availability_latency_ms": embedding_latency,
             "hybrid_rrf_visibility_latency_ms": hybrid_latency,
             "hybrid_rrf_visible_with_embedding": hybrid_visible_with_embedding,
+            "hybrid_vector_arm_visibility_latency_ms": hybrid_vector_latency,
+            "hybrid_vector_arm_visible_with_embedding": hybrid_vector_visible_with_embedding,
         }
     finally:
         store.close()
@@ -475,6 +502,7 @@ def _summarize_probe_set(label: str, probes: list[dict[str, Any]]) -> dict[str, 
         "trigram_visibility_latency_ms",
         "embedding_availability_latency_ms",
         "hybrid_rrf_visibility_latency_ms",
+        "hybrid_vector_arm_visibility_latency_ms",
     ]
     return {
         "label": label,

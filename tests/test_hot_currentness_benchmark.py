@@ -22,6 +22,65 @@ def _fake_embed(text: str) -> list[float]:
     return [float(seed + idx) / 1000.0 for idx in range(1024)]
 
 
+def _has_vector(db_path: Path, chunk_id: str) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        return (
+            conn.execute(
+                "SELECT COUNT(*) FROM chunk_vectors_rowids WHERE id = ?",
+                (chunk_id,),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_store_probe_hot_embeds_fresh_chunk_and_still_drains_old_backlog(tmp_path):
+    benchmark = _load_benchmark_module()
+    from brainlayer.store import store_memory
+    from brainlayer.vector_store import VectorStore
+
+    db_path = tmp_path / "hot-currentness.db"
+    store = VectorStore(db_path)
+    old_ids = []
+    try:
+        for index in range(3):
+            old = store_memory(
+                store=store,
+                embed_fn=None,
+                content=f"old backlog currentness drain marker {index}",
+                memory_type="note",
+                project="brainlayer-test",
+                created_at=f"2026-06-13T00:0{index}:00+00:00",
+            )
+            old_ids.append(old["id"])
+    finally:
+        store.close()
+
+    fresh_content = "fresh vector currentness marker should hot embed before backlog"
+
+    def lane_embed(text: str) -> list[float]:
+        if text == fresh_content:
+            return [1.0] + [0.0] * 1023
+        return [0.0, 1.0] + [0.0] * 1022
+
+    before_pending = benchmark.embedding_backlog_metrics(db_path=db_path)["pending_manual_mcp_embeddings"]
+    result = benchmark.run_store_probe(
+        db_path=db_path,
+        content=fresh_content,
+        project="brainlayer-test",
+        embed_fn=lane_embed,
+        embed_after_store=True,
+        timeout_s=3.0,
+        poll_interval_s=0.01,
+    )
+    after_pending = benchmark.embedding_backlog_metrics(db_path=db_path)["pending_manual_mcp_embeddings"]
+
+    assert result["hybrid_vector_arm_visible_with_embedding"] is True
+    assert result["hybrid_vector_arm_visibility_latency_ms"] >= 0
+    assert _has_vector(db_path, result["chunk_id"])
+    assert _has_vector(db_path, old_ids[0])
+    assert after_pending < before_pending
+
+
 def test_store_probe_separates_durable_lexical_embedding_and_hybrid_visibility(tmp_path):
     benchmark = _load_benchmark_module()
     db_path = tmp_path / "hot-currentness.db"
