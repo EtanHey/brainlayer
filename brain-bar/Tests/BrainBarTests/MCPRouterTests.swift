@@ -1790,18 +1790,30 @@ final class MCPRouterTests: XCTestCase {
 
         let result = response["result"] as? [String: Any]
         XCTAssertNil(result?["isError"])
+        // The live write queued (busy DB), but the existing backlog must still drain.
         XCTAssertEqual(result?["queued"] as? Bool, true)
-        XCTAssertEqual(result?["flushed_count"] as? Int, 0)
+        XCTAssertEqual(result?["flushed_count"] as? Int, 1)
         let flushed = result?["_brainbarFlushedQueuedChunks"] as? [[String: Any]]
-        XCTAssertEqual(flushed?.count, 0)
+        XCTAssertEqual(flushed?.count, 1)
+        // Receipts stay privacy-stripped (chunk_id + rowid only), matching the .stored path.
+        XCTAssertNotNil(flushed?.first?["chunk_id"] as? String)
+        XCTAssertNotNil(flushed?.first?["rowid"])
+        XCTAssertNil(flushed?.first?["content"])
+        XCTAssertNil(flushed?.first?["tags"])
+        XCTAssertNil(flushed?.first?["importance"])
 
+        // Only the just-queued LIVE chunk remains queued (the seeded backlog item was drained).
+        let queuedPayloadAfterFlush = try XCTUnwrap(readSinglePendingStorePayload(queuePath: queuePath))
+        XCTAssertEqual(queuedPayloadAfterFlush["content"] as? String, "Live write queues but still triggers flush")
+
+        // The pre-seeded backlog item flushed to the DB exactly once; the live chunk did not.
         let contents = try chunkContents(path: dbPath)
-        XCTAssertFalse(contents.contains("Queued item should flush even when live write queues"))
+        XCTAssertEqual(
+            contents.filter { $0 == "Queued item should flush even when live write queues" }.count,
+            1,
+            "the seeded backlog item should be stored exactly once"
+        )
         XCTAssertFalse(contents.contains("Live write queues but still triggers flush"))
-
-        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
-        XCTAssertTrue(queuedText.contains("Queued item should flush even when live write queues"))
-        XCTAssertTrue(queuedText.contains("Live write queues but still triggers flush"))
     }
 
     func testBrainStoreFlushKeepsMalformedQueueLines() throws {

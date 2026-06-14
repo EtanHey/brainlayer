@@ -512,11 +512,17 @@ final class MCPRouter: @unchecked Sendable {
                     ]
                 )
             case .queued(let queueID, let queuedAt, let chunkID):
+                // Mirror the .stored path: even when the current store queues under a
+                // busy DB, drain the existing backlog so prior writes are not stranded.
+                // Exclude the just-queued chunk so it is not immediately re-replayed /
+                // double-stored before its own deferred drain runs.
+                let flushedStores = db.flushPendingStores(excludingChunkIDs: [chunkID])
                 return queuedBrainStoreOutput(
                     queueID: queueID,
                     queuedAt: queuedAt,
                     chunkID: chunkID,
-                    queuePath: db.pendingStoreQueuePathForReceipt()
+                    queuePath: db.pendingStoreQueuePathForReceipt(),
+                    flushedStores: flushedStores
                 )
             }
         } catch BrainDatabase.DBError.notOpen {
