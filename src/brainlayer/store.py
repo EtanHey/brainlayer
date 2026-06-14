@@ -74,6 +74,7 @@ def store_memory(
     fallback_source_path: Optional[str] = None,
     origin_repo_path: Optional[str] = None,
     replayed_by: Optional[str] = None,
+    chunk_origin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -104,6 +105,7 @@ def store_memory(
         fallback_source_path: Optional path to a local fallback file being replayed.
         origin_repo_path: Optional git root for the fallback's originating repo.
         replayed_by: Optional replay worker identifier.
+        chunk_origin: Optional explicit origin classification preserved from queued fallback metadata.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -166,7 +168,7 @@ def store_memory(
     if replayed_by is not None:
         meta["replayed_by"] = replayed_by
 
-    chunk_origin = detect_chunk_origin(content)
+    resolved_chunk_origin = detect_chunk_origin(content, chunk_origin)
     content_class = classify_content_class(content, content_type=memory_type, tags=tags, source="manual")
     tags_json = json.dumps(tags) if tags else None
     incoming_chunk_id = chunk_id
@@ -266,7 +268,7 @@ def store_memory(
                             content[:200],
                             tags_json,
                             float(importance) if importance is not None else None,
-                            chunk_origin,
+                            resolved_chunk_origin,
                             1,
                             now,
                             dedupe_fields.dedupe_hash,
@@ -333,7 +335,7 @@ def store_memory(
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
     store._invalidate_audit_recursion_count_cache()
-    if chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
+    if resolved_chunk_origin == CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT:
         store._invalidate_checkpoint_count_cache()
 
     return {

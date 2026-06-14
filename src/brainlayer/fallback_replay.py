@@ -77,6 +77,7 @@ def replay_entry(
             fallback_source_path=str(entry.path),
             origin_repo_path=str(entry.origin_repo_path),
             replayed_by=replayed_by,
+            chunk_origin=entry.frontmatter.get("chunk_origin"),
         )
     except Exception as exc:
         try:
