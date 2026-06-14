@@ -110,11 +110,14 @@ PYTHONPATH=src python3 -m brainlayer.isolation_proof \
   --json
 ```
 
-Expected BASIC output:
+Expected output:
 
 - `worker-repo-a`: `repo-a-main-proof`
 - `orchestrator`: all seeded IDs
 - `coach`: `personal-checkpoint-proof`, `null-user-local-proof`
+- `lead-repo-a`: `repo-a-main-proof`, `repo-a-worktree-proof`, `repo-b-main-proof`, `repo-b-worktree-proof`
+- `worker-repo-a-main`: `repo-a-main-proof`
+- `worker-repo-a-worktree`: `repo-a-main-proof`, `repo-a-worktree-proof`
 
 Then run the real-cmux gate with the live MCP server loaded from the same build. Paste the observed `brain_search` outputs into the collab before merging.
 

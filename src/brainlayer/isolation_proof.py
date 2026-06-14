@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ._helpers import serialize_f32
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT
-from .scoping import resolve_consumer_scope
+from .scoping import ConsumerScope, resolve_consumer_scope
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
@@ -26,11 +26,23 @@ BASIC_PROOF_EXPECTATIONS: dict[str, set[str]] = {
         "repo-a-worktree-proof",
         "repo-a-checkpoint-proof",
         "repo-b-main-proof",
+        "repo-b-worktree-proof",
         "repo-b-checkpoint-proof",
         "personal-checkpoint-proof",
         "null-user-local-proof",
     },
     "coach": {"personal-checkpoint-proof", "null-user-local-proof"},
+}
+
+EXTENSION_PROOF_EXPECTATIONS: dict[str, set[str]] = {
+    "lead-repo-a": {
+        "repo-a-main-proof",
+        "repo-a-worktree-proof",
+        "repo-b-main-proof",
+        "repo-b-worktree-proof",
+    },
+    "worker-repo-a-main": {"repo-a-main-proof"},
+    "worker-repo-a-worktree": {"repo-a-main-proof", "repo-a-worktree-proof"},
 }
 
 
@@ -46,6 +58,7 @@ class ScopeProbe:
     consumer: str
     project: str | None
     include_checkpoints: bool = False
+    project_filters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -110,6 +123,7 @@ def seed_isolation_proof_db(db_path: str | Path) -> IsolationProofFixture:
         "repo-a-worktree-proof",
         "repo-a-checkpoint-proof",
         "repo-b-main-proof",
+        "repo-b-worktree-proof",
         "repo-b-checkpoint-proof",
         "personal-checkpoint-proof",
         "null-user-local-proof",
@@ -148,10 +162,17 @@ def seed_isolation_proof_db(db_path: str | Path) -> IsolationProofFixture:
         )
         _insert_proof_chunk(
             store,
+            chunk_id="repo-b-worktree-proof",
+            project="repo-b.worktree.parallel",
+            content=f"{QUERY_TEXT} repo B parallel worktree memory",
+            created_at="2026-06-14T00:04:00Z",
+        )
+        _insert_proof_chunk(
+            store,
             chunk_id="repo-b-checkpoint-proof",
             project="repo-b",
             content=f"[precompact checkpoint] {QUERY_TEXT} repo B checkpoint memory",
-            created_at="2026-06-14T00:04:00Z",
+            created_at="2026-06-14T00:05:00Z",
             chunk_origin=CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
         )
         _insert_proof_chunk(
@@ -159,7 +180,7 @@ def seed_isolation_proof_db(db_path: str | Path) -> IsolationProofFixture:
             chunk_id="personal-checkpoint-proof",
             project="personal",
             content=f"[precompact checkpoint] {QUERY_TEXT} personal coach checkpoint memory",
-            created_at="2026-06-14T00:05:00Z",
+            created_at="2026-06-14T00:06:00Z",
             chunk_origin=CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT,
         )
         _insert_proof_chunk(
@@ -167,12 +188,29 @@ def seed_isolation_proof_db(db_path: str | Path) -> IsolationProofFixture:
             chunk_id="null-user-local-proof",
             project=None,
             content=f"{QUERY_TEXT} user-local null-project memory",
-            created_at="2026-06-14T00:06:00Z",
+            created_at="2026-06-14T00:07:00Z",
         )
     finally:
         store.close()
     clear_hybrid_search_cache(path)
     return IsolationProofFixture(db_path=path, seeded_ids=seeded_ids)
+
+
+def _scope_for_probe(probe: ScopeProbe) -> ConsumerScope:
+    if probe.project_filters:
+        return ConsumerScope(
+            role=probe.consumer,
+            project_filter=probe.project,
+            project_filters=probe.project_filters,
+            include_checkpoints=probe.include_checkpoints,
+            allow_null_project=False,
+            deny_all=probe.project is None,
+        )
+    return resolve_consumer_scope(
+        project=probe.project,
+        consumer=probe.consumer,
+        include_checkpoints=probe.include_checkpoints,
+    )
 
 
 def run_basic_isolation_proof(db_path: str | Path, probes: list[ScopeProbe] | None = None) -> IsolationProofReport:
@@ -189,11 +227,7 @@ def run_basic_isolation_proof(db_path: str | Path, probes: list[ScopeProbe] | No
     store._binary_index_available = False
     try:
         for probe in selected_probes:
-            scope = resolve_consumer_scope(
-                project=probe.project,
-                consumer=probe.consumer,
-                include_checkpoints=probe.include_checkpoints,
-            )
+            scope = _scope_for_probe(probe)
             results = store.hybrid_search(
                 query_embedding=_embed(QUERY_TEXT),
                 query_text=QUERY_TEXT,
@@ -211,6 +245,41 @@ def run_basic_isolation_proof(db_path: str | Path, probes: list[ScopeProbe] | No
     return IsolationProofReport(visible_ids_by_probe=visible_ids_by_probe, failures=failures)
 
 
+def run_extension_isolation_proof(db_path: str | Path) -> IsolationProofReport:
+    return run_basic_isolation_proof(
+        db_path,
+        probes=[
+            ScopeProbe(
+                name="lead-repo-a",
+                consumer="lead",
+                project="repo-a",
+                project_filters=(
+                    "repo-a",
+                    "repo-a.worktree.feature-x",
+                    "repo-b",
+                    "repo-b.worktree.parallel",
+                ),
+            ),
+            ScopeProbe(name="worker-repo-a-main", consumer="worker", project="repo-a"),
+            ScopeProbe(
+                name="worker-repo-a-worktree",
+                consumer="worker",
+                project="repo-a.worktree.feature-x",
+                project_filters=("repo-a.worktree.feature-x", "repo-a"),
+            ),
+        ],
+    )
+
+
+def run_full_isolation_proof(db_path: str | Path) -> IsolationProofReport:
+    basic = run_basic_isolation_proof(db_path)
+    extension = run_extension_isolation_proof(db_path)
+    return IsolationProofReport(
+        visible_ids_by_probe={**basic.visible_ids_by_probe, **extension.visible_ids_by_probe},
+        failures=[*basic.failures, *extension.failures],
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build and run the Happy Camper BrainLayer isolation proof DB.")
     parser.add_argument("--db", type=Path, required=True, help="Path to write the seeded proof SQLite DB")
@@ -218,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     fixture = seed_isolation_proof_db(args.db)
-    report = run_basic_isolation_proof(fixture.db_path)
+    report = run_full_isolation_proof(fixture.db_path)
     payload = {
         "db_path": str(fixture.db_path),
         "seeded_ids": sorted(fixture.seeded_ids),
