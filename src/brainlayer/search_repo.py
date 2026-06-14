@@ -365,6 +365,12 @@ def _optional_chunk_expr(store: Any, column: str, alias: str | None = None, fall
     return f"{fallback} AS {column}"
 
 
+def _temporal_current_clause(store: Any, alias: str | None = None) -> str | None:
+    if not getattr(store, "_has_invalid_at", False):
+        return None
+    return f"{alias}.invalid_at IS NULL" if alias else "invalid_at IS NULL"
+
+
 def _clone_hybrid_result(result: Dict[str, List]) -> Dict[str, List]:
     """Return a defensive deep copy of cached hybrid_search results."""
     return copy.deepcopy(result)
@@ -1035,6 +1041,9 @@ class SearchMixin:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
                     where_clauses.append(checkpoint_clause)
+            temporal_clause = _temporal_current_clause(self, "c")
+            if temporal_clause:
+                where_clauses.append(temporal_clause)
             if not include_archived:
                 where_clauses.append("c.superseded_by IS NULL")
                 where_clauses.append("c.aggregated_into IS NULL")
@@ -1148,6 +1157,9 @@ class SearchMixin:
                 checkpoint_clause = self._checkpoint_exclusion_clause()
                 if checkpoint_clause:
                     where_clauses.append(checkpoint_clause)
+            temporal_clause = _temporal_current_clause(self)
+            if temporal_clause:
+                where_clauses.append(temporal_clause)
             if not include_archived:
                 where_clauses.append("superseded_by IS NULL")
                 where_clauses.append("aggregated_into IS NULL")
@@ -1442,6 +1454,9 @@ class SearchMixin:
             checkpoint_clause = self._checkpoint_exclusion_clause("c")
             if checkpoint_clause:
                 where_clauses.append(checkpoint_clause)
+        temporal_clause = _temporal_current_clause(self, "c")
+        if temporal_clause:
+            where_clauses.append(temporal_clause)
         if not include_archived:
             where_clauses.append("c.superseded_by IS NULL")
             where_clauses.append("c.aggregated_into IS NULL")
@@ -1846,6 +1861,9 @@ class SearchMixin:
                 checkpoint_clause = self._checkpoint_exclusion_clause("c")
                 if checkpoint_clause:
                     fts_extra.append(f"AND {checkpoint_clause}")
+            temporal_clause = _temporal_current_clause(self, "c")
+            if temporal_clause:
+                fts_extra.append(f"AND {temporal_clause}")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     fts_extra.append("AND LOWER(c.content) NOT LIKE ?")
@@ -2030,6 +2048,9 @@ class SearchMixin:
                 checkpoint_clause = self._checkpoint_exclusion_clause()
                 if checkpoint_clause:
                     recent_extra.append(f"AND {checkpoint_clause}")
+            temporal_clause = _temporal_current_clause(self)
+            if temporal_clause:
+                recent_extra.append(f"AND {temporal_clause}")
             if filter_meta_noise:
                 for pattern in META_NOISE_PATTERNS_CASEFOLDED:
                     recent_extra.append("AND LOWER(content) NOT LIKE ?")

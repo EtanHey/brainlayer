@@ -495,6 +495,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         self._has_content_class = "content_class" in chunk_columns
         self._has_provenance_class = "provenance_class" in chunk_columns
         self._has_superseded_by = "superseded_by" in chunk_columns
+        self._has_invalid_at = "invalid_at" in chunk_columns
         self._binary_index_available = "chunk_vectors_binary" in existing_tables
         self._trigram_fts_available = "chunks_fts_trigram" in existing_tables
         self._chunk_tags_available = "chunk_tags" in existing_tables
@@ -590,7 +591,12 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 provenance_class TEXT,
                 chunk_origin TEXT DEFAULT 'unknown',
-                content_class TEXT DEFAULT 'knowledge'
+                content_class TEXT DEFAULT 'knowledge',
+                content_hash TEXT,
+                valid_from TEXT,
+                invalid_at TEXT,
+                sys_period_start TEXT DEFAULT '0001-01-01T00:00:00.000000Z',
+                sys_period_end TEXT DEFAULT '9999-12-31T23:59:59.999999Z'
             )
         """)
 
@@ -1587,6 +1593,13 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 SELECT content, summary, tags, resolved_query, key_facts, resolved_queries, id FROM chunks
             """)
 
+        existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+        self._has_invalid_at = "invalid_at" in existing_cols
+        if self._has_invalid_at:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_current_active ON chunks(created_at, id) WHERE invalid_at IS NULL"
+            )
+
         # Thread-local storage for per-thread read connections.
         # APSW connections are NOT thread-safe — each thread needs its own.
         # This prevents "Connection is busy in another thread" when parallel
@@ -2279,6 +2292,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 lifecycle_clauses.append("COALESCE(archived, 0) = 0")
             if "status" in cols:
                 lifecycle_clauses.append("COALESCE(status, 'active') = 'active'")
+        if "invalid_at" in cols:
+            lifecycle_clauses.append("invalid_at IS NULL")
         lifecycle_filter = "".join(f" AND {clause}" for clause in lifecycle_clauses)
         rows = list(
             cursor.execute(

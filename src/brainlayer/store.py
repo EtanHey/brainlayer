@@ -30,6 +30,7 @@ Usage:
     )
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -132,6 +133,7 @@ def store_memory(
     chunk_id = chunk_id or f"manual-{uuid.uuid4().hex[:16]}"
     now = datetime.now(timezone.utc).isoformat()
     effective_created_at = created_at or now
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     # Embed at write time (if embed_fn provided), otherwise defer
     embedding = None
@@ -182,6 +184,7 @@ def store_memory(
         "content_class": content_class,
         "created_at": effective_created_at,
         "last_seen_at": now,
+        "content_hash": content_hash,
     }
     for attempt in range(5):
         cursor = store.conn.cursor()
@@ -240,45 +243,80 @@ def store_memory(
                             store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
                 else:
                     stored_chunk_id = incoming_chunk_id
+                    chunk_columns = {row[1] for row in cursor.execute("PRAGMA table_info(chunks)")}
+                    insert_columns = [
+                        "id",
+                        "content",
+                        "metadata",
+                        "source_file",
+                        "project",
+                        "content_type",
+                        "value_type",
+                        "char_count",
+                        "source",
+                        "created_at",
+                        "enriched_at",
+                        "enrich_status",
+                        "summary",
+                        "tags",
+                        "importance",
+                        "chunk_origin",
+                        "seen_count",
+                        "last_seen_at",
+                        "dedupe_hash",
+                        "simhash",
+                        "simhash_band_0",
+                        "simhash_band_1",
+                        "simhash_band_2",
+                        "simhash_band_3",
+                        "content_class",
+                    ]
+                    insert_values = [
+                        incoming_chunk_id,
+                        content,
+                        json.dumps(meta),
+                        "brainlayer-store",
+                        project,
+                        memory_type,
+                        "HIGH",
+                        len(content),
+                        "manual",
+                        effective_created_at,
+                        now,
+                        "success",
+                        content[:200],
+                        tags_json,
+                        float(importance) if importance is not None else None,
+                        resolved_chunk_origin,
+                        1,
+                        now,
+                        dedupe_fields.dedupe_hash,
+                        dedupe_fields.simhash,
+                        dedupe_fields.bands[0],
+                        dedupe_fields.bands[1],
+                        dedupe_fields.bands[2],
+                        dedupe_fields.bands[3],
+                        content_class,
+                    ]
+                    optional_values = {
+                        "content_hash": content_hash,
+                        "valid_from": effective_created_at,
+                        "invalid_at": None,
+                        "sys_period_start": now,
+                        "sys_period_end": "9999-12-31T23:59:59.999999Z",
+                    }
+                    for column, value in optional_values.items():
+                        if column in chunk_columns:
+                            insert_columns.append(column)
+                            insert_values.append(value)
+                    column_sql = ", ".join(insert_columns)
+                    placeholders = ", ".join("?" for _ in insert_values)
                     cursor.execute(
-                        """
-                        INSERT INTO chunks
-                        (id, content, metadata, source_file, project, content_type,
-                         value_type, char_count, source, created_at, enriched_at, enrich_status,
-                         summary, tags, importance, chunk_origin, seen_count, last_seen_at,
-                         dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3,
-                         content_class, ingested_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                ?,
-                                CAST(strftime('%s', 'now') AS INTEGER))
-                    """,
-                        (
-                            incoming_chunk_id,
-                            content,
-                            json.dumps(meta),
-                            "brainlayer-store",
-                            project,
-                            memory_type,
-                            "HIGH",
-                            len(content),
-                            "manual",
-                            effective_created_at,
-                            now,
-                            "success",
-                            content[:200],
-                            tags_json,
-                            float(importance) if importance is not None else None,
-                            resolved_chunk_origin,
-                            1,
-                            now,
-                            dedupe_fields.dedupe_hash,
-                            dedupe_fields.simhash,
-                            dedupe_fields.bands[0],
-                            dedupe_fields.bands[1],
-                            dedupe_fields.bands[2],
-                            dedupe_fields.bands[3],
-                            content_class,
-                        ),
+                        f"""
+                        INSERT INTO chunks ({column_sql}, ingested_at)
+                        VALUES ({placeholders}, CAST(strftime('%s', 'now') AS INTEGER))
+                        """,
+                        insert_values,
                     )
                     if embedding is not None:
                         store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
