@@ -608,6 +608,56 @@ async def test_mcp_roundtrip_applies_worker_and_orchestrator_scopes_on_seeded_st
 
 
 @pytest.mark.asyncio
+async def test_mcp_search_consumer_argument_overrides_shared_server_env(store, monkeypatch):
+    from brainlayer.mcp.search_handler import _brain_search
+
+    _insert_chunk(
+        store,
+        chunk_id="repo-a-explicit-consumer",
+        content="explicit consumer scope sentinel repo a",
+        embedding=_embed("explicit consumer"),
+        project="repo-a",
+    )
+    _insert_chunk(
+        store,
+        chunk_id="repo-b-explicit-consumer",
+        content="explicit consumer scope sentinel repo b",
+        embedding=_embed("explicit consumer"),
+        project="repo-b",
+    )
+    _insert_chunk(
+        store,
+        chunk_id="null-explicit-consumer",
+        content="explicit consumer scope sentinel user local",
+        embedding=_embed("explicit consumer"),
+        project=None,
+    )
+
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "worker")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: _ScopedEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "repo-a")
+
+    _content, structured = await _brain_search(
+        query="explicit consumer scope sentinel",
+        source="all",
+        num_results=10,
+        consumer="orchestrator",
+        allow_helper_route=False,
+    )
+
+    assert {result["chunk_id"] for result in structured["results"]} == {
+        "repo-a-explicit-consumer",
+        "repo-b-explicit-consumer",
+        "null-explicit-consumer",
+    }
+
+
+@pytest.mark.asyncio
 async def test_entity_id_search_resolves_project_before_worker_scope(monkeypatch):
     from brainlayer.mcp.search_handler import _brain_search
 

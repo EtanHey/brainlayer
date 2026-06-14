@@ -652,6 +652,7 @@ def _kg_facts_sql(
 async def _brain_search(
     query: str,
     project: str | None = None,
+    consumer: str | None = None,
     file_path: str | None = None,
     chunk_id: str | None = None,
     content_type: str | None = None,
@@ -710,6 +711,7 @@ async def _brain_search(
                     helper_project = _resolve_helper_project(project, entity_id=entity_id, source=source)
                     helper_kwargs = {
                         "project": helper_project,
+                        "consumer": consumer,
                         "source": source,
                         "tag": tag,
                         "importance_min": importance_min,
@@ -739,6 +741,7 @@ async def _brain_search(
         return await _brain_search_dispatch(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
             content_type=content_type,
@@ -773,6 +776,7 @@ async def _brain_search(
 async def _brain_search_dispatch(
     query: str,
     project: str | None = None,
+    consumer: str | None = None,
     file_path: str | None = None,
     chunk_id: str | None = None,
     content_type: str | None = None,
@@ -817,7 +821,7 @@ async def _brain_search_dispatch(
             logger.debug("Project auto-scope failed, proceeding without scope")
     from ..scoping import resolve_consumer_scope
 
-    consumer_scope = resolve_consumer_scope(project=project, include_checkpoints=include_checkpoints)
+    consumer_scope = resolve_consumer_scope(project=project, consumer=consumer, include_checkpoints=include_checkpoints)
     project = consumer_scope.project_filter
     include_checkpoints = consumer_scope.include_checkpoints
 
@@ -941,6 +945,7 @@ async def _brain_search_dispatch(
         return await _brain_search(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=extracted_file,
             content_type=content_type,
             source=source,
@@ -1395,6 +1400,7 @@ def _smart_detect_mode(query: str | None, mode: str | None) -> str:
 async def _brain_recall(
     mode: str | None = None,
     project: str | None = None,
+    consumer: str | None = None,
     hours: int = 24,
     days: int = 7,
     limit: int = 20,
@@ -1466,6 +1472,7 @@ async def _brain_recall(
         return await _brain_search(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
             content_type=content_type,

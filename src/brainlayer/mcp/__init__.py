@@ -163,6 +163,7 @@ _INPUT_STRING_MAX_LENGTHS = {
     "content_type": 64,
     "content_type_filter": 64,
     "context": 4_096,
+    "consumer": 32,
     "correction_category": 128,
     "date_from": 32,
     "date_to": 32,
@@ -410,6 +411,11 @@ async def list_tools() -> list[Tool]:
                         "project": {
                             "type": "string",
                             "description": "Filter by project name. Encoded/worktree names are auto-normalized.",
+                        },
+                        "consumer": {
+                            "type": "string",
+                            "enum": ["orchestrator", "worker", "coach"],
+                            "description": "Per-request consumer role for shared MCP servers. Overrides BRAINLAYER_CONSUMER for this search.",
                         },
                         "file_path": {
                             "type": "string",
@@ -748,6 +754,11 @@ async def list_tools() -> list[Tool]:
                         "project": {
                             "type": "string",
                             "description": "Filter by project name.",
+                        },
+                        "consumer": {
+                            "type": "string",
+                            "enum": ["orchestrator", "worker", "coach"],
+                            "description": "Per-request consumer role for shared MCP servers in search mode. Overrides BRAINLAYER_CONSUMER for this request.",
                         },
                         "hours": {
                             "type": "integer",
@@ -1300,6 +1311,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 mode="search",
                 query=arguments["query"],
                 project=arguments.get("project"),
+                consumer=arguments.get("consumer"),
                 file_path=arguments.get("file_path"),
                 chunk_id=arguments.get("chunk_id"),
                 content_type=resolved_content_type,
@@ -1387,6 +1399,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             _brain_recall(
                 mode=arguments.get("mode"),
                 project=arguments.get("project"),
+                consumer=arguments.get("consumer"),
                 hours=arguments.get("hours", 24),
                 days=arguments.get("days", 7),
                 limit=arguments.get("limit", 20),

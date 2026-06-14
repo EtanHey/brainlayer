@@ -571,6 +571,14 @@ class TestInputSchemaPresence:
 
         assert cc["type"] == "string"
 
+    def test_consumer_role_is_exposed_for_shared_mcp_socket(self):
+        """brain_search exposes per-request consumer role for shared MCP servers."""
+        props = self._get_brain_search_props()
+        consumer = props["consumer"]
+
+        assert consumer["type"] == "string"
+        assert consumer["enum"] == ["orchestrator", "worker", "coach"]
+
 
 # ── Alias resolution in call_tool ────────────────────────────────────────────
 
@@ -713,6 +721,28 @@ class TestAliasResolution:
 
         call_kwargs = mock_recall.call_args[1]
         assert call_kwargs["include_checkpoints"] is True
+
+    def test_consumer_passes_from_call_tool(self):
+        """consumer is forwarded so shared MCP sockets can scope each request."""
+        from brainlayer.mcp import call_tool
+
+        with patch(
+            "brainlayer.mcp._brain_recall",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_recall:
+            asyncio.run(
+                call_tool(
+                    "brain_search",
+                    {
+                        "query": "test",
+                        "consumer": "orchestrator",
+                    },
+                )
+            )
+
+        call_kwargs = mock_recall.call_args[1]
+        assert call_kwargs["consumer"] == "orchestrator"
 
 
 class TestBrainResumeSchema:
