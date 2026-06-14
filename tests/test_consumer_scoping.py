@@ -232,6 +232,34 @@ def test_worker_on_main_sees_main_only(monkeypatch):
     assert scope.project_filters == ("repo-a",)
 
 
+def test_prefilter_project_skips_when_scope_allows_null_project():
+    from brainlayer.mcp.search_handler import _prefilter_project_for_consumer_scope
+
+    assert _prefilter_project_for_consumer_scope("personal", ConsumerScope.for_coach()) is None
+
+
+def test_engine_think_and_recall_pass_consumer_scope_to_hybrid_search():
+    from brainlayer.engine import recall, think
+
+    calls = []
+
+    class FakeStore:
+        def hybrid_search(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "documents": [["allowed memory"]],
+                "metadatas": [[{"project": "repo-a", "intent": "implementing"}]],
+            }
+
+    scope = ConsumerScope.for_worker("repo-a")
+
+    think("scoped work", store=FakeStore(), embed_fn=_embed, project=None, consumer_scope=scope)
+    recall(store=FakeStore(), embed_fn=_embed, topic="scoped work", project=None, consumer_scope=scope)
+
+    assert calls[0]["consumer_scope"] == scope
+    assert calls[1]["consumer_scope"] == scope
+
+
 def test_worker_consumer_scope_blocks_foreign_and_null_projects_across_rrf(store):
     query_embedding = _embed("repo b semantic target")
     _insert_chunk(
@@ -1021,3 +1049,57 @@ async def test_entity_id_search_resolves_project_before_worker_scope(monkeypatch
     assert kwargs["project"] == "repo-a"
     assert kwargs["consumer_scope"].project_filter == "repo-a"
     assert kwargs["consumer_scope"].deny_all is False
+
+
+@pytest.mark.asyncio
+async def test_recall_resolves_consumer_scope_with_source_filter(monkeypatch):
+    from brainlayer.mcp.search_handler import _brain_recall
+
+    calls = []
+
+    async def fake_current_context(**kwargs):
+        calls.append(kwargs)
+        return ([], {"context": "ok"})
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._current_context", fake_current_context)
+
+    await _brain_recall(
+        mode="context",
+        project="repo-a",
+        consumer="worker",
+        source_filter="%youtube%",
+    )
+
+    assert calls[0]["consumer_scope"].source_filter == "%youtube%"
+
+
+@pytest.mark.asyncio
+async def test_entity_kg_search_receives_consumer_scope(monkeypatch):
+    from brainlayer.mcp.search_handler import _brain_search
+
+    calls = []
+
+    class FakeStore:
+        def kg_hybrid_search(self, **kwargs):
+            calls.append(kwargs)
+            return {"chunks": {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}}
+
+        def hybrid_search(self, **_kwargs):
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeStore())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: _ScopedEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [{"name": "RepoA"}])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._kg_facts_sql", lambda *_args, **_kwargs: [])
+
+    await _brain_search(
+        query="RepoA",
+        project="repo-a",
+        consumer="worker",
+        allow_helper_route=False,
+    )
+
+    assert calls[0]["consumer_scope"].project_filter == "repo-a"
+    assert calls[0]["consumer_scope"].allow_null_project is False

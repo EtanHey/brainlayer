@@ -111,7 +111,10 @@ def _filter_regression_for_consumer_scope(
 
 
 def _prefilter_project_for_consumer_scope(project: str | None, consumer_scope: Any | None) -> str | None:
-    if consumer_scope is not None and len(getattr(consumer_scope, "project_filters", ()) or ()) > 1:
+    if consumer_scope is not None and (
+        len(getattr(consumer_scope, "project_filters", ()) or ()) > 1
+        or getattr(consumer_scope, "allow_null_project", False)
+    ):
         return None
     return project
 
@@ -1172,6 +1175,7 @@ async def _brain_search_dispatch(
                 content_class_filter=content_class_filter,
                 agent_id=agent_id,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                consumer_scope=consumer_scope,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -1541,7 +1545,12 @@ async def _brain_recall(
             logger.debug("Project auto-scope failed, proceeding without scope")
     from ..scoping import resolve_consumer_scope
 
-    consumer_scope = resolve_consumer_scope(project=project, consumer=consumer, include_checkpoints=include_checkpoints)
+    consumer_scope = resolve_consumer_scope(
+        project=project,
+        consumer=consumer,
+        source_filter=source_filter,
+        include_checkpoints=include_checkpoints,
+    )
     project = consumer_scope.project_filter
 
     # --- New modes: search + entity ---
@@ -2101,6 +2110,7 @@ async def _think(
                 max_results=max_results,
                 include_audit=include_audit,
                 agent_id=agent_id,
+                consumer_scope=consumer_scope,
             ),
         )
         result = _filter_think_result_for_consumer_scope(result, normalized_project, consumer_scope)
@@ -2150,6 +2160,7 @@ async def _recall(
                 max_results=max_results,
                 include_audit=include_audit,
                 agent_id=agent_id,
+                consumer_scope=consumer_scope,
             ),
         )
         result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)
