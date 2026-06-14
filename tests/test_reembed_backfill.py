@@ -38,9 +38,11 @@ def _insert_chunk(
 class FakeBatchModel:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self.batch_sizes: list[int | None] = []
 
     def encode(self, texts, **kwargs):
         self.calls.append(list(texts))
+        self.batch_sizes.append(kwargs.get("batch_size"))
         return [_embed(float(i + 1)) for i, _ in enumerate(texts)]
 
 
@@ -127,6 +129,76 @@ def test_run_reembed_backfill_batches_and_writes_both_vector_tables(tmp_path):
         assert cursor.execute("SELECT COUNT(*) FROM chunk_vectors_binary").fetchone()[0] == 2
     finally:
         check.close()
+
+
+def test_run_reembed_backfill_reuses_large_candidate_page_for_encode_batches(tmp_path, monkeypatch):
+    from brainlayer import reembed_backfill
+    from brainlayer.reembed_backfill import run_reembed_backfill
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        for index in range(5):
+            _insert_chunk(store, chunk_id=f"missing-{index}", content=f"text {index}")
+    finally:
+        store.close()
+
+    fetch_sizes: list[int] = []
+    real_fetch = reembed_backfill.fetch_unvectored_batch
+
+    def tracking_fetch(*args, **kwargs):
+        fetch_sizes.append(kwargs["batch_size"])
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(reembed_backfill, "fetch_unvectored_batch", tracking_fetch)
+
+    model = FakeBatchModel()
+    result = run_reembed_backfill(
+        db_path=tmp_path / "backfill.db",
+        model=model,
+        batch_size=2,
+        candidate_page_size=5,
+    )
+
+    assert result.processed == 5
+    assert [len(call) for call in model.calls] == [2, 2, 1]
+    assert model.batch_sizes == [2, 2, 1]
+    assert fetch_sizes == [5, 5]
+
+
+def test_write_chunk_embeddings_wraps_batch_in_one_transaction():
+    from brainlayer.reembed_backfill import PendingChunk, write_chunk_embeddings
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, sql, *_args, **_kwargs):
+            self.statements.append(" ".join(str(sql).split()).upper())
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.cursor_obj = FakeCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.conn = FakeConn()
+
+        def _upsert_chunk_vector(self, cursor, chunk_id, embedding):
+            cursor.execute("INSERT INTO chunk_vectors VALUES (?, ?)", (chunk_id, embedding))
+
+    store = FakeStore()
+    chunks = [PendingChunk(chunk_id="a", content="first"), PendingChunk(chunk_id="b", content="second")]
+
+    written = write_chunk_embeddings(store, chunks, [_embed(1.0), _embed(2.0)])
+
+    assert written == 2
+    assert store.conn.cursor_obj.statements[0] == "BEGIN IMMEDIATE"
+    assert store.conn.cursor_obj.statements[-1] == "COMMIT"
+    assert store.conn.cursor_obj.statements.count("BEGIN IMMEDIATE") == 1
+    assert store.conn.cursor_obj.statements.count("COMMIT") == 1
 
 
 def test_run_reembed_backfill_is_idempotent(tmp_path):

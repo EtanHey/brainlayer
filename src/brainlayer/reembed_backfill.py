@@ -72,7 +72,7 @@ def _active_lifecycle_clauses(store: VectorStore) -> list[str]:
 
 def _pending_where_sql(store: VectorStore, *, include_inactive: bool) -> str:
     clauses = [
-        "v.chunk_id IS NULL",
+        "r.id IS NULL",
         "c.content IS NOT NULL",
         "c.content != ''",
     ]
@@ -94,7 +94,7 @@ def count_unvectored_chunks(store: VectorStore, *, include_inactive: bool = Fals
             f"""
             SELECT COUNT(*)
             FROM chunks c
-            LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
             WHERE {where_sql}
             """
         )
@@ -114,7 +114,7 @@ def fetch_unvectored_batch(
         f"""
         SELECT c.id, c.content
         FROM chunks c
-        LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
+        LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
         WHERE {where_sql}
         ORDER BY c.created_at ASC, c.id ASC
         LIMIT ?
@@ -134,13 +134,23 @@ def write_chunk_embeddings(store: VectorStore, chunks: list[PendingChunk], embed
     """Write float and binary vectors for a batch, returning successful rows."""
     cursor = store.conn.cursor()
     written = 0
-    for chunk, embedding in zip(chunks, embeddings):
-        try:
-            store._upsert_chunk_vector(cursor, chunk.chunk_id, _to_float_list(embedding))
-            written += 1
-        except Exception as exc:
-            logger.warning("Failed to write embedding for %s: %s", chunk.chunk_id, exc)
-    return written
+    transaction_started = False
+    try:
+        cursor.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        for chunk, embedding in zip(chunks, embeddings):
+            try:
+                store._upsert_chunk_vector(cursor, chunk.chunk_id, _to_float_list(embedding))
+                written += 1
+            except Exception as exc:
+                logger.warning("Failed to write embedding for %s: %s", chunk.chunk_id, exc)
+        cursor.execute("COMMIT")
+        transaction_started = False
+        return written
+    except Exception:
+        if transaction_started:
+            cursor.execute("ROLLBACK")
+        raise
 
 
 def load_embedding_model(model_name: str = DEFAULT_MODEL):
@@ -208,6 +218,7 @@ def run_reembed_backfill(
     dry_run: bool = False,
     include_inactive: bool = False,
     progress_every: int = 10,
+    candidate_page_size: int | None = None,
 ) -> BackfillResult:
     """Batch-embed all chunks missing vectors.
 
@@ -233,39 +244,64 @@ def run_reembed_backfill(
 
         active_model = model or load_embedding_model(model_name)
         batch_number = 0
+        page_size = candidate_page_size or max(batch_size * 64, 4096)
         while True:
             remaining_limit = None if limit is None else max(limit - processed, 0)
             if remaining_limit == 0:
                 break
-            effective_batch_size = batch_size if remaining_limit is None else min(batch_size, remaining_limit)
-            chunks = fetch_unvectored_batch(
+            effective_page_size = page_size if remaining_limit is None else min(page_size, remaining_limit)
+            candidate_start = time.monotonic()
+            candidates = fetch_unvectored_batch(
                 store,
-                batch_size=effective_batch_size,
+                batch_size=effective_page_size,
                 include_inactive=include_inactive,
             )
-            if not chunks:
+            candidate_query_ms = (time.monotonic() - candidate_start) * 1000
+            if not candidates:
                 break
 
-            texts = [chunk.content for chunk in chunks]
-            embeddings = active_model.encode(
-                texts,
-                batch_size=effective_batch_size,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-            )
-            written = write_chunk_embeddings(store, chunks, embeddings)
-            processed += written
-            failed += len(chunks) - written
-            batch_number += 1
+            for offset in range(0, len(candidates), batch_size):
+                remaining_limit = None if limit is None else max(limit - processed, 0)
+                if remaining_limit == 0:
+                    break
+                effective_batch_size = batch_size if remaining_limit is None else min(batch_size, remaining_limit)
+                chunks = candidates[offset : offset + effective_batch_size]
+                if not chunks:
+                    break
 
-            if batch_number % progress_every == 0:
+                texts = [chunk.content for chunk in chunks]
+                encode_start = time.monotonic()
+                embeddings = active_model.encode(
+                    texts,
+                    batch_size=len(chunks),
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                )
+                encode_ms = (time.monotonic() - encode_start) * 1000
+
+                write_start = time.monotonic()
+                written = write_chunk_embeddings(store, chunks, embeddings)
+                vector_write_ms = (time.monotonic() - write_start) * 1000
+
+                processed += written
+                failed += len(chunks) - written
+                batch_number += 1
                 elapsed = time.monotonic() - start
                 rate = processed / elapsed if elapsed > 0 else 0.0
                 logger.info(
-                    "Reembed backfill progress: processed=%d failed=%d remaining=%d rate=%.1f chunks/s",
+                    (
+                        "Reembed backfill batch: batch=%d size=%d written=%d "
+                        "candidate_query_ms=%.1f encode_ms=%.1f vector_write_ms=%.1f "
+                        "processed=%d failed=%d rate=%.1f chunks/s"
+                    ),
+                    batch_number,
+                    len(chunks),
+                    written,
+                    candidate_query_ms if offset == 0 else 0.0,
+                    encode_ms,
+                    vector_write_ms,
                     processed,
                     failed,
-                    count_unvectored_chunks(store, include_inactive=include_inactive),
                     rate,
                 )
 
