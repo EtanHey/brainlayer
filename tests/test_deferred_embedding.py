@@ -45,6 +45,23 @@ def fast_embed():
     return _embed
 
 
+def _insert_pending_chunk(store: VectorStore, *, chunk_id: str, source: str, content: str | None = None) -> None:
+    cursor = store.conn.cursor()
+    text = content or f"Pending content for {chunk_id}"
+    cursor.execute(
+        """INSERT INTO chunks (
+            id, content, metadata, source_file, project, content_type,
+            value_type, char_count, source, created_at, enriched_at, enrich_status,
+            summary, tags, importance, chunk_origin, seen_count, last_seen_at,
+            content_class
+        ) VALUES (?, ?, '{}', 'test.jsonl', 'test', 'note',
+            'HIGH', ?, ?, '2026-06-14T00:00:00+00:00', NULL, NULL,
+            NULL, NULL, NULL, 'raw', 1, '2026-06-14T00:00:00+00:00',
+            'human-authored')""",
+        (chunk_id, text, len(text), source),
+    )
+
+
 class TestDeferredStore:
     """store_memory with embed_fn=None stores without embedding."""
 
@@ -214,6 +231,80 @@ class TestBackgroundEmbedder:
 
         count = embed_pending_chunks(store=store, embed_fn=fast_embed, batch_size=3)
         assert count == 3  # Only processes batch_size items
+
+    def test_embed_pending_chunks_embeds_all_active_sources(self, store, fast_embed):
+        """embed_pending_chunks self-heals active unvectored chunks regardless of source."""
+        from brainlayer.store import embed_pending_chunks
+
+        sources = ["manual", "mcp", "claude_code", "realtime_watcher", "youtube", "whatsapp"]
+        for source in sources:
+            _insert_pending_chunk(store, chunk_id=f"{source}-pending", source=source)
+
+        count = embed_pending_chunks(store=store, embed_fn=fast_embed, batch_size=20)
+
+        assert count == len(sources)
+        cursor = store.conn.cursor()
+        for source in sources:
+            vector_count = cursor.execute(
+                "SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id = ?",
+                (f"{source}-pending",),
+            ).fetchone()[0]
+            assert vector_count == 1, f"{source} chunk was not embedded"
+
+    def test_embed_pending_chunks_skips_inactive_lifecycle_rows(self, store, fast_embed):
+        """Archived, superseded, and aggregated chunks are intentional exclusions."""
+        from brainlayer.store import embed_pending_chunks
+
+        _insert_pending_chunk(store, chunk_id="active-pending", source="claude_code")
+        _insert_pending_chunk(store, chunk_id="archived-pending", source="claude_code")
+        _insert_pending_chunk(store, chunk_id="superseded-pending", source="claude_code")
+        _insert_pending_chunk(store, chunk_id="aggregated-pending", source="claude_code")
+
+        cursor = store.conn.cursor()
+        cursor.execute("UPDATE chunks SET archived_at = '2026-06-14T00:00:00+00:00' WHERE id = 'archived-pending'")
+        cursor.execute("UPDATE chunks SET superseded_by = 'replacement' WHERE id = 'superseded-pending'")
+        cursor.execute("UPDATE chunks SET aggregated_into = 'aggregate' WHERE id = 'aggregated-pending'")
+
+        count = embed_pending_chunks(store=store, embed_fn=fast_embed, batch_size=20)
+
+        assert count == 1
+        embedded_ids = {
+            row[0]
+            for row in cursor.execute(
+                "SELECT chunk_id FROM chunk_vectors WHERE chunk_id LIKE '%-pending' ORDER BY chunk_id"
+            )
+        }
+        assert embedded_ids == {"active-pending"}
+
+    def test_embed_pending_chunks_uses_batch_embedder_when_available(self, store):
+        """Batch-capable callers can avoid per-row model.encode calls."""
+        from brainlayer.store import embed_pending_chunks
+
+        for i in range(4):
+            _insert_pending_chunk(store, chunk_id=f"batch-pending-{i}", source="realtime_watcher")
+
+        single_calls = []
+        batch_calls = []
+
+        def single_embed(text: str) -> list[float]:
+            single_calls.append(text)
+            return [0.0] * 1024
+
+        def batch_embed(texts: list[str]) -> list[list[float]]:
+            batch_calls.append(list(texts))
+            return [[float(i + 1)] * 1024 for i, _ in enumerate(texts)]
+
+        count = embed_pending_chunks(
+            store=store,
+            embed_fn=single_embed,
+            batch_size=4,
+            embed_batch_fn=batch_embed,
+        )
+
+        assert count == 4
+        assert single_calls == []
+        assert len(batch_calls) == 1
+        assert len(batch_calls[0]) == 4
 
 
 class TestMCPStoreDeferred:

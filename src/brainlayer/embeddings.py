@@ -115,6 +115,23 @@ class EmbeddingModel:
         except Exception as e:
             raise RuntimeError(f"Failed to embed query: {e}") from e
 
+    def embed_texts(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
+        """Generate passage embeddings for stored chunk content in batches."""
+        if not texts:
+            return []
+
+        model = self._load_model()
+        try:
+            embeddings = model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            return [embedding.tolist() for embedding in embeddings]
+        except Exception as e:
+            raise RuntimeError(f"Failed to embed text batch: {e}") from e
+
 
 # Global model instance
 _embedding_model: Optional[EmbeddingModel] = None

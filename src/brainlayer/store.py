@@ -348,16 +348,22 @@ def embed_pending_chunks(
     store: VectorStore,
     embed_fn: Callable[[str], List[float]],
     batch_size: int = 50,
+    embed_batch_fn: Optional[Callable[[List[str]], List[List[float]]]] = None,
 ) -> int:
     """Backfill embeddings for chunks stored without them.
 
     Finds chunks in the chunks table that have no corresponding row in
-    chunk_vectors and generates embeddings for them.
+    chunk_vectors and generates embeddings for them. Only active lifecycle
+    rows are eligible; archived, superseded, and aggregated chunks are
+    intentionally skipped because normal semantic search excludes them.
 
     Args:
         store: VectorStore instance.
         embed_fn: Function that takes text and returns a 1024-dim embedding vector.
         batch_size: Max chunks to process in one call.
+        embed_batch_fn: Optional function that takes a list of texts and returns
+            one 1024-dim embedding vector per text. When provided, the daemon
+            embeds the selected rows in one model batch instead of one row at a time.
 
     Returns:
         Number of chunks embedded.
@@ -368,7 +374,12 @@ def embed_pending_chunks(
             """
             SELECT c.id, c.content FROM chunks c
             LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
-            WHERE v.chunk_id IS NULL AND c.source IN ('manual', 'mcp')
+            WHERE v.chunk_id IS NULL
+              AND c.content IS NOT NULL
+              AND c.content != ''
+              AND c.archived_at IS NULL
+              AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL
             ORDER BY c.created_at ASC
             LIMIT ?
             """,
@@ -380,13 +391,24 @@ def embed_pending_chunks(
         return 0
 
     count = 0
-    for chunk_id, content in rows:
+    if embed_batch_fn is not None:
         try:
-            embedding = embed_fn(content)
-            store._upsert_chunk_vector(cursor, chunk_id, embedding)
-            count += 1
+            embeddings = embed_batch_fn([content for _, content in rows])
+            if len(embeddings) != len(rows):
+                raise ValueError(f"batch embedder returned {len(embeddings)} embeddings for {len(rows)} chunks")
+            for (chunk_id, _), embedding in zip(rows, embeddings):
+                store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                count += 1
         except Exception as e:
-            logger.warning("Failed to embed chunk %s: %s", chunk_id, e)
+            logger.warning("Failed to embed pending chunk batch: %s", e)
+    else:
+        for chunk_id, content in rows:
+            try:
+                embedding = embed_fn(content)
+                store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                count += 1
+            except Exception as e:
+                logger.warning("Failed to embed chunk %s: %s", chunk_id, e)
 
     from .search_repo import clear_hybrid_search_cache
 
