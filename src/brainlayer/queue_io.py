@@ -68,6 +68,7 @@ def enqueue_store(
     **metadata: Any,
 ) -> Path:
     supersedes = metadata.pop("supersedes", None)
+    chunk_origin = metadata.pop("chunk_origin", None)
     chunk_id = metadata.pop("chunk_id", None) or f"manual-{uuid.uuid4().hex[:16]}"
     created_at = created_at or datetime.now(timezone.utc).isoformat()
     return enqueue_jsonl(
@@ -80,6 +81,7 @@ def enqueue_store(
             "tags": tags,
             "importance": importance,
             "created_at": created_at,
+            "chunk_origin": chunk_origin,
             "supersedes": supersedes,
             "metadata": {key: value for key, value in metadata.items() if value is not None},
         },

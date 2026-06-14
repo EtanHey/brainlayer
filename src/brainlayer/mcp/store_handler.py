@@ -533,6 +533,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
         for line in lines:
             try:
                 item = json.loads(line)
+                item_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
                 result = store_memory(
                     store=store,
                     embed_fn=embed_fn,
@@ -553,6 +554,7 @@ def _flush_pending_stores(store, embed_fn) -> int:
                     line_number=item.get("line_number"),
                     chunk_id=item.get("chunk_id"),
                     created_at=_reservation_created_at(item),
+                    chunk_origin=item.get("chunk_origin") or item_metadata.get("chunk_origin"),
                 )
                 if item.get("supersedes"):
                     if not store.supersede_chunk(item["supersedes"], result["id"]):

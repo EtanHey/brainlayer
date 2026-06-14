@@ -67,17 +67,20 @@ def replay_entry(
     replayed_by: str,
 ) -> ReplayResult:
     try:
-        result = store_func(
-            content=entry.body,
-            memory_type=str(entry.frontmatter.get("memory_type") or "note"),
-            project=entry.project,
-            tags=_normalize_tags(entry.frontmatter.get("tags")),
-            importance=entry.frontmatter.get("importance"),
-            created_at=str(entry.frontmatter.get("timestamp") or ""),
-            fallback_source_path=str(entry.path),
-            origin_repo_path=str(entry.origin_repo_path),
-            replayed_by=replayed_by,
-        )
+        store_kwargs = {
+            "content": entry.body,
+            "memory_type": str(entry.frontmatter.get("memory_type") or "note"),
+            "project": entry.project,
+            "tags": _normalize_tags(entry.frontmatter.get("tags")),
+            "importance": entry.frontmatter.get("importance"),
+            "created_at": str(entry.frontmatter.get("timestamp") or ""),
+            "fallback_source_path": str(entry.path),
+            "origin_repo_path": str(entry.origin_repo_path),
+            "replayed_by": replayed_by,
+        }
+        if entry.frontmatter.get("chunk_origin"):
+            store_kwargs["chunk_origin"] = entry.frontmatter["chunk_origin"]
+        result = store_func(**store_kwargs)
     except Exception as exc:
         try:
             _write_replay_attempt(entry, chunk_id=entry.frontmatter.get("chunk_id") or None)

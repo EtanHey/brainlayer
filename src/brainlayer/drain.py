@@ -331,6 +331,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
     tags = event.get("tags")
+    explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
     if existing:
         if str(existing[0]).strip() == content:
@@ -367,7 +368,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "tags": json.dumps(tags) if tags else None,
             "importance": float(event["importance"]) if event.get("importance") is not None else None,
             "content_hash": _content_hash(content),
-            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
+            "chunk_origin": detect_chunk_origin(content, explicit_chunk_origin),
         },
     )
     supersedes = event.get("supersedes") or metadata.get("supersedes")
