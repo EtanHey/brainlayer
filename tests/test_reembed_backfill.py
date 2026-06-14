@@ -163,3 +163,28 @@ def test_reembed_backfill_cli_dry_run_reports_pending_count(tmp_path):
 
     assert result.exit_code == 0, result.stdout
     assert "Unvectored active chunks: 1" in result.stdout
+
+
+def test_heavy_ml_mutex_ignores_agent_prompt_text(monkeypatch):
+    from brainlayer import reembed_backfill
+
+    class Result:
+        stdout = "\n".join(
+            [
+                "111 /usr/local/bin/claude claude --append-system-prompt mentions mlx ollama enrichment",
+                "222 /opt/homebrew/bin/llama-server /opt/homebrew/bin/llama-server --model local.gguf",
+                "333 /usr/bin/python3 python -m mlx_audio.tts.generate --model voice",
+                "444 /usr/bin/python3 python scripts/embed_backfill.py",
+            ]
+        )
+
+    monkeypatch.setattr(reembed_backfill.os, "getpid", lambda: 999)
+    monkeypatch.setattr(reembed_backfill.subprocess, "run", lambda *_args, **_kwargs: Result())
+
+    matches = reembed_backfill.find_heavy_ml_processes()
+
+    assert len(matches) == 3
+    assert not any("claude --append-system-prompt" in match for match in matches)
+    assert any("llama-server" in match for match in matches)
+    assert any("mlx_audio.tts.generate" in match for match in matches)
+    assert any("embed_backfill.py" in match for match in matches)

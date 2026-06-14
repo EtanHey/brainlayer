@@ -15,13 +15,18 @@ from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-HEAVY_ML_PATTERNS = (
+HEAVY_ML_EXECUTABLES = (
     "llama-server",
     "ollama",
     "whisper",
-    "mlx",
-    "brainlayer enrich",
-    "enrichment",
+    "whisper-server",
+    "mlx_lm.server",
+)
+HEAVY_ML_PYTHON_MARKERS = (
+    "mlx_audio.tts.generate",
+    "mlx_lm.server",
+    "brainlayer.reembed_backfill",
+    "python.*embed",
 )
 
 
@@ -151,7 +156,7 @@ def load_embedding_model(model_name: str = DEFAULT_MODEL):
 def find_heavy_ml_processes() -> list[str]:
     """Return running heavy-ML process command lines that should block this job."""
     try:
-        result = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True)
+        result = subprocess.run(["ps", "-axo", "pid=,comm=,args="], capture_output=True, text=True, check=True)
     except Exception as exc:
         logger.warning("Unable to inspect process list for heavy-ML mutex: %s", exc)
         return []
@@ -162,11 +167,18 @@ def find_heavy_ml_processes() -> list[str]:
         stripped = line.strip()
         if not stripped:
             continue
-        pid, _, command = stripped.partition(" ")
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, executable, command = parts
         if pid == current_pid:
             continue
+        executable_name = Path(executable).name.lower()
         lower = command.lower()
-        if any(pattern in lower for pattern in HEAVY_ML_PATTERNS):
+        executable_match = any(pattern in executable_name for pattern in HEAVY_ML_EXECUTABLES)
+        python_mlx = "python" in executable_name and any(marker in lower for marker in HEAVY_ML_PYTHON_MARKERS)
+        python_embed = "python" in executable_name and "embed" in lower
+        if executable_match or python_mlx or python_embed:
             matches.append(stripped)
     return matches
 
