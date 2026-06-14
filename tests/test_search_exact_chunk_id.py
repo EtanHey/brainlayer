@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -7,8 +7,9 @@ from brainlayer.mcp.search_handler import _brain_search, _exact_chunk_lookup_res
 
 
 @pytest.mark.asyncio
-async def test_brain_search_exact_chunk_id_query_bypasses_hybrid_search():
+async def test_brain_search_exact_chunk_id_query_bypasses_hybrid_search(monkeypatch):
     """Free-text chunk IDs should short-circuit to an exact chunk lookup."""
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
     chunk_id = "brainbar-ddf12232"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -40,8 +41,8 @@ async def test_brain_search_exact_chunk_id_query_bypasses_hybrid_search():
 
 
 @pytest.mark.asyncio
-async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown():
-    """Exact chunk lookup should keep compact results stable when project is null."""
+async def test_brain_search_exact_chunk_id_default_worker_hides_missing_project(monkeypatch):
+    """Default worker scope must not expose null-project exact chunk hits."""
     chunk_id = "brainbar-nullproj01"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -55,6 +56,37 @@ async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown()
         "summary": "Null project repro",
         "tags": '["fts"]',
     }
+    monkeypatch.delenv("BRAINLAYER_CONSUMER", raising=False)
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("exact chunk-id query should bypass hybrid search")),
+        ),
+    ):
+        _, structured = await _brain_search(query=chunk_id, detail="compact")
+
+    assert structured["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_brain_search_exact_chunk_id_orchestrator_defaults_missing_project_to_unknown(monkeypatch):
+    """Orchestrator scope keeps compact results stable when project is null."""
+    chunk_id = "brainbar-nullproj01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": "Chunk without project metadata",
+        "source_file": "docs/repro.md",
+        "project": None,
+        "content_type": "note",
+        "importance": 3,
+        "created_at": "2026-04-30T09:15:00Z",
+        "summary": "Null project repro",
+        "tags": '["fts"]',
+    }
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
 
     with (
         patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
@@ -69,8 +101,9 @@ async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown()
 
 
 @pytest.mark.asyncio
-async def test_brain_search_exact_chunk_id_treats_source_all_as_unfiltered():
+async def test_brain_search_exact_chunk_id_treats_source_all_as_unfiltered(monkeypatch):
     """BrainBar forwards source='all'; exact chunk-id lookup must still short-circuit."""
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
     chunk_id = "brainbar-sourceall01"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -170,8 +203,9 @@ def test_exact_chunk_lookup_skips_status_archived_chunks():
 
 
 @pytest.mark.asyncio
-async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
+async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup(monkeypatch):
     """Explicit chunk_id context expansion should run before exact-id short-circuiting."""
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "worker")
     chunk_id = "brainbar-ddf12232"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -190,7 +224,7 @@ async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
             new=AsyncMock(side_effect=AssertionError("chunk_id routing should bypass hybrid search")),
         ),
     ):
-        result = await _brain_search(query=chunk_id, chunk_id=chunk_id, detail="compact")
+        result = await _brain_search(query=chunk_id, chunk_id=chunk_id, project="brainlayer", detail="compact")
 
     assert result == ["context window"]
     context_mock.assert_awaited_once_with(
@@ -199,11 +233,13 @@ async def test_brain_search_chunk_id_context_routing_wins_over_exact_lookup():
         after=3,
         include_checkpoints=False,
         include_audit=False,
+        consumer_scope=ANY,
     )
 
 
 @pytest.mark.asyncio
-async def test_brain_search_chunk_id_context_blocks_audit_recursion_by_default():
+async def test_brain_search_chunk_id_context_blocks_audit_recursion_by_default(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "worker")
     chunk_id = "rt-33abe108-recursive"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -222,14 +258,17 @@ async def test_brain_search_chunk_id_context_blocks_audit_recursion_by_default()
             new=AsyncMock(side_effect=AssertionError("audit-recursive chunk_id must not route to context")),
         ),
     ):
-        content, structured = await _brain_search(query="ignored", chunk_id=chunk_id, detail="compact")
+        content, structured = await _brain_search(
+            query="ignored", chunk_id=chunk_id, project="brainlayer", detail="compact"
+        )
 
     assert "No results found." in content[0].text
     assert structured == {"query": "ignored", "total": 0, "results": []}
 
 
 @pytest.mark.asyncio
-async def test_brain_search_chunk_id_context_allows_audit_when_requested():
+async def test_brain_search_chunk_id_context_allows_audit_when_requested(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "worker")
     chunk_id = "rt-33abe108-recursive"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -245,7 +284,13 @@ async def test_brain_search_chunk_id_context_allows_audit_when_requested():
         patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
         patch("brainlayer.mcp.search_handler._context", new=AsyncMock(return_value=["context window"])) as context_mock,
     ):
-        result = await _brain_search(query="ignored", chunk_id=chunk_id, detail="compact", include_audit=True)
+        result = await _brain_search(
+            query="ignored",
+            chunk_id=chunk_id,
+            project="brainlayer",
+            detail="compact",
+            include_audit=True,
+        )
 
     assert result == ["context window"]
     context_mock.assert_awaited_once_with(
@@ -254,6 +299,7 @@ async def test_brain_search_chunk_id_context_allows_audit_when_requested():
         after=3,
         include_checkpoints=False,
         include_audit=True,
+        consumer_scope=ANY,
     )
 
 
@@ -289,8 +335,9 @@ async def test_brain_search_exact_chunk_id_respects_project_scope():
 
 
 @pytest.mark.asyncio
-async def test_brain_search_exact_chunk_id_resolves_recent_alias():
+async def test_brain_search_exact_chunk_id_resolves_recent_alias(monkeypatch):
     """Old duplicate chunk IDs should resolve through chunk_id_alias during grace period."""
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
     old_chunk_id = "brainbar-olddup01"
     canonical_id = "brainbar-canon01"
     mock_store = MagicMock()

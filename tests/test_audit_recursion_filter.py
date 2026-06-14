@@ -639,6 +639,7 @@ def test_entity_chunks_exclude_audit_evidence_by_default(tmp_path):
 
 @pytest.mark.asyncio
 async def test_chunk_context_filters_audit_neighbors_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
     store = VectorStore(tmp_path / "audit-context-filter.db")
     try:
         recursive_content = 'MCP BrainLayer Memory: Invalid JSON-RPC message: {"jsonrpc":"2.0"}'

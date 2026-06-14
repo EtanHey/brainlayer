@@ -20,7 +20,7 @@ from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..content_class import content_class_is_default_hidden, normalize_content_class, query_signals_operational_intent
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
-from ..search_repo import _is_audit_recursion_metadata
+from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -62,6 +62,52 @@ def _is_sqlite_vec_knn_error(exc: Exception) -> bool:
         return False
     message = str(exc).lower()
     return "sqlite-vec" in message or ("knn" in message and ("limit" in message or "too large" in message))
+
+
+def _row_matches_consumer_scope(row: dict[str, Any], project: str | None, consumer_scope: Any | None) -> bool:
+    return _metadata_matches_project_scope({"project": row.get("project")}, project, consumer_scope)
+
+
+def _filter_rows_for_consumer_scope(
+    rows: list[dict[str, Any]],
+    project: str | None,
+    consumer_scope: Any | None,
+) -> list[dict[str, Any]]:
+    return [row for row in rows if _row_matches_consumer_scope(row, project, consumer_scope)]
+
+
+def _filter_recall_result_for_consumer_scope(result: Any, project: str | None, consumer_scope: Any | None) -> Any:
+    if consumer_scope is None:
+        return result
+    if hasattr(result, "file_history"):
+        result.file_history = _filter_rows_for_consumer_scope(result.file_history, project, consumer_scope)
+    if hasattr(result, "related_chunks"):
+        result.related_chunks = _filter_rows_for_consumer_scope(result.related_chunks, project, consumer_scope)
+    if hasattr(result, "session_summaries"):
+        result.session_summaries = _filter_rows_for_consumer_scope(result.session_summaries, project, consumer_scope)
+    return result
+
+
+def _filter_regression_for_consumer_scope(
+    result: dict[str, Any], project: str | None, consumer_scope: Any | None
+) -> dict[str, Any]:
+    if consumer_scope is None:
+        return result
+    filtered = dict(result)
+    timeline = _filter_rows_for_consumer_scope(list(result.get("timeline") or []), project, consumer_scope)
+    filtered["timeline"] = timeline
+    last_success = result.get("last_success")
+    filtered["last_success"] = (
+        last_success
+        if isinstance(last_success, dict) and _row_matches_consumer_scope(last_success, project, consumer_scope)
+        else None
+    )
+    filtered["changes_after"] = _filter_rows_for_consumer_scope(
+        list(result.get("changes_after") or []),
+        project,
+        consumer_scope,
+    )
+    return filtered
 
 
 def _helper_sentinel_path() -> Path:
@@ -331,6 +377,7 @@ def _exact_chunk_lookup_result(
     include_audit: bool = False,
     include_operational: bool = False,
     content_class_filter: str | None = None,
+    consumer_scope: Any | None = None,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -352,7 +399,10 @@ def _exact_chunk_lookup_result(
     effective_source = None if source == "all" else source
     if any(value is not None for value in (effective_source, intent, sentiment, source_filter, correction_category)):
         return None
-    if project is not None:
+    if consumer_scope is not None:
+        if not _metadata_matches_project_scope({"project": chunk.get("project")}, project, consumer_scope):
+            return _empty_exact_chunk_lookup_result(query)
+    elif project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
         normalized_project = _normalize_project_name(project) or project
         if chunk_project not in (normalized_project, None):
@@ -757,13 +807,19 @@ async def _brain_search_dispatch(
             f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
         )
 
-    if project is None and entity_id is None and source not in ("youtube", "whatsapp", "telegram", "all"):
+    consumer_scope = None
+    if project is None:
         try:
             from ..scoping import resolve_project_scope
 
             project = resolve_project_scope()
         except Exception:
             logger.debug("Project auto-scope failed, proceeding without scope")
+    from ..scoping import resolve_consumer_scope
+
+    consumer_scope = resolve_consumer_scope(project=project, include_checkpoints=include_checkpoints)
+    project = consumer_scope.project_filter
+    include_checkpoints = consumer_scope.include_checkpoints
 
     if entity_id is not None:
         return await _search(
@@ -790,11 +846,19 @@ async def _brain_search_dispatch(
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            consumer_scope=consumer_scope,
         )
 
     if chunk_id is not None:
         store = _get_vector_store()
         chunk = store.get_chunk(chunk_id)
+        if isinstance(chunk, dict) and not _metadata_matches_project_scope(
+            {"project": chunk.get("project")},
+            project,
+            consumer_scope,
+        ):
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
         if (
             not include_checkpoints
             and isinstance(chunk, dict)
@@ -831,16 +895,18 @@ async def _brain_search_dispatch(
             after=after,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            consumer_scope=consumer_scope,
         )
 
     if file_path is not None and _query_has_regression_signal(query):
-        regression_result = await _regression(file_path=file_path, project=project)
+        regression_result = await _regression(file_path=file_path, project=project, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
             project=project,
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
         merged_text = []
         if isinstance(regression_result, list):
@@ -852,13 +918,14 @@ async def _brain_search_dispatch(
         return merged_text
 
     if file_path is not None:
-        timeline = await _file_timeline(file_path=file_path, project=project, limit=50)
+        timeline = await _file_timeline(file_path=file_path, project=project, limit=50, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
             project=project,
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
         merged_text = []
         if isinstance(timeline, list):
@@ -957,6 +1024,7 @@ async def _brain_search_dispatch(
         include_audit=include_audit,
         include_operational=include_operational,
         content_class_filter=content_class_filter,
+        consumer_scope=consumer_scope,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -1156,6 +1224,7 @@ async def _brain_search_dispatch(
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
         brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+        consumer_scope=consumer_scope,
     )
     return result
 
@@ -1488,6 +1557,7 @@ async def _search(
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     brainbar_helper_fast_profile: bool = False,
+    consumer_scope: Any | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -1572,6 +1642,7 @@ async def _search(
                         profile_query_id=profile_query_id,
                         profile_scope=profile_scope,
                         brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                        consumer_scope=consumer_scope,
                     )
                     break
                 except Exception as e:
@@ -1752,6 +1823,7 @@ async def _context(
     *,
     include_checkpoints: bool = False,
     include_audit: bool = False,
+    consumer_scope: Any | None = None,
 ) -> list[TextContent]:
     """Get surrounding conversation context for a chunk."""
     try:
@@ -1762,6 +1834,7 @@ async def _context(
             after=after,
             include_checkpoints=include_checkpoints,
             include_audit=include_audit,
+            consumer_scope=consumer_scope,
         )
         if result.get("error"):
             return _error_result(f"Unknown chunk_id '{chunk_id[:20]}...'. Use chunk_id from brainlayer_search results.")
@@ -1785,11 +1858,17 @@ async def _context(
         return _error_result(f"Context error: {str(e)}")
 
 
-async def _file_timeline(file_path: str, project: str | None = None, limit: int = 50) -> list[TextContent]:
+async def _file_timeline(
+    file_path: str,
+    project: str | None = None,
+    limit: int = 50,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """Get interaction timeline for a file."""
     try:
         store = _get_vector_store()
         interactions = store.get_file_timeline(file_path, project=project, limit=limit)
+        interactions = _filter_rows_for_consumer_scope(interactions, project, consumer_scope)
         if not interactions:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
         output_parts = [f"## File Timeline: {file_path}\n", f"Found {len(interactions)} interactions:\n"]
@@ -1824,11 +1903,16 @@ async def _operations(session_id: str) -> list[TextContent]:
         return _error_result(f"Operations error: {str(e)}")
 
 
-async def _regression(file_path: str, project: str | None = None) -> list[TextContent]:
+async def _regression(
+    file_path: str,
+    project: str | None = None,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """Analyze a file for regressions."""
     try:
         store = _get_vector_store()
         result = store.get_file_regression(file_path, project=project)
+        result = _filter_regression_for_consumer_scope(result, project, consumer_scope)
         if not result["timeline"]:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
         parts = [f"## Regression Analysis: {file_path}\n", f"Timeline: {len(result['timeline'])} interactions\n"]
@@ -1943,6 +2027,7 @@ async def _recall(
     max_results: int = 10,
     include_audit: bool = False,
     agent_id: str | None = None,
+    consumer_scope: Any | None = None,
 ):
     """Execute recall -- proactive context retrieval."""
     try:
@@ -1969,6 +2054,7 @@ async def _recall(
                 agent_id=agent_id,
             ),
         )
+        result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)
         structured = {
             "target": result.target,
             "file_history": [
