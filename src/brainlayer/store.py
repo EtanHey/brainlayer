@@ -380,6 +380,8 @@ def embed_pending_chunks(
               AND c.archived_at IS NULL
               AND c.superseded_by IS NULL
               AND c.aggregated_into IS NULL
+              AND COALESCE(c.archived, 0) = 0
+              AND COALESCE(c.status, 'active') = 'active'
             ORDER BY c.created_at ASC
             LIMIT ?
             """,
@@ -397,8 +399,11 @@ def embed_pending_chunks(
             if len(embeddings) != len(rows):
                 raise ValueError(f"batch embedder returned {len(embeddings)} embeddings for {len(rows)} chunks")
             for (chunk_id, _), embedding in zip(rows, embeddings):
-                store._upsert_chunk_vector(cursor, chunk_id, embedding)
-                count += 1
+                try:
+                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
+                    count += 1
+                except Exception as e:
+                    logger.warning("Failed to write pending chunk %s: %s", chunk_id, e)
         except Exception as e:
             logger.warning("Failed to embed pending chunk batch: %s", e)
     else:
@@ -414,6 +419,51 @@ def embed_pending_chunks(
 
     clear_hybrid_search_cache(getattr(store, "db_path", None))
     return count
+
+
+def embed_hot_chunk(
+    store: VectorStore,
+    embed_fn: Callable[[str], List[float]],
+    chunk_id: str,
+) -> bool:
+    """Embed one just-stored active chunk without disturbing the FIFO backlog drain.
+
+    Returns True only when this call writes a vector. Missing, inactive, empty,
+    already-embedded, or failed chunks return False so callers can safely fall
+    through to deferred backlog processing.
+    """
+    cursor = store.conn.cursor()
+    row = cursor.execute(
+        """
+        SELECT c.content
+        FROM chunks c
+        LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
+        WHERE c.id = ?
+          AND v.chunk_id IS NULL
+          AND c.content IS NOT NULL
+          AND c.content != ''
+          AND c.archived_at IS NULL
+          AND c.superseded_by IS NULL
+          AND c.aggregated_into IS NULL
+          AND COALESCE(c.archived, 0) = 0
+          AND COALESCE(c.status, 'active') = 'active'
+        """,
+        (chunk_id,),
+    ).fetchone()
+    if row is None:
+        return False
+
+    try:
+        embedding = embed_fn(row[0])
+        store._upsert_chunk_vector(cursor, chunk_id, embedding)
+    except Exception as e:
+        logger.warning("Failed to hot-embed chunk %s: %s", chunk_id, e)
+        return False
+
+    from .search_repo import clear_hybrid_search_cache
+
+    clear_hybrid_search_cache(getattr(store, "db_path", None))
+    return True
 
 
 def _find_related(
