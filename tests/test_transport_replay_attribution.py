@@ -109,10 +109,14 @@ def test_transport_closed_jsonl_replay_preserves_original_chunk_origin(tmp_path,
     drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
 
     with VectorStore(db_path) as store:
-        row = store.conn.cursor().execute(
-            "SELECT project, source, source_file, chunk_origin FROM chunks WHERE id = ?",
-            ("manual-wi3-jsonl-origin",),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT project, source, source_file, chunk_origin FROM chunks WHERE id = ?",
+                ("manual-wi3-jsonl-origin",),
+            )
+            .fetchone()
+        )
 
     assert before_event["project"] == "systems"
     assert before_event["chunk_origin"] == CHUNK_ORIGIN_USER_EXPLICIT
@@ -138,10 +142,14 @@ def test_markdown_fallback_replay_preserves_origin_repo_and_chunk_origin(tmp_pat
             store_func=lambda **kwargs: store_memory(store=store, embed_fn=None, **kwargs),
             replayed_by="wi3-test",
         )
-        row = store.conn.cursor().execute(
-            "SELECT project, chunk_origin, metadata FROM chunks WHERE id = ?",
-            (result.chunk_id,),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT project, chunk_origin, metadata FROM chunks WHERE id = ?",
+                (result.chunk_id,),
+            )
+            .fetchone()
+        )
 
     metadata = json.loads(row[2])
     assert result.error is None
@@ -178,10 +186,14 @@ def test_legacy_pending_store_empty_chunk_id_lands_with_origin_and_is_queryable(
     with VectorStore(db_path) as store:
         with patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path):
             flushed = _flush_pending_stores(store, None)
-        row = store.conn.cursor().execute(
-            "SELECT id, project, chunk_origin FROM chunks WHERE content LIKE ?",
-            (f"%{token}%",),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT id, project, chunk_origin FROM chunks WHERE content LIKE ?",
+                (f"%{token}%",),
+            )
+            .fetchone()
+        )
         results = store.search(query_text=token, n_results=5)
 
     assert flushed == 1
@@ -219,10 +231,14 @@ def test_metadata_only_queued_origin_is_preserved_for_old_fallback_events(tmp_pa
     drained = drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log")
 
     with VectorStore(db_path) as store:
-        row = store.conn.cursor().execute(
-            "SELECT project, chunk_origin FROM chunks WHERE id = ?",
-            ("manual-wi3-metadata-origin",),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT project, chunk_origin FROM chunks WHERE id = ?",
+                ("manual-wi3-metadata-origin",),
+            )
+            .fetchone()
+        )
 
     assert drained == 1
     assert row == ("systems", CHUNK_ORIGIN_USER_EXPLICIT)
@@ -261,10 +277,14 @@ def test_deferred_mcp_row_stays_raw_etan_direct_with_high_enrichment_cap(tmp_pat
             mention_type="explicit",
         )
 
-        row = store.conn.cursor().execute(
-            "SELECT source, source_file, provenance_class FROM chunks WHERE id = ?",
-            (chunk["id"],),
-        ).fetchone()
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT source, source_file, provenance_class FROM chunks WHERE id = ?",
+                (chunk["id"],),
+            )
+            .fetchone()
+        )
         report = resolve_entity_conflicts(store, "enrichment", dry_run=True)
         results = store.search(query_text="WI3_PRIMARY_BACKEND", n_results=5, source_filter="mcp")
 

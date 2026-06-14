@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 
-
 DIRECT_QUEUE_CASES = [
     pytest.param("manual", "brainlayer-store", "RAW-ETAN-DIRECT", id="manual-brainlayer-store"),
     pytest.param("manual", "brainbar-store", "RAW-ETAN-DIRECT", id="manual-brainbar-store"),
