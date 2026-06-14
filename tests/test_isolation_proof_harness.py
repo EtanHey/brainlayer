@@ -64,6 +64,7 @@ def test_extension_isolation_proof_reports_expectation_failures(tmp_path):
                 project_filters=("repo-a",),
             )
         ],
+        expectations=EXTENSION_PROOF_EXPECTATIONS,
     )
 
     assert report.failures == [

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ._helpers import serialize_f32
@@ -197,20 +197,14 @@ def seed_isolation_proof_db(db_path: str | Path) -> IsolationProofFixture:
 
 
 def _scope_for_probe(probe: ScopeProbe) -> ConsumerScope:
-    if probe.project_filters:
-        return ConsumerScope(
-            role=probe.consumer,
-            project_filter=probe.project,
-            project_filters=probe.project_filters,
-            include_checkpoints=probe.include_checkpoints,
-            allow_null_project=False,
-            deny_all=probe.project is None,
-        )
-    return resolve_consumer_scope(
+    scope = resolve_consumer_scope(
         project=probe.project,
         consumer=probe.consumer,
         include_checkpoints=probe.include_checkpoints,
     )
+    if probe.project_filters:
+        return replace(scope, project_filters=probe.project_filters)
+    return scope
 
 
 def run_basic_isolation_proof(
@@ -224,7 +218,7 @@ def run_basic_isolation_proof(
         ScopeProbe(name="orchestrator", consumer="orchestrator", project=None, include_checkpoints=True),
         ScopeProbe(name="coach", consumer="coach", project=None),
     ]
-    expected_by_probe = expectations or {**BASIC_PROOF_EXPECTATIONS, **EXTENSION_PROOF_EXPECTATIONS}
+    expected_by_probe = expectations or BASIC_PROOF_EXPECTATIONS
     visible_ids_by_probe: dict[str, set[str]] = {}
     failures: list[str] = []
 
@@ -278,7 +272,9 @@ def run_extension_isolation_proof(db_path: str | Path) -> IsolationProofReport:
 
 
 def run_full_isolation_proof(db_path: str | Path) -> IsolationProofReport:
-    basic = run_basic_isolation_proof(db_path)
+    basic = run_basic_isolation_proof(
+        db_path, expectations={**BASIC_PROOF_EXPECTATIONS, **EXTENSION_PROOF_EXPECTATIONS}
+    )
     extension = run_extension_isolation_proof(db_path)
     return IsolationProofReport(
         visible_ids_by_probe={**basic.visible_ids_by_probe, **extension.visible_ids_by_probe},

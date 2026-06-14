@@ -764,9 +764,11 @@ async def test_think_filters_with_expanded_lead_scope(monkeypatch):
             total=4,
         )
 
-    consumer_scope = ConsumerScope.for_lead("repo-a")
-    object.__setattr__(consumer_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
-
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+    consumer_scope = resolve_consumer_scope(project="repo-a", consumer="lead")
     monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
     monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: _ScopedEmbeddingModel())
     monkeypatch.setattr("brainlayer.engine.think", fake_think)
@@ -813,8 +815,11 @@ async def test_lead_file_timeline_skips_single_project_prefilter(monkeypatch):
                 },
             ]
 
-    consumer_scope = ConsumerScope.for_lead("repo-a")
-    object.__setattr__(consumer_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+    consumer_scope = resolve_consumer_scope(project="repo-a", consumer="lead")
     monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: FakeStore())
 
     parts = await _file_timeline(
@@ -893,8 +898,11 @@ async def test_sessions_route_honors_deny_all_and_expanded_scope(monkeypatch):
     monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: object())
     monkeypatch.setattr("brainlayer.engine.sessions", fake_sessions)
 
-    lead_scope = ConsumerScope.for_lead("repo-a")
-    object.__setattr__(lead_scope, "project_filters", ("repo-a", "repo-a.worktree.feature-x"))
+    monkeypatch.setattr(
+        "brainlayer.scoping._load_scopes",
+        lambda: {"worktrees": {"repo-a.worktree.feature-x": "repo-a"}},
+    )
+    lead_scope = resolve_consumer_scope(project="repo-a", consumer="lead")
 
     parts = await _sessions(project="repo-a", consumer_scope=lead_scope)
     text = _text_parts(parts)
