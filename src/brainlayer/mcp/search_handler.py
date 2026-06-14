@@ -88,7 +88,9 @@ def _filter_recall_result_for_consumer_scope(result: Any, project: str | None, c
     return result
 
 
-def _filter_regression_for_consumer_scope(result: dict[str, Any], project: str | None, consumer_scope: Any | None) -> dict[str, Any]:
+def _filter_regression_for_consumer_scope(
+    result: dict[str, Any], project: str | None, consumer_scope: Any | None
+) -> dict[str, Any]:
     if consumer_scope is None:
         return result
     filtered = dict(result)
@@ -96,7 +98,9 @@ def _filter_regression_for_consumer_scope(result: dict[str, Any], project: str |
     filtered["timeline"] = timeline
     last_success = result.get("last_success")
     filtered["last_success"] = (
-        last_success if isinstance(last_success, dict) and _row_matches_consumer_scope(last_success, project, consumer_scope) else None
+        last_success
+        if isinstance(last_success, dict) and _row_matches_consumer_scope(last_success, project, consumer_scope)
+        else None
     )
     filtered["changes_after"] = _filter_rows_for_consumer_scope(
         list(result.get("changes_after") or []),

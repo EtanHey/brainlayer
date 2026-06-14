@@ -487,8 +487,18 @@ async def test_worker_recall_filters_foreign_and_null_rows(monkeypatch):
     def fake_recall(**_kwargs):
         return _FakeRecallResult(
             file_history=[
-                {"timestamp": "2026-06-01T00:00:00Z", "session_id": "repo-a-session", "action": "edit", "project": "repo-a"},
-                {"timestamp": "2026-06-01T01:00:00Z", "session_id": "repo-b-session", "action": "edit", "project": "repo-b"},
+                {
+                    "timestamp": "2026-06-01T00:00:00Z",
+                    "session_id": "repo-a-session",
+                    "action": "edit",
+                    "project": "repo-a",
+                },
+                {
+                    "timestamp": "2026-06-01T01:00:00Z",
+                    "session_id": "repo-b-session",
+                    "action": "edit",
+                    "project": "repo-b",
+                },
                 {"timestamp": "2026-06-01T02:00:00Z", "session_id": "null-session", "action": "read", "project": None},
             ],
             related_chunks=[

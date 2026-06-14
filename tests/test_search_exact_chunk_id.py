@@ -258,7 +258,9 @@ async def test_brain_search_chunk_id_context_blocks_audit_recursion_by_default(m
             new=AsyncMock(side_effect=AssertionError("audit-recursive chunk_id must not route to context")),
         ),
     ):
-        content, structured = await _brain_search(query="ignored", chunk_id=chunk_id, project="brainlayer", detail="compact")
+        content, structured = await _brain_search(
+            query="ignored", chunk_id=chunk_id, project="brainlayer", detail="compact"
+        )
 
     assert "No results found." in content[0].text
     assert structured == {"query": "ignored", "total": 0, "results": []}
