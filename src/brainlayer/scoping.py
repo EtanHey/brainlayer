@@ -6,6 +6,7 @@ Falls back to parsing CWD if no config exists.
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,9 @@ _SCOPES_PATH = Path.home() / ".config" / "brainlayer" / "scopes.yaml"
 # Cache parsed config
 _cached_scopes: Optional[dict] = None
 _cached_mtime: float = 0.0
+_VALID_CONSUMERS = frozenset({"orchestrator", "worker", "coach"})
+_DEFAULT_CONSUMER = "worker"
+_COACH_PROJECT = "personal"
 
 
 def _load_scopes() -> dict:
@@ -109,6 +113,113 @@ def resolve_project_scope() -> Optional[str]:
         return matches[0][1]
 
     return None if default == "all" else default
+
+
+@dataclass(frozen=True)
+class ConsumerScope:
+    """Retrieval-time visibility policy for a BrainLayer consumer role."""
+
+    role: str
+    project_filter: Optional[str]
+    source_filter: Optional[str] = None
+    include_checkpoints: bool = False
+    allow_null_project: bool = False
+    deny_all: bool = False
+
+    @classmethod
+    def for_worker(
+        cls,
+        project: Optional[str],
+        *,
+        source_filter: Optional[str] = None,
+        include_checkpoints: bool = False,
+    ) -> "ConsumerScope":
+        return cls(
+            role="worker",
+            project_filter=project,
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+            allow_null_project=False,
+            deny_all=project is None,
+        )
+
+    @classmethod
+    def for_orchestrator(
+        cls,
+        *,
+        source_filter: Optional[str] = None,
+        include_checkpoints: bool = False,
+    ) -> "ConsumerScope":
+        return cls(
+            role="orchestrator",
+            project_filter=None,
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+            allow_null_project=True,
+            deny_all=False,
+        )
+
+    @classmethod
+    def for_coach(
+        cls,
+        *,
+        source_filter: Optional[str] = None,
+        include_checkpoints: bool = True,
+    ) -> "ConsumerScope":
+        return cls(
+            role="coach",
+            project_filter=_COACH_PROJECT,
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+            allow_null_project=True,
+            deny_all=False,
+        )
+
+    def cache_key(self) -> tuple:
+        return (
+            self.role,
+            self.project_filter,
+            self.source_filter,
+            self.include_checkpoints,
+            self.allow_null_project,
+            self.deny_all,
+        )
+
+
+def resolve_consumer_role(consumer: Optional[str] = None) -> str:
+    """Resolve consumer role from explicit value or BRAINLAYER_CONSUMER.
+
+    Missing or invalid values fail closed to worker, the most restrictive role.
+    """
+    raw = consumer if consumer is not None else os.environ.get("BRAINLAYER_CONSUMER")
+    role = (raw or _DEFAULT_CONSUMER).strip().casefold()
+    if role not in _VALID_CONSUMERS:
+        logger.warning("Invalid BRAINLAYER_CONSUMER=%r; defaulting to worker", raw)
+        return _DEFAULT_CONSUMER
+    return role
+
+
+def resolve_consumer_scope(
+    *,
+    project: Optional[str] = None,
+    consumer: Optional[str] = None,
+    source_filter: Optional[str] = None,
+    include_checkpoints: bool = False,
+) -> ConsumerScope:
+    """Resolve the retrieval-time policy for the current BrainLayer consumer."""
+    role = resolve_consumer_role(consumer)
+    if role == "orchestrator":
+        return ConsumerScope.for_orchestrator(
+            source_filter=source_filter,
+            include_checkpoints=include_checkpoints,
+        )
+    if role == "coach":
+        return ConsumerScope.for_coach(source_filter=source_filter, include_checkpoints=True)
+    return ConsumerScope.for_worker(
+        project,
+        source_filter=source_filter,
+        include_checkpoints=include_checkpoints,
+    )
 
 
 def _cwd_heuristic() -> Optional[str]:

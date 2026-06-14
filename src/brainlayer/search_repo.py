@@ -22,6 +22,7 @@ from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_chec
 from .content_class import DEFAULT_CONTENT_CLASS, normalize_content_class, query_signals_operational_intent
 from .dedupe import resolve_chunk_id
 from .ingest_guard import recursive_mcp_output_reason
+from .scoping import ConsumerScope
 
 # ── hybrid_search result cache ───────────────────────────────────────────────
 # Caches identical (store, query_text, filters) → results for 60s.
@@ -356,6 +357,61 @@ def _content_class_expr(store: Any, alias: str | None = None) -> str:
     if getattr(store, "_has_content_class", True):
         return f"{alias}.content_class" if alias else "content_class"
     return f"'{DEFAULT_CONTENT_CLASS}'"
+
+
+def _effective_project_filter(project_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
+    if consumer_scope is not None:
+        return consumer_scope.project_filter
+    return project_filter
+
+
+def _effective_source_filter(source_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
+    if consumer_scope is not None and consumer_scope.source_filter is not None:
+        return consumer_scope.source_filter
+    return source_filter
+
+
+def _effective_include_checkpoints(include_checkpoints: bool, consumer_scope: ConsumerScope | None) -> bool:
+    if consumer_scope is not None:
+        return include_checkpoints or consumer_scope.include_checkpoints
+    return include_checkpoints
+
+
+def _project_scope_where(
+    column_expr: str,
+    project_filter: Optional[str],
+    consumer_scope: ConsumerScope | None,
+) -> tuple[str | None, list[Any]]:
+    if consumer_scope is not None and consumer_scope.deny_all:
+        return "0 = 1", []
+
+    effective_project = _effective_project_filter(project_filter, consumer_scope)
+    if not effective_project:
+        return None, []
+
+    if consumer_scope is not None and not consumer_scope.allow_null_project:
+        return f"{column_expr} = ?", [effective_project]
+    return f"({column_expr} = ? OR {column_expr} IS NULL)", [effective_project]
+
+
+def _metadata_matches_project_scope(
+    metadata: dict[str, Any],
+    project_filter: Optional[str],
+    consumer_scope: ConsumerScope | None,
+) -> bool:
+    if consumer_scope is not None and consumer_scope.deny_all:
+        return False
+
+    effective_project = _effective_project_filter(project_filter, consumer_scope)
+    if not effective_project:
+        return True
+
+    project = metadata.get("project")
+    if project == effective_project:
+        return True
+    if project is None:
+        return consumer_scope is None or consumer_scope.allow_null_project
+    return False
 
 
 def _optional_chunk_expr(store: Any, column: str, alias: str | None = None, fallback: str = "NULL") -> str:
@@ -965,6 +1021,7 @@ class SearchMixin:
         include_audit: bool = False,
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
+        consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Search chunks by embedding or text.
 
@@ -976,6 +1033,9 @@ class SearchMixin:
         """
 
         cursor = self._read_cursor()
+        project_filter = _effective_project_filter(project_filter, consumer_scope)
+        source_filter = _effective_source_filter(source_filter, consumer_scope)
+        include_checkpoints = _effective_include_checkpoints(include_checkpoints, consumer_scope)
 
         if query_embedding is not None:
             # Vector similarity search
@@ -987,9 +1047,10 @@ class SearchMixin:
             if entity_id:
                 where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 filter_params.append(entity_id)
-            if project_filter:
-                where_clauses.append("(c.project = ? OR c.project IS NULL)")
-                filter_params.append(project_filter)
+            project_clause, project_params = _project_scope_where("c.project", project_filter, consumer_scope)
+            if project_clause:
+                where_clauses.append(project_clause)
+                filter_params.extend(project_params)
             if content_type_filter:
                 where_clauses.append("c.content_type = ?")
                 filter_params.append(content_type_filter)
@@ -1106,9 +1167,10 @@ class SearchMixin:
             if entity_id:
                 where_clauses.append("id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
                 params.append(entity_id)
-            if project_filter:
-                where_clauses.append("(project = ? OR project IS NULL)")
-                params.append(project_filter)
+            project_clause, project_params = _project_scope_where("project", project_filter, consumer_scope)
+            if project_clause:
+                where_clauses.append(project_clause)
+                params.extend(project_params)
             if content_type_filter:
                 where_clauses.append("content_type = ?")
                 params.append(content_type_filter)
@@ -1389,10 +1451,14 @@ class SearchMixin:
         include_operational: bool = False,
         content_class_filter: Optional[str] = None,
         brainbar_helper_fast_profile: bool = False,
+        consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Run KNN search against binary-quantized vectors."""
         cursor = self._read_cursor()
         query_bytes = serialize_f32(query_embedding)
+        project_filter = _effective_project_filter(project_filter, consumer_scope)
+        source_filter = _effective_source_filter(source_filter, consumer_scope)
+        include_checkpoints = _effective_include_checkpoints(include_checkpoints, consumer_scope)
 
         where_clauses = []
         filter_params: list = []
@@ -1400,9 +1466,10 @@ class SearchMixin:
         if entity_id:
             where_clauses.append("c.id IN (SELECT chunk_id FROM kg_entity_chunks WHERE entity_id = ?)")
             filter_params.append(entity_id)
-        if project_filter:
-            where_clauses.append("(c.project = ? OR c.project IS NULL)")
-            filter_params.append(project_filter)
+        project_clause, project_params = _project_scope_where("c.project", project_filter, consumer_scope)
+        if project_clause:
+            where_clauses.append(project_clause)
+            filter_params.extend(project_params)
         if content_type_filter:
             where_clauses.append("c.content_type = ?")
             filter_params.append(content_type_filter)
@@ -1647,6 +1714,7 @@ class SearchMixin:
         profile_query_id: str | None = None,
         profile_scope: str = "search.repo",
         brainbar_helper_fast_profile: bool = False,
+        consumer_scope: ConsumerScope | None = None,
     ) -> Dict[str, List]:
         """Hybrid search combining semantic (vector) + keyword (FTS5) via Reciprocal Rank Fusion.
 
@@ -1658,6 +1726,12 @@ class SearchMixin:
         return cached results, avoiding repeated brute-force 303K-vector scans.
         Cache is module-level LRU (128 entries) with defensive copy-on-read.
         """
+
+        project_filter = _effective_project_filter(project_filter, consumer_scope)
+        source_filter = _effective_source_filter(source_filter, consumer_scope)
+        include_checkpoints = _effective_include_checkpoints(include_checkpoints, consumer_scope)
+        if consumer_scope is not None and consumer_scope.deny_all:
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
         # ── Cache lookup ─────────────────────────────────────────────────────
         store_key = os.fspath(getattr(self, "db_path", "<unknown-db>"))
@@ -1692,6 +1766,7 @@ class SearchMixin:
             correction_category,
             filter_meta_noise,
             brainbar_helper_fast_profile,
+            consumer_scope.cache_key() if consumer_scope is not None else None,
         )
         now = time.monotonic()
         if cache_key in _hybrid_cache:
@@ -1733,6 +1808,7 @@ class SearchMixin:
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                consumer_scope=consumer_scope,
             )
             search_profile.emit(
                 profile_scope,
@@ -1776,6 +1852,7 @@ class SearchMixin:
                 include_audit=include_audit,
                 include_operational=include_operational,
                 content_class_filter=content_class_filter,
+                consumer_scope=consumer_scope,
             )
             search_profile.emit(
                 profile_scope,
@@ -1810,9 +1887,10 @@ class SearchMixin:
                 entity_join = "JOIN kg_entity_chunks ec ON c.id = ec.chunk_id"
                 fts_extra.append("AND ec.entity_id = ?")
                 fts_filter_params.append(entity_id)
-            if project_filter:
-                fts_extra.append("AND (c.project = ? OR c.project IS NULL)")
-                fts_filter_params.append(project_filter)
+            project_clause, project_params = _project_scope_where("c.project", project_filter, consumer_scope)
+            if project_clause:
+                fts_extra.append(f"AND {project_clause}")
+                fts_filter_params.extend(project_params)
             if source_filter:
                 fts_extra.append("AND c.source = ?")
                 fts_filter_params.append(source_filter)
@@ -1994,9 +2072,10 @@ class SearchMixin:
         if recency_intent and not date_from:
             recent_extra = []
             recent_params: list = []
-            if project_filter:
-                recent_extra.append("AND (project = ? OR project IS NULL)")
-                recent_params.append(project_filter)
+            project_clause, project_params = _project_scope_where("project", project_filter, consumer_scope)
+            if project_clause:
+                recent_extra.append(f"AND {project_clause}")
+                recent_params.extend(project_params)
             if source_filter:
                 recent_extra.append("AND source = ?")
                 recent_params.append(source_filter)
@@ -2204,12 +2283,12 @@ class SearchMixin:
                 continue
             if not include_audit and _is_audit_recursion_metadata(meta, doc):
                 continue
+            if not _metadata_matches_project_scope(meta, project_filter, consumer_scope):
+                continue
 
             # Apply filters to FTS-only results
             if fts_rank is not None and sem_entry is None:
                 if source_filter and meta.get("source") != source_filter:
-                    continue
-                if project_filter and meta.get("project") not in (project_filter, None):
                     continue
                 if content_type_filter and meta.get("content_type") != content_type_filter:
                     continue

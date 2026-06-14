@@ -20,7 +20,7 @@ from .._helpers import _escape_fts5_query, _is_sqlite_busy_error
 from ..chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, is_precompact_checkpoint_content
 from ..content_class import content_class_is_default_hidden, normalize_content_class, query_signals_operational_intent
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
-from ..search_repo import _is_audit_recursion_metadata
+from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -331,6 +331,7 @@ def _exact_chunk_lookup_result(
     include_audit: bool = False,
     include_operational: bool = False,
     content_class_filter: str | None = None,
+    consumer_scope: Any | None = None,
 ) -> tuple[list[TextContent], dict] | None:
     """Return an exact chunk hit for chunk-id shaped queries, or None on miss."""
     candidate = query.strip()
@@ -352,7 +353,10 @@ def _exact_chunk_lookup_result(
     effective_source = None if source == "all" else source
     if any(value is not None for value in (effective_source, intent, sentiment, source_filter, correction_category)):
         return None
-    if project is not None:
+    if consumer_scope is not None:
+        if not _metadata_matches_project_scope({"project": chunk.get("project")}, project, consumer_scope):
+            return _empty_exact_chunk_lookup_result(query)
+    elif project is not None:
         chunk_project = _normalize_project_name(chunk.get("project")) or chunk.get("project")
         normalized_project = _normalize_project_name(project) or project
         if chunk_project not in (normalized_project, None):
@@ -757,13 +761,19 @@ async def _brain_search_dispatch(
             f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
         )
 
-    if project is None and entity_id is None and source not in ("youtube", "whatsapp", "telegram", "all"):
+    consumer_scope = None
+    if project is None and entity_id is None:
         try:
             from ..scoping import resolve_project_scope
 
             project = resolve_project_scope()
         except Exception:
             logger.debug("Project auto-scope failed, proceeding without scope")
+    from ..scoping import resolve_consumer_scope
+
+    consumer_scope = resolve_consumer_scope(project=project, include_checkpoints=include_checkpoints)
+    project = consumer_scope.project_filter
+    include_checkpoints = consumer_scope.include_checkpoints
 
     if entity_id is not None:
         return await _search(
@@ -790,11 +800,19 @@ async def _brain_search_dispatch(
             profile_query_id=profile_query_id,
             profile_scope=profile_scope,
             brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            consumer_scope=consumer_scope,
         )
 
     if chunk_id is not None:
         store = _get_vector_store()
         chunk = store.get_chunk(chunk_id)
+        if isinstance(chunk, dict) and not _metadata_matches_project_scope(
+            {"project": chunk.get("project")},
+            project,
+            consumer_scope,
+        ):
+            empty = {"query": query, "total": 0, "results": []}
+            return ([TextContent(type="text", text="No results found.")], empty)
         if (
             not include_checkpoints
             and isinstance(chunk, dict)
@@ -957,6 +975,7 @@ async def _brain_search_dispatch(
         include_audit=include_audit,
         include_operational=include_operational,
         content_class_filter=content_class_filter,
+        consumer_scope=consumer_scope,
     )
     if exact_chunk_hit is not None:
         return exact_chunk_hit
@@ -1156,6 +1175,7 @@ async def _brain_search_dispatch(
         profile_query_id=profile_query_id,
         profile_scope=profile_scope,
         brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+        consumer_scope=consumer_scope,
     )
     return result
 
@@ -1488,6 +1508,7 @@ async def _search(
     profile_query_id: str | None = None,
     profile_scope: str = "search.mcp",
     brainbar_helper_fast_profile: bool = False,
+    consumer_scope: Any | None = None,
 ):
     """Execute a hybrid search query (semantic + keyword via RRF). Retries on BusyError."""
     try:
@@ -1572,6 +1593,7 @@ async def _search(
                         profile_query_id=profile_query_id,
                         profile_scope=profile_scope,
                         brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                        consumer_scope=consumer_scope,
                     )
                     break
                 except Exception as e:

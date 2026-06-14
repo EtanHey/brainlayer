@@ -40,8 +40,8 @@ async def test_brain_search_exact_chunk_id_query_bypasses_hybrid_search():
 
 
 @pytest.mark.asyncio
-async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown():
-    """Exact chunk lookup should keep compact results stable when project is null."""
+async def test_brain_search_exact_chunk_id_default_worker_hides_missing_project(monkeypatch):
+    """Default worker scope must not expose null-project exact chunk hits."""
     chunk_id = "brainbar-nullproj01"
     mock_store = MagicMock()
     mock_store.get_chunk.return_value = {
@@ -55,6 +55,37 @@ async def test_brain_search_exact_chunk_id_defaults_missing_project_to_unknown()
         "summary": "Null project repro",
         "tags": '["fts"]',
     }
+    monkeypatch.delenv("BRAINLAYER_CONSUMER", raising=False)
+
+    with (
+        patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+        patch(
+            "brainlayer.mcp.search_handler._search",
+            new=AsyncMock(side_effect=AssertionError("exact chunk-id query should bypass hybrid search")),
+        ),
+    ):
+        _, structured = await _brain_search(query=chunk_id, detail="compact")
+
+    assert structured["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_brain_search_exact_chunk_id_orchestrator_defaults_missing_project_to_unknown(monkeypatch):
+    """Orchestrator scope keeps compact results stable when project is null."""
+    chunk_id = "brainbar-nullproj01"
+    mock_store = MagicMock()
+    mock_store.get_chunk.return_value = {
+        "id": chunk_id,
+        "content": "Chunk without project metadata",
+        "source_file": "docs/repro.md",
+        "project": None,
+        "content_type": "note",
+        "importance": 3,
+        "created_at": "2026-04-30T09:15:00Z",
+        "summary": "Null project repro",
+        "tags": '["fts"]',
+    }
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
 
     with (
         patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),

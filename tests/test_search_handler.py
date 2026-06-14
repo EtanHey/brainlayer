@@ -73,6 +73,60 @@ async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_brain_search_threads_fail_closed_worker_consumer_scope_when_env_unset(monkeypatch):
+    store = RecordingSearchStore()
+
+    monkeypatch.delenv("BRAINLAYER_CONSUMER", raising=False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "brainlayer")
+
+    await _brain_search(
+        query="auth implementation",
+        source="all",
+        allow_helper_route=False,
+    )
+
+    scope = store.hybrid_kwargs["consumer_scope"]
+    assert scope.role == "worker"
+    assert scope.project_filter == "brainlayer"
+    assert scope.allow_null_project is False
+    assert store.hybrid_kwargs["project_filter"] == "brainlayer"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_threads_orchestrator_consumer_scope(monkeypatch):
+    store = RecordingSearchStore()
+
+    monkeypatch.setenv("BRAINLAYER_CONSUMER", "orchestrator")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr("brainlayer.scoping.resolve_project_scope", lambda: "brainlayer")
+
+    await _brain_search(
+        query="auth implementation",
+        source="all",
+        allow_helper_route=False,
+    )
+
+    scope = store.hybrid_kwargs["consumer_scope"]
+    assert scope.role == "orchestrator"
+    assert scope.project_filter is None
+    assert scope.allow_null_project is True
+    assert store.hybrid_kwargs["project_filter"] is None
+
+
+@pytest.mark.asyncio
 async def test_brain_search_threads_helper_fast_profile_to_hybrid_search(monkeypatch):
     store = RecordingSearchStore()
 
