@@ -6,7 +6,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var config: BrainLayerConfig
     @Published var pendingPlainAPIKey = ""
     @Published var onePasswordReference: String
+    @Published var backendDraft: String
     @Published var errorMessage: String?
+    @Published var isRefreshingLaunchdStatus = false
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
@@ -14,6 +16,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
+        initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         refreshStatusOnLoad: Bool = true
     ) {
         self.store = store
@@ -22,51 +25,56 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let document = try store.loadDocument()
             config = document.config
             onePasswordReference = document.config.googleAPIKey.opReference
+            backendDraft = document.config.enrichmentBackend
         } catch {
             config = .defaultConfig
             onePasswordReference = BrainLayerConfig.defaultConfig.googleAPIKey.opReference
+            backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
             errorMessage = error.localizedDescription
         }
+        applyLaunchdStates(initialLaunchdStates)
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
         }
     }
 
     func setEnrichmentEnabled(_ enabled: Bool) {
-        config.enrichmentEnabled = enabled
-        save()
+        updateConfig { $0.enrichmentEnabled = enabled }
     }
 
     func setSystemEnabled(_ enabled: Bool) {
-        config.systemEnabled = enabled
-        save()
+        updateConfig { $0.systemEnabled = enabled }
     }
 
     func setEnrichmentMode(_ mode: BrainLayerEnrichmentMode) {
-        config.enrichmentMode = mode
-        save()
+        updateConfig { $0.enrichmentMode = mode }
     }
 
     func setEnrichmentProvider(_ provider: BrainLayerEnrichmentProvider) {
-        config.enrichmentProvider = provider
-        if provider == .gemini, config.enrichmentBackend.isEmpty {
-            config.enrichmentBackend = "gemini"
+        updateConfig { nextConfig in
+            nextConfig.enrichmentProvider = provider
+            if provider == .gemini, nextConfig.enrichmentBackend.isEmpty {
+                nextConfig.enrichmentBackend = "gemini"
+            }
         }
-        save()
     }
 
-    func setEnrichmentBackend(_ backend: String) {
-        config.enrichmentBackend = backend.trimmingCharacters(in: .whitespacesAndNewlines)
-        save()
+    func commitBackendDraft() {
+        let backend = backendDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !backend.isEmpty, backend != config.enrichmentBackend else {
+            backendDraft = config.enrichmentBackend
+            return
+        }
+        updateConfig { $0.enrichmentBackend = backend }
     }
 
     func storePlainAPIKey() {
         let value = pendingPlainAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
-        config.googleAPIKey = .plain(value)
-        pendingPlainAPIKey = ""
-        save()
+        if updateConfig({ $0.googleAPIKey = .plain(value) }) {
+            pendingPlainAPIKey = ""
+        }
     }
 
     func storeOnePasswordReference() {
@@ -75,33 +83,50 @@ final class BrainBarSettingsViewModel: ObservableObject {
         if config.googleAPIKey != .onePasswordReference(reference) {
             guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
         }
-        config.googleAPIKey = .onePasswordReference(reference)
-        save()
+        _ = updateConfig { $0.googleAPIKey = .onePasswordReference(reference) }
     }
 
     func clearGoogleAPIKey() {
-        config.googleAPIKey = .missing
-        save()
+        _ = updateConfig { $0.googleAPIKey = .missing }
     }
 
     func setJob(_ job: BrainLayerLaunchdJob, enabled: Bool) {
-        config.launchdJobs[job, default: BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)].enabled = enabled
-        save()
+        updateConfig {
+            $0.launchdJobs[job, default: BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)].enabled = enabled
+        }
     }
 
     func refreshLaunchdStatus() {
-        let states = launchdStatusProvider.sample()
+        isRefreshingLaunchdStatus = true
+        let provider = launchdStatusProvider
+        Task {
+            let states = await Task.detached {
+                provider.sample()
+            }.value
+            applyLaunchdStates(states)
+            isRefreshingLaunchdStatus = false
+        }
+    }
+
+    private func applyLaunchdStates(_ states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]) {
         for (job, state) in states {
             config.launchdJobs[job, default: BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)].loadState = state
         }
     }
 
-    private func save() {
+    @discardableResult
+    private func updateConfig(_ apply: (inout BrainLayerConfig) -> Void) -> Bool {
+        var nextConfig = config
+        apply(&nextConfig)
         do {
-            try store.save(config)
+            try store.save(nextConfig)
+            config = nextConfig
+            backendDraft = nextConfig.enrichmentBackend
             errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -178,6 +203,7 @@ struct BrainBarSettingsView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .controlSize(.small)
+            .disabled(viewModel.isRefreshingLaunchdStatus)
         }
     }
 
@@ -230,13 +256,20 @@ struct BrainBarSettingsView: View {
                     .frame(width: 110, alignment: .leading)
                 TextField(
                     "gemini",
-                    text: Binding(
-                        get: { viewModel.config.enrichmentBackend },
-                        set: { viewModel.setEnrichmentBackend($0) }
-                    )
+                    text: $viewModel.backendDraft
                 )
                 .focused($focusedField, equals: .backend)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    viewModel.commitBackendDraft()
+                }
+                Button("Save") {
+                    viewModel.commitBackendDraft()
+                }
+                .disabled(
+                    viewModel.backendDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        viewModel.backendDraft.trimmingCharacters(in: .whitespacesAndNewlines) == viewModel.config.enrichmentBackend
+                )
             }
         }
     }

@@ -31,7 +31,13 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
                 .enrichment: .loaded,
                 .hotlane: .unloaded,
                 .drain: .running,
-            ])
+            ]),
+            initialLaunchdStates: [
+                .enrichment: .loaded,
+                .hotlane: .unloaded,
+                .drain: .running,
+            ],
+            refreshStatusOnLoad: false
         )
         let view = NSHostingView(rootView: BrainBarSettingsView(viewModel: viewModel))
         view.frame = NSRect(x: 0, y: 0, width: 700, height: 1_080)

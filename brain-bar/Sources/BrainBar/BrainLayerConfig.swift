@@ -175,6 +175,7 @@ struct BrainLayerConfig: Equatable {
     var enrichmentMode: BrainLayerEnrichmentMode
     var enrichmentProvider: BrainLayerEnrichmentProvider
     var enrichmentBackend: String
+    var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
 
     static let defaultConfig = BrainLayerConfig(
@@ -184,6 +185,7 @@ struct BrainLayerConfig: Equatable {
         enrichmentMode: .remote,
         enrichmentProvider: .gemini,
         enrichmentBackend: "gemini",
+        tuningValues: BrainLayerEnvDocument.tuningDefaults,
         launchdJobs: Dictionary(
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 ($0, BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown))
@@ -211,7 +213,10 @@ struct BrainLayerEnvDocument {
     }
 
     func rendered() -> String {
-        let managedValues = Self.managedValues(for: config)
+        let includeLegacyGoogleKey = originalLines.contains {
+            Self.assignmentKey($0) == "GOOGLE_GENERATIVE_AI_API_KEY"
+        }
+        let managedValues = Self.managedValues(for: config, includeLegacyGoogleKey: includeLegacyGoogleKey)
         var emitted = Set<String>()
         var output: [String] = []
 
@@ -243,8 +248,17 @@ struct BrainLayerEnvDocument {
         return output.joined(separator: "\n") + "\n"
     }
 
+    static let tuningDefaults: [String: String] = [
+        "BRAINLAYER_ENRICH_RATE": "15",
+        "BRAINLAYER_ENRICH_CONCURRENCY": "4",
+        "BRAINLAYER_MAX_COMMIT_BATCH": "25",
+        "BRAINLAYER_GEMINI_SERVICE_TIER": "flex",
+        "BRAINLAYER_DISABLED_SLEEP_SECONDS": "3600",
+    ]
+
     private static let managedKeyOrder: [String] = [
         "GOOGLE_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
         "BRAINLAYER_SYSTEM_ENABLED",
         "BRAINLAYER_ENRICH_ENABLED",
         "BRAINLAYER_ENRICH_MODE",
@@ -269,7 +283,18 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED",
     ]
 
-    private static func managedValues(for config: BrainLayerConfig) -> [String: String] {
+    private static let tuningKeyOrder: [String] = [
+        "BRAINLAYER_ENRICH_RATE",
+        "BRAINLAYER_ENRICH_CONCURRENCY",
+        "BRAINLAYER_MAX_COMMIT_BATCH",
+        "BRAINLAYER_GEMINI_SERVICE_TIER",
+        "BRAINLAYER_DISABLED_SLEEP_SECONDS",
+    ]
+
+    private static func managedValues(
+        for config: BrainLayerConfig,
+        includeLegacyGoogleKey: Bool
+    ) -> [String: String] {
         var values: [String: String] = [
             "GOOGLE_API_KEY": config.googleAPIKey.renderedValue,
             "BRAINLAYER_SYSTEM_ENABLED": config.systemEnabled ? "1" : "0",
@@ -277,12 +302,13 @@ struct BrainLayerEnvDocument {
             "BRAINLAYER_ENRICH_MODE": config.enrichmentMode.rawValue,
             "BRAINLAYER_ENRICH_PROVIDER": config.enrichmentProvider.rawValue,
             "BRAINLAYER_ENRICH_BACKEND": config.enrichmentBackend,
-            "BRAINLAYER_ENRICH_RATE": "15",
-            "BRAINLAYER_ENRICH_CONCURRENCY": "4",
-            "BRAINLAYER_MAX_COMMIT_BATCH": "25",
-            "BRAINLAYER_GEMINI_SERVICE_TIER": "flex",
-            "BRAINLAYER_DISABLED_SLEEP_SECONDS": "3600",
         ]
+        if includeLegacyGoogleKey {
+            values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
+        }
+        for key in tuningKeyOrder {
+            values[key] = config.tuningValues[key] ?? tuningDefaults[key] ?? ""
+        }
         for job in BrainLayerLaunchdJob.allCases {
             values[job.configKey] = config.launchdJobs[job]?.enabled == false ? "0" : "1"
         }
@@ -312,6 +338,10 @@ struct BrainLayerEnvDocument {
         }
         if let raw = assignments["BRAINLAYER_ENRICH_BACKEND"], !normalized(raw).isEmpty {
             config.enrichmentBackend = normalized(raw)
+        }
+        for key in tuningKeyOrder {
+            guard let raw = assignments[key] else { continue }
+            config.tuningValues[key] = raw
         }
         for job in BrainLayerLaunchdJob.allCases {
             guard let raw = assignments[job.configKey] else { continue }
@@ -408,7 +438,7 @@ struct BrainLayerConfigStore {
     }
 }
 
-protocol BrainLayerLaunchdStatusSampling {
+protocol BrainLayerLaunchdStatusSampling: Sendable {
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]
 }
 

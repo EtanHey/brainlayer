@@ -58,6 +58,11 @@ final class BrainLayerConfigTests: XCTestCase {
             BRAINLAYER_ENRICH_MODE=remote
             BRAINLAYER_ENRICH_PROVIDER=gemini
             BRAINLAYER_ENRICH_BACKEND=gemini
+            BRAINLAYER_ENRICH_RATE=99
+            BRAINLAYER_ENRICH_CONCURRENCY=7
+            BRAINLAYER_MAX_COMMIT_BATCH=88
+            BRAINLAYER_GEMINI_SERVICE_TIER=standard
+            BRAINLAYER_DISABLED_SLEEP_SECONDS=42
             BRAINLAYER_LAUNCHD_DRAIN_ENABLED=1
             """
         )
@@ -77,8 +82,33 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_ENABLED=0"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_MODE=local"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_BACKEND=mlx"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_RATE=99"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_CONCURRENCY=7"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_MAX_COMMIT_BATCH=88"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_GEMINI_SERVICE_TIER=standard"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_DISABLED_SLEEP_SECONDS=42"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_LAUNCHD_DRAIN_ENABLED=0"))
         XCTAssertFalse(rendered.contains("old-secret"))
+    }
+
+    func testSaveMigratesLegacyGoogleKeyAliasToCanonicalKeyAndClearsAlias() throws {
+        var document = try BrainLayerEnvDocument(
+            text: """
+            GOOGLE_GENERATIVE_AI_API_KEY='legacy-secret'
+            BRAINLAYER_ENRICH_PROVIDER=gemini
+            """
+        )
+
+        XCTAssertEqual(document.config.googleAPIKey.kind, .plainPresent)
+
+        document.update { config in
+            config.googleAPIKey = .missing
+        }
+
+        let rendered = document.rendered()
+        XCTAssertTrue(rendered.contains("GOOGLE_API_KEY="))
+        XCTAssertTrue(rendered.contains("GOOGLE_GENERATIVE_AI_API_KEY="))
+        XCTAssertFalse(rendered.contains("legacy-secret"))
     }
 
     func testWritesMissingConfigWithFullSchemaDefaults() throws {
