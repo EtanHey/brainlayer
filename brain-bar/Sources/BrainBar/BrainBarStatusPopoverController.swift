@@ -96,6 +96,14 @@ final class BrainBarStatusPopoverController: NSObject {
     private func configureContextMenu() {
         contextMenuForTesting.addItem(
             NSMenuItem(
+                title: "Settings...",
+                action: #selector(openSettings(_:)),
+                keyEquivalent: ""
+            )
+        )
+        contextMenuForTesting.addItem(NSMenuItem.separator())
+        contextMenuForTesting.addItem(
+            NSMenuItem(
                 title: "Restart BrainBar",
                 action: #selector(restartBrainBar(_:)),
                 keyEquivalent: ""
@@ -117,6 +125,10 @@ final class BrainBarStatusPopoverController: NSObject {
 
     @objc private func restartBrainBar(_ sender: Any?) {
         BrainBarProcessControl.restart()
+    }
+
+    @objc private func openSettings(_ sender: Any?) {
+        BrainBarSettingsActions.openSettingsWindow()
     }
 
     @objc private func quitBrainBar(_ sender: Any?) {

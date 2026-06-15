@@ -32,6 +32,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
         let itemTitles = controller.contextMenuForTesting.items.map(\.title)
 
+        XCTAssertTrue(itemTitles.contains("Settings..."))
         XCTAssertTrue(itemTitles.contains("Restart BrainBar"))
         XCTAssertFalse(itemTitles.contains("Run as App Window"))
         XCTAssertFalse(itemTitles.contains("Run as Menu Item Daemon"))

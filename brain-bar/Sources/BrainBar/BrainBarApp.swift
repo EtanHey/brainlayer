@@ -273,10 +273,14 @@ struct BrainBarApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            BrainBarSettingsView()
         }
         .commands {
             CommandGroup(after: .appInfo) {
+                Button("Settings...") {
+                    BrainBarSettingsActions.openSettingsWindow()
+                }
+
                 Button("Toggle BrainBar") {
                     appDelegate.runtime.handleToggleRequest()
                 }
