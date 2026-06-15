@@ -6,6 +6,7 @@
 	<string>com.brainlayer.jsonl-backup</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__HOME__/.local/lib/brainlayer/jsonl-backup.sh</string>
 	</array>
 	<key>StartCalendarInterval</key>
@@ -27,6 +28,10 @@
 		<string>Brain Drive/06_ARCHIVE/backups/claude-jsonl</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>jsonl-backup</string>
 	</dict>
 	<key>Nice</key>
 	<integer>15</integer>

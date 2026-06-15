@@ -6,6 +6,7 @@
 	<string>com.brainlayer.repair-fts</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_BIN__</string>
 		<string>repair-fts</string>
 	</array>
@@ -30,6 +31,10 @@
 		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>repair-fts</string>
 	</dict>
 	<key>Nice</key>
 	<integer>15</integer>

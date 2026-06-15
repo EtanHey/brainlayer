@@ -6,6 +6,7 @@
 	<string>com.brainlayer.enrichment</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_BIN__</string>
 		<string>enrich</string>
 		<string>--mode</string>
@@ -30,18 +31,14 @@
 		<string>300</string>
 		<key>BRAINLAYER_ARBITRATED</key>
 		<string>1</string>
-		<key>BRAINLAYER_ENRICH_RATE</key>
-		<string>15</string>
-		<key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-		<string>4</string>
-		<key>BRAINLAYER_MAX_COMMIT_BATCH</key>
-		<string>25</string>
-		<key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
-		<string>flex</string>
-		<key>GOOGLE_API_KEY</key>
-		<string>__GOOGLE_API_KEY__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_REQUIRE_GOOGLE_API_KEY</key>
+		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>enrichment</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>

@@ -6,6 +6,7 @@
 	<string>com.brainlayer.watch</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_BIN__</string>
 		<string>watch</string>
 		<string>--poll</string>
@@ -25,6 +26,10 @@
 		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>watch</string>
 	</dict>
 	<key>StandardOutPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/watch.out.log</string>

@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import threading
 import types
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -1347,7 +1348,7 @@ def test_enrichment_plist_invokes_cli_enrich_entrypoint():
     plist = _load_enrichment_plist()
 
     args = plist["ProgramArguments"]
-    assert args == ["__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
+    assert args == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
     assert "while true" not in " ".join(args)
     assert "--limit" not in args
     assert "--since-hours" not in args
@@ -1356,14 +1357,18 @@ def test_enrichment_plist_invokes_cli_enrich_entrypoint():
 def test_enrichment_plist_matches_validated_flex_realtime_profile():
     plist = _load_enrichment_plist()
     env = plist["EnvironmentVariables"]
+    env_template = (Path(__file__).parent.parent / "scripts" / "launchd" / "brainlayer.env.example").read_text()
 
     assert plist["Nice"] == 10
     assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.out.log"
     assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.err.log"
-    assert env["BRAINLAYER_ENRICH_RATE"] == "15"
-    assert env["BRAINLAYER_ENRICH_CONCURRENCY"] == "4"
-    assert env["BRAINLAYER_MAX_COMMIT_BATCH"] == "25"
-    assert env["BRAINLAYER_GEMINI_SERVICE_TIER"] == "flex"
+    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
+    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
+    assert "GOOGLE_API_KEY" not in env
+    assert "BRAINLAYER_ENRICH_RATE=15" in env_template
+    assert "BRAINLAYER_ENRICH_CONCURRENCY=4" in env_template
+    assert "BRAINLAYER_MAX_COMMIT_BATCH=25" in env_template
+    assert "BRAINLAYER_GEMINI_SERVICE_TIER=flex" in env_template
 
 
 def test_launchd_installer_supports_enrichment_load_and_unload():
@@ -1385,12 +1390,14 @@ def test_launchd_installer_enrich_alias_removes_legacy_plist():
     assert "remove_plist enrich 2>/dev/null || true" in install_script
 
 
-def test_launchd_installer_reads_google_api_key_from_zshrc():
+def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_key():
     from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
-    assert ".zshrc" in install_script
-    assert "GOOGLE_API_KEY" in install_script
+    assert ".zshrc" not in install_script
+    assert "__GOOGLE_API_KEY__" not in install_script
+    assert 'BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"' in install_script
+    assert "__BRAINLAYER_ENV_RUN__" in install_script
 
 
 # ── Gemini model constant test ────────────────────────────────────────────────
