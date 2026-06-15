@@ -29,8 +29,8 @@
 		<string>1</string>
 		<key>BRAINLAYER_STALL_TIMEOUT</key>
 		<string>300</string>
-		<key>BRAINLAYER_ARBITRATED</key>
-		<string>1</string>
+		<key>BRAINLAYER_ENRICHMENT_QUEUE_WRITES</key>
+		<string>0</string>
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>BRAINLAYER_REQUIRE_GOOGLE_API_KEY</key>

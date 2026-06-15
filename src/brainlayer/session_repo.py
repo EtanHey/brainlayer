@@ -244,6 +244,8 @@ class SessionMixin:
         sentiment_score: Optional[float] = None,
         sentiment_signals: Optional[List[str]] = None,
         chunk_origin: Optional[str] = None,
+        enrichment_model: Optional[str] = None,
+        enrichment_backend: Optional[str] = None,
     ) -> None:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
@@ -296,6 +298,12 @@ class SessionMixin:
         if sentiment_signals is not None:
             sets.append("sentiment_signals = ?")
             params.append(json.dumps(sentiment_signals))
+        if enrichment_model is not None:
+            sets.append("enrichment_model = ?")
+            params.append(enrichment_model)
+        if enrichment_backend is not None:
+            sets.append("enrichment_backend = ?")
+            params.append(enrichment_backend)
         normalized_origin = str(chunk_origin or "").strip()
         if (
             normalized_origin

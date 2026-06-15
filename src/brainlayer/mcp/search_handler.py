@@ -1536,7 +1536,7 @@ async def _brain_recall(
             }
         )
 
-    if project is None:
+    if project is None and resolved_mode != "sessions":
         try:
             from ..scoping import resolve_project_scope
 

@@ -278,7 +278,7 @@ def store_memory(
                         "brainlayer-store",
                         project,
                         memory_type,
-                        "HIGH",
+                        "high",
                         len(content),
                         "manual",
                         effective_created_at,

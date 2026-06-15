@@ -14,6 +14,7 @@ from brainlayer.vector_store import VectorStore
 def test_sustained_rate_no_contention(tmp_path, monkeypatch):
     from brainlayer import enrichment_controller as controller
 
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     store = VectorStore(tmp_path / "test.db")
     try:
         chunk_ids = []

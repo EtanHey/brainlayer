@@ -54,10 +54,10 @@ def test_supervisor_reuses_one_vector_store_across_cycles(tmp_path):
     assert result.enriched == 3
 
 
-def test_supervisor_uses_readonly_store_when_arbitrated(tmp_path, monkeypatch):
+def test_supervisor_uses_readonly_store_when_enrichment_queue_writes_enabled(tmp_path, monkeypatch):
     from brainlayer import enrichment_controller as controller
 
-    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
     init_args = []
 
     class FakeVectorStore:
@@ -79,10 +79,10 @@ def test_supervisor_uses_readonly_store_when_arbitrated(tmp_path, monkeypatch):
     assert result.cycles == 1
 
 
-def test_enrich_realtime_skips_schema_writer_when_arbitrated(monkeypatch):
+def test_enrich_realtime_skips_schema_writer_when_enrichment_queue_writes_enabled(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
-    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
     monkeypatch.setattr(
         controller,
         "_ensure_enrichment_columns",

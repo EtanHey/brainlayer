@@ -166,6 +166,8 @@ def enqueue_enrichment_update(
     entities: list[Any] | None = None,
     provenance_class: str | None = None,
     chunk_origin: str | None = None,
+    enrichment_model: str | None = None,
+    enrichment_backend: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
     return enqueue_enrichment_updates(
@@ -177,6 +179,8 @@ def enqueue_enrichment_update(
                 "entities": entities,
                 "provenance_class": provenance_class,
                 "chunk_origin": chunk_origin,
+                "enrichment_model": enrichment_model,
+                "enrichment_backend": enrichment_backend,
             }
         ],
         queue_dir=queue_dir,
@@ -197,6 +201,8 @@ def enqueue_enrichment_updates(
             "entities": update.get("entities"),
             "chunk_origin": update.get("chunk_origin"),
             "provenance_class": update.get("provenance_class"),
+            "enrichment_model": update.get("enrichment_model"),
+            "enrichment_backend": update.get("enrichment_backend"),
         }
         for update in updates
     ]

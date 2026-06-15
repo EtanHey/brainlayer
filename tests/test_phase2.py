@@ -244,11 +244,14 @@ class TestParseEnrichment:
     def test_valid_json(self):
         from brainlayer.pipeline.enrichment import parse_enrichment
 
-        text = '{"summary":"Test summary here","tags":["python","testing"],"importance":7,"intent":"debugging"}'
+        text = (
+            '{"summary":"Test summary here","tags":["tech/testing","project/brainlayer"],'
+            '"importance":7,"intent":"debugging"}'
+        )
         result = parse_enrichment(text)
         assert result is not None
         assert result["summary"] == "Test summary here"
-        assert "python" in result["tags"]
+        assert "tech/testing" in result["tags"]
         assert result["importance"] == 7.0
         assert result["intent"] == "debugging"
 

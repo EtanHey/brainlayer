@@ -463,8 +463,12 @@ def _arbitrated_writes_enabled() -> bool:
     return os.environ.get("BRAINLAYER_ARBITRATED") == "1"
 
 
+def _enrichment_writes_queued_enabled() -> bool:
+    return os.environ.get("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0").lower() not in {"0", "false", "no"}
+
+
 def _open_enrich_supervisor_store(vector_store_cls, db_path: Path):
-    if not _arbitrated_writes_enabled():
+    if not _enrichment_writes_queued_enabled():
         return vector_store_cls(db_path)
     try:
         return vector_store_cls(db_path, readonly=True)
@@ -489,6 +493,11 @@ def _current_post_write_yield_seconds() -> float:
 
 def _current_enrichment_chunk_origin() -> str:
     return str(GEMINI_REALTIME_MODEL).strip() or CHUNK_ORIGIN_GEMINI_FLASH_LITE
+
+
+def _current_enrichment_backend() -> str:
+    tier = _get_gemini_service_tier()
+    return f"gemini-{tier}" if tier else "gemini"
 
 
 def _current_auto_supersede_dry_run() -> bool | None:
@@ -572,6 +581,8 @@ def _enrichment_update_payload(
         "entities": enrichment.get("entities", []),
         "chunk_origin": normalized_origin,
         "provenance_class": provenance_class,
+        "enrichment_model": GEMINI_REALTIME_MODEL,
+        "enrichment_backend": _current_enrichment_backend(),
     }
 
 
@@ -687,6 +698,10 @@ def _meta_research_enrichment(chunk: dict[str, Any]) -> dict[str, Any]:
         "summary": None,
         "tags": tags,
     }
+
+
+def _duplicate_content_enrichment() -> dict[str, Any]:
+    return {"enrich_status": "duplicate"}
 
 
 def _enqueue_meta_research_write(chunk: dict[str, Any]) -> None:
@@ -1268,6 +1283,8 @@ def _apply_enrichment(
             sentiment_score=enrichment.get("sentiment_score"),
             sentiment_signals=enrichment.get("sentiment_signals"),
             chunk_origin=normalized_origin or None,
+            enrichment_model=GEMINI_REALTIME_MODEL,
+            enrichment_backend=_current_enrichment_backend(),
         )
         entities = enrichment.get("entities", [])
         # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
@@ -1370,7 +1387,7 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 
     _begin_store_operation(store)
     try:
-        if not _arbitrated_writes_enabled():
+        if not _enrichment_writes_queued_enabled():
             _ensure_enrichment_columns(store)
 
         chunk = _get_chunk_readonly(store, chunk_id)
@@ -1379,7 +1396,7 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             return None
 
         if is_meta_research(chunk.get("content", "")):
-            if _arbitrated_writes_enabled():
+            if _enrichment_writes_queued_enabled():
                 _enqueue_meta_research_write(chunk)
             else:
                 _submit_write(store, f"mark-meta:{chunk_id}", lambda: _mark_meta_research(store, chunk))
@@ -1426,7 +1443,7 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
             return None
 
         try:
-            if _arbitrated_writes_enabled():
+            if _enrichment_writes_queued_enabled():
                 _enqueue_enrichment_write(chunk, enrichment)
             else:
                 _submit_write(
@@ -1529,14 +1546,14 @@ def enrich_realtime(
             _emit_enrichment_complete(result, 0)
             return result
 
-        if not _arbitrated_writes_enabled():
+        if not _enrichment_writes_queued_enabled():
             _ensure_enrichment_columns(store, yield_after=rate_per_second > 0)
 
         client = _get_gemini_client()
         sanitizer = Sanitizer.from_env()
         config = _build_gemini_config()
         rate_limiter = _get_store_rate_limiter(store, rate_per_second=rate_per_second)
-        write_batcher = _EnrichmentWriteBatcher() if _arbitrated_writes_enabled() else None
+        write_batcher = _EnrichmentWriteBatcher() if _enrichment_writes_queued_enabled() else None
 
         def is_duplicate(content: str) -> bool:
             return _is_duplicate_content(store, content)
@@ -1569,7 +1586,9 @@ def enrich_realtime(
                             pending.cancel()
                         break
                     if status == "skip":
-                        if write_batcher is None:
+                        if write_batcher is not None:
+                            write_batcher.enqueue(chunk, _duplicate_content_enrichment(), counted_as="skipped")
+                        else:
                             _submit_write(
                                 store,
                                 f"mark-duplicate:{chunk['id']}",
@@ -1642,7 +1661,7 @@ def enrich_batch(
             _emit_enrichment_complete(result, duration_ms)
             return result
 
-        if not _arbitrated_writes_enabled():
+        if not _enrichment_writes_queued_enabled():
             _ensure_enrichment_columns(store)
 
         try:
@@ -1656,7 +1675,7 @@ def enrich_batch(
         sanitizer = Sanitizer.from_env()
         config = _build_gemini_config()
         rate_limiter = _get_store_rate_limiter(store, rate_per_second=RATE_LIMITS["batch"])
-        write_batcher = _EnrichmentWriteBatcher() if _arbitrated_writes_enabled() else None
+        write_batcher = _EnrichmentWriteBatcher() if _enrichment_writes_queued_enabled() else None
 
         try:
             for chunk in candidates:
@@ -1670,7 +1689,9 @@ def enrich_batch(
                     result.skipped += 1
                     continue
                 if _is_duplicate_content(store, chunk.get("content", "")):
-                    if write_batcher is None:
+                    if write_batcher is not None:
+                        write_batcher.enqueue(chunk, _duplicate_content_enrichment(), counted_as="skipped")
+                    else:
                         _submit_write(
                             store,
                             f"mark-duplicate:{chunk['id']}",
