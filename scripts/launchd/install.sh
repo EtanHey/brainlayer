@@ -26,7 +26,8 @@ BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
 BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
-GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
+BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
+BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "ERROR: python3 not found in PATH"
@@ -44,22 +45,59 @@ fi
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
 mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
 
-resolve_google_api_key() {
-    if [ -n "${GOOGLE_API_KEY:-}" ]; then
-        printf '%s' "$GOOGLE_API_KEY"
-        return 0
+install_env_runner() {
+    local src="$SCRIPT_DIR/brainlayer-env-run.sh"
+
+    if [ ! -f "$src" ]; then
+        echo "ERROR: $src not found"
+        return 1
     fi
 
-    if [ -f "$HOME/.zshrc" ] && command -v zsh >/dev/null 2>&1; then
-        local sourced_key
-        sourced_key="$(zsh -lc 'source ~/.zshrc >/dev/null 2>&1; printf %s "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}"' 2>/dev/null || true)"
-        if [ -n "$sourced_key" ]; then
-            printf '%s' "$sourced_key"
-            return 0
-        fi
+    install -m 0755 "$src" "$BRAINLAYER_ENV_RUN"
+    echo "Installed: $BRAINLAYER_ENV_RUN"
+}
+
+verify_gemini_env_file() {
+    if [ ! -f "$BRAINLAYER_ENV_FILE" ]; then
+        echo "ERROR: BrainLayer Gemini env file not found at $BRAINLAYER_ENV_FILE"
+        echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example"
+        return 1
     fi
 
-    printf '%s' "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+    if ! BRAINLAYER_ENV_FILE="$BRAINLAYER_ENV_FILE" /bin/sh -c '
+        set -a
+        . "$BRAINLAYER_ENV_FILE"
+        set +a
+        test -n "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}"
+    ' >/dev/null; then
+        echo "ERROR: $BRAINLAYER_ENV_FILE did not provide GOOGLE_API_KEY"
+        return 1
+    fi
+
+    if ! BRAINLAYER_ENV_FILE="$BRAINLAYER_ENV_FILE" /bin/sh -c '
+        set -a
+        . "$BRAINLAYER_ENV_FILE"
+        set +a
+        for key in BRAINLAYER_ENRICH_ENABLED BRAINLAYER_ENRICH_MODE BRAINLAYER_ENRICH_PROVIDER BRAINLAYER_ENRICH_BACKEND BRAINLAYER_ENRICH_RATE BRAINLAYER_ENRICH_CONCURRENCY BRAINLAYER_MAX_COMMIT_BATCH BRAINLAYER_GEMINI_SERVICE_TIER; do
+            eval "value=\${$key:-}"
+            if [ -z "$value" ]; then
+                echo "missing $key" >&2
+                exit 1
+            fi
+        done
+    ' >/dev/null; then
+        echo "ERROR: $BRAINLAYER_ENV_FILE is missing required enrichment config keys"
+        echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example"
+        return 1
+    fi
+}
+
+verify_config_file() {
+    if [ ! -f "$BRAINLAYER_ENV_FILE" ]; then
+        echo "ERROR: BrainLayer config file not found at $BRAINLAYER_ENV_FILE"
+        echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example"
+        return 1
+    fi
 }
 
 load_plist() {
@@ -81,19 +119,17 @@ install_plist() {
     local name="$1"
     local src="$SCRIPT_DIR/com.brainlayer.${name}.plist"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    local google_api_key="${GOOGLE_API_KEY:-}"
 
     if [ ! -f "$src" ]; then
         echo "ERROR: $src not found"
         return 1
     fi
 
+    install_env_runner
+    verify_config_file
+
     if [ "$name" = "enrichment" ] || [ "$name" = "enrich" ]; then
-        google_api_key="$(resolve_google_api_key)"
-        if [ -z "$google_api_key" ]; then
-            echo "ERROR: GOOGLE_API_KEY not found in environment or ~/.zshrc"
-            return 1
-        fi
+        verify_gemini_env_file
     fi
 
     # Replace placeholders
@@ -103,7 +139,8 @@ install_plist() {
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
-        -e "s|__GOOGLE_API_KEY__|$google_api_key|g" \
+        -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
+        -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
         "$src" > "$dst"
 
     echo "Installed: $dst"

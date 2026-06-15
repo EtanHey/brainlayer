@@ -6,6 +6,7 @@
 	<string>com.brainlayer.wal-checkpoint</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_BIN__</string>
 		<string>wal-checkpoint</string>
 		<string>--mode</string>
@@ -32,6 +33,10 @@
 		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>wal-checkpoint</string>
 	</dict>
 	<key>Nice</key>
 	<integer>15</integer>

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import plistlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -134,3 +136,184 @@ def test_canonical_launchagent_env_has_no_concrete_dev_src_paths():
 def test_script_launchagents_use_installed_package_imports():
     for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
         _assert_uses_installed_package_not_source_path(path, plistlib.loads(path.read_bytes()))
+
+
+def test_enrichment_launchagent_sources_standard_env_file_without_embedded_google_key():
+    plist = _load("scripts/launchd/com.brainlayer.enrichment.plist")
+    env = plist["EnvironmentVariables"]
+    args = plist["ProgramArguments"]
+
+    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
+    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
+    assert "GOOGLE_API_KEY" not in env
+    assert "__GOOGLE_API_KEY__" not in plistlib.dumps(plist).decode("utf-8")
+    assert args[:2] == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__"]
+    assert args[2:] == ["enrich", "--mode", "realtime", "--supervisor"]
+
+
+def test_all_script_launchagents_source_unified_config_file():
+    for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
+        plist = plistlib.loads(path.read_bytes())
+        args = plist["ProgramArguments"]
+        env = plist["EnvironmentVariables"]
+        service = plist["Label"].removeprefix("com.brainlayer.")
+
+        assert args[0] == "__BRAINLAYER_ENV_RUN__", str(path)
+        assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__", str(path)
+        assert env["BRAINLAYER_LAUNCHD_SERVICE"] == service, str(path)
+
+
+def test_launchd_env_loader_exists_and_sources_env_before_exec():
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    content = loader.read_text(encoding="utf-8")
+
+    assert 'ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"' in content
+    assert "BRAINLAYER_SYSTEM_ENABLED" in content
+    assert "BRAINLAYER_LAUNCHD_SERVICE" in content
+    assert "BRAINLAYER_LAUNCHD_${service_key}_ENABLED" in content
+    assert "BRAINLAYER_ENRICH_ENABLED" in content
+    assert "current user or root" in content
+    assert "world-writable" in content
+    assert "set -a" in content
+    assert 'source "$ENV_FILE"' in content
+    assert 'exec "$@"' in content
+    assert "GOOGLE_API_KEY" in content
+
+
+def test_launchd_env_loader_rejects_world_writable_env_file(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("GOOGLE_API_KEY='test-secret'\n", encoding="utf-8")
+    env_file.chmod(0o666)
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_REQUIRE_GOOGLE_API_KEY": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "must not be world-writable" in result.stderr
+
+
+def test_launchd_env_loader_honors_service_disable_toggle(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_LAUNCHD_DRAIN_ENABLED=0",
+                "BRAINLAYER_DISABLED_SLEEP_SECONDS=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/bin/sh", "-c", "exit 42"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "drain",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "disabled by config" in result.stderr
+
+
+def test_launchd_env_loader_normalizes_auto_enrich_false_values(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=off\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/bin/sh", "-c", 'test "$BRAINLAYER_AUTO_ENRICH" = 0'],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "watch",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_launchd_env_loader_skip_disable_gates_still_checks_required_key(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_ENRICH_ENABLED=0",
+                "BRAINLAYER_DISABLED_SLEEP_SECONDS=99",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "enrichment",
+            "BRAINLAYER_REQUIRE_GOOGLE_API_KEY": "1",
+            "BRAINLAYER_SKIP_DISABLE_GATES": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "GOOGLE_API_KEY not set" in result.stderr
+
+
+def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
+    launchd_dir = tmp_path / "launchd"
+    launchd_dir.mkdir()
+    shutil.copy(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh", launchd_dir / "brainlayer-env-run.sh")
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+    functions_only = install_source.split('case "${1:-all}" in', 1)[0]
+    harness = launchd_dir / "verify-config.sh"
+    harness.write_text(functions_only + "\nverify_gemini_env_file\n", encoding="utf-8")
+    harness.chmod(0o755)
+
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("GOOGLE_API_KEY='test-secret'\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(harness)],
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_BIN": "/usr/bin/true",
+            "PYTHON_BIN": "/usr/bin/true",
+            "BRAINLAYER_ENV_FILE": str(env_file),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "missing BRAINLAYER_ENRICH_ENABLED" in result.stderr
+    assert "missing required enrichment config keys" in result.stdout

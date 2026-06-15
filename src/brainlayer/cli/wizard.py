@@ -5,6 +5,7 @@ and guides through first-time setup.
 """
 
 import platform
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -12,6 +13,42 @@ from pathlib import Path
 from typing import Optional
 
 from ..paths import get_db_path
+
+DEFAULT_BRAINLAYER_CONFIG = {
+    "BRAINLAYER_SYSTEM_ENABLED": "1",
+    "BRAINLAYER_ENRICH_ENABLED": "1",
+    "BRAINLAYER_ENRICH_MODE": "remote",
+    "BRAINLAYER_ENRICH_PROVIDER": "gemini",
+    "BRAINLAYER_ENRICH_BACKEND": "gemini",
+    "BRAINLAYER_ENRICH_RATE": "15",
+    "BRAINLAYER_ENRICH_CONCURRENCY": "4",
+    "BRAINLAYER_MAX_COMMIT_BATCH": "25",
+    "BRAINLAYER_GEMINI_SERVICE_TIER": "flex",
+    "BRAINLAYER_DISABLED_SLEEP_SECONDS": "3600",
+    "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_DECAY_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_DRAIN_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_WATCH_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_INDEX_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_JSONL_BACKUP_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_MAINTENANCE_NIGHTLY_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_MAINTENANCE_WEEKLY_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_REPAIR_FTS_ENABLED": "1",
+    "BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED": "1",
+}
+
+DEFAULT_ENRICHMENT_ENV = DEFAULT_BRAINLAYER_CONFIG
+
+_GOOGLE_KEY_RE = re.compile(r"^\s*(?:export\s+)?(?:GOOGLE_API_KEY|GOOGLE_GENERATIVE_AI_API_KEY)=")
+
+
+def _env_assignment_key(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    return stripped.removeprefix("export ").split("=", 1)[0].strip()
 
 
 @dataclass
@@ -22,6 +59,84 @@ class WizardConfig:
     extras: list[str] = field(default_factory=list)
     claude_projects_dir: Optional[Path] = None
     db_path: Optional[Path] = None
+    gemini_env_file: Optional[Path] = None
+
+
+def get_default_env_file() -> Path:
+    """Return the standard private BrainLayer env-file path."""
+    return Path.home() / ".config" / "brainlayer" / "brainlayer.env"
+
+
+def env_file_has_google_key(path: Path) -> bool:
+    """Return whether an env file already defines a Gemini API key variable."""
+    if not path.exists():
+        return False
+    return any(_GOOGLE_KEY_RE.match(line) for line in path.read_text(encoding="utf-8").splitlines())
+
+
+def _shell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _google_key_line(value: str, secret_source: str) -> str:
+    if secret_source == "1password":
+        return f'GOOGLE_API_KEY="$(op read {_shell_single_quote(value)})"'
+    if secret_source == "plain":
+        return f"GOOGLE_API_KEY={_shell_single_quote(value)}"
+    raise ValueError("secret_source must be '1password' or 'plain'")
+
+
+def write_gemini_env_file(
+    path: Path,
+    *,
+    google_api_key: str,
+    secret_source: str,
+    overwrite: bool = False,
+    enrichment_env: Optional[dict[str, str]] = None,
+) -> None:
+    """Write or update the private Gemini env file without printing secrets."""
+    if not google_api_key:
+        raise ValueError("google_api_key must not be empty")
+
+    existing_lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    if env_file_has_google_key(path) and not overwrite:
+        raise FileExistsError(f"{path} already defines GOOGLE_API_KEY")
+
+    config_defaults = enrichment_env or DEFAULT_BRAINLAYER_CONFIG
+    google_key_names = {
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+    }
+    existing_config_keys: set[str] = set()
+    preserved_lines = []
+    for line in existing_lines:
+        key = _env_assignment_key(line)
+        if key in google_key_names:
+            continue
+        if key in config_defaults:
+            existing_config_keys.add(key)
+        preserved_lines.append(line)
+
+    lines = preserved_lines
+    if lines and lines[-1] != "":
+        lines.append("")
+    if not lines:
+        lines.extend(
+            [
+                "# BrainLayer private config.",
+                "# Preferred secure form uses a 1Password CLI reference:",
+                "# GOOGLE_API_KEY=\"$(op read 'op://Private/Google AI/Gemini API key')\"",
+                "",
+            ]
+        )
+    lines.append(_google_key_line(google_api_key, secret_source))
+    for key, value in config_defaults.items():
+        if key not in existing_config_keys:
+            lines.append(f"{key}={value}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)
 
 
 def detect_environment() -> dict:
@@ -54,6 +169,9 @@ def detect_environment() -> dict:
     # Check for existing DB
     default_db = get_db_path()
     env["existing_db"] = default_db.exists()
+    env["gemini_env_file"] = get_default_env_file()
+    env["gemini_env_file_has_key"] = env_file_has_google_key(env["gemini_env_file"])
+    env["op_available"] = shutil.which("op") is not None
 
     return env
 
@@ -101,6 +219,42 @@ def run_wizard() -> WizardConfig:
         console.print("[dim]Install Ollama (ollama.ai) for local enrichment.[/dim]")
         backend = "none"
     config.enrich_backend = backend
+    config.gemini_env_file = env["gemini_env_file"]
+
+    console.print(f"\n  Gemini env file: [cyan]{config.gemini_env_file}[/cyan]")
+    if Confirm.ask("Configure Gemini API key env file for cloud enrichment?", default=False):
+        overwrite = True
+        if env["gemini_env_file_has_key"]:
+            overwrite = Confirm.ask("Existing GOOGLE_API_KEY found. Overwrite it?", default=False)
+        if overwrite:
+            if not env["op_available"]:
+                console.print("[yellow]1Password CLI not found; install op before runtime if you choose it.[/yellow]")
+            source = Prompt.ask(
+                "Gemini API key source",
+                choices=["1password", "plain", "skip"],
+                default="1password",
+            )
+            if source == "1password":
+                op_ref = Prompt.ask(
+                    "1Password secret reference",
+                    default="op://Private/Google AI/Gemini API key",
+                )
+                write_gemini_env_file(
+                    config.gemini_env_file,
+                    google_api_key=op_ref,
+                    secret_source="1password",
+                    overwrite=True,
+                )
+                console.print("[green]Configured Gemini key via 1Password reference.[/green]")
+            elif source == "plain":
+                key = Prompt.ask("Google API key", password=True)
+                write_gemini_env_file(
+                    config.gemini_env_file,
+                    google_api_key=key,
+                    secret_source="plain",
+                    overwrite=True,
+                )
+                console.print("[yellow]Configured Gemini key in a private env file.[/yellow]")
 
     extras = []
     if Confirm.ask("\nInstall style analysis (communication patterns)?", default=False):

@@ -6,7 +6,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import plistlib
 import sqlite3
 import subprocess
 import time
@@ -353,12 +352,21 @@ def _bootout_service(service: str) -> None:
 
 
 def _verify_enrichment_template_flex_backend(repo_root: Path) -> None:
-    plist_path = repo_root / "scripts/launchd/com.brainlayer.enrichment.plist"
-    with plist_path.open("rb") as handle:
-        plist = plistlib.load(handle)
-    env = plist.get("EnvironmentVariables") or {}
-    if env.get("BRAINLAYER_GEMINI_SERVICE_TIER") != "flex":
-        raise MaintenanceAbort("enrichment launchd template no longer uses Gemini Flex backend")
+    env_template_path = repo_root / "scripts/launchd/brainlayer.env.example"
+    if not env_template_path.exists():
+        raise MaintenanceAbort(f"BrainLayer env template not found: {env_template_path}")
+    env_template = env_template_path.read_text(encoding="utf-8")
+    service_tier = None
+    for raw_line in env_template.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").strip()
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "BRAINLAYER_GEMINI_SERVICE_TIER":
+            service_tier = value.strip().strip("'\"").lower()
+    if service_tier != "flex":
+        raise MaintenanceAbort("BrainLayer env template no longer uses Gemini Flex backend")
 
 
 def _resume_service(repo_root: Path, service: str) -> None:

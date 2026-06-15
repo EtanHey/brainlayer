@@ -282,7 +282,7 @@ def test_enrichment_launchagent_runs_supervisor_not_shell_respawn_loop():
 
     args = plist["ProgramArguments"]
 
-    assert args == ["__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
+    assert args == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
     assert "--limit" not in args
     assert "--since-hours" not in args
     assert "while true" not in " ".join(args)

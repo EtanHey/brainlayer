@@ -346,3 +346,56 @@ def test_maintenance_launchd_plists_and_installer_wiring():
     install = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
     assert "maintenance-nightly" in install
     assert "maintenance-weekly" in install
+
+
+def test_enrichment_template_flex_validation_parses_active_env_lines(tmp_path):
+    from brainlayer.maintenance import _verify_enrichment_template_flex_backend
+
+    launchd_dir = tmp_path / "scripts" / "launchd"
+    launchd_dir.mkdir(parents=True)
+    template = launchd_dir / "brainlayer.env.example"
+    template.write_text(
+        "\n".join(
+            [
+                "# BRAINLAYER_GEMINI_SERVICE_TIER=standard",
+                "export BRAINLAYER_GEMINI_SERVICE_TIER = 'FLEX'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    _verify_enrichment_template_flex_backend(tmp_path)
+
+
+def test_enrichment_template_flex_validation_uses_last_active_assignment(tmp_path):
+    from brainlayer.maintenance import _verify_enrichment_template_flex_backend
+
+    launchd_dir = tmp_path / "scripts" / "launchd"
+    launchd_dir.mkdir(parents=True)
+    template = launchd_dir / "brainlayer.env.example"
+    template.write_text(
+        "\n".join(
+            [
+                "BRAINLAYER_GEMINI_SERVICE_TIER=standard",
+                "BRAINLAYER_GEMINI_SERVICE_TIER=flex",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    _verify_enrichment_template_flex_backend(tmp_path)
+
+
+def test_enrichment_template_flex_validation_rejects_missing_or_commented_flex(tmp_path):
+    from brainlayer.maintenance import MaintenanceAbort, _verify_enrichment_template_flex_backend
+
+    with pytest.raises(MaintenanceAbort, match="env template not found"):
+        _verify_enrichment_template_flex_backend(tmp_path)
+
+    launchd_dir = tmp_path / "scripts" / "launchd"
+    launchd_dir.mkdir(parents=True)
+    template = launchd_dir / "brainlayer.env.example"
+    template.write_text("# BRAINLAYER_GEMINI_SERVICE_TIER=flex\n", encoding="utf-8")
+
+    with pytest.raises(MaintenanceAbort, match="no longer uses Gemini Flex"):
+        _verify_enrichment_template_flex_backend(tmp_path)
