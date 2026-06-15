@@ -293,6 +293,10 @@ private struct BrainBarHeaderRefreshControls: View {
 private struct BrainBarAppControlMenu: View {
     var body: some View {
         Menu {
+            Button("Settings...") {
+                BrainBarSettingsActions.openSettingsWindow()
+            }
+            Divider()
             Button("Restart BrainBar") {
                 BrainBarProcessControl.restart()
             }
