@@ -697,6 +697,62 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
     assert summaries == {"c0": "s0", "c1": "s1", "c2": None, "c3": None}
 
 
+def test_drain_persists_enrichment_provenance_in_chunk_metadata(tmp_path):
+    """Queued enrichment writes must stamp provenance fields onto chunk metadata."""
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+
+    conn = apsw.Connection(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            metadata TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, metadata, content_hash) VALUES (?, ?, ?, ?)",
+        ("c-provenance", "content for provenance", json.dumps({"existing": True}), "h-prov"),
+    )
+    conn.close()
+
+    enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "c-provenance",
+                "content_hash": "h-prov",
+                "enrichment": {"summary": "provenance summary"},
+                "enrichment_model": "gemini-2.5-flash-lite",
+                "enrichment_backend": "gemini-flex",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        summary, metadata_raw = conn.execute(
+            "SELECT summary, metadata FROM chunks WHERE id = 'c-provenance'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    metadata = json.loads(metadata_raw)
+    assert summary == "provenance summary"
+    assert metadata["existing"] is True
+    assert metadata["enrichment_model"] == "gemini-2.5-flash-lite"
+    assert metadata["enrichment_backend"] == "gemini-flex"
+
+
 def _create_burn_drain_db(path):
     conn = apsw.Connection(str(path))
     conn.execute("PRAGMA journal_mode=WAL")
