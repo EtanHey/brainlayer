@@ -72,6 +72,188 @@ def test_enrich_realtime_calls_get_enrichment_candidates(monkeypatch):
     assert result.mode == "realtime"
 
 
+def test_enrichment_provenance_columns_are_audit_queryable_but_not_normal_search_payload(tmp_path):
+    from brainlayer.store import store_memory
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "provenance.db")
+    try:
+        columns = {row[1] for row in store.conn.cursor().execute("PRAGMA table_info(chunks)")}
+        assert {"enrichment_model", "enrichment_backend"}.issubset(columns)
+
+        result = store_memory(
+            store=store,
+            embed_fn=None,
+            content="Track B provenance stamps enrichment model and backend for audit grading.",
+            memory_type="decision",
+            project="brainlayer",
+        )
+        store.update_enrichment(
+            result["id"],
+            summary="Track B stamps model/backend provenance.",
+            tags=["project/brainlayer"],
+            enrichment_model="gemini-2.5-flash-lite",
+            enrichment_backend="gemini-flex",
+        )
+
+        row = (
+            store.conn.cursor()
+            .execute(
+                "SELECT enrichment_model, enrichment_backend FROM chunks WHERE id = ?",
+                (result["id"],),
+            )
+            .fetchone()
+        )
+        assert row == ("gemini-2.5-flash-lite", "gemini-flex")
+
+        normal_payload = store.get_chunk(result["id"])
+        assert normal_payload is not None
+        assert "enrichment_model" not in normal_payload
+        assert "enrichment_backend" not in normal_payload
+    finally:
+        store.close()
+
+
+def test_enrich_realtime_uses_legacy_direct_writes_by_default(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1", "x" * 120)]
+    _patch_realtime_deps(monkeypatch, controller, store)
+    monkeypatch.delenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", raising=False)
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
+
+    enqueued = []
+    from brainlayer import queue_io
+
+    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
+    monkeypatch.setattr(controller, "_apply_enrichment", lambda *_args, **_kwargs: None)
+
+    result = controller.enrich_realtime(store, limit=1, since_hours=24)
+
+    assert result.enriched == 1
+    assert enqueued == []
+
+
+def test_enrich_realtime_enqueues_enrichment_writes_when_enabled(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1", "x" * 120)]
+    _patch_realtime_deps(monkeypatch, controller, store)
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    monkeypatch.delenv("BRAINLAYER_ARBITRATED", raising=False)
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
+
+    enqueued = []
+    from brainlayer import queue_io
+
+    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
+
+    result = controller.enrich_realtime(store, limit=1, since_hours=24)
+
+    assert result.enriched == 1
+    assert len(enqueued) == 1
+    assert enqueued[0]["chunk_id"] == "c1"
+    assert enqueued[0]["enrichment_model"] == controller.GEMINI_REALTIME_MODEL
+    assert enqueued[0]["enrichment_backend"] == controller._current_enrichment_backend()
+    store.update_enrichment.assert_not_called()
+
+
+def test_enrich_supervisor_opens_readonly_store_when_writes_are_queued(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    opened = []
+
+    class FakeStore:
+        def __init__(self, db_path, readonly=False):
+            opened.append((db_path, readonly))
+
+        def close(self):
+            pass
+
+    controller.run_enrich_supervisor(
+        tmp_path / "supervisor.db",
+        max_cycles=1,
+        vector_store_cls=FakeStore,
+        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
+            mode="realtime",
+            attempted=0,
+            enriched=0,
+            skipped=0,
+            failed=0,
+            errors=[],
+        ),
+    )
+
+    assert opened == [(tmp_path / "supervisor.db", True)]
+
+
+def test_enrich_realtime_runs_with_readonly_store_while_writer_is_open(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.vector_store import VectorStore
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
+    db_path = tmp_path / "parallel.db"
+    writer_store = VectorStore(db_path)
+    try:
+        writer_store.conn.cursor().execute(
+            """
+            INSERT INTO chunks (
+                id, content, metadata, source_file, project, content_type,
+                value_type, char_count, source, created_at, enriched_at, enrich_status
+            ) VALUES (
+                'parallel-c1',
+                'BrainLayer enrichment should keep running while the single writer is busy with normal writes.',
+                '{}',
+                'test',
+                'brainlayer',
+                'assistant_text',
+                'high',
+                90,
+                'claude_code',
+                '2026-06-15T00:00:00+00:00',
+                NULL,
+                NULL
+            )
+            """
+        )
+        readonly_store = VectorStore(db_path, readonly=True)
+        try:
+            _patch_realtime_deps(monkeypatch, controller, readonly_store)
+            monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+            monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
+            monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
+            monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
+
+            enqueued = []
+            from brainlayer import queue_io
+
+            monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
+
+            result = controller.enrich_realtime(readonly_store, limit=1, since_hours=None)
+
+            assert result.enriched == 1
+            assert enqueued[0]["chunk_id"] == "parallel-c1"
+            assert (
+                writer_store.conn.cursor()
+                .execute("SELECT enriched_at FROM chunks WHERE id = 'parallel-c1'")
+                .fetchone()[0]
+                is None
+            )
+        finally:
+            readonly_store.close()
+    finally:
+        writer_store.close()
+
+
 def test_enrich_realtime_calls_build_external_prompt_for_every_chunk(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
@@ -226,6 +408,7 @@ def test_enrich_realtime_writes_via_update_enrichment_only(monkeypatch):
 
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate()]
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
@@ -251,6 +434,7 @@ def test_enrich_realtime_is_idempotent_on_rerun(monkeypatch):
 
     store = MagicMock()
     store.get_enrichment_candidates.side_effect = [[_candidate()], []]
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
     monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
     monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
@@ -535,24 +719,21 @@ def test_realtime_persists_duplicate_skip_status(monkeypatch):
 
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
-    submitted_labels = []
     _patch_realtime_deps(monkeypatch, controller, store)
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
     monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
 
-    def capture_submit(_store, label, operation, **_kwargs):
-        submitted_labels.append(label)
-        operation()
+    enqueued = []
+    from brainlayer import queue_io
 
-    monkeypatch.setattr(controller, "_submit_write", capture_submit)
-    mark_duplicate = MagicMock()
-    monkeypatch.setattr(controller, "_mark_duplicate_content", mark_duplicate, raising=False)
+    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
 
     result = controller.enrich_realtime(store, limit=2)
 
     assert result.skipped == 1
     assert result.enriched == 1
-    assert "mark-duplicate:c1" in submitted_labels
-    mark_duplicate.assert_called_once_with(store, store.get_enrichment_candidates.return_value[0])
+    duplicate_update = next(update for update in enqueued if update["chunk_id"] == "c1")
+    assert duplicate_update["enrichment"]["enrich_status"] == "duplicate"
 
 
 def test_local_enrichment_stays_disabled_even_with_duplicates(monkeypatch):
@@ -1027,6 +1208,8 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
         sentiment_score=-0.6,
         sentiment_signals=["damn", "broken"],
         chunk_origin="gemini-2.5-flash-lite",
+        enrichment_model="gemini-2.5-flash-lite",
+        enrichment_backend="gemini-flex",
     )
 
 

@@ -29,6 +29,7 @@ def test_enrich_concurrency_env_var(monkeypatch):
 def test_enrich_realtime_processes_chunks(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [
         _candidate("c1", "content 1"),

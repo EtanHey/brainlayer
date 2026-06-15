@@ -18,7 +18,7 @@ def _candidate(chunk_id: str) -> dict:
     }
 
 
-def test_enrich_batch_batches_arbitrated_enrichment_writes(monkeypatch, tmp_path):
+def test_enrich_batch_batches_queued_enrichment_writes(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
     from brainlayer import queue_io
 
@@ -26,7 +26,7 @@ def test_enrich_batch_batches_arbitrated_enrichment_writes(monkeypatch, tmp_path
     store = MagicMock()
     store.get_enrichment_candidates.return_value = [_candidate(f"c{i}") for i in range(5)]
 
-    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
     monkeypatch.setenv("BRAINLAYER_MAX_COMMIT_BATCH", "2")
     monkeypatch.setattr(controller, "MAX_COMMIT_BATCH", 2, raising=False)
     monkeypatch.setattr(queue_io, "get_queue_dir", lambda: queue_dir)
@@ -158,7 +158,7 @@ def test_enrich_batch_reports_final_flush_failure_without_crashing(monkeypatch):
     errors = []
     completed = []
 
-    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
     monkeypatch.setattr(controller, "MAX_COMMIT_BATCH", 25, raising=False)
     monkeypatch.setattr(controller, "_ensure_enrichment_columns", lambda store: None)
     monkeypatch.setattr(controller, "_is_duplicate_content", lambda store, content: False)

@@ -767,6 +767,158 @@ def test_burn_drain_skips_verified_stale_enrichment_and_applies_real_update(tmp_
     assert rows == {"already-done": "old summary", "needs-update": "real summary"}
 
 
+def test_burn_drain_adds_provenance_columns_on_fresh_schema_before_queued_update(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    conn = apsw.Connection(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+        ("fresh-c1", "fresh DB queued provenance should persist", "fresh-hash"),
+    )
+    conn.close()
+
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "fresh-c1",
+                "content_hash": "fresh-hash",
+                "enrichment": {"summary": "fresh summary"},
+                "enrichment_model": "gemini-2.5-flash-lite",
+                "enrichment_backend": "gemini-flex",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert result.applied_events == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+        row = conn.execute(
+            "SELECT summary, enrichment_model, enrichment_backend FROM chunks WHERE id = ?",
+            ("fresh-c1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert {"enrichment_model", "enrichment_backend"}.issubset(columns)
+    assert row == ("fresh summary", "gemini-2.5-flash-lite", "gemini-flex")
+
+
+def test_drain_once_adds_provenance_columns_on_fresh_schema_before_queued_update(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "drain.log"
+    conn = apsw.Connection(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            summary TEXT,
+            enriched_at TEXT,
+            enrich_status TEXT,
+            content_hash TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, content, content_hash) VALUES (?, ?, ?)",
+        ("fresh-drain-c1", "plain drain queued provenance should persist", "fresh-drain-hash"),
+    )
+    conn.close()
+
+    queued = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "fresh-drain-c1",
+                "content_hash": "fresh-drain-hash",
+                "enrichment": {"summary": "plain drain summary"},
+                "enrichment_model": "gemini-2.5-flash-lite",
+                "enrichment_backend": "gemini-flex",
+            }
+        ],
+        queue_dir=queue_dir,
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path, embed_fn=None) == 1
+    assert not queued.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+        row = conn.execute(
+            "SELECT summary, enrichment_model, enrichment_backend FROM chunks WHERE id = ?",
+            ("fresh-drain-c1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert {"enrichment_model", "enrichment_backend"}.issubset(columns)
+    assert row == ("plain drain summary", "gemini-2.5-flash-lite", "gemini-flex")
+
+
+def test_burn_drain_duplicate_enrichment_event_is_idempotent(tmp_path):
+    from brainlayer.drain import burn_drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    log_path = tmp_path / "burn.log"
+    _create_burn_drain_db(db_path)
+    event = {
+        "chunk_id": "needs-update",
+        "content_hash": "h2",
+        "enrichment": {"summary": "idempotent summary"},
+        "provenance_class": "RAW-ETAN-DIRECT",
+        "enrichment_model": "gemini-2.5-flash-lite",
+        "enrichment_backend": "gemini-flex",
+    }
+
+    first = enqueue_enrichment_updates([event], queue_dir=queue_dir)
+    first_result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+    second = enqueue_enrichment_updates([event], queue_dir=queue_dir)
+    second_result = burn_drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=10, log_path=log_path)
+
+    assert first_result.applied_events == 1
+    assert first_result.skipped_verified_stale == 0
+    assert not first.exists()
+    assert second_result.applied_events == 0
+    assert second_result.skipped_verified_stale == 1
+    assert not second.exists()
+    conn = apsw.Connection(str(db_path))
+    try:
+        rows = list(
+            conn.execute(
+                """
+                SELECT summary, enrich_status, provenance_class, enrichment_model, enrichment_backend
+                FROM chunks
+                WHERE id = 'needs-update'
+                """
+            )
+        )
+        count = conn.execute("SELECT COUNT(*) FROM chunks WHERE id = 'needs-update'").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+    assert rows == [("idempotent summary", "success", "RAW-ETAN-DIRECT", "gemini-2.5-flash-lite", "gemini-flex")]
+
+
 def test_burn_drain_applies_same_hash_event_when_provenance_state_missing(tmp_path):
     from brainlayer.drain import burn_drain_once
 

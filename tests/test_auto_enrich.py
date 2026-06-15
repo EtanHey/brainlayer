@@ -20,6 +20,7 @@ from brainlayer.vector_store import VectorStore
 def store(tmp_path, monkeypatch):
     """Create a fresh VectorStore for testing."""
     monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
     db_path = tmp_path / "test.db"
     s = VectorStore(db_path)
     yield s
@@ -46,7 +47,7 @@ def stored_chunk(store):
 def _fake_gemini_response(summary="Auto-enriched summary", tags=None):
     """Build a fake Gemini JSON response string."""
     if tags is None:
-        tags = ["architecture", "decision", "real-time"]
+        tags = ["tech/architecture", "pm/decision"]
     return json.dumps(
         {
             "summary": summary,
@@ -104,7 +105,7 @@ class TestEnrichSingle:
 
         assert result is not None
         assert result["summary"] == "Auto-enriched summary"
-        assert "architecture" in result["tags"]
+        assert "tech/architecture" in result["tags"]
         assert client.call_count == 1
 
     def test_returns_none_when_disabled(self, store, stored_chunk, monkeypatch):
@@ -192,8 +193,8 @@ class TestEnrichSingle:
         assert len(rows) == 1
         assert rows[0][0] == "Auto-enriched summary"
         db_tags = json.loads(rows[0][1])
-        assert "architecture" in db_tags
-        assert "real-time" in db_tags
+        assert "tech/architecture" in db_tags
+        assert "pm/decision" in db_tags
 
     def test_enrich_single_persists_positive_sentiment(self, store, stored_chunk, monkeypatch):
         """Known-positive chunks should persist sentiment_label from Gemini output."""

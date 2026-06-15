@@ -58,6 +58,7 @@ from .ingest_guard import reject_recursive_mcp_output
 from .kg_repo import KGMixin
 from .search_repo import SearchMixin
 from .session_repo import SessionMixin
+from .tag_normalization import ensure_tag_tombstone_schema
 
 _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
@@ -648,6 +649,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             ("resolved_queries", "TEXT"),
             ("raw_entities_json", "TEXT"),
             ("provenance_class", "TEXT"),
+            ("enrichment_model", "TEXT"),
+            ("enrichment_backend", "TEXT"),
             ("epistemic_level", "TEXT"),
             ("version_scope", "TEXT"),
             ("debt_impact", "TEXT"),
@@ -794,7 +797,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         cursor.execute("""
             UPDATE chunks
             SET archived = 1
-            WHERE value_type = 'ARCHIVED' AND COALESCE(archived, 0) = 0
+            WHERE lower(value_type) = 'archived' AND COALESCE(archived, 0) = 0
         """)
         if needs_atomic_brick_backfill:
             self._backfill_atomic_brick_columns(cursor)
@@ -1019,6 +1022,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunk_tags_tag ON chunk_tags(tag)")
+        ensure_tag_tombstone_schema(self.conn)
 
         # Sync triggers: keep chunk_tags in sync with chunks.tags JSON
         cursor.execute("DROP TRIGGER IF EXISTS chunk_tags_insert")
@@ -1630,7 +1634,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
             UPDATE chunks
             SET status = CASE
                 WHEN COALESCE(archived, 0) = 1
-                  OR value_type = 'ARCHIVED'
+                  OR lower(value_type) = 'archived'
                   OR archived_at IS NOT NULL
                     THEN 'archived'
                 WHEN superseded_by IS NOT NULL
@@ -1644,7 +1648,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     status = 'active'
                     AND (
                         COALESCE(archived, 0) = 1
-                        OR value_type = 'ARCHIVED'
+                        OR lower(value_type) = 'archived'
                         OR archived_at IS NOT NULL
                         OR superseded_by IS NOT NULL
                         OR aggregated_into IS NOT NULL

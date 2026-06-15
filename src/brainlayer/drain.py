@@ -188,6 +188,27 @@ def _columns(conn: apsw.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _ensure_enrichment_update_schema(conn: apsw.Connection) -> None:
+    """Ensure APSW-only drain writers can persist queued enrichment fields.
+
+    Writable VectorStore instances run the full chunks migration, but queued
+    enrichment updates may be produced by a read-only supervisor and applied by
+    this plain APSW drain before any VectorStore writer opens the DB.
+    """
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks'").fetchone():
+        return
+    cols = _columns(conn, "chunks")
+    for col, typ in (
+        ("raw_entities_json", "TEXT"),
+        ("provenance_class", "TEXT"),
+        ("enrichment_model", "TEXT"),
+        ("enrichment_backend", "TEXT"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE chunks ADD COLUMN {col} {typ}")
+            cols.add(col)
+
+
 def _content_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
@@ -358,7 +379,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "source_file": "brainlayer-queue",
             "project": event.get("project"),
             "content_type": event.get("memory_type", "note"),
-            "value_type": "HIGH",
+            "value_type": "high",
             "char_count": len(content),
             "source": event.get("source") or "manual",
             "created_at": created_at,
@@ -431,7 +452,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> None:
             "source_file": source_file,
             "project": event.get("project"),
             "content_type": event.get("content_type") or "assistant_text",
-            "value_type": event.get("value_type") or "HIGH",
+            "value_type": event.get("value_type") or "high",
             "char_count": len(content),
             "source": "realtime_watcher",
             "created_at": event.get("created_at") or datetime.now(timezone.utc).isoformat(),
@@ -486,7 +507,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "source_file": source_file,
             "project": event.get("project"),
             "content_type": "assistant_text",
-            "value_type": "HIGH",
+            "value_type": "high",
             "char_count": len(content),
             "source": "realtime",
             "created_at": created_at,
@@ -548,6 +569,12 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     provenance_class = str(event.get("provenance_class") or "").strip()
     if "provenance_class" in cols and provenance_class:
         updates["provenance_class"] = provenance_class
+    enrichment_model = str(event.get("enrichment_model") or "").strip()
+    if "enrichment_model" in cols and enrichment_model:
+        updates["enrichment_model"] = enrichment_model
+    enrichment_backend = str(event.get("enrichment_backend") or "").strip()
+    if "enrichment_backend" in cols and enrichment_backend:
+        updates["enrichment_backend"] = enrichment_backend
     chunk_origin = str(event.get("chunk_origin") or "").strip()
     if "chunk_origin" in cols and chunk_origin:
         row = conn.execute("SELECT chunk_origin FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
@@ -556,10 +583,13 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         current_origin = str(row[0] or "").strip()
         if current_origin in {"", CHUNK_ORIGIN_UNKNOWN}:
             updates["chunk_origin"] = chunk_origin
+    requested_status = str(enrichment.get("enrich_status") or "success").strip()
+    if requested_status not in {"success", "duplicate"}:
+        requested_status = "success"
     if "enriched_at" in cols:
         updates["enriched_at"] = datetime.now(timezone.utc).isoformat()
     if "enrich_status" in cols:
-        updates["enrich_status"] = "success"
+        updates["enrich_status"] = requested_status
     if not updates:
         return
     assignments = ", ".join(f"{col} = ?" for col in updates)
@@ -712,6 +742,10 @@ def _prefetch_enrichment_state(conn: apsw.Connection, events: list[dict[str, Any
     selected_cols = ["id", "content_hash", "enrich_status", "enriched_at"]
     if "provenance_class" in cols:
         selected_cols.append("provenance_class")
+    if "enrichment_model" in cols:
+        selected_cols.append("enrichment_model")
+    if "enrichment_backend" in cols:
+        selected_cols.append("enrichment_backend")
     if "raw_entities_json" in cols:
         selected_cols.append("raw_entities_json")
     rows = conn.execute(
@@ -748,6 +782,18 @@ def _is_verified_redundant_enrichment(
     if provenance_class and "provenance_class" in state:
         current_provenance_class = str(state.get("provenance_class") or "").strip()
         if current_provenance_class != provenance_class:
+            return False
+
+    enrichment_model = str(payload.get("enrichment_model") or "").strip()
+    if enrichment_model and "enrichment_model" in state:
+        current_enrichment_model = str(state.get("enrichment_model") or "").strip()
+        if current_enrichment_model != enrichment_model:
+            return False
+
+    enrichment_backend = str(payload.get("enrichment_backend") or "").strip()
+    if enrichment_backend and "enrichment_backend" in state:
+        current_enrichment_backend = str(state.get("enrichment_backend") or "").strip()
+        if current_enrichment_backend != enrichment_backend:
             return False
 
     if payload.get("entities") is not None and "raw_entities_json" in state:
@@ -801,6 +847,7 @@ def burn_drain_once(
         all_events = [event for _, events in batch for event in events]
         conn = _open_connection(db_path)
         try:
+            _ensure_enrichment_update_schema(conn)
             conn.execute("BEGIN IMMEDIATE")
             prefetched_state = _prefetch_enrichment_state(conn, all_events)
             store_chunk_ids: list[str] = []
@@ -907,6 +954,7 @@ def drain_once(
                 store_chunk_ids: list[str] = []
                 try:
                     conn = _open_connection(db_path)
+                    _ensure_enrichment_update_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
                     ensure_dedupe_schema(conn)
                     for event in events_to_apply:

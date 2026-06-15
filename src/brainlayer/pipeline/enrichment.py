@@ -45,6 +45,7 @@ _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
 
 from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
+from ..tag_normalization import valid_taxonomy_tags
 from ..vector_store import VectorStore
 from .entity_extraction import normalize_entity_type
 
@@ -302,6 +303,26 @@ VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
 VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
 VALID_SENTIMENTS = ["frustration", "confusion", "positive", "satisfaction", "neutral"]
 
+
+def normalize_enrichment_tags(tags: Any, *, limit: int = 10) -> list[str]:
+    if not isinstance(tags, list):
+        return []
+    valid_tags = valid_taxonomy_tags()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        value = tag.strip().lower()
+        if value not in valid_tags or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 ENRICHMENT_PROMPT = """You are a knowledge extraction engine for a personal knowledge graph. Your summaries will be embedded for vector search AND indexed for full-text keyword search. Write dense, fact-rich extractions — not descriptions.
 
 RULES:
@@ -386,11 +407,9 @@ Return this exact JSON structure:
 }}
 
 TAG RULES:
-- Use lowercase, hyphenated tags (e.g., "bug-fix", "api-design")
-- Include: language tags (python, typescript, sql), framework tags (react, fastapi, bun)
-- Include: concept tags (error-handling, authentication, deployment, testing, refactoring)
-- Include: action tags (bug-fix, feature-dev, code-review, documentation)
-- 3-7 tags per chunk
+- Use ONLY the faceted taxonomy labels from src/brainlayer/taxonomy.json (examples: "tech/debug/investigation", "tech/testing", "pm/decision", "project/brainlayer", "platform/github", "meta/noise")
+- Do NOT invent free-form singleton tags, language tags, framework tags, names, or issue-specific labels
+- Prefer 1-4 high-signal taxonomy labels per chunk
 
 IMPORTANCE RULES:
 - 1-3: Trivial (greetings, short confirmations, file listings)
@@ -792,9 +811,7 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
         if isinstance(summary, str) and len(summary) > 5:
             result["summary"] = summary[:500]  # Cap at 500 chars
 
-        tags = match.get("tags", [])
-        if isinstance(tags, list):
-            result["tags"] = [str(t).lower().strip() for t in tags if isinstance(t, str)][:10]
+        result["tags"] = normalize_enrichment_tags(match.get("tags", []))
 
         importance = match.get("importance")
         if isinstance(importance, (int, float)):
