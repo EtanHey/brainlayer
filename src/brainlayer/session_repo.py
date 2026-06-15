@@ -80,21 +80,58 @@ class SessionMixin:
 
         prev_assistant_expr = self._previous_assistant_text_candidate_expr(cols)
 
-        results = list(
-            cursor.execute(
-                f"""
-                SELECT c.id, c.content, c.source_file, c.project, c.content_type,
-                       c.conversation_id, c.position, c.char_count, c.source, c.created_at,
-                       {"c.sender" if "sender" in cols else "NULL AS sender"},
-                       {prev_assistant_expr}
-                FROM chunks c
-                WHERE {" AND ".join(where)}
-                ORDER BY c.rowid {order_clause}
-                LIMIT ?
-                """,
-                params,
+        if "content_hash" in cols:
+            results = list(
+                cursor.execute(
+                    f"""
+                    WITH ranked AS (
+                        SELECT c.id, c.content, c.source_file, c.project, c.content_type,
+                               c.conversation_id, c.position, c.char_count, c.source, c.created_at,
+                               {"c.sender" if "sender" in cols else "NULL AS sender"},
+                               {prev_assistant_expr},
+                               c.rowid AS candidate_rowid,
+                               EXISTS (
+                                   SELECT 1
+                                   FROM chunks e
+                                   WHERE e.content_hash = c.content_hash
+                                     AND e.id != c.id
+                                     AND e.enriched_at IS NOT NULL
+                                     AND e.summary IS NOT NULL
+                               ) AS has_enriched_twin,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(c.content_hash, c.id)
+                                   ORDER BY c.rowid {order_clause}
+                               ) AS hash_rank
+                        FROM chunks c
+                        WHERE {" AND ".join(where)}
+                    )
+                    SELECT id, content, source_file, project, content_type,
+                           conversation_id, position, char_count, source, created_at,
+                           sender, prev_assistant_text
+                    FROM ranked
+                    WHERE hash_rank = 1
+                    ORDER BY has_enriched_twin ASC, candidate_rowid {order_clause}
+                    LIMIT ?
+                    """,
+                    params,
+                )
             )
-        )
+        else:
+            results = list(
+                cursor.execute(
+                    f"""
+                    SELECT c.id, c.content, c.source_file, c.project, c.content_type,
+                           c.conversation_id, c.position, c.char_count, c.source, c.created_at,
+                           {"c.sender" if "sender" in cols else "NULL AS sender"},
+                           {prev_assistant_expr}
+                    FROM chunks c
+                    WHERE {" AND ".join(where)}
+                    ORDER BY c.rowid {order_clause}
+                    LIMIT ?
+                    """,
+                    params,
+                )
+            )
 
         candidates = [
             {

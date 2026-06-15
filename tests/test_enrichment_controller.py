@@ -529,6 +529,31 @@ def test_realtime_skips_duplicate_content(monkeypatch):
     assert result.enriched == 1
 
 
+def test_realtime_persists_duplicate_skip_status(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+
+    store = MagicMock()
+    store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
+    submitted_labels = []
+    _patch_realtime_deps(monkeypatch, controller, store)
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
+
+    def capture_submit(_store, label, operation, **_kwargs):
+        submitted_labels.append(label)
+        operation()
+
+    monkeypatch.setattr(controller, "_submit_write", capture_submit)
+    mark_duplicate = MagicMock()
+    monkeypatch.setattr(controller, "_mark_duplicate_content", mark_duplicate, raising=False)
+
+    result = controller.enrich_realtime(store, limit=2)
+
+    assert result.skipped == 1
+    assert result.enriched == 1
+    assert "mark-duplicate:c1" in submitted_labels
+    mark_duplicate.assert_called_once_with(store, store.get_enrichment_candidates.return_value[0])
+
+
 def test_local_enrichment_stays_disabled_even_with_duplicates(monkeypatch):
     from brainlayer import enrichment_controller as controller
 
