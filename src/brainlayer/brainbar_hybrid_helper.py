@@ -176,6 +176,8 @@ class HybridSearchHelper:
             "allow_helper_route": False,
             "brainbar_helper_fast_profile": True,
         }
+        if arguments.get("consumer"):
+            search_kwargs["consumer"] = arguments.get("consumer")
         if arguments.get("include_operational"):
             search_kwargs["include_operational"] = True
         if arguments.get("content_class"):

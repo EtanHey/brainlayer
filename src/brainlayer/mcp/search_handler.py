@@ -110,6 +110,74 @@ def _filter_regression_for_consumer_scope(
     return filtered
 
 
+def _prefilter_project_for_consumer_scope(project: str | None, consumer_scope: Any | None) -> str | None:
+    if consumer_scope is not None and (
+        len(getattr(consumer_scope, "project_filters", ()) or ()) > 1
+        or getattr(consumer_scope, "allow_null_project", False)
+    ):
+        return None
+    return project
+
+
+def _filter_think_result_for_consumer_scope(result: Any, project: str | None, consumer_scope: Any | None) -> Any:
+    if consumer_scope is None:
+        return result
+    total = 0
+    for field_name in ("decisions", "patterns", "bugs", "context"):
+        if not hasattr(result, field_name):
+            continue
+        filtered = _filter_rows_for_consumer_scope(list(getattr(result, field_name) or []), project, consumer_scope)
+        setattr(result, field_name, filtered)
+        total += len(filtered)
+    if hasattr(result, "total"):
+        result.total = total
+    return result
+
+
+def _filter_current_context_for_consumer_scope(result: Any, project: str | None, consumer_scope: Any | None) -> Any:
+    if consumer_scope is None:
+        return result
+    filtered_sessions = []
+    if hasattr(result, "recent_sessions"):
+        filtered_sessions = [
+            session
+            for session in result.recent_sessions
+            if _row_matches_consumer_scope({"project": getattr(session, "project", None)}, project, consumer_scope)
+        ]
+        result.recent_sessions = filtered_sessions
+        result.active_branches = sorted(
+            {session.branch for session in filtered_sessions if getattr(session, "branch", None)}
+        )
+        scoped_files: list[str] = []
+        for session in filtered_sessions:
+            for file_path in getattr(session, "files_changed", []) or []:
+                if file_path and file_path not in scoped_files:
+                    scoped_files.append(file_path)
+        result.recent_files = scoped_files
+        result.active_plan = next((session.plan_name for session in filtered_sessions if session.plan_name), "")
+    if hasattr(result, "active_projects"):
+        result.active_projects = [
+            active_project
+            for active_project in result.active_projects
+            if _row_matches_consumer_scope({"project": active_project}, project, consumer_scope)
+        ]
+    return result
+
+
+def _filter_sessions_for_consumer_scope(
+    sessions: list[Any], project: str | None, consumer_scope: Any | None
+) -> list[Any]:
+    if consumer_scope is None:
+        return sessions
+    if getattr(consumer_scope, "deny_all", False):
+        return []
+    return [
+        session
+        for session in sessions
+        if _row_matches_consumer_scope({"project": getattr(session, "project", None)}, project, consumer_scope)
+    ]
+
+
 def _helper_sentinel_path() -> Path:
     return Path("~/.local/share/brainlayer/use-helper-socket").expanduser()
 
@@ -652,6 +720,7 @@ def _kg_facts_sql(
 async def _brain_search(
     query: str,
     project: str | None = None,
+    consumer: str | None = None,
     file_path: str | None = None,
     chunk_id: str | None = None,
     content_type: str | None = None,
@@ -710,6 +779,7 @@ async def _brain_search(
                     helper_project = _resolve_helper_project(project, entity_id=entity_id, source=source)
                     helper_kwargs = {
                         "project": helper_project,
+                        "consumer": consumer,
                         "source": source,
                         "tag": tag,
                         "importance_min": importance_min,
@@ -739,6 +809,7 @@ async def _brain_search(
         return await _brain_search_dispatch(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
             content_type=content_type,
@@ -773,6 +844,7 @@ async def _brain_search(
 async def _brain_search_dispatch(
     query: str,
     project: str | None = None,
+    consumer: str | None = None,
     file_path: str | None = None,
     chunk_id: str | None = None,
     content_type: str | None = None,
@@ -817,7 +889,7 @@ async def _brain_search_dispatch(
             logger.debug("Project auto-scope failed, proceeding without scope")
     from ..scoping import resolve_consumer_scope
 
-    consumer_scope = resolve_consumer_scope(project=project, include_checkpoints=include_checkpoints)
+    consumer_scope = resolve_consumer_scope(project=project, consumer=consumer, include_checkpoints=include_checkpoints)
     project = consumer_scope.project_filter
     include_checkpoints = consumer_scope.include_checkpoints
 
@@ -941,6 +1013,7 @@ async def _brain_search_dispatch(
         return await _brain_search(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=extracted_file,
             content_type=content_type,
             source=source,
@@ -966,13 +1039,14 @@ async def _brain_search_dispatch(
         )
 
     if _query_signals_current_context(query):
-        ctx = await _current_context(hours=24)
+        ctx = await _current_context(hours=24, project=project, consumer_scope=consumer_scope)
         think_result = await _think(
             context=query,
             project=project,
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
         merged_text = []
         if isinstance(ctx, tuple):
@@ -992,6 +1066,7 @@ async def _brain_search_dispatch(
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
 
     if _query_signals_recall(query):
@@ -1001,6 +1076,7 @@ async def _brain_search_dispatch(
             max_results=max_results,
             include_audit=include_audit,
             agent_id=agent_id,
+            consumer_scope=consumer_scope,
         )
 
     store = _get_vector_store()
@@ -1099,6 +1175,7 @@ async def _brain_search_dispatch(
                 content_class_filter=content_class_filter,
                 agent_id=agent_id,
                 brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+                consumer_scope=consumer_scope,
             )
             chunk_results = kg_results.get("chunks", {})
 
@@ -1395,6 +1472,7 @@ def _smart_detect_mode(query: str | None, mode: str | None) -> str:
 async def _brain_recall(
     mode: str | None = None,
     project: str | None = None,
+    consumer: str | None = None,
     hours: int = 24,
     days: int = 7,
     limit: int = 20,
@@ -1458,6 +1536,23 @@ async def _brain_recall(
             }
         )
 
+    if project is None:
+        try:
+            from ..scoping import resolve_project_scope
+
+            project = resolve_project_scope()
+        except Exception:
+            logger.debug("Project auto-scope failed, proceeding without scope")
+    from ..scoping import resolve_consumer_scope
+
+    consumer_scope = resolve_consumer_scope(
+        project=project,
+        consumer=consumer,
+        source_filter=source_filter,
+        include_checkpoints=include_checkpoints,
+    )
+    project = consumer_scope.project_filter
+
     # --- New modes: search + entity ---
 
     if resolved_mode == "search":
@@ -1466,6 +1561,7 @@ async def _brain_recall(
         return await _brain_search(
             query=query,
             project=project,
+            consumer=consumer,
             file_path=file_path,
             chunk_id=chunk_id,
             content_type=content_type,
@@ -1501,9 +1597,14 @@ async def _brain_recall(
     # --- Original modes ---
 
     if resolved_mode == "context":
-        return await _current_context(hours=hours)
+        return await _current_context(hours=hours, project=project, consumer_scope=consumer_scope)
     elif resolved_mode == "sessions":
-        return await _sessions(project=project, days=max(1, min(days, 365)), limit=max(1, min(limit, 100)))
+        return await _sessions(
+            project=project,
+            days=max(1, min(days, 365)),
+            limit=max(1, min(limit, 100)),
+            consumer_scope=consumer_scope,
+        )
     elif resolved_mode == "operations":
         if not session_id:
             return _error_result("session_id required for mode=operations")
@@ -1867,7 +1968,8 @@ async def _file_timeline(
     """Get interaction timeline for a file."""
     try:
         store = _get_vector_store()
-        interactions = store.get_file_timeline(file_path, project=project, limit=limit)
+        prefilter_project = _prefilter_project_for_consumer_scope(project, consumer_scope)
+        interactions = store.get_file_timeline(file_path, project=prefilter_project, limit=limit)
         interactions = _filter_rows_for_consumer_scope(interactions, project, consumer_scope)
         if not interactions:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
@@ -1911,7 +2013,8 @@ async def _regression(
     """Analyze a file for regressions."""
     try:
         store = _get_vector_store()
-        result = store.get_file_regression(file_path, project=project)
+        prefilter_project = _prefilter_project_for_consumer_scope(project, consumer_scope)
+        result = store.get_file_regression(file_path, project=prefilter_project)
         result = _filter_regression_for_consumer_scope(result, project, consumer_scope)
         if not result["timeline"]:
             return [TextContent(type="text", text=f"No interactions found for '{file_path}'.")]
@@ -1982,6 +2085,7 @@ async def _think(
     max_results: int = 10,
     include_audit: bool = False,
     agent_id: str | None = None,
+    consumer_scope: Any | None = None,
 ):
     """Execute think -- retrieve relevant memories for current task."""
     try:
@@ -1995,18 +2099,21 @@ async def _think(
             return model.embed_query(text)
 
         normalized_project = _normalize_project_name(project)
+        prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
         result = await loop.run_in_executor(
             None,
             lambda: think(
                 context=context,
                 store=store,
                 embed_fn=_embed,
-                project=normalized_project,
+                project=prefilter_project,
                 max_results=max_results,
                 include_audit=include_audit,
                 agent_id=agent_id,
+                consumer_scope=consumer_scope,
             ),
         )
+        result = _filter_think_result_for_consumer_scope(result, normalized_project, consumer_scope)
         structured = {
             "query": result.query,
             "total": result.total,
@@ -2036,6 +2143,7 @@ async def _recall(
         store = _get_vector_store()
         model = _get_embedding_model()
         normalized_project = _normalize_project_name(project)
+        prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
         loop = asyncio.get_running_loop()
 
         def _embed(text: str) -> list[float]:
@@ -2048,10 +2156,11 @@ async def _recall(
                 embed_fn=_embed,
                 file_path=file_path,
                 topic=topic,
-                project=normalized_project,
+                project=prefilter_project,
                 max_results=max_results,
                 include_audit=include_audit,
                 agent_id=agent_id,
+                consumer_scope=consumer_scope,
             ),
         )
         result = _filter_recall_result_for_consumer_scope(result, normalized_project, consumer_scope)
@@ -2082,14 +2191,21 @@ async def _recall(
         return _error_result(f"Recall error: {str(e)}")
 
 
-async def _sessions(project: str | None = None, days: int = 7, limit: int = 20) -> list[TextContent]:
+async def _sessions(
+    project: str | None = None,
+    days: int = 7,
+    limit: int = 20,
+    consumer_scope: Any | None = None,
+) -> list[TextContent]:
     """List recent sessions."""
     try:
         from ..engine import format_sessions, sessions
 
         store = _get_vector_store()
         normalized_project = _normalize_project_name(project)
-        result = sessions(store=store, project=normalized_project, days=days, limit=limit)
+        prefilter_project = _prefilter_project_for_consumer_scope(normalized_project, consumer_scope)
+        result = sessions(store=store, project=prefilter_project, days=days, limit=limit)
+        result = _filter_sessions_for_consumer_scope(result, normalized_project, consumer_scope)
         return [TextContent(type="text", text=format_sessions(result, days=days))]
     except Exception as e:
         return _error_result(f"Sessions error: {str(e)}")
@@ -2157,13 +2273,14 @@ async def _session_summary(session_id: str):
         return _error_result(f"Session summary error: {str(e)}")
 
 
-async def _current_context(hours: int = 24):
+async def _current_context(hours: int = 24, project: str | None = None, consumer_scope: Any | None = None):
     """Lightweight session awareness."""
     try:
         from ..engine import current_context
 
         store = _get_vector_store()
         result = current_context(store=store, hours=hours)
+        result = _filter_current_context_for_consumer_scope(result, project, consumer_scope)
         structured = {
             "active_projects": result.active_projects,
             "active_branches": result.active_branches,

@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.types import TextContent
@@ -212,6 +213,19 @@ async def test_brain_search_helper_path_forwards_max_results(monkeypatch):
     await _brain_search(query="recall previous warm route decisions", project="brainlayer", max_results=17)
 
     assert calls[0]["max_results"] == 17
+
+
+@pytest.mark.asyncio
+async def test_warm_helper_search_passes_consumer_to_local_dispatch(monkeypatch):
+    from brainlayer.brainbar_hybrid_helper import HybridSearchHelper
+
+    helper = HybridSearchHelper(socket_path=Path("/tmp/unused.sock"), db_path=Path("/tmp/unused.db"))
+    mock_search = AsyncMock(return_value=([TextContent(type="text", text="ok")], {"total": 0}))
+    monkeypatch.setattr("brainlayer.mcp.search_handler._brain_search", mock_search)
+
+    await helper._search({"query": "scoped helper", "project": "repo-a", "consumer": "worker"})
+
+    assert mock_search.call_args.kwargs["consumer"] == "worker"
 
 
 @pytest.mark.asyncio

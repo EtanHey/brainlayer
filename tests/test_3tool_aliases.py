@@ -235,7 +235,11 @@ class TestBackwardCompatRecallModes:
         ) as mock_ctx:
             asyncio.run(_brain_recall(mode="context"))
 
-        mock_ctx.assert_called_once_with(hours=24)
+        mock_ctx.assert_called_once()
+        call_kwargs = mock_ctx.call_args.kwargs
+        assert call_kwargs["hours"] == 24
+        assert call_kwargs["consumer_scope"].role == "worker"
+        assert call_kwargs["consumer_scope"].allow_null_project is False
 
     def test_sessions_mode_still_works(self):
         """mode=sessions still routes to _sessions."""
@@ -246,7 +250,13 @@ class TestBackwardCompatRecallModes:
         ) as mock_sessions:
             asyncio.run(_brain_recall(mode="sessions", days=14, limit=50))
 
-        mock_sessions.assert_called_once_with(project=None, days=14, limit=50)
+        mock_sessions.assert_called_once()
+        call_kwargs = mock_sessions.call_args.kwargs
+        assert call_kwargs["project"] is None
+        assert call_kwargs["days"] == 14
+        assert call_kwargs["limit"] == 50
+        assert call_kwargs["consumer_scope"].role == "worker"
+        assert call_kwargs["consumer_scope"].allow_null_project is False
 
     def test_stats_mode_still_works(self):
         """mode=stats still routes to _stats + _list_projects."""

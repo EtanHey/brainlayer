@@ -365,6 +365,16 @@ def _effective_project_filter(project_filter: Optional[str], consumer_scope: Con
     return project_filter
 
 
+def _effective_project_filters(project_filter: Optional[str], consumer_scope: ConsumerScope | None) -> tuple[str, ...]:
+    if consumer_scope is not None:
+        if consumer_scope.project_filters:
+            return consumer_scope.project_filters
+        if consumer_scope.project_filter:
+            return (consumer_scope.project_filter,)
+        return ()
+    return (project_filter,) if project_filter else ()
+
+
 def _effective_source_filter(source_filter: Optional[str], consumer_scope: ConsumerScope | None) -> Optional[str]:
     if consumer_scope is not None and consumer_scope.source_filter is not None:
         return consumer_scope.source_filter
@@ -385,13 +395,14 @@ def _project_scope_where(
     if consumer_scope is not None and consumer_scope.deny_all:
         return "0 = 1", []
 
-    effective_project = _effective_project_filter(project_filter, consumer_scope)
-    if not effective_project:
+    effective_projects = _effective_project_filters(project_filter, consumer_scope)
+    if not effective_projects:
         return None, []
 
+    placeholders = ", ".join("?" for _ in effective_projects)
     if consumer_scope is not None and not consumer_scope.allow_null_project:
-        return f"{column_expr} = ?", [effective_project]
-    return f"({column_expr} = ? OR {column_expr} IS NULL)", [effective_project]
+        return f"{column_expr} IN ({placeholders})", list(effective_projects)
+    return f"({column_expr} IN ({placeholders}) OR {column_expr} IS NULL)", list(effective_projects)
 
 
 def _metadata_matches_project_scope(
@@ -402,12 +413,12 @@ def _metadata_matches_project_scope(
     if consumer_scope is not None and consumer_scope.deny_all:
         return False
 
-    effective_project = _effective_project_filter(project_filter, consumer_scope)
-    if not effective_project:
+    effective_projects = _effective_project_filters(project_filter, consumer_scope)
+    if not effective_projects:
         return True
 
     project = metadata.get("project")
-    if project == effective_project:
+    if project in effective_projects:
         return True
     if project is None:
         return consumer_scope is None or consumer_scope.allow_null_project
