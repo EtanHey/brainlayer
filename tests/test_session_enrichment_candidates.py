@@ -117,6 +117,26 @@ def test_get_enrichment_candidates_respects_limit(tmp_path):
     assert len(results) == 2
 
 
+def test_get_enrichment_candidates_uses_one_candidate_per_content_hash(tmp_path):
+    from brainlayer.enrichment_controller import _content_hash
+
+    store = VectorStore(tmp_path / "test.db")
+    duplicate_hash = _content_hash("canonical duplicate content")
+    _insert_chunk(store, "duplicate-old", "older duplicate row " + "x" * 80)
+    _insert_chunk(store, "duplicate-new", "newer duplicate row " + "x" * 80)
+    _insert_chunk(store, "unique", "unique candidate " + "y" * 80)
+    store.conn.cursor().execute(
+        "UPDATE chunks SET content_hash = ? WHERE id IN ('duplicate-old', 'duplicate-new')",
+        (duplicate_hash,),
+    )
+
+    results = store.get_enrichment_candidates(limit=10)
+
+    assert len(results) == 2
+    assert "unique" in {row["id"] for row in results}
+    assert len({"duplicate-old", "duplicate-new"} & {row["id"] for row in results}) == 1
+
+
 def test_get_enrichment_candidates_returns_empty_list_when_nothing_needs_enrichment(tmp_path):
     store = VectorStore(tmp_path / "test.db")
     _insert_chunk(store, "c1", "a" * 80)

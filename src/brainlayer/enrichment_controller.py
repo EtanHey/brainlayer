@@ -1150,6 +1150,23 @@ def _mark_meta_research(store, chunk: dict[str, Any]) -> None:
             pass
 
 
+def _mark_duplicate_content(store, chunk: dict[str, Any]) -> None:
+    cursor = store.conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    content = chunk.get("content", "")
+    content_hash = _content_hash(content) if content else None
+    if content_hash:
+        cursor.execute(
+            "UPDATE chunks SET enriched_at = ?, enrich_status = 'duplicate', content_hash = ? WHERE id = ?",
+            (now, content_hash, chunk["id"]),
+        )
+    else:
+        cursor.execute(
+            "UPDATE chunks SET enriched_at = ?, enrich_status = 'duplicate' WHERE id = ?",
+            (now, chunk["id"]),
+        )
+
+
 def _backfill_content_hashes(store, limit: int = 1000) -> int:
     """Backfill content_hash for chunks that don't have one yet. Returns count updated."""
     try:
@@ -1552,6 +1569,13 @@ def enrich_realtime(
                             pending.cancel()
                         break
                     if status == "skip":
+                        if write_batcher is None:
+                            _submit_write(
+                                store,
+                                f"mark-duplicate:{chunk['id']}",
+                                lambda chunk=chunk: _mark_duplicate_content(store, chunk),
+                                yield_after=rate_per_second > 0,
+                            )
                         result.skipped += 1
                         continue
                     if status == "meta":
@@ -1646,6 +1670,12 @@ def enrich_batch(
                     result.skipped += 1
                     continue
                 if _is_duplicate_content(store, chunk.get("content", "")):
+                    if write_batcher is None:
+                        _submit_write(
+                            store,
+                            f"mark-duplicate:{chunk['id']}",
+                            lambda chunk=chunk: _mark_duplicate_content(store, chunk),
+                        )
                     result.skipped += 1
                     continue
 
