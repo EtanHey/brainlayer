@@ -26,10 +26,13 @@ brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
 brainlayer init
 ```
 
+On macOS, add `--launchd` to the `brainlayer setup` command to install the
+packaged launchd agents.
+
 This will:
 
 1. Create `~/.config/brainlayer/brainlayer.env` without writing plaintext secrets.
-2. Install launchd agents from the packaged templates when setup runs with launchd enabled.
+2. Install launchd agents from the packaged templates when setup runs with `--launchd`.
 3. Check for Claude Code conversations in `~/.claude/projects/` when using `brainlayer init`.
 4. Create the database at `~/.local/share/brainlayer/brainlayer.db` during indexing.
 

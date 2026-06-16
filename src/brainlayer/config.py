@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_OP_READ_PREFIX = "$(op read "
 
 
 def get_user_env_path() -> Path:
@@ -29,7 +31,8 @@ def _parse_env_assignment(line: str) -> tuple[str, str] | None:
 
     value_text = raw_value.strip()
     if "$(" in value_text or "`" in value_text:
-        return None
+        value = _resolve_op_read_value(value_text)
+        return (key, value) if value is not None else None
 
     try:
         parsed = shlex.split(value_text, comments=False, posix=True)
@@ -37,6 +40,45 @@ def _parse_env_assignment(line: str) -> tuple[str, str] | None:
         return None
     value = parsed[0] if parsed else ""
     return key, value
+
+
+def _resolve_op_read_value(value_text: str) -> str | None:
+    """Resolve exactly quoted $(op read 'op://...') values without a shell."""
+    try:
+        parsed = shlex.split(value_text, comments=False, posix=True)
+    except ValueError:
+        return None
+    if len(parsed) != 1:
+        return None
+
+    command = parsed[0].strip()
+    if not command.startswith(_OP_READ_PREFIX) or not command.endswith(")"):
+        return None
+
+    inner = command[2:-1]
+    try:
+        args = shlex.split(inner, comments=False, posix=True)
+    except ValueError:
+        return None
+    if len(args) != 3 or args[:2] != ["op", "read"] or not args[2].startswith("op://"):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["op", "read", args[2]],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Could not resolve 1Password env reference %s: %s", args[2], exc)
+        return None
+
+    if result.returncode != 0:
+        logger.warning("Could not resolve 1Password env reference %s: op read exited %s", args[2], result.returncode)
+        return None
+    return result.stdout.rstrip("\n")
 
 
 def load_brainlayer_env(

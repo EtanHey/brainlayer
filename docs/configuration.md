@@ -140,6 +140,9 @@ bash scripts/launchd/install.sh unload enrichment
 bash scripts/launchd/install.sh load enrichment
 ```
 
+Use `brainlayer setup --launchd --google-api-key-op-ref ...` to render and load
+all packaged launchd agents in one step.
+
 The install-managed plists in `scripts/launchd/` render without embedding
 `GOOGLE_API_KEY`. Their ProgramArguments call the installed
 `brainlayer-env-run.sh` loader, which sources `~/.config/brainlayer/brainlayer.env`

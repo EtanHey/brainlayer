@@ -53,7 +53,7 @@ def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path) -> N
             [
                 "#!/usr/bin/env bash",
                 "set -euo pipefail",
-                'printf "%s\\n" "$BRAINLAYER_ENV_FILE" "$PYTHON_BIN" "$1" > "$CALL_MARKER"',
+                'printf "%s\\n" "$BRAINLAYER_ENV_FILE" "$PYTHON_BIN" "$BRAINLAYER_PYTHON" "$1" > "$CALL_MARKER"',
             ]
         ),
         encoding="utf-8",
@@ -63,7 +63,12 @@ def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path) -> N
 
     install_launchd("watch", env_file=env_file, launchd_dir=launchd_dir, extra_env={"CALL_MARKER": str(marker)})
 
-    assert marker.read_text(encoding="utf-8").splitlines() == [str(env_file), sys.executable, "watch"]
+    assert marker.read_text(encoding="utf-8").splitlines() == [
+        str(env_file),
+        sys.executable,
+        sys.executable,
+        "watch",
+    ]
 
 
 def test_install_launchd_times_out_with_clear_error(tmp_path: Path) -> None:
@@ -106,6 +111,31 @@ def test_setup_command_writes_op_backed_env_without_plaintext_and_can_skip_launc
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
 
 
+def test_setup_command_does_not_install_launchd_by_default(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
+    from brainlayer.cli import app
+
+    def fail_install(*args, **kwargs):
+        raise AssertionError("launchd should be opt-in")
+
+    monkeypatch.setattr(setup_helpers, "install_launchd", fail_install)
+    env_file = tmp_path / "brainlayer.env"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "setup",
+            "--env-file",
+            str(env_file),
+            "--google-api-key-op-ref",
+            "op://Private/Google AI/Gemini API key",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert env_file.exists()
+
+
 def test_setup_command_env_file_annotation_accepts_none() -> None:
     from brainlayer.cli import setup
 
@@ -126,6 +156,7 @@ def test_setup_command_reports_launchd_failure_without_traceback(tmp_path: Path,
         app,
         [
             "setup",
+            "--launchd",
             "--env-file",
             str(env_file),
             "--google-api-key-op-ref",
@@ -181,6 +212,7 @@ def test_init_command_reports_launchd_failure_without_traceback(monkeypatch) -> 
 def test_config_loader_prefers_process_env_then_user_env_and_ignores_repo_root_dotenv(
     tmp_path: Path, monkeypatch
 ) -> None:
+    import brainlayer.config as config
     from brainlayer.config import load_brainlayer_env
 
     user_env = tmp_path / "brainlayer.env"
@@ -201,12 +233,29 @@ def test_config_loader_prefers_process_env_then_user_env_and_ignores_repo_root_d
     monkeypatch.delenv("BRAINLAYER_FROM_REPO", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
+    def fake_run(args, **kwargs):
+        assert args == ["op", "read", "op://Private/Google AI/Gemini API key"]
+        return subprocess.CompletedProcess(args, 0, stdout="resolved-secret\n", stderr="")
+
+    monkeypatch.setattr(config.subprocess, "run", fake_run)
+
     loaded = load_brainlayer_env(user_env, repo_env_path=repo_env)
 
-    assert loaded == {"BRAINLAYER_FROM_USER": "ok"}
+    assert loaded == {"BRAINLAYER_FROM_USER": "ok", "GOOGLE_API_KEY": "resolved-secret"}
     assert os.environ["BRAINLAYER_FROM_USER"] == "ok"
     assert os.environ["BRAINLAYER_EXISTING"] == "from-process"
     assert "BRAINLAYER_FROM_REPO" not in os.environ
+    assert os.environ["GOOGLE_API_KEY"] == "resolved-secret"
+
+
+def test_config_loader_ignores_shell_substitution_that_is_not_op_read(tmp_path: Path, monkeypatch) -> None:
+    from brainlayer.config import load_brainlayer_env
+
+    user_env = tmp_path / "brainlayer.env"
+    user_env.write_text('GOOGLE_API_KEY="$(cat /tmp/key)"\n', encoding="utf-8")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    assert load_brainlayer_env(user_env) == {}
     assert "GOOGLE_API_KEY" not in os.environ
 
 
@@ -285,6 +334,51 @@ def test_launchd_installer_preflights_all_before_loading_without_google_key(tmp_
     assert "did not provide GOOGLE_API_KEY" in result.stdout
     assert not launchctl_log.exists()
     assert not list((home / "Library" / "LaunchAgents").glob("com.brainlayer.*.plist"))
+
+
+def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    brainlayer_python = tmp_path / "tool" / "bin" / "python"
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "backup"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": "/usr/bin/python3",
+            "BRAINLAYER_PYTHON": str(brainlayer_python),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.backup-daily.plist"
+    assert f"<string>{brainlayer_python}</string>" in rendered.read_text(encoding="utf-8")
+    assert "__BRAINLAYER_PYTHON__" not in rendered.read_text(encoding="utf-8")
 
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:

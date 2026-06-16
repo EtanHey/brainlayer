@@ -71,7 +71,7 @@ def init(
 
 @app.command()
 def setup(
-    launchd: bool = typer.Option(True, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
+    launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
     env_file: Path | None = typer.Option(
         None,
         "--env-file",

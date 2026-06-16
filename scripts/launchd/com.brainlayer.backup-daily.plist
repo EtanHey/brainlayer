@@ -31,7 +31,7 @@
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>BRAINLAYER_PYTHON</key>
-		<string>__PYTHON_BIN__</string>
+		<string>__BRAINLAYER_PYTHON__</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
 		<string>backup-daily</string>
 	</dict>

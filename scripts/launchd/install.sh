@@ -139,6 +139,7 @@ install_plist() {
         -e "s|__BRAINLAYER_BIN__|$BRAINLAYER_BIN|g" \
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
+        -e "s|__BRAINLAYER_PYTHON__|$BRAINLAYER_PYTHON|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
