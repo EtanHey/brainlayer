@@ -108,22 +108,9 @@ BRAINLAYER_MAX_COMMIT_BATCH=25
 BRAINLAYER_GEMINI_SERVICE_TIER=flex
 ```
 
-Plain-env fallback:
-
-```bash
-GOOGLE_API_KEY='...'
-BRAINLAYER_SYSTEM_ENABLED=1
-BRAINLAYER_ENRICH_ENABLED=1
-BRAINLAYER_ENRICH_MODE=remote
-BRAINLAYER_ENRICH_PROVIDER=gemini
-BRAINLAYER_ENRICH_BACKEND=gemini
-BRAINLAYER_ENRICH_RATE=15
-BRAINLAYER_ENRICH_CONCURRENCY=4
-BRAINLAYER_MAX_COMMIT_BATCH=25
-BRAINLAYER_GEMINI_SERVICE_TIER=flex
-```
-
-Manual configs should keep the same tuning keys as the 1Password form. See
+Plaintext Google keys are intentionally not supported in generated BrainLayer
+env files. Manual configs should keep the same tuning keys as the 1Password
+form. See
 `scripts/launchd/brainlayer.env.example` for the full schema and launchd job gates.
 
 ## Scheduled Tasks (macOS)
@@ -147,6 +134,7 @@ BrainLayer includes launchd plist templates for automated operation:
 Manual install and control:
 
 ```bash
+brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
 bash scripts/launchd/install.sh enrichment
 bash scripts/launchd/install.sh unload enrichment
 bash scripts/launchd/install.sh load enrichment
@@ -157,7 +145,19 @@ The install-managed plists in `scripts/launchd/` render without embedding
 `brainlayer-env-run.sh` loader, which sources `~/.config/brainlayer/brainlayer.env`
 and then execs the service command.
 
+Configuration precedence is:
+
+1. Existing process environment.
+2. Simple assignments in `~/.config/brainlayer/brainlayer.env`.
+3. Built-in defaults.
+
+The shared Python config loader does not read repo-root `.env`. Command
+substitution such as `GOOGLE_API_KEY="$(op read 'op://...')"` is intentionally
+left for the shell-based launchd env runner so plaintext secrets are never
+written to disk by BrainLayer.
+
 Migration for an existing hardcoded LaunchAgent: move the existing key value into
-`~/.config/brainlayer/brainlayer.env` using `brainlayer init`, preferably as a
-1Password `op read` reference, then have the deployment lead reinstall the
-repo-generated plist. Do not paste the key into shell history, logs, PRs, or chat.
+`~/.config/brainlayer/brainlayer.env` using `brainlayer setup` or
+`brainlayer init`, preferably as a 1Password `op read` reference, then have the
+deployment lead reinstall the repo-generated plist. Do not paste the key into
+shell history, logs, PRs, or chat.

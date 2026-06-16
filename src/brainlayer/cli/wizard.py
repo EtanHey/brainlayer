@@ -81,9 +81,7 @@ def _shell_single_quote(value: str) -> str:
 def _google_key_line(value: str, secret_source: str) -> str:
     if secret_source == "1password":
         return f'GOOGLE_API_KEY="$(op read {_shell_single_quote(value)})"'
-    if secret_source == "plain":
-        return f"GOOGLE_API_KEY={_shell_single_quote(value)}"
-    raise ValueError("secret_source must be '1password' or 'plain'")
+    raise ValueError("GOOGLE_API_KEY must be sourced from a 1Password reference")
 
 
 def write_gemini_env_file(
@@ -231,7 +229,7 @@ def run_wizard() -> WizardConfig:
                 console.print("[yellow]1Password CLI not found; install op before runtime if you choose it.[/yellow]")
             source = Prompt.ask(
                 "Gemini API key source",
-                choices=["1password", "plain", "skip"],
+                choices=["1password", "skip"],
                 default="1password",
             )
             if source == "1password":
@@ -246,15 +244,6 @@ def run_wizard() -> WizardConfig:
                     overwrite=True,
                 )
                 console.print("[green]Configured Gemini key via 1Password reference.[/green]")
-            elif source == "plain":
-                key = Prompt.ask("Google API key", password=True)
-                write_gemini_env_file(
-                    config.gemini_env_file,
-                    google_api_key=key,
-                    secret_source="plain",
-                    overwrite=True,
-                )
-                console.print("[yellow]Configured Gemini key in a private env file.[/yellow]")
 
     extras = []
     if Confirm.ask("\nInstall style analysis (communication patterns)?", default=False):
