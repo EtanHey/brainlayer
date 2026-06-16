@@ -244,6 +244,8 @@ BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich   # Force Groq
 ## CLI Reference
 
 ```bash
+brainlayer setup              # Create ~/.config/brainlayer/brainlayer.env
+brainlayer setup --launchd    # Create config and install launchd agents
 brainlayer init               # Interactive setup wizard
 brainlayer index              # Batch index conversations
 brainlayer watch              # Real-time watcher (persistent, ~1s)

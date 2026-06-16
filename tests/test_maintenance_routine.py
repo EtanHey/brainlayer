@@ -98,6 +98,27 @@ def test_lsof_gate_aborts_on_unexpected_writer(tmp_path, monkeypatch):
         maintenance.run_maintenance("light", config=config, dry_run=True)
 
 
+def test_lsof_gate_accepts_packaged_drain_module_writer(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
+    config.db_path.write_bytes(b"db")
+    monkeypatch.setattr(
+        maintenance,
+        "collect_lsof_entries",
+        lambda _paths: [
+            maintenance.LsofEntry(
+                pid=4242,
+                command="python -m brainlayer.drain",
+                fd="9u",
+                path=str(config.db_path),
+            ),
+        ],
+    )
+
+    maintenance._check_lsof_clean(config)
+
+
 def test_recent_queue_activity_abort_message_reports_count(tmp_path, monkeypatch):
     from brainlayer import maintenance
 
@@ -342,10 +363,30 @@ def test_maintenance_launchd_plists_and_installer_wiring():
         assert plist["Nice"] == 10
         assert plist["ProcessType"] == "Background"
         assert plist["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"] == "__BRAINLAYER_DIR__"
+        assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_DIR"] == "__BRAINLAYER_LAUNCHD_DIR__"
 
     install = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
     assert "maintenance-nightly" in install
     assert "maintenance-weekly" in install
+
+
+def test_resume_service_uses_configured_launchd_dir_for_packaged_installs(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+    launchd_dir.mkdir(parents=True)
+    (launchd_dir / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (launchd_dir / "brainlayer.env.example").write_text(
+        "BRAINLAYER_GEMINI_SERVICE_TIER=flex\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setenv("BRAINLAYER_LAUNCHD_DIR", str(launchd_dir))
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **_kwargs: commands.append(list(args)))
+
+    maintenance._resume_service(tmp_path / "site-packages", "enrichment")
+
+    assert commands == [[str(launchd_dir / "install.sh"), "enrichment"]]
 
 
 def test_enrichment_template_flex_validation_parses_active_env_lines(tmp_path):

@@ -1179,3 +1179,7 @@ def main() -> int:
         return 0
     run_daemon(args.interval, args.batch_size)
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -24,8 +24,10 @@ LOG_DIR="$HOME/Library/Logs"
 BRAINLAYER_LOG_DIR="$HOME/.local/share/brainlayer/logs"
 BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
 BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+BRAINLAYER_LAUNCHD_DIR="${BRAINLAYER_LAUNCHD_DIR:-$SCRIPT_DIR}"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+BRAINLAYER_PYTHON="${BRAINLAYER_PYTHON:-$PYTHON_BIN}"
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 
@@ -137,7 +139,9 @@ install_plist() {
         -e "s|__HOME__|$HOME|g" \
         -e "s|__BRAINLAYER_BIN__|$BRAINLAYER_BIN|g" \
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
+        -e "s|__BRAINLAYER_LAUNCHD_DIR__|$BRAINLAYER_LAUNCHD_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
+        -e "s|__BRAINLAYER_PYTHON__|$BRAINLAYER_PYTHON|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
         -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
@@ -245,6 +249,9 @@ case "${1:-all}" in
         install_plist maintenance-weekly
         ;;
     all)
+        install_env_runner
+        verify_config_file
+        verify_gemini_env_file
         install_plist index
         install_plist drain
         install_plist watch

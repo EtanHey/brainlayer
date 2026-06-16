@@ -14,13 +14,17 @@ def test_pyproject_declares_pure_engine_package_boundary() -> None:
     sdist_config = payload["tool"]["hatch"]["build"]["targets"]["sdist"]
 
     assert payload["project"]["name"] == "brainlayer"
-    assert payload["project"]["scripts"] == {"brainlayer-mcp": "brainlayer.mcp:serve"}
+    assert payload["project"]["scripts"] == {
+        "brainlayer": "brainlayer.cli:app",
+        "brainlayer-mcp": "brainlayer.mcp:serve",
+    }
     assert wheel_config["packages"] == ["src/brainlayer"]
-    assert "src/brainlayer/cli" in wheel_config["exclude"]
-    assert "src/brainlayer/cli_new.py" in wheel_config["exclude"]
+    assert "src/brainlayer/cli" not in wheel_config.get("exclude", [])
+    assert "src/brainlayer/cli_new.py" not in wheel_config.get("exclude", [])
+    assert wheel_config["force-include"]["scripts/launchd"] == "brainlayer/launchd"
     assert "src/brainlayer/dashboard" in wheel_config["exclude"]
-    assert "src/brainlayer/cli/**" in sdist_config["exclude"]
-    assert "src/brainlayer/cli_new.py" in sdist_config["exclude"]
+    assert "src/brainlayer/cli/**" not in sdist_config.get("exclude", [])
+    assert "src/brainlayer/cli_new.py" not in sdist_config.get("exclude", [])
     assert "src/brainlayer/dashboard/**" in sdist_config["exclude"]
 
 

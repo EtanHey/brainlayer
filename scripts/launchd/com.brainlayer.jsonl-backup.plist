@@ -30,6 +30,8 @@
 		<string>__BRAINLAYER_DIR__</string>
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_PYTHON</key>
+		<string>__BRAINLAYER_PYTHON__</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
 		<string>jsonl-backup</string>
 	</dict>

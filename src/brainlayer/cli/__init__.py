@@ -40,11 +40,80 @@ app.add_typer(provenance_app, name="provenance")
 
 
 @app.command()
-def init() -> None:
+def init(
+    should_install_launchd: bool = typer.Option(
+        False,
+        "--install-launchd",
+        help="After the interactive wizard, install launchd agents with scripts/launchd/install.sh.",
+    ),
+) -> None:
     """Interactive setup wizard — detects your environment and configures BrainLayer."""
+    import subprocess
+
+    from ..setup import install_launchd as install_launchd_agents
     from .wizard import run_wizard
 
-    run_wizard()
+    try:
+        config = run_wizard()
+        if should_install_launchd:
+            install_launchd_agents("all", env_file=config.gemini_env_file)
+    except (
+        FileNotFoundError,
+        FileExistsError,
+        PermissionError,
+        TimeoutError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        rprint(f"[red]BrainLayer init failed:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+
+@app.command()
+def setup(
+    launchd: bool = typer.Option(False, "--launchd/--no-launchd", help="Install launchd agents after writing config."),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="BrainLayer env file path. Defaults to ~/.config/brainlayer/brainlayer.env.",
+    ),
+    google_api_key_op_ref: str | None = typer.Option(
+        None,
+        "--google-api-key-op-ref",
+        envvar="BRAINLAYER_GOOGLE_API_KEY_OP_REF",
+        help="1Password secret reference for GOOGLE_API_KEY. Plaintext keys are not accepted.",
+    ),
+    overwrite_google_key: bool = typer.Option(
+        False,
+        "--overwrite-google-key",
+        help="Replace an existing GOOGLE_API_KEY line in the env file.",
+    ),
+    target: str = typer.Option("all", "--target", help="launchd install target passed to install.sh."),
+) -> None:
+    """Create brainlayer.env and optionally bootstrap launchd agents."""
+    import subprocess
+
+    from ..setup import ensure_brainlayer_env, install_launchd
+
+    try:
+        resolved_env_file = ensure_brainlayer_env(
+            env_file,
+            google_api_key_op_ref=google_api_key_op_ref,
+            overwrite_google_key=overwrite_google_key,
+        )
+        if launchd:
+            install_launchd(target, env_file=resolved_env_file)
+    except (
+        FileNotFoundError,
+        FileExistsError,
+        PermissionError,
+        TimeoutError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        rprint(f"[red]BrainLayer setup failed:[/] {exc}")
+        raise typer.Exit(1) from exc
+    rprint(f"[green]BrainLayer env file:[/] {resolved_env_file}")
 
 
 @app.command()

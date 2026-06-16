@@ -22,15 +22,19 @@ pip install "brainlayer[style]"     # ChromaDB vector store (alternative backend
 Run the interactive wizard:
 
 ```bash
+brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
 brainlayer init
 ```
 
+On macOS, add `--launchd` to the `brainlayer setup` command to install the
+packaged launchd agents.
+
 This will:
 
-1. Check for Claude Code conversations in `~/.claude/projects/`
-2. Detect your hardware (Apple Silicon → MLX, otherwise Ollama)
-3. Configure your LLM backend for enrichment
-4. Create the database at `~/.local/share/brainlayer/brainlayer.db`
+1. Create `~/.config/brainlayer/brainlayer.env` without writing plaintext secrets.
+2. Install launchd agents from the packaged templates when setup runs with `--launchd`.
+3. Check for Claude Code conversations in `~/.claude/projects/` when using `brainlayer init`.
+4. Create the database at `~/.local/share/brainlayer/brainlayer.db` during indexing.
 
 ## Index Your Conversations
 
