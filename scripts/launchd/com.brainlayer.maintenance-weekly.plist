@@ -33,6 +33,8 @@
 		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
+		<key>BRAINLAYER_LAUNCHD_DIR</key>
+		<string>__BRAINLAYER_LAUNCHD_DIR__</string>
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>

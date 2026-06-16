@@ -41,11 +41,17 @@ def test_launchd_templates_are_declared_as_package_data() -> None:
         assert plist["Label"].startswith("com.brainlayer.")
 
 
-def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path) -> None:
+def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.setup as setup_helpers
     from brainlayer.setup import install_launchd
 
     launchd_dir = tmp_path / "launchd"
     launchd_dir.mkdir()
+    fake_brainlayer = tmp_path / "tool" / "bin" / "brainlayer"
+    fake_brainlayer.parent.mkdir(parents=True)
+    fake_brainlayer.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    fake_brainlayer.chmod(0o755)
+    monkeypatch.setattr(setup_helpers.sys, "argv", [str(fake_brainlayer)])
     install_script = launchd_dir / "install.sh"
     marker = tmp_path / "called.txt"
     install_script.write_text(
@@ -53,7 +59,7 @@ def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path) -> N
             [
                 "#!/usr/bin/env bash",
                 "set -euo pipefail",
-                'printf "%s\\n" "$BRAINLAYER_ENV_FILE" "$PYTHON_BIN" "$BRAINLAYER_PYTHON" "$1" > "$CALL_MARKER"',
+                'printf "%s\\n" "$BRAINLAYER_ENV_FILE" "$PYTHON_BIN" "$BRAINLAYER_PYTHON" "$BRAINLAYER_BIN" "$1" > "$CALL_MARKER"',
             ]
         ),
         encoding="utf-8",
@@ -67,6 +73,7 @@ def test_setup_invokes_launchd_install_script_with_env_file(tmp_path: Path) -> N
         str(env_file),
         sys.executable,
         sys.executable,
+        str(fake_brainlayer),
         "watch",
     ]
 
@@ -259,6 +266,23 @@ def test_config_loader_ignores_shell_substitution_that_is_not_op_read(tmp_path: 
     assert "GOOGLE_API_KEY" not in os.environ
 
 
+def test_config_loader_does_not_resolve_op_when_process_env_already_has_key(tmp_path: Path, monkeypatch) -> None:
+    import brainlayer.config as config
+    from brainlayer.config import load_brainlayer_env
+
+    user_env = tmp_path / "brainlayer.env"
+    user_env.write_text("GOOGLE_API_KEY=\"$(op read 'op://Private/Google AI/Gemini API key')\"\n", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_API_KEY", "from-process")
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("op read should not run when process env has GOOGLE_API_KEY")
+
+    monkeypatch.setattr(config.subprocess, "run", fail_run)
+
+    assert load_brainlayer_env(user_env) == {}
+    assert os.environ["GOOGLE_API_KEY"] == "from-process"
+
+
 def test_config_loader_ignores_unreadable_user_env(monkeypatch, tmp_path: Path) -> None:
     from brainlayer.config import load_brainlayer_env
 
@@ -379,6 +403,52 @@ def test_launchd_installer_renders_brainlayer_python_override(tmp_path: Path) ->
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.backup-daily.plist"
     assert f"<string>{brainlayer_python}</string>" in rendered.read_text(encoding="utf-8")
     assert "__BRAINLAYER_PYTHON__" not in rendered.read_text(encoding="utf-8")
+
+
+def test_launchd_installer_renders_launchd_dir_for_maintenance_resume(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "maintenance-nightly"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_LAUNCHD_DIR": str(launchd_dir),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.maintenance-nightly.plist"
+    content = rendered.read_text(encoding="utf-8")
+    assert f"<string>{launchd_dir}</string>" in content
+    assert "__BRAINLAYER_LAUNCHD_DIR__" not in content
 
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:

@@ -29,6 +29,7 @@ EXPECTED_WRITER_PATTERNS = (
     "brainlayer watch",
     "brainlayer enrich",
     "brainlayer index",
+    "brainlayer.drain",
     "drain_daemon.py",
     "com.brainlayer.",
 )
@@ -351,8 +352,29 @@ def _bootout_service(service: str) -> None:
     run_command(["launchctl", "bootout", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=False)
 
 
-def _verify_enrichment_template_flex_backend(repo_root: Path) -> None:
-    env_template_path = repo_root / "scripts/launchd/brainlayer.env.example"
+def _as_launchd_dir(path: Path) -> Path:
+    if (path / "install.sh").exists() or (path / "brainlayer.env.example").exists():
+        return path
+    return path / "scripts" / "launchd"
+
+
+def _launchd_dir_for_resume(repo_root: Path) -> Path:
+    configured = os.environ.get("BRAINLAYER_LAUNCHD_DIR")
+    if configured:
+        return Path(configured)
+
+    repo_launchd_dir = _as_launchd_dir(repo_root)
+    if (repo_launchd_dir / "install.sh").exists():
+        return repo_launchd_dir
+
+    from .setup import get_launchd_dir
+
+    return get_launchd_dir()
+
+
+def _verify_enrichment_template_flex_backend(repo_root_or_launchd_dir: Path) -> None:
+    launchd_dir = _as_launchd_dir(repo_root_or_launchd_dir)
+    env_template_path = launchd_dir / "brainlayer.env.example"
     if not env_template_path.exists():
         raise MaintenanceAbort(f"BrainLayer env template not found: {env_template_path}")
     env_template = env_template_path.read_text(encoding="utf-8")
@@ -370,9 +392,10 @@ def _verify_enrichment_template_flex_backend(repo_root: Path) -> None:
 
 
 def _resume_service(repo_root: Path, service: str) -> None:
+    launchd_dir = _launchd_dir_for_resume(repo_root)
     if service == "enrichment":
-        _verify_enrichment_template_flex_backend(repo_root)
-    run_command([str(repo_root / "scripts/launchd/install.sh"), service], check=True)
+        _verify_enrichment_template_flex_backend(launchd_dir)
+    run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
 def _quiesce_services(services: Sequence[str]) -> None:

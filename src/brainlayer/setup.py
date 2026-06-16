@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from importlib import resources
@@ -29,6 +30,20 @@ def get_launchd_dir() -> Path:
         return source
 
     raise FileNotFoundError("BrainLayer launchd templates were not found")
+
+
+def get_current_brainlayer_bin() -> str | None:
+    """Return the current console-script path when setup was invoked by one."""
+    argv0 = Path(sys.argv[0]).expanduser()
+    if argv0.name == "brainlayer":
+        candidate = argv0 if argv0.is_absolute() else Path.cwd() / argv0
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+
+    found = shutil.which("brainlayer")
+    if found:
+        return found
+    return None
 
 
 def ensure_brainlayer_env(
@@ -85,6 +100,9 @@ def install_launchd(
         run_env.update(extra_env)
     run_env.setdefault("PYTHON_BIN", sys.executable)
     run_env.setdefault("BRAINLAYER_PYTHON", sys.executable)
+    brainlayer_bin = get_current_brainlayer_bin()
+    if brainlayer_bin is not None:
+        run_env.setdefault("BRAINLAYER_BIN", brainlayer_bin)
     if env_file is not None:
         run_env["BRAINLAYER_ENV_FILE"] = str(env_file)
 

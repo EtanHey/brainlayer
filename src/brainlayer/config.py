@@ -17,7 +17,7 @@ def get_user_env_path() -> Path:
     return Path.home() / ".config" / "brainlayer" / "brainlayer.env"
 
 
-def _parse_env_assignment(line: str) -> tuple[str, str] | None:
+def _split_env_assignment(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or "=" not in stripped:
         return None
@@ -28,18 +28,28 @@ def _parse_env_assignment(line: str) -> tuple[str, str] | None:
     key = key.strip()
     if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
         return None
+    return key, raw_value
 
+
+def _parse_env_value(raw_value: str) -> str | None:
     value_text = raw_value.strip()
     if "$(" in value_text or "`" in value_text:
-        value = _resolve_op_read_value(value_text)
-        return (key, value) if value is not None else None
+        return _resolve_op_read_value(value_text)
 
     try:
         parsed = shlex.split(value_text, comments=False, posix=True)
     except ValueError:
         return None
-    value = parsed[0] if parsed else ""
-    return key, value
+    return parsed[0] if parsed else ""
+
+
+def _parse_env_assignment(line: str) -> tuple[str, str] | None:
+    assignment = _split_env_assignment(line)
+    if assignment is None:
+        return None
+    key, raw_value = assignment
+    value = _parse_env_value(raw_value)
+    return (key, value) if value is not None else None
 
 
 def _resolve_op_read_value(value_text: str) -> str | None:
@@ -109,11 +119,14 @@ def load_brainlayer_env(
 
     loaded: dict[str, str] = {}
     for line in lines:
-        assignment = _parse_env_assignment(line)
+        assignment = _split_env_assignment(line)
         if assignment is None:
             continue
-        key, value = assignment
+        key, raw_value = assignment
         if key in os.environ:
+            continue
+        value = _parse_env_value(raw_value)
+        if value is None:
             continue
         os.environ[key] = value
         loaded[key] = value
