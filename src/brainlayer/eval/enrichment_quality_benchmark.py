@@ -470,7 +470,11 @@ def grade_outputs(
     flex_summary = _score_summary(flex_scores)
     verdict = "insufficient-flex-baseline"
     if local_summary["count"] and flex_summary["count"]:
-        verdict = "local-matches-flex-variance" if local_summary["mean_overall"] >= flex_summary["mean_overall"] - 0.08 else "local-below-flex-variance"
+        verdict = (
+            "local-matches-flex-variance"
+            if local_summary["mean_overall"] >= flex_summary["mean_overall"] - 0.08
+            else "local-below-flex-variance"
+        )
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -557,7 +561,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     if args.command == "flex-sample":
-        print(json.dumps(run_gemini_flex_sample(args.input, args.out, limit=args.limit, seed=args.seed), sort_keys=True))
+        print(
+            json.dumps(run_gemini_flex_sample(args.input, args.out, limit=args.limit, seed=args.seed), sort_keys=True)
+        )
         return 0
     if args.command == "grade":
         print(json.dumps(grade_outputs(args.selection, args.local, args.out, flex_jsonl=args.flex), sort_keys=True))
@@ -660,7 +666,9 @@ def _load_existing_enrichments(conn: sqlite3.Connection, chunk_ids: Sequence[str
     columns = _available_columns(conn, "chunks")
     selected_cols = ["id"] + [col for col in ENRICHMENT_COLUMNS if col in columns]
     placeholders = ",".join("?" for _ in chunk_ids)
-    rows = conn.execute(f"SELECT {', '.join(selected_cols)} FROM chunks WHERE id IN ({placeholders})", tuple(chunk_ids)).fetchall()
+    rows = conn.execute(
+        f"SELECT {', '.join(selected_cols)} FROM chunks WHERE id IN ({placeholders})", tuple(chunk_ids)
+    ).fetchall()
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         row_map = dict(zip(selected_cols, row, strict=True))
@@ -720,7 +728,11 @@ def _enrichment_text(enrichment: Mapping[str, Any]) -> str:
 
 
 def _tokens(text: str) -> set[str]:
-    return {token for token in re.findall(r"[a-z0-9][a-z0-9_.#/-]{1,}", text.lower()) if token not in {"the", "and", "that", "this", "with", "from"}}
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9_.#/-]{1,}", text.lower())
+        if token not in {"the", "and", "that", "this", "with", "from"}
+    }
 
 
 def _token_overlap(left: str, right: str) -> float:
