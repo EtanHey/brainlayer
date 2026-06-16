@@ -834,6 +834,33 @@ def test_queue_and_drain_preserve_provenance_class(tmp_path, con):
     assert dict(queued) == {"entity": "controlLayer", "chunk_id": "chunk-1", "reason": "enrichment"}
 
 
+def test_queue_and_drain_enqueue_entities_for_provenance_sweep(tmp_path, con):
+    from brainlayer.drain import _apply_enrichment
+    from brainlayer.queue_io import enqueue_enrichment_updates
+
+    con.execute(
+        "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("chunk-1", "PRIMARY_BACKEND: Gemini", "assistant_text", "assistant", "2026-06-09T10:00:00Z"),
+    )
+    path = enqueue_enrichment_updates(
+        [
+            {
+                "chunk_id": "chunk-1",
+                "enrichment": {"summary": "summary"},
+                "entities": [{"name": "enrichment"}, {"text": "orc"}],
+                "provenance_class": "AGENT-INFERENCE",
+            }
+        ],
+        queue_dir=tmp_path,
+    )
+    event = json.loads(path.read_text(encoding="utf-8").strip())
+
+    _apply_enrichment(con, event)
+
+    rows = con.execute("SELECT entity, chunk_id FROM provenance_resolve_queue ORDER BY entity").fetchall()
+    assert [tuple(row) for row in rows] == [("enrichment", "chunk-1"), ("orc", "chunk-1")]
+
+
 def test_resolve_entity_conflicts_defaults_to_dry_run(con):
     from brainlayer.provenance_integration import resolve_entity_conflicts
 

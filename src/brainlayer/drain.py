@@ -324,6 +324,123 @@ def _event_created_at(event: dict[str, Any]) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _metadata_with_enrichment_provenance(raw_metadata: Any, event: dict[str, Any]) -> str | None:
+    provenance: dict[str, str] = {}
+    for key in ("enrichment_model", "enrichment_backend"):
+        value = str(event.get(key) or "").strip()
+        if value:
+            provenance[key] = value
+    if not provenance:
+        return None
+
+    if isinstance(raw_metadata, dict):
+        metadata = dict(raw_metadata)
+    elif raw_metadata:
+        try:
+            parsed = json.loads(str(raw_metadata))
+            metadata = parsed if isinstance(parsed, dict) else {"_previous_metadata_raw": raw_metadata}
+        except (TypeError, json.JSONDecodeError):
+            metadata = {"_previous_metadata_raw": raw_metadata}
+    else:
+        metadata = {}
+
+    metadata.update(provenance)
+    return json.dumps(metadata)
+
+
+def _auto_supersede_dry_run() -> bool | None:
+    raw = str(os.environ.get("BRAINLAYER_AUTO_SUPERSEDE") or "").strip().lower()
+    if raw in {"", "0", "false", "off", "no"}:
+        return None
+    return raw != "apply"
+
+
+def _enrichment_hook_chunk(
+    conn: apsw.Connection,
+    chunk_id: str,
+    *,
+    entity: str,
+    provenance_class: str,
+) -> dict[str, Any] | None:
+    cols = _columns(conn, "chunks")
+    selected = [
+        col for col in ("id", "content", "content_type", "sender", "created_at", "provenance_class") if col in cols
+    ]
+    if not selected:
+        return None
+    row = conn.execute(f"SELECT {', '.join(selected)} FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    if not row:
+        return None
+    chunk = dict(zip(selected, row, strict=False))
+    chunk["entity"] = entity
+    if provenance_class:
+        chunk["provenance_class"] = provenance_class
+    return chunk
+
+
+def _run_enrichment_provenance_hooks(
+    conn: apsw.Connection,
+    event: dict[str, Any],
+    *,
+    chunk_id: str,
+    provenance_class: str,
+) -> None:
+    entities = event.get("entities")
+    if not entities:
+        return
+    if not conn.execute("SELECT 1 FROM chunks WHERE id = ?", (chunk_id,)).fetchone():
+        return
+
+    try:
+        enqueue_provenance_resolution_for_entities(conn, entities, chunk_id=chunk_id, commit=False)
+    except Exception:
+        logger.exception("Failed to enqueue provenance resolution for drained chunk_id=%s", chunk_id)
+
+    dry_run = _auto_supersede_dry_run()
+    if dry_run is None:
+        return
+
+    try:
+        from .provenance_autosupersede import auto_supersede
+        from .provenance_integration import _entity_name_from_payload
+
+        for entity in entities:
+            entity_name = _entity_name_from_payload(entity)
+            if not entity_name:
+                continue
+            chunk = _enrichment_hook_chunk(
+                conn,
+                chunk_id,
+                entity=entity_name,
+                provenance_class=provenance_class,
+            )
+            if chunk is None:
+                continue
+            report = auto_supersede(conn, chunk, dry_run=dry_run, commit=False)
+            if (
+                report.candidate_count
+                or report.contradiction_count
+                or report.would_supersede_count
+                or report.pending_confirm_count
+                or report.skipped_count
+            ):
+                mode = "dry_run" if dry_run else "apply"
+                logger.info(
+                    "drain auto_supersede %s entity=%s candidates=%s contradictions=%s would_supersede=%s "
+                    "superseded=%s pending_confirm=%s skipped=%s",
+                    mode,
+                    report.entity,
+                    report.candidate_count,
+                    report.contradiction_count,
+                    report.would_supersede_count,
+                    report.superseded_count,
+                    report.pending_confirm_count,
+                    report.skipped_reason or report.skipped_count,
+                )
+    except Exception:
+        logger.exception("drain auto_supersede failed for chunk_id=%s", chunk_id)
+
+
 def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     raw_content = event.get("content")
     if raw_content is None:
@@ -575,6 +692,13 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     enrichment_backend = str(event.get("enrichment_backend") or "").strip()
     if "enrichment_backend" in cols and enrichment_backend:
         updates["enrichment_backend"] = enrichment_backend
+    if "metadata" in cols:
+        row = conn.execute("SELECT metadata FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        if not row:
+            return
+        metadata_json = _metadata_with_enrichment_provenance(row[0], event)
+        if metadata_json is not None:
+            updates["metadata"] = metadata_json
     chunk_origin = str(event.get("chunk_origin") or "").strip()
     if "chunk_origin" in cols and chunk_origin:
         row = conn.execute("SELECT chunk_origin FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
@@ -590,11 +714,10 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
         updates["enriched_at"] = datetime.now(timezone.utc).isoformat()
     if "enrich_status" in cols:
         updates["enrich_status"] = requested_status
-    if not updates:
-        return
-    assignments = ", ".join(f"{col} = ?" for col in updates)
-    conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    enqueue_provenance_resolution_for_entities(conn, event.get("entities"), chunk_id=chunk_id, commit=False)
+    if updates:
+        assignments = ", ".join(f"{col} = ?" for col in updates)
+        conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
+    _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class)
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:

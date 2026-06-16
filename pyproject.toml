@@ -82,6 +82,7 @@ dev = [
     "ruff>=0.1.0",
     "scikit-learn<1.6",
     "setuptools>=70.0.0,<81",
+    "umap-learn>=0.5.0",
 ]
 docs = [
     "mkdocs-material>=9.5.0",
