@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from importlib import resources
 from pathlib import Path
 
@@ -71,6 +72,7 @@ def install_launchd(
     env_file: Path | None = None,
     launchd_dir: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    timeout_seconds: float = 120,
 ) -> None:
     """Run the packaged launchd installer for a single target or all agents."""
     template_dir = launchd_dir or get_launchd_dir()
@@ -81,7 +83,12 @@ def install_launchd(
     run_env = os.environ.copy()
     if extra_env:
         run_env.update(extra_env)
+    run_env.setdefault("PYTHON_BIN", sys.executable)
+    run_env.setdefault("BRAINLAYER_PYTHON", sys.executable)
     if env_file is not None:
         run_env["BRAINLAYER_ENV_FILE"] = str(env_file)
 
-    subprocess.run([str(install_script), target], env=run_env, check=True)
+    try:
+        subprocess.run([str(install_script), target], env=run_env, check=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"launchd installer timed out after {timeout_seconds:g}s") from exc

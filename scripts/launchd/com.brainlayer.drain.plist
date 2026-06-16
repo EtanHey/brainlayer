@@ -8,7 +8,8 @@
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__PYTHON_BIN__</string>
-		<string>__REPO_ROOT__/scripts/drain_daemon.py</string>
+		<string>-m</string>
+		<string>brainlayer.drain</string>
 		<string>--once</string>
 		<string>--batch-size</string>
 		<string>250</string>

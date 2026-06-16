@@ -8,7 +8,8 @@
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__PYTHON_BIN__</string>
-		<string>__REPO_ROOT__/scripts/maintenance/brainlayer_maintenance.py</string>
+		<string>-m</string>
+		<string>brainlayer.maintenance</string>
 		<string>--full</string>
 	</array>
 	<key>StartCalendarInterval</key>

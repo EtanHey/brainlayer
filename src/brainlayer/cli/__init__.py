@@ -48,12 +48,25 @@ def init(
     ),
 ) -> None:
     """Interactive setup wizard — detects your environment and configures BrainLayer."""
+    import subprocess
+
     from ..setup import install_launchd as install_launchd_agents
     from .wizard import run_wizard
 
-    config = run_wizard()
-    if should_install_launchd:
-        install_launchd_agents("all", env_file=config.gemini_env_file)
+    try:
+        config = run_wizard()
+        if should_install_launchd:
+            install_launchd_agents("all", env_file=config.gemini_env_file)
+    except (
+        FileNotFoundError,
+        FileExistsError,
+        PermissionError,
+        TimeoutError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        rprint(f"[red]BrainLayer init failed:[/] {exc}")
+        raise typer.Exit(1) from exc
 
 
 @app.command()
@@ -90,7 +103,14 @@ def setup(
         )
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
-    except (FileNotFoundError, PermissionError, subprocess.CalledProcessError) as exc:
+    except (
+        FileNotFoundError,
+        FileExistsError,
+        PermissionError,
+        TimeoutError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as exc:
         rprint(f"[red]BrainLayer setup failed:[/] {exc}")
         raise typer.Exit(1) from exc
     rprint(f"[green]BrainLayer env file:[/] {resolved_env_file}")

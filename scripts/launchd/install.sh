@@ -26,6 +26,7 @@ BRAINLAYER_LIB_DIR="$HOME/.local/lib/brainlayer"
 BRAINLAYER_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BRAINLAYER_BIN="${BRAINLAYER_BIN:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+BRAINLAYER_PYTHON="${BRAINLAYER_PYTHON:-$PYTHON_BIN}"
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 
@@ -245,6 +246,9 @@ case "${1:-all}" in
         install_plist maintenance-weekly
         ;;
     all)
+        install_env_runner
+        verify_config_file
+        verify_gemini_env_file
         install_plist index
         install_plist drain
         install_plist watch

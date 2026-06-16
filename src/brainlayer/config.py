@@ -56,8 +56,17 @@ def load_brainlayer_env(
     if not target.exists():
         return {}
 
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
+        return {}
+    except UnicodeDecodeError as exc:
+        logger.warning("Could not decode BrainLayer env file %s: %s", target, exc)
+        return {}
+
     loaded: dict[str, str] = {}
-    for line in target.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         assignment = _parse_env_assignment(line)
         if assignment is None:
             continue
