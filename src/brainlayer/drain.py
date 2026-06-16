@@ -692,6 +692,9 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     enrichment_backend = str(event.get("enrichment_backend") or "").strip()
     if "enrichment_backend" in cols and enrichment_backend:
         updates["enrichment_backend"] = enrichment_backend
+    enrichment_version = str(event.get("enrichment_version") or "").strip()
+    if "enrichment_version" in cols and enrichment_version:
+        updates["enrichment_version"] = enrichment_version
     if "metadata" in cols:
         row = conn.execute("SELECT metadata FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
         if not row:
@@ -869,6 +872,8 @@ def _prefetch_enrichment_state(conn: apsw.Connection, events: list[dict[str, Any
         selected_cols.append("enrichment_model")
     if "enrichment_backend" in cols:
         selected_cols.append("enrichment_backend")
+    if "enrichment_version" in cols:
+        selected_cols.append("enrichment_version")
     if "raw_entities_json" in cols:
         selected_cols.append("raw_entities_json")
     rows = conn.execute(
@@ -917,6 +922,12 @@ def _is_verified_redundant_enrichment(
     if enrichment_backend and "enrichment_backend" in state:
         current_enrichment_backend = str(state.get("enrichment_backend") or "").strip()
         if current_enrichment_backend != enrichment_backend:
+            return False
+
+    enrichment_version = str(payload.get("enrichment_version") or "").strip()
+    if enrichment_version and "enrichment_version" in state:
+        current_enrichment_version = str(state.get("enrichment_version") or "").strip()
+        if current_enrichment_version != enrichment_version:
             return False
 
     if payload.get("entities") is not None and "raw_entities_json" in state:

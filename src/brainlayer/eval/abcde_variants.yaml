@@ -1,5 +1,5 @@
 schema_version: 1
-frozen_at: '2026-06-01T15:15:09+00:00'
+frozen_at: '2026-06-16T16:00:02+00:00'
 hash_algorithm: sha256
 variants:
 - id: A
@@ -49,10 +49,7 @@ variants:
     , \"entity_subtype\": \"<channel|podcast|brand|newsletter or null>\", \"relation\": \"<relationship to other entities\
     \ in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>\"}}\n  ],\n  \"sentiment_label\": \"\
     <one of: frustration, confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n\
-    \  \"sentiment_signals\": [\"<words/phrases that indicate the sentiment>\"]\n}}\n\nTAG RULES:\n- Use ONLY the faceted\
-    \ taxonomy labels from src/brainlayer/taxonomy.json (examples: \"tech/debug/investigation\", \"tech/testing\", \"pm/decision\"\
-    , \"project/brainlayer\", \"platform/github\", \"meta/noise\")\n- Do NOT invent free-form singleton tags, language tags,\
-    \ framework tags, names, or issue-specific labels\n- Prefer 1-4 high-signal taxonomy labels per chunk\n\nIMPORTANCE RULES:\n\
+    \  \"sentiment_signals\": [\"<words/phrases that indicate the sentiment>\"]\n}}\n\n{tag_rules}\n\nIMPORTANCE RULES:\n\
     - 1-3: Trivial (greetings, short confirmations, file listings)\n- 4-6: Moderate (standard code, config changes, routine\
     \ discussions)\n- 7-9: High (bug fixes with root cause, architecture decisions, novel patterns)\n- 10: Critical (security\
     \ fixes, production incidents, key architectural choices)\n\nENTITIES:\n- Extract non-code entities only — people, agents,\
@@ -76,7 +73,7 @@ variants:
   axis: production-control
   source_path: src/brainlayer/pipeline/enrichment.py
   source_section: ENRICHMENT_PROMPT
-  prompt_hash: 57bf92b9ceb9eb54dced44544f39e41f9fd7739bc4855666d4be9ec07b45e373
+  prompt_hash: efc98f883fb4db481bfb45a82a5c9bec603e923b028031e16afd3bdd03061750
 - id: B
   label: 2026-03-19-v2-faceted-tags
   prompt_template: 'You are a knowledge base tagger for a personal multi-project development knowledge base. Your job is to

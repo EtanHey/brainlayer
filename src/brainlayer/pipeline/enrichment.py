@@ -45,7 +45,12 @@ _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
 
 from ..chunk_origin import CHUNK_ORIGIN_GROQ, CHUNK_ORIGIN_MLX, CHUNK_ORIGIN_OLLAMA
-from ..tag_normalization import valid_taxonomy_tags
+from ..tag_normalization import (
+    enrichment_tag_mode,
+    normalize_enrichment_tag_values,
+    taxonomy_content_sha,
+    taxonomy_git_sha,
+)
 from ..vector_store import VectorStore
 from .entity_extraction import normalize_entity_type
 
@@ -106,6 +111,7 @@ MLX_URL = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http:/
 MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
 MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
 MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
+ENRICHMENT_PROMPT_VERSION = os.environ.get("BRAINLAYER_ENRICHMENT_PROMPT_VERSION", "r82-hybrid-taxonomy")
 
 # Groq cloud API (for NON-PRIVATE content only — sanitization enforced in _enrich_one)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -305,22 +311,34 @@ VALID_SENTIMENTS = ["frustration", "confusion", "positive", "satisfaction", "neu
 
 
 def normalize_enrichment_tags(tags: Any, *, limit: int = 10) -> list[str]:
-    if not isinstance(tags, list):
-        return []
-    valid_tags = valid_taxonomy_tags()
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for tag in tags:
-        if not isinstance(tag, str):
-            continue
-        value = tag.strip().lower()
-        if value not in valid_tags or value in seen:
-            continue
-        seen.add(value)
-        normalized.append(value)
-        if len(normalized) >= limit:
-            break
-    return normalized
+    return normalize_enrichment_tag_values(tags, limit=limit)
+
+
+def enrichment_version_metadata(*, model: str | None = None, backend: str | None = None) -> dict[str, str]:
+    return {
+        "prompt_version": ENRICHMENT_PROMPT_VERSION,
+        "taxonomy_git_sha": taxonomy_git_sha(),
+        "taxonomy_content_sha": taxonomy_content_sha(),
+        "tag_mode": enrichment_tag_mode(),
+        "model": model or os.environ.get("BRAINLAYER_ENRICHMENT_MODEL_STAMP", MODEL),
+        "backend": backend or os.environ.get("BRAINLAYER_ENRICHMENT_BACKEND_STAMP", ENRICH_BACKEND),
+        "run_id": os.environ.get("BRAINLAYER_ENRICHMENT_RUN_ID", f"pid-{os.getpid()}"),
+    }
+
+
+def _tag_rules_for_prompt() -> str:
+    if enrichment_tag_mode() == "taxonomy":
+        return """TAG RULES — TAXONOMY WHITELIST MODE:
+- Use ONLY the faceted taxonomy labels from src/brainlayer/taxonomy.json (examples: "tech/debug/investigation", "tech/testing", "pm/decision", "project/brainlayer", "platform/github", "meta/noise")
+- Do NOT invent free-form singleton tags, language tags, framework tags, names, or issue-specific labels
+- Prefer 1-4 high-signal taxonomy labels per chunk"""
+    return """TAG RULES — HYBRID TAG MODE:
+- Prefer curated base/facet labels from src/brainlayer/taxonomy.json when they fit (examples: "tech/debug/investigation", "tech/testing", "pm/decision", "project/brainlayer", "platform/github", "meta/noise")
+- ALSO include retrieval-useful specific leaf tags for concrete tools, libraries, projects, workflows, bugs, and concepts that the base vocabulary does not capture
+- Use 2-7 total tags; lowercase; short hyphenated specifics; no sentence fragments or vague tags like "misc", "update", or "general"
+- Normalize aliases in the output when obvious: React.js/reactjs/React -> react; Node.js/nodejs -> node; Code Rabbit -> coderabbit
+- Keep specific tags when they help future search (examples: "tdd-guard", "context-gating", "gemini-batch", "voice-picker", "brainbar", "sqlite-fts5")
+- Do not force a coarse label if a specific tag is the retrieval hook"""
 
 
 ENRICHMENT_PROMPT = """You are a knowledge extraction engine for a personal knowledge graph. Your summaries will be embedded for vector search AND indexed for full-text keyword search. Write dense, fact-rich extractions — not descriptions.
@@ -406,10 +424,7 @@ Return this exact JSON structure:
   "sentiment_signals": ["<words/phrases that indicate the sentiment>"]
 }}
 
-TAG RULES:
-- Use ONLY the faceted taxonomy labels from src/brainlayer/taxonomy.json (examples: "tech/debug/investigation", "tech/testing", "pm/decision", "project/brainlayer", "platform/github", "meta/noise")
-- Do NOT invent free-form singleton tags, language tags, framework tags, names, or issue-specific labels
-- Prefer 1-4 high-signal taxonomy labels per chunk
+{tag_rules}
 
 IMPORTANCE RULES:
 - 1-3: Trivial (greetings, short confirmations, file listings)
@@ -491,6 +506,7 @@ def build_prompt(chunk: Dict[str, Any], context_chunks: Optional[List[Dict[str, 
         content_type=chunk.get("content_type", "unknown"),
         content=safe_content,
         context_section=context_section,
+        tag_rules=_tag_rules_for_prompt(),
     )
 
 
@@ -562,6 +578,7 @@ def build_external_prompt(
         content_type=chunk.get("content_type", "unknown"),
         content=safe_content,
         context_section=context_section,
+        tag_rules=_tag_rules_for_prompt(),
     )
 
     return prompt, result
@@ -812,6 +829,7 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
             result["summary"] = summary[:500]  # Cap at 500 chars
 
         result["tags"] = normalize_enrichment_tags(match.get("tags", []))
+        result["enrichment_metadata"] = enrichment_version_metadata()
 
         importance = match.get("importance")
         if isinstance(importance, (int, float)):
@@ -1024,25 +1042,29 @@ def _enrich_one(
         if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
             legacy_resolved_query = resolved_queries[0]
 
-        store.update_enrichment(
-            chunk_id=chunk["id"],
-            summary=enrichment.get("summary"),
-            tags=enrichment.get("tags"),
-            importance=enrichment.get("importance"),
-            intent=enrichment.get("intent"),
-            primary_symbols=enrichment.get("primary_symbols"),
-            resolved_query=legacy_resolved_query,
-            epistemic_level=enrichment.get("epistemic_level"),
-            version_scope=enrichment.get("version_scope"),
-            debt_impact=enrichment.get("debt_impact"),
-            external_deps=enrichment.get("external_deps"),
-            key_facts=enrichment.get("key_facts"),
-            resolved_queries=resolved_queries,
-            sentiment_label=sentiment_label,
-            sentiment_score=sentiment_score,
-            sentiment_signals=sentiment_signals,
-            chunk_origin=_chunk_origin_for_backend(backend),
-        )
+        update_kwargs = {
+            "chunk_id": chunk["id"],
+            "summary": enrichment.get("summary"),
+            "tags": enrichment.get("tags"),
+            "importance": enrichment.get("importance"),
+            "intent": enrichment.get("intent"),
+            "primary_symbols": enrichment.get("primary_symbols"),
+            "resolved_query": legacy_resolved_query,
+            "epistemic_level": enrichment.get("epistemic_level"),
+            "version_scope": enrichment.get("version_scope"),
+            "debt_impact": enrichment.get("debt_impact"),
+            "external_deps": enrichment.get("external_deps"),
+            "key_facts": enrichment.get("key_facts"),
+            "resolved_queries": resolved_queries,
+            "sentiment_label": sentiment_label,
+            "sentiment_score": sentiment_score,
+            "sentiment_signals": sentiment_signals,
+            "chunk_origin": _chunk_origin_for_backend(backend),
+        }
+        enrichment_version = enrichment.get("enrichment_metadata", {}).get("prompt_version")
+        if enrichment_version:
+            update_kwargs["enrichment_version"] = enrichment_version
+        store.update_enrichment(**update_kwargs)
 
         # KG extraction: extract entities from enriched chunk into KG tables
         try:

@@ -1,0 +1,118 @@
+{
+  "aggregation": {
+    "count": 50,
+    "fields": {
+      "debt_impact": {
+        "mean_scores": {
+          "flex": 3.24,
+          "local": 3.8
+        },
+        "score_delta_local_minus_flex": 0.56,
+        "winner_counts": {
+          "flex": 7,
+          "local": 16,
+          "tie": 27
+        }
+      },
+      "epistemic_level": {
+        "mean_scores": {
+          "flex": 4.16,
+          "local": 4.6
+        },
+        "score_delta_local_minus_flex": 0.44,
+        "winner_counts": {
+          "flex": 8,
+          "local": 12,
+          "tie": 30
+        }
+      },
+      "importance": {
+        "mean_scores": {
+          "flex": 4.7,
+          "local": 4.32
+        },
+        "score_delta_local_minus_flex": -0.38,
+        "winner_counts": {
+          "flex": 16,
+          "local": 1,
+          "tie": 33
+        }
+      },
+      "intent": {
+        "mean_scores": {
+          "flex": 3.64,
+          "local": 3.74
+        },
+        "score_delta_local_minus_flex": 0.1,
+        "winner_counts": {
+          "flex": 12,
+          "local": 10,
+          "tie": 28
+        }
+      },
+      "sentiment": {
+        "mean_scores": {
+          "flex": 3.84,
+          "local": 4.74
+        },
+        "score_delta_local_minus_flex": 0.9,
+        "winner_counts": {
+          "flex": 4,
+          "local": 36,
+          "tie": 10
+        }
+      },
+      "summary": {
+        "mean_scores": {
+          "flex": 3.82,
+          "local": 4.34
+        },
+        "score_delta_local_minus_flex": 0.52,
+        "winner_counts": {
+          "flex": 12,
+          "local": 37,
+          "tie": 1
+        }
+      },
+      "tags": {
+        "mean_scores": {
+          "flex": 3.92,
+          "local": 4.3
+        },
+        "score_delta_local_minus_flex": 0.38,
+        "winner_counts": {
+          "flex": 15,
+          "local": 32,
+          "tie": 3
+        }
+      }
+    },
+    "overall": {
+      "mean_scores": {
+        "flex": 3.6,
+        "local": 4.0
+      },
+      "score_delta_local_minus_flex": 0.4,
+      "winner_counts": {
+        "flex": 15,
+        "local": 31,
+        "tie": 4
+      }
+    }
+  },
+  "failed_remaining": 0,
+  "generated_at": "2026-06-16T15:53:13Z",
+  "judge_model": "gemini-2.5-flash",
+  "label_semantics": {
+    "flex": "BEFORE old Flex: Track-A prompt + tag validation off",
+    "local": "AFTER Flex: production prompt + HYBRID taxonomy"
+  },
+  "missing_chunk_ids": [],
+  "requested": 50,
+  "source_files": {
+    "judge-after-hybrid-vs-before-gemini-flash-retry1.jsonl": 1,
+    "judge-after-hybrid-vs-before-gemini-flash.jsonl": 50
+  },
+  "succeeded": 50,
+  "verdict": "after-hybrid-passes-before"
+}

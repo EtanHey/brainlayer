@@ -168,6 +168,7 @@ def enqueue_enrichment_update(
     chunk_origin: str | None = None,
     enrichment_model: str | None = None,
     enrichment_backend: str | None = None,
+    enrichment_version: str | None = None,
     queue_dir: Path | None = None,
 ) -> Path:
     return enqueue_enrichment_updates(
@@ -181,6 +182,7 @@ def enqueue_enrichment_update(
                 "chunk_origin": chunk_origin,
                 "enrichment_model": enrichment_model,
                 "enrichment_backend": enrichment_backend,
+                "enrichment_version": enrichment_version,
             }
         ],
         queue_dir=queue_dir,
@@ -203,6 +205,7 @@ def enqueue_enrichment_updates(
             "provenance_class": update.get("provenance_class"),
             "enrichment_model": update.get("enrichment_model"),
             "enrichment_backend": update.get("enrichment_backend"),
+            "enrichment_version": update.get("enrichment_version"),
         }
         for update in updates
     ]

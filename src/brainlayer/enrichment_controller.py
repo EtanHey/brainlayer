@@ -583,6 +583,7 @@ def _enrichment_update_payload(
         "provenance_class": provenance_class,
         "enrichment_model": GEMINI_REALTIME_MODEL,
         "enrichment_backend": _current_enrichment_backend(),
+        "enrichment_version": (enrichment.get("enrichment_metadata") or {}).get("prompt_version"),
     }
 
 
@@ -1265,27 +1266,31 @@ def _apply_enrichment(
             legacy_resolved_query = resolved_queries[0]
         normalized_origin = str(chunk_origin or _current_enrichment_chunk_origin()).strip()
 
-        store.update_enrichment(
-            chunk_id=chunk["id"],
-            summary=enrichment.get("summary"),
-            tags=enrichment.get("tags"),
-            importance=enrichment.get("importance"),
-            intent=enrichment.get("intent"),
-            primary_symbols=enrichment.get("primary_symbols"),
-            resolved_query=legacy_resolved_query,
-            epistemic_level=enrichment.get("epistemic_level"),
-            version_scope=enrichment.get("version_scope"),
-            debt_impact=enrichment.get("debt_impact"),
-            external_deps=enrichment.get("external_deps"),
-            key_facts=enrichment.get("key_facts"),
-            resolved_queries=resolved_queries,
-            sentiment_label=enrichment.get("sentiment_label"),
-            sentiment_score=enrichment.get("sentiment_score"),
-            sentiment_signals=enrichment.get("sentiment_signals"),
-            chunk_origin=normalized_origin or None,
-            enrichment_model=GEMINI_REALTIME_MODEL,
-            enrichment_backend=_current_enrichment_backend(),
-        )
+        update_kwargs = {
+            "chunk_id": chunk["id"],
+            "summary": enrichment.get("summary"),
+            "tags": enrichment.get("tags"),
+            "importance": enrichment.get("importance"),
+            "intent": enrichment.get("intent"),
+            "primary_symbols": enrichment.get("primary_symbols"),
+            "resolved_query": legacy_resolved_query,
+            "epistemic_level": enrichment.get("epistemic_level"),
+            "version_scope": enrichment.get("version_scope"),
+            "debt_impact": enrichment.get("debt_impact"),
+            "external_deps": enrichment.get("external_deps"),
+            "key_facts": enrichment.get("key_facts"),
+            "resolved_queries": resolved_queries,
+            "sentiment_label": enrichment.get("sentiment_label"),
+            "sentiment_score": enrichment.get("sentiment_score"),
+            "sentiment_signals": enrichment.get("sentiment_signals"),
+            "chunk_origin": normalized_origin or None,
+            "enrichment_model": GEMINI_REALTIME_MODEL,
+            "enrichment_backend": _current_enrichment_backend(),
+        }
+        enrichment_version = (enrichment.get("enrichment_metadata") or {}).get("prompt_version")
+        if enrichment_version:
+            update_kwargs["enrichment_version"] = enrichment_version
+        store.update_enrichment(**update_kwargs)
         entities = enrichment.get("entities", [])
         # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
         # R84b canonicalization pipeline will consume and populate kg_entities downstream.

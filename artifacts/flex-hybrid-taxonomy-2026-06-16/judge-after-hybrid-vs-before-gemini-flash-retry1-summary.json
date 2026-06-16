@@ -1,0 +1,109 @@
+{
+  "aggregation": {
+    "count": 1,
+    "fields": {
+      "debt_impact": {
+        "mean_scores": {
+          "flex": 1.0,
+          "local": 1.0
+        },
+        "score_delta_local_minus_flex": 0.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 0,
+          "tie": 1
+        }
+      },
+      "epistemic_level": {
+        "mean_scores": {
+          "flex": 5.0,
+          "local": 5.0
+        },
+        "score_delta_local_minus_flex": 0.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 0,
+          "tie": 1
+        }
+      },
+      "importance": {
+        "mean_scores": {
+          "flex": 4.0,
+          "local": 4.0
+        },
+        "score_delta_local_minus_flex": 0.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 0,
+          "tie": 1
+        }
+      },
+      "intent": {
+        "mean_scores": {
+          "flex": 5.0,
+          "local": 5.0
+        },
+        "score_delta_local_minus_flex": 0.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 0,
+          "tie": 1
+        }
+      },
+      "sentiment": {
+        "mean_scores": {
+          "flex": 4.0,
+          "local": 2.0
+        },
+        "score_delta_local_minus_flex": -2.0,
+        "winner_counts": {
+          "flex": 1,
+          "local": 0,
+          "tie": 0
+        }
+      },
+      "summary": {
+        "mean_scores": {
+          "flex": 2.0,
+          "local": 5.0
+        },
+        "score_delta_local_minus_flex": 3.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 1,
+          "tie": 0
+        }
+      },
+      "tags": {
+        "mean_scores": {
+          "flex": 3.0,
+          "local": 5.0
+        },
+        "score_delta_local_minus_flex": 2.0,
+        "winner_counts": {
+          "flex": 0,
+          "local": 1,
+          "tie": 0
+        }
+      }
+    },
+    "overall": {
+      "mean_scores": {
+        "flex": 3.0,
+        "local": 4.0
+      },
+      "score_delta_local_minus_flex": 1.0,
+      "winner_counts": {
+        "flex": 0,
+        "local": 1,
+        "tie": 0
+      }
+    }
+  },
+  "failed": 0,
+  "generated_at": "2026-06-16T15:52:36.178646+00:00",
+  "judge_model": "gemini-2.5-flash",
+  "requested": 1,
+  "succeeded": 1,
+  "verdict": "local-better-than-flex"
+}

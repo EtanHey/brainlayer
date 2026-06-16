@@ -1,0 +1,109 @@
+{
+  "aggregation": {
+    "count": 49,
+    "fields": {
+      "debt_impact": {
+        "mean_scores": {
+          "flex": 3.2857,
+          "local": 3.8571
+        },
+        "score_delta_local_minus_flex": 0.5714,
+        "winner_counts": {
+          "flex": 7,
+          "local": 16,
+          "tie": 26
+        }
+      },
+      "epistemic_level": {
+        "mean_scores": {
+          "flex": 4.1429,
+          "local": 4.5918
+        },
+        "score_delta_local_minus_flex": 0.449,
+        "winner_counts": {
+          "flex": 8,
+          "local": 12,
+          "tie": 29
+        }
+      },
+      "importance": {
+        "mean_scores": {
+          "flex": 4.7143,
+          "local": 4.3265
+        },
+        "score_delta_local_minus_flex": -0.3878,
+        "winner_counts": {
+          "flex": 16,
+          "local": 1,
+          "tie": 32
+        }
+      },
+      "intent": {
+        "mean_scores": {
+          "flex": 3.6122,
+          "local": 3.7143
+        },
+        "score_delta_local_minus_flex": 0.102,
+        "winner_counts": {
+          "flex": 12,
+          "local": 10,
+          "tie": 27
+        }
+      },
+      "sentiment": {
+        "mean_scores": {
+          "flex": 3.8367,
+          "local": 4.7959
+        },
+        "score_delta_local_minus_flex": 0.9592,
+        "winner_counts": {
+          "flex": 3,
+          "local": 36,
+          "tie": 10
+        }
+      },
+      "summary": {
+        "mean_scores": {
+          "flex": 3.8571,
+          "local": 4.3265
+        },
+        "score_delta_local_minus_flex": 0.4694,
+        "winner_counts": {
+          "flex": 12,
+          "local": 36,
+          "tie": 1
+        }
+      },
+      "tags": {
+        "mean_scores": {
+          "flex": 3.9388,
+          "local": 4.2857
+        },
+        "score_delta_local_minus_flex": 0.3469,
+        "winner_counts": {
+          "flex": 15,
+          "local": 31,
+          "tie": 3
+        }
+      }
+    },
+    "overall": {
+      "mean_scores": {
+        "flex": 3.6122,
+        "local": 4.0
+      },
+      "score_delta_local_minus_flex": 0.3878,
+      "winner_counts": {
+        "flex": 15,
+        "local": 30,
+        "tie": 4
+      }
+    }
+  },
+  "failed": 1,
+  "generated_at": "2026-06-16T15:51:50.133757+00:00",
+  "judge_model": "gemini-2.5-flash",
+  "requested": 50,
+  "succeeded": 49,
+  "verdict": "local-better-than-flex"
+}

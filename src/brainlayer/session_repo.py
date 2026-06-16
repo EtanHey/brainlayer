@@ -246,6 +246,7 @@ class SessionMixin:
         chunk_origin: Optional[str] = None,
         enrichment_model: Optional[str] = None,
         enrichment_backend: Optional[str] = None,
+        enrichment_version: Optional[str] = None,
     ) -> None:
         """Update enrichment metadata for a chunk."""
         cursor = self.conn.cursor()
@@ -304,6 +305,9 @@ class SessionMixin:
         if enrichment_backend is not None:
             sets.append("enrichment_backend = ?")
             params.append(enrichment_backend)
+        if enrichment_version is not None:
+            sets.append("enrichment_version = ?")
+            params.append(enrichment_version)
         normalized_origin = str(chunk_origin or "").strip()
         if (
             normalized_origin

@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 from brainlayer.pipeline import enrichment
 
 
-def test_parse_enrichment_whitelists_tags_to_faceted_taxonomy():
+def test_parse_enrichment_uses_hybrid_tag_taxonomy_by_default(monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_ENRICHMENT_TAG_MODE", raising=False)
     parsed = enrichment.parse_enrichment(
         """
         {
@@ -14,7 +15,9 @@ def test_parse_enrichment_whitelists_tags_to_faceted_taxonomy():
           "tags": [
             "Project/BrainLayer",
             "tech/debug/investigation",
-            "python",
+            "React.js",
+            "reactjs",
+            "tech/debug/resolution",
             "one-off-singleton-from-model",
             "PM/Decision"
           ],
@@ -24,12 +27,75 @@ def test_parse_enrichment_whitelists_tags_to_faceted_taxonomy():
     )
 
     assert parsed is not None
-    assert parsed["tags"] == ["project/brainlayer", "tech/debug/investigation", "pm/decision"]
+    assert parsed["tags"] == [
+        "project/brainlayer",
+        "tech/debug/investigation",
+        "react",
+        "tech/debug/resolution",
+        "one-off-singleton-from-model",
+        "pm/decision",
+    ]
 
 
-def test_parse_enrichment_tag_whitelist_is_forward_only_for_existing_rows(tmp_path):
+def test_parse_enrichment_can_roll_back_to_taxonomy_whitelist(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "taxonomy")
+    parsed = enrichment.parse_enrichment(
+        """
+        {
+          "summary": "BrainLayer Track B can still A/B the old taxonomy whitelist mode.",
+          "tags": ["Project/BrainLayer", "React.js", "tech/debug/resolution", "PM/Decision"],
+          "importance": 8
+        }
+        """
+    )
+
+    assert parsed is not None
+    assert parsed["tags"] == ["project/brainlayer", "pm/decision"]
+
+
+def test_parse_enrichment_version_stamps_outputs(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_RUN_ID", "test-run")
+    parsed = enrichment.parse_enrichment(
+        """
+        {
+          "summary": "Hybrid taxonomy outputs carry provenance metadata for eval reproducibility.",
+          "tags": ["React.js"],
+          "importance": 6
+        }
+        """
+    )
+
+    assert parsed is not None
+    metadata = parsed["enrichment_metadata"]
+    assert metadata["prompt_version"]
+    assert metadata["tag_mode"] == "hybrid"
+    assert metadata["taxonomy_git_sha"]
+    assert metadata["taxonomy_content_sha"]
+    assert metadata["run_id"] == "test-run"
+
+
+def test_build_prompt_switches_tag_rules_with_env(monkeypatch):
+    chunk = {
+        "content": "BrainLayer React.js tag normalization decision.",
+        "project": "brainlayer",
+        "content_type": "assistant_text",
+    }
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "hybrid")
+    hybrid_prompt = enrichment.build_prompt(chunk)
+    assert "HYBRID TAG MODE" in hybrid_prompt
+    assert "React.js/reactjs/React -> react" in hybrid_prompt
+
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "taxonomy")
+    taxonomy_prompt = enrichment.build_prompt(chunk)
+    assert "TAXONOMY WHITELIST MODE" in taxonomy_prompt
+    assert "Do NOT invent free-form singleton tags" in taxonomy_prompt
+
+
+def test_parse_enrichment_tag_whitelist_is_forward_only_for_existing_rows(tmp_path, monkeypatch):
     from brainlayer.vector_store import VectorStore
 
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "taxonomy")
     store = VectorStore(tmp_path / "forward-tags.db")
     try:
         cursor = store.conn.cursor()
