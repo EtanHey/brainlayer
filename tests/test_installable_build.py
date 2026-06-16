@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -149,8 +150,24 @@ def test_config_loader_prefers_process_env_then_user_env_and_ignores_repo_root_d
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "dist"
+    pip_available = (
+        subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+    build_command = (
+        [sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheel_dir), str(REPO_ROOT)]
+        if pip_available
+        else ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)]
+    )
+
+    assert pip_available or shutil.which("uv"), "wheel build test requires either pip or uv"
     result = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        build_command,
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
