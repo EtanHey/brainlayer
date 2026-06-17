@@ -386,9 +386,17 @@ final class MCPRouter: @unchecked Sendable {
                     profileQueryID: profileQueryID
                 ))
                 if let response {
-                    textSection = response.text
-                    metadata = sanitizedHybridMetadata(response.metadata)
-                    kgSection = ""
+                    if hybridSearchResponseIsEmpty(response) {
+                        NSLog("[BrainBar] Hybrid search helper returned empty results, falling back to BrainBar database search")
+                        let fallback = try searchViaBrainBarDatabase()
+                        textSection = fallback.text
+                        metadata = fallback.metadata
+                        kgSection = localKGSection()
+                    } else {
+                        textSection = response.text
+                        metadata = sanitizedHybridMetadata(response.metadata)
+                        kgSection = ""
+                    }
                 } else {
                     NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
                     let fallback = try searchViaBrainBarDatabase()
@@ -415,6 +423,22 @@ final class MCPRouter: @unchecked Sendable {
             return ToolOutput(text: textSection, metadata: metadata)
         }
         return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+    }
+
+    private func hybridSearchResponseIsEmpty(_ response: HybridSearchResponse) -> Bool {
+        if let structured = response.metadata["structuredContent"] as? [String: Any] {
+            if let total = structured["total"] as? Int {
+                return total == 0
+            }
+            if let total = structured["total"] as? NSNumber {
+                return total.intValue == 0
+            }
+            if let results = structured["results"] as? [Any] {
+                return results.isEmpty
+            }
+        }
+
+        return response.text.contains(" - 0 of 0 shown")
     }
 
     private func hybridSearchWithinBudget(arguments: [String: Any]) throws -> HybridSearchResponse? {
