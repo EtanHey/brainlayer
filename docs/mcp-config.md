@@ -1,39 +1,35 @@
 # MCP Configuration for BrainLayer
 
-Add this to `~/.claude/settings.json` under `mcpServers`:
+Use the BrainBar socket bridge for agent MCP wiring. This avoids GUI `PATH`
+drift in Finder-launched apps because agents connect to the already-running
+BrainBar daemon instead of spawning a Python MCP process.
+
+Add this to Claude, Codex, Cursor, or Gemini MCP settings under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "python",
-      "args": ["-m", "brainlayer.mcp"],
-      "cwd": "/path/to/brainlayer"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
 ```
 
-Or if you have brainlayer installed globally:
+If a GUI app cannot find `socat`, use the absolute Homebrew path in `command`
+(`/opt/homebrew/bin/socat` on Apple Silicon, `/usr/local/bin/socat` on Intel).
 
-```json
-{
-  "mcpServers": {
-    "brainlayer": {
-      "command": "brainlayer-mcp",
-      "args": []
-    }
-  }
-}
-```
+The Python `brainlayer-mcp` entrypoint is still packaged for development and
+formula installs, but it is not the recommended agent wiring path.
 
 ## Testing the MCP Server
 
-1. Start the server manually to test:
+1. Confirm BrainBar owns the MCP socket:
    ```bash
-   cd /path/to/brainlayer
-   source .venv/bin/activate
-   python -m brainlayer.mcp
+   test -S /tmp/brainbar.sock
+   printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n' \
+     | socat - UNIX-CONNECT:/tmp/brainbar.sock
    ```
 
 2. In Claude Code, the tools should appear:
