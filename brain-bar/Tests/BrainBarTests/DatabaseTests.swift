@@ -1781,6 +1781,33 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
     }
 
+    func testDigestNormalizesEntityWhitespaceBeforePersisting() throws {
+        let result = try db.digest(content: "Etan\nHeyman discussed BrainLayer architecture with Claude.")
+        let entities = result["entities"] as? [String] ?? []
+
+        XCTAssertTrue(entities.contains("Etan Heyman"))
+        XCTAssertFalse(entities.contains(where: { $0.contains("\n") }))
+        XCTAssertNotNil(try db.lookupEntity(query: "Etan Heyman"))
+    }
+
+    func testDigestLinksSlugCollisionToExistingEntity() throws {
+        let entityID = BrainDatabase.digestEntityID(name: "John Smith")
+        try db.insertEntity(
+            id: entityID,
+            type: "concept",
+            name: "John Smith",
+            metadata: "{\"description\":\"existing\"}"
+        )
+
+        let result = try db.digest(content: "John  Smith discussed SQLite and Swift retrieval.")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let entities = result["entities"] as? [String] ?? []
+
+        XCTAssertTrue(entities.contains("John Smith"))
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+    }
+
     func testDigestStorageFailureReportsZeroPersistedEntities() throws {
         db.failNextStoreAfterInsertForTesting = true
 

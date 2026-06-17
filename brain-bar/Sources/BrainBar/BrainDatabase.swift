@@ -5153,7 +5153,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     /// Build a deterministic, KG-resolvable entity ID from an entity name.
     /// Format mirrors the existing `<type>-<slug>` convention so repeated digests
-    /// upsert the same entity (via INSERT OR REPLACE) instead of duplicating.
+    /// target the same entity instead of duplicating.
     static func digestEntityID(name: String) -> String {
         let slug = name
             .lowercased()
@@ -5166,8 +5166,14 @@ final class BrainDatabase: @unchecked Sendable {
         return "digest-entity-\(trimmed.isEmpty ? "unknown" : trimmed)"
     }
 
+    private static func normalizedDigestEntityName(_ name: String) -> String {
+        name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
     private func entityIDForDigestEntity(name: String) throws -> String? {
         guard let db else { throw DBError.notOpen }
+        let name = Self.normalizedDigestEntityName(name)
+        guard !name.isEmpty else { return nil }
 
         let existingSQL = """
             SELECT id
@@ -5202,14 +5208,7 @@ final class BrainDatabase: @unchecked Sendable {
             bindText(name, to: stmt, index: 2)
         }
 
-        var insertedStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, existingSQL, -1, &insertedStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(insertedStmt) }
-        bindText(name, to: insertedStmt, index: 1)
-        guard sqlite3_step(insertedStmt) == SQLITE_ROW else { return nil }
-        return columnText(insertedStmt, 0)
+        return entityID
     }
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
@@ -5255,7 +5254,7 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         // Deduplicate
-        entities = Array(Set(entities))
+        entities = Array(Set(entities.map(Self.normalizedDigestEntityName).filter { !$0.isEmpty }))
         urls = Array(Set(urls))
         codeIds = Array(Set(codeIds))
 
