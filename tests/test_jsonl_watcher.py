@@ -480,6 +480,10 @@ class TestJSONLWatcher:
         assert [item["_provider"] for item in flushed] == ["codex", "cursor"]
         assert watcher._tailers[str(hot_codex)].offset < hot_codex.stat().st_size
 
+        flushed.clear()
+        assert watcher.poll_once() == 1
+        assert [item["_provider"] for item in flushed] == ["codex"]
+
     def test_codex_root_normalizes_role_content_entries(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)

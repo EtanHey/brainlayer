@@ -288,10 +288,11 @@ class JSONLTailer:
         except OSError:
             return []
 
-        if not new_data:
+        if not new_data and b"\n" not in self._buffer:
             return []
 
-        self._buffer += new_data
+        if new_data:
+            self._buffer += new_data
         lines = []
 
         while b"\n" in self._buffer:
