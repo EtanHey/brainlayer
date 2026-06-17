@@ -365,7 +365,12 @@ final class MCPRouter: @unchecked Sendable {
             )
             let typedResults = results.map(SearchResult.init(payload:))
             return (
-                TextFormatter.formatSearchResults(query: query, results: typedResults, total: typedResults.count),
+                TextFormatter.formatSearchResults(
+                    query: query,
+                    results: typedResults,
+                    total: typedResults.count,
+                    detail: args["detail"] as? String ?? "compact"
+                ),
                 [:]
             )
         }

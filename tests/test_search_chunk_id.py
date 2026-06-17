@@ -157,6 +157,41 @@ class TestSearchReturnsChunkId:
             assert full["results"][0]["chunk_id"] == "real-chunk-id-001"
 
     @pytest.mark.asyncio
+    async def test_full_text_output_exposes_chunk_id(self, mock_store, mock_model):
+        """Full detail rendered TEXT must include the chunk_id so it can be chained
+        into brain_update/brain_expand/brain_supersede/brain_archive from a search hit."""
+        chunk_ids = ["text-id-001", "text-id-002"]
+        documents = ["First document content", "Second document content"]
+        mock_store.hybrid_search.return_value = _make_search_results(chunk_ids, documents)
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+            patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
+        ):
+            content, _ = await _search(query="test query", detail="full")
+
+        text = "\n".join(getattr(c, "text", "") for c in content)
+        assert "- ID: text-id-001" in text
+        assert "- ID: text-id-002" in text
+
+    @pytest.mark.asyncio
+    async def test_compact_text_output_hides_chunk_id(self, mock_store, mock_model):
+        """Compact rendered TEXT must NOT expose the chunk_id."""
+        chunk_ids = ["hidden-id-001"]
+        documents = ["Some content"]
+        mock_store.hybrid_search.return_value = _make_search_results(chunk_ids, documents)
+
+        with (
+            patch("brainlayer.mcp.search_handler._get_vector_store", return_value=mock_store),
+            patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
+        ):
+            content, _ = await _search(query="test query", detail="compact")
+
+        text = "\n".join(getattr(c, "text", "") for c in content)
+        assert "hidden-id-001" not in text
+        assert "- ID:" not in text
+
+    @pytest.mark.asyncio
     async def test_empty_results_no_crash(self, mock_store, mock_model):
         """Empty result set should not crash."""
         mock_store.hybrid_search.return_value = {

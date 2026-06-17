@@ -1846,6 +1846,9 @@ async def _search(
             structured_results.append(item)
 
             output_parts.append(f"\n### Result {i + 1} (score: {score:.3f})")
+            # full detail exposes the chunk_id so it can be chained into
+            # brain_update/brain_expand/brain_supersede/brain_archive.
+            output_parts.append(f"- ID: {cid}")
             enrichment_parts = []
             if meta.get("intent"):
                 enrichment_parts.append(f"Intent: {meta['intent']}")

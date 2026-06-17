@@ -1003,6 +1003,35 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertFalse(text.contains("f-1"), "Compact labeled markdown should not expose chunk_id by default")
     }
 
+    func testBrainSearchFullDetailExposesChunkID() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-detail-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        try db.insertChunk(id: "detail-1", content: "Socket handling code", sessionId: "s1", project: "brainbar", contentType: "assistant_text", importance: 5)
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "socket", "project": "brainbar", "detail": "full"] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        let result = response["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        let text = content?.first?["text"] as? String ?? ""
+
+        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Socket handling code"), "Should contain chunk content")
+        XCTAssertTrue(text.contains("- ID: detail-1"), "full detail must expose chunk_id for chaining")
+    }
+
     func testBrainSearchPassesImportanceMinFilter() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-imp-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

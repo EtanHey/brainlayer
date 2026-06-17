@@ -70,13 +70,19 @@ def _append_kv_section(lines: list[str], title: str, values: dict | None, *, ski
         lines.append(f"- {key}: {value}")
 
 
-def format_search_results(query: str, results: list[dict], total: int) -> str:
+def format_search_results(query: str, results: list[dict], total: int, detail: str = "compact") -> str:
     """Format search results as labeled-field markdown.
 
     Each result dict should have: chunk_id, score, project, date, snippet, summary, importance.
+
+    Only detail="full" exposes the chunk_id (as a "- ID:" line) so it can be chained
+    into brain_update/brain_expand/brain_supersede/brain_archive. Compact (the default)
+    intentionally hides it.
     """
     if total == 0:
         return f'## Search results for "{_truncate(query, 50)}" - 0 of 0 shown\n\nNo results found.'
+
+    include_chunk_id = detail == "full"
 
     lines = []
     lines.append(f'## Search results for "{_truncate(query, 50)}" - {len(results)} of {total} shown')
@@ -91,6 +97,9 @@ def format_search_results(query: str, results: list[dict], total: int) -> str:
 
         lines.append("")
         lines.append(f"### {i + 1}. {title}")
+        chunk_id = r.get("chunk_id")
+        if include_chunk_id and chunk_id:
+            lines.append(f"- ID: {chunk_id}")
         lines.append(f"- Source: {source}")
         lines.append(f"- Date: {date}")
         lines.append(f"- Preview: {preview}")

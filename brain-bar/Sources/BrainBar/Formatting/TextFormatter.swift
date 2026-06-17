@@ -7,7 +7,7 @@ enum TextFormatter {
         case center
     }
 
-    static func formatSearchResults(query: String, results: [SearchResult], total: Int) -> String {
+    static func formatSearchResults(query: String, results: [SearchResult], total: Int, detail: String = "compact") -> String {
         let truncatedQuery = truncate(query, maxLen: 50)
 
         if total == 0 {
@@ -18,6 +18,11 @@ enum TextFormatter {
             ].joined(separator: "\n")
         }
 
+        // Only the explicit "full" detail level exposes chunk IDs, so they can be
+        // chained into brain_update/brain_expand/brain_supersede/brain_archive.
+        // Compact (the default) intentionally hides them.
+        let includeChunkID = detail == "full"
+
         var lines = ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
 
         for (index, result) in results.enumerated() {
@@ -27,6 +32,9 @@ enum TextFormatter {
             let datePart = formattedDate(result.date)
             lines.append("")
             lines.append("### \(index + 1). \(title)")
+            if includeChunkID && !result.chunkID.isEmpty {
+                lines.append("- ID: \(result.chunkID)")
+            }
             lines.append("- Source: \(source.isEmpty ? "unknown" : source)")
             lines.append("- Date: \(datePart.isEmpty ? "unknown" : datePart)")
             lines.append("- Preview: \(preview)")
