@@ -476,6 +476,57 @@ class TestJSONLWatcher:
         assert flushed[0]["message"]["content"][0]["text"].startswith("Explain the watcher")
         assert flushed[0]["_provider"] == "codex"
 
+    def test_normalizer_ignores_string_author_without_poll_failure(self, tmp_path):
+        sessions = tmp_path / "cursor" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "session.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-06-17T10:00:00Z",
+                    "author": "user",
+                    "content": "This row lacks a structured role and should be skipped without crashing.",
+                }
+            )
+            + "\n"
+        )
+
+        flushed = []
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("cursor", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 0
+        assert flushed == []
+
+    def test_normalizer_uses_text_message_without_dict_role_lookup_failure(self, tmp_path):
+        sessions = tmp_path / "gemini" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "session.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-06-17T10:00:00Z",
+                    "role": "model",
+                    "message": "Gemini live adapter verification text should normalize cleanly.",
+                }
+            )
+            + "\n"
+        )
+
+        flushed = []
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("gemini", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 1
+        assert flushed[0]["type"] == "assistant"
+        assert flushed[0]["message"]["content"][0]["text"].startswith("Gemini live adapter")
+
     def test_health_snapshot_uses_db_realtime_insert_rate_when_db_path_is_available(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
