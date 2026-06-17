@@ -70,6 +70,10 @@ def _content_to_text(content: Any) -> str:
     return ""
 
 
+def _mapping_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
@@ -95,8 +99,8 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
         candidate.get("role")
         or candidate.get("sender")
         or candidate.get("speaker")
-        or (candidate.get("author") or {}).get("role")
-        or (candidate.get("message") or {}).get("role")
+        or _mapping_value(candidate.get("author")).get("role")
+        or _mapping_value(candidate.get("message")).get("role")
     )
     role = str(role or "").lower()
     if role in {"model", "gemini", "ai", "bot"}:
