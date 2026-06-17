@@ -43,6 +43,7 @@ def degraded_notice(reason):
 def emit_degraded(reason):
     print(degraded_notice(reason))
 
+
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
 HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
@@ -53,6 +54,43 @@ LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.30
 LOW_CONFIDENCE_FALLBACK_MESSAGE = "No high-confidence memories found. Use brain_search() for deeper retrieval."
 _KG_ENTITY_CHUNKS_RELATION_TYPE_CACHE = {}
 AMBIGUOUS_SINGLE_TOKEN_ENTITY_TYPES = {"technology", "tool"}
+OPERATIONAL_NOISE_MARKERS = (
+    "<task-notification",
+    "<tool-use-id",
+    "<tool-result",
+    "</tool-result",
+    "toolu_",
+    "tool_result",
+    '"tool_use_id"',
+    "'tool_use_id'",
+)
+MONITOR_TICK_RE = re.compile(r"^\s*(fleet|monitor|cron|loop)\s+tick\b.*$", re.IGNORECASE | re.DOTALL)
+OUTPUT_FILE_ONLY_RE = re.compile(
+    r"^\s*(?:output[-_ ]?file|output_path|artifact_path)\s*[:=]\s*\S+\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_operational_noise_prompt(prompt: str) -> bool:
+    """Return True for hook payloads that are operational envelopes, not user prompts."""
+    if not prompt:
+        return False
+
+    normalized = prompt.strip().lower()
+    if not normalized:
+        return False
+
+    starts_like_envelope = normalized.startswith(("<task-notification", "<tool-result", "<tool-use-id"))
+    if starts_like_envelope and any(marker in normalized for marker in OPERATIONAL_NOISE_MARKERS):
+        return True
+
+    if MONITOR_TICK_RE.fullmatch(normalized):
+        return True
+
+    if OUTPUT_FILE_ONLY_RE.match(prompt):
+        return True
+
+    return False
 
 
 def get_session_context(conn, session_id: str, limit: int = 3) -> list[str]:
@@ -1070,7 +1108,8 @@ def main():
 
     def finalize_and_exit(*, mode=None):
         final_mode = mode or telemetry_mode
-        if session_id and prompt and db_path:
+        should_record = bool(new_chunk_ids) or final_mode == "degraded"
+        if should_record and session_id and prompt and db_path:
             token_estimate = sum(len(b) // 4 for b in new_briefs)
             record_injection_event(
                 db_path=db_path,
@@ -1099,6 +1138,9 @@ def main():
 
     if not prompt:
         finalize_and_exit(mode="skip")
+
+    if is_operational_noise_prompt(prompt):
+        sys.exit(0)
 
     classification = classify_prompt(prompt)
     record_prompt_classification(session_id=session_id, prompt=prompt, classification=classification)

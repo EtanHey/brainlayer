@@ -225,6 +225,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
     let query: String
     let chunkIDs: [String]
     let tokenCount: Int
+    let mode: String
     let chunks: [InjectionChunk]
     let claudeConversationID: String
 
@@ -292,6 +293,19 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         "\(query) • \(chunkCount) chunks • \(tokenCount) tok"
     }
 
+    var chunkRibbonStatusText: String? {
+        if !chunks.isEmpty {
+            return nil
+        }
+        if mode == "degraded" {
+            return "BrainLayer degraded; source metadata unavailable."
+        }
+        if chunkIDs.isEmpty {
+            return "No memories surfaced."
+        }
+        return "Hit bars show retrieved chunk IDs; source metadata was unavailable."
+    }
+
     private static func normalizedForDedupe(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .whitespacesAndNewlines)
@@ -307,6 +321,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         query: String,
         chunkIDs: [String],
         tokenCount: Int,
+        mode: String = "normal",
         chunks: [InjectionChunk] = [],
         claudeConversationID: String = ""
     ) {
@@ -316,6 +331,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         self.query = query
         self.chunkIDs = chunkIDs
         self.tokenCount = tokenCount
+        self.mode = mode
         self.chunks = chunks
         self.claudeConversationID = claudeConversationID
     }
@@ -332,6 +348,7 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         timestamp = row["timestamp"] as? String ?? ""
         query = row["query"] as? String ?? ""
         tokenCount = row["token_count"] as? Int ?? 0
+        mode = row["mode"] as? String ?? "normal"
         claudeConversationID = row["claude_conversation_id"] as? String ?? ""
 
         if let rawChunkIDs = row["chunk_ids"] as? [String] {

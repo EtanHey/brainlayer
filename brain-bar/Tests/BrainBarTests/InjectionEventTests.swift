@@ -259,4 +259,64 @@ final class InjectionEventTests: XCTestCase {
         XCTAssertEqual(event.primaryKind, .other)
         XCTAssertEqual(event.displayTitle, "lead chunk metadata missing")
     }
+
+    func testEmptyChunkIDsReportNoMemoriesSurfaced() {
+        let event = InjectionEvent(
+            id: 7,
+            sessionID: "s7",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "zero result prompt",
+            chunkIDs: [],
+            tokenCount: 0,
+            chunks: []
+        )
+
+        XCTAssertEqual(event.chunkRibbonStatusText, "No memories surfaced.")
+    }
+
+    func testDegradedEventReportsInfrastructureStatus() {
+        let event = InjectionEvent(
+            id: 9,
+            sessionID: "s9",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "database unavailable",
+            chunkIDs: [],
+            tokenCount: 0,
+            mode: "degraded",
+            chunks: []
+        )
+
+        XCTAssertEqual(event.chunkRibbonStatusText, "BrainLayer degraded; source metadata unavailable.")
+    }
+
+    func testRowDecodesInjectionMode() throws {
+        let event = try InjectionEvent(
+            row: [
+                "id": 10,
+                "session_id": "sess-10",
+                "timestamp": "2026-03-31T04:50:00.000Z",
+                "query": "degraded event",
+                "chunk_ids": "[]",
+                "token_count": 0,
+                "mode": "degraded"
+            ]
+        )
+
+        XCTAssertEqual(event.mode, "degraded")
+        XCTAssertEqual(event.chunkRibbonStatusText, "BrainLayer degraded; source metadata unavailable.")
+    }
+
+    func testMissingChunkRowsReportMetadataUnavailable() {
+        let event = InjectionEvent(
+            id: 8,
+            sessionID: "s8",
+            timestamp: "2026-03-31T04:50:00.000Z",
+            query: "missing chunk metadata",
+            chunkIDs: ["missing"],
+            tokenCount: 12,
+            chunks: []
+        )
+
+        XCTAssertEqual(event.chunkRibbonStatusText, "Hit bars show retrieved chunk IDs; source metadata was unavailable.")
+    }
 }

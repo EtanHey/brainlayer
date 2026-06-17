@@ -1274,6 +1274,77 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(event.chunks.map(\.id), ["live-hook"])
     }
 
+    func testListInjectionEventsPreservesModeAfterFeedScoping() throws {
+        try db.insertChunk(
+            id: "live-hook-mode",
+            content: "Injected project context for degraded hook session.",
+            sessionId: "session-live",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 7
+        )
+        db.exec("""
+            UPDATE chunks
+            SET source = 'mcp',
+                source_file = 'precompact:live-hook-mode',
+                tags = '["hook-injection"]'
+            WHERE id = 'live-hook-mode'
+        """)
+
+        db.recordInjectionEvent(
+            sessionID: "claude-session-1",
+            query: "degraded mode survives scoping",
+            chunkIDs: ["live-hook-mode"],
+            tokenCount: 24,
+            timestamp: "2026-05-29T00:01:00.000Z"
+        )
+        db.exec("UPDATE injection_events SET mode = 'degraded' WHERE query = 'degraded mode survives scoping'")
+
+        let event = try XCTUnwrap(db.listInjectionEvents(sessionID: "claude-session-1", limit: 1).first)
+
+        XCTAssertEqual(event.mode, "degraded")
+        XCTAssertEqual(event.chunkRibbonStatusText, nil)
+    }
+
+    func testListInjectionEventsReadOnlyLegacyDBWithoutModeFallsBackToNormal() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-injection-events-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL DEFAULT '',
+                    source_file TEXT NOT NULL DEFAULT '',
+                    content_type TEXT NOT NULL DEFAULT '',
+                    tags TEXT NOT NULL DEFAULT '[]'
+                );
+                CREATE TABLE injection_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                    query TEXT NOT NULL,
+                    chunk_ids TEXT NOT NULL,
+                    token_count INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO injection_events (session_id, timestamp, query, chunk_ids, token_count)
+                VALUES ('legacy-session', '2026-05-29T00:01:00.000Z', 'legacy no mode', '[]', 0);
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyDB = BrainDatabase(path: legacyPath, openConfiguration: .init(readOnly: true))
+        defer { legacyDB.close() }
+
+        let event = try XCTUnwrap(legacyDB.listInjectionEvents(sessionID: "legacy-session", limit: 1).first)
+
+        XCTAssertEqual(event.query, "legacy no mode")
+        XCTAssertEqual(event.mode, "normal")
+    }
+
     func testListInjectionEventsFiltersBySessionAndNewestFirst() throws {
         try db.recordInjectionEvent(
             sessionID: "session-a",
