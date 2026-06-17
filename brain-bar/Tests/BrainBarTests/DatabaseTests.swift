@@ -1704,6 +1704,47 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNotNil(result["chunks_created"])
     }
 
+    func testDigestScopesChunkToProject() throws {
+        let content = "Etan Heyman discussed BrainLayer architecture. The project uses SQLite and Swift to ship a fast retrieval pipeline for memories."
+        let result = try db.digest(content: content, project: "gen16-scope")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let scoped = try db.search(query: "BrainLayer architecture", limit: 10, project: "gen16-scope")
+        XCTAssertTrue(scoped.contains(where: { ($0["chunk_id"] as? String) == chunkID }),
+                      "Digested chunk should be findable via search scoped to its project")
+
+        let otherProject = try db.search(query: "BrainLayer architecture", limit: 10, project: "some-other-project")
+        XCTAssertFalse(otherProject.contains(where: { ($0["chunk_id"] as? String) == chunkID }),
+                       "Digested chunk should NOT appear under a different project scope")
+    }
+
+    func testDigestEntitiesResolvableViaLookup() throws {
+        let content = "Etan Heyman discussed BrainLayer architecture with Claude. The project uses SQLite and Swift."
+        let result = try db.digest(content: content)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let entities = result["entities"] as? [String] ?? []
+        let name = try XCTUnwrap(entities.first(where: { $0.contains("BrainLayer") }))
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: name),
+                                   "Digest-extracted entity should be resolvable via lookupEntity")
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entity["name"] as? String, name)
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }),
+                      "Digested chunk should be linked to its extracted entity")
+    }
+
+    func testDigestTitlePrependedToChunk() throws {
+        let content = "The pipeline ingests raw transcripts and produces durable memory chunks for retrieval."
+        let result = try db.digest(content: content, title: "Gen16 Digest Title")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let chunk = try XCTUnwrap(try db.getChunk(id: chunkID))
+        let storedContent = try XCTUnwrap(chunk["content"] as? String)
+        XCTAssertTrue(storedContent.hasPrefix("Gen16 Digest Title"),
+                      "Title should be prepended to the digested chunk content")
+    }
+
     private func seedTrigramMaintenanceRows(count: Int) throws {
         for index in 0..<count {
             try db.insertChunk(

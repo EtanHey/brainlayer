@@ -5151,7 +5151,22 @@ final class BrainDatabase: @unchecked Sendable {
 
     // MARK: - brain_digest: rule-based entity extraction
 
-    func digest(content: String) throws -> [String: Any] {
+    /// Build a deterministic, KG-resolvable entity ID from an entity name.
+    /// Format mirrors the existing `<type>-<slug>` convention so repeated digests
+    /// upsert the same entity (via INSERT OR REPLACE) instead of duplicating.
+    static func digestEntityID(name: String) -> String {
+        let slug = name
+            .lowercased()
+            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
+            .reduce(into: "") { acc, ch in
+                if ch == "-" && acc.hasSuffix("-") { return }
+                acc.append(ch)
+            }
+        let trimmed = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return "digest-entity-\(trimmed.isEmpty ? "unknown" : trimmed)"
+    }
+
+    func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
 
         // Rule-based entity extraction
@@ -5200,19 +5215,40 @@ final class BrainDatabase: @unchecked Sendable {
 
         // Store the digest as a chunk
         let digestSummary = "Digest: \(entities.count) entities, \(urls.count) URLs, \(codeIds.count) code refs"
-        
+        let titledContent: String = {
+            let body = String(content.prefix(500)) + (content.count > 500 ? "..." : "")
+            if let title, !title.isEmpty { return "\(title)\n\n\(body)" }
+            return body
+        }()
+
         do {
             let stored = try store(
-                content: content.prefix(500) + (content.count > 500 ? "..." : ""),
+                content: titledContent,
                 tags: ["digest"] + entities.prefix(5).map { $0 },
                 importance: 5,
-                source: "digest"
+                source: "digest",
+                project: project
             )
-            
+
+            // Persist extracted entities to the knowledge graph so they are
+            // immediately resolvable via brain_entity (lookupEntity), and link
+            // each to the digested chunk so brain_entity surfaces its memories.
+            var entitiesPersisted = 0
+            for name in entities {
+                let entityID = Self.digestEntityID(name: name)
+                do {
+                    try insertEntity(id: entityID, type: "concept", name: name)
+                    try linkEntityChunk(entityId: entityID, chunkId: stored.chunkID, relevance: 1.0)
+                    entitiesPersisted += 1
+                } catch {
+                    // Best-effort: a single failed entity write must not fail the digest.
+                }
+            }
+
             return [
                 "mode": "digest",
                 "entities": entities,
-                "entities_created": entities.count,
+                "entities_created": entitiesPersisted,
                 "urls": urls,
                 "code_identifiers": codeIds,
                 "chunks_created": 1,
