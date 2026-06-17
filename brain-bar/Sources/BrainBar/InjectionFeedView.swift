@@ -505,8 +505,8 @@ struct InjectionFeedView: View {
                             .font(.system(size: 10, weight: .medium))
                     }
                 }
-                if event.chunks.isEmpty {
-                    Text("Hit bars show retrieved chunk IDs; source metadata was unavailable.")
+                if let statusText = event.chunkRibbonStatusText {
+                    Text(statusText)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)

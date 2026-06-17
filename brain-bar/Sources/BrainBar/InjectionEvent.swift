@@ -292,6 +292,16 @@ struct InjectionEvent: Equatable, Identifiable, Sendable {
         "\(query) • \(chunkCount) chunks • \(tokenCount) tok"
     }
 
+    var chunkRibbonStatusText: String? {
+        if !chunks.isEmpty {
+            return nil
+        }
+        if chunkIDs.isEmpty {
+            return "No memories surfaced."
+        }
+        return "Hit bars show retrieved chunk IDs; source metadata was unavailable."
+    }
+
     private static func normalizedForDedupe(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .whitespacesAndNewlines)

@@ -261,6 +261,27 @@ class TestPromptSearchConditional:
         assert activate is True
         assert light is True
 
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "<task-notification>\n<summary>Worker completed</summary>\n</task-notification>",
+            "<task-notification><tool-use-id>toolu_123</tool-use-id></task-notification>",
+            "<tool-result tool_use_id=\"toolu_123\">ok</tool-result>",
+            "FLEET TICK gen16: monitor heartbeat only",
+            "output_file=/tmp/worker.out",
+        ],
+    )
+    def test_operational_noise_prompts_are_detected(self, prompt_search, prompt):
+        assert prompt_search.is_operational_noise_prompt(prompt) is True
+
+    def test_real_user_prompt_is_not_operational_noise(self, prompt_search):
+        assert (
+            prompt_search.is_operational_noise_prompt(
+                "What did we decide about restoring the BrainLayer watcher?"
+            )
+            is False
+        )
+
     def test_extract_keywords_keeps_short_meaningful_terms(self, prompt_search):
         keywords = prompt_search.extract_keywords("T3 Code AI PR review")
 
@@ -509,7 +530,7 @@ class TestPromptSearchConditional:
         row = sqlite3.connect(db_path).execute("SELECT mode FROM injection_events").fetchone()
         assert row == ("entity",)
 
-    def test_injection_event_skip_logged(self, prompt_search, tmp_path, monkeypatch, capsys):
+    def test_injection_event_skip_not_logged(self, prompt_search, tmp_path, monkeypatch, capsys):
         db_path = tmp_path / "hook-events.db"
         conn = sqlite3.connect(db_path)
         conn.execute(
@@ -539,10 +560,81 @@ class TestPromptSearchConditional:
         assert capsys.readouterr().out == ""
         row = (
             sqlite3.connect(db_path)
-            .execute("SELECT session_id, chunk_ids, token_count, mode FROM injection_events")
+            .execute("SELECT COUNT(*) FROM injection_events")
             .fetchone()
         )
-        assert row == ("sess-skip", "[]", 0, "skip")
+        assert row == (0,)
+
+    def test_operational_noise_prompt_exits_before_classification_and_event(
+        self, prompt_search, monkeypatch, capsys
+    ):
+        calls = []
+
+        def classify_spy(*args, **kwargs):
+            calls.append((args, kwargs))
+            return "knowledge_question"
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(prompt_search, "classify_prompt", classify_spy)
+        monkeypatch.setattr(
+            prompt_search,
+            "record_injection_event",
+            lambda *args, **kwargs: calls.append(("event", args, kwargs)),
+        )
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "prompt": "<task-notification><tool-use-id>toolu_abc</tool-use-id></task-notification>",
+                        "session_id": "sess-noise",
+                    }
+                )
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out == ""
+        assert calls == []
+
+    def test_zero_result_real_prompt_stays_out_of_visible_injection_events(
+        self, prompt_search, monkeypatch, capsys
+    ):
+        fake_conn = FakeConn()
+        events = []
+
+        monkeypatch.setattr(prompt_search, "get_db_path", lambda: "/tmp/brainlayer.db")
+        monkeypatch.setattr(
+            prompt_search, "classify_prompt", lambda prompt, detected_entities=None: "knowledge_question"
+        )
+        monkeypatch.setattr(prompt_search, "record_prompt_classification", lambda **kwargs: None)
+        monkeypatch.setattr(prompt_search, "record_injection_event", lambda *args, **kwargs: events.append(kwargs))
+        monkeypatch.setattr(prompt_search, "detect_entities_in_prompt", lambda *args, **kwargs: [])
+        monkeypatch.setattr(prompt_search, "detect_correction", lambda prompt: None)
+        monkeypatch.setattr(prompt_search.sqlite3, "connect", lambda *args, **kwargs: fake_conn)
+        monkeypatch.setattr(
+            prompt_search.sys,
+            "stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "prompt": "What did we decide about a term that has no indexed memories?",
+                        "session_id": "sess-zero",
+                    }
+                )
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_search.main()
+
+        assert exc_info.value.code == 0
+        assert "No high-confidence memories found" in capsys.readouterr().out
+        assert events == []
 
     def test_main_prints_search_before_assume_warning(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
