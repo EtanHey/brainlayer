@@ -533,6 +533,7 @@ private struct BrainBarDashboardView: View {
         BrainBarQueueRail(
             summary: flowSummary.queue,
             coverageText: "\(Int(collector.stats.enrichmentPercent.rounded()))% enriched",
+            watcherText: collector.stats.watcherHealth?.summaryText ?? "unknown",
             compact: layout.compactCards
         )
     }
@@ -722,6 +723,7 @@ private struct BrainBarFlowLaneCard: View {
 private struct BrainBarQueueRail: View {
     let summary: DashboardQueueSummary
     let coverageText: String
+    let watcherText: String
     let compact: Bool
 
     var body: some View {
@@ -768,11 +770,13 @@ private struct BrainBarQueueRail: View {
             HStack(spacing: 14) {
                 BrainBarLaneMetric(label: "Backlog", value: "\(summary.backlogCount)")
                 BrainBarLaneMetric(label: "Coverage", value: coverageText)
+                BrainBarLaneMetric(label: "Watcher", value: watcherText)
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 BrainBarLaneMetric(label: "Backlog", value: "\(summary.backlogCount)")
                 BrainBarLaneMetric(label: "Coverage", value: coverageText)
+                BrainBarLaneMetric(label: "Watcher", value: watcherText)
             }
         }
     }

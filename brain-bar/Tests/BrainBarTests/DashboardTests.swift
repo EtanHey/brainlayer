@@ -85,6 +85,31 @@ final class DashboardTests: XCTestCase {
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
+    func testDashboardStatsReadsWatcherHealthSnapshot() throws {
+        let healthURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("watcher-health-\(UUID().uuidString).json")
+        try """
+        {
+          "alerting": true,
+          "files_tracked": 7,
+          "max_offset_lag_bytes": 2097152,
+          "active_jsonl_entries_per_minute": 44.0,
+          "db_realtime_inserts_per_minute": 3.0
+        }
+        """.write(to: healthURL, atomically: true, encoding: .utf8)
+        let restoreHealthPath = setDashboardWatcherHealthPath(healthURL)
+        defer {
+            restoreHealthPath()
+            try? FileManager.default.removeItem(at: healthURL)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.watcherHealth?.filesTracked, 7)
+        XCTAssertEqual(stats.watcherHealth?.alerting, true)
+        XCTAssertEqual(stats.watcherHealth?.summaryText, "lag 2 MB")
+    }
+
     func testDashboardStatsRecentEnrichmentCountSharesBucketSource() {
         let stats = DashboardStats(
             chunkCount: 12,
@@ -1536,6 +1561,18 @@ private func setDashboardPendingStoreQueuePath(_ path: URL) -> () -> Void {
             setenv("BRAINBAR_PENDING_STORES_PATH", previous, 1)
         } else {
             unsetenv("BRAINBAR_PENDING_STORES_PATH")
+        }
+    }
+}
+
+private func setDashboardWatcherHealthPath(_ path: URL) -> () -> Void {
+    let previous = ProcessInfo.processInfo.environment["BRAINLAYER_WATCHER_HEALTH_PATH"]
+    setenv("BRAINLAYER_WATCHER_HEALTH_PATH", path.path, 1)
+    return {
+        if let previous {
+            setenv("BRAINLAYER_WATCHER_HEALTH_PATH", previous, 1)
+        } else {
+            unsetenv("BRAINLAYER_WATCHER_HEALTH_PATH")
         }
     }
 }
