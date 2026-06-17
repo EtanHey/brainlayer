@@ -441,6 +441,49 @@ class TestJSONLWatcher:
         assert watcher.provider_for_file(str(fresh_cursor)) == "cursor"
         assert watcher.provider_for_file(str(old_codex)) == "codex"
 
+    def test_poll_once_limits_each_file_so_active_roots_do_not_starve(self, tmp_path):
+        codex_sessions = tmp_path / "codex" / "sessions"
+        cursor_sessions = tmp_path / "cursor" / "sessions"
+        codex_sessions.mkdir(parents=True)
+        cursor_sessions.mkdir(parents=True)
+        hot_codex = codex_sessions / "hot.jsonl"
+        fresh_cursor = cursor_sessions / "fresh.jsonl"
+        hot_codex.write_text(
+            "\n".join(
+                json.dumps({"role": "user", "content": f"codex active line {idx} with enough content"})
+                for idx in range(3)
+            )
+            + "\n"
+        )
+        fresh_cursor.write_text(
+            json.dumps(
+                {"type": "message", "payload": {"role": "user", "content": "cursor active line with enough content"}}
+            )
+            + "\n"
+        )
+        os.utime(hot_codex, (3000, 3000))
+        os.utime(fresh_cursor, (2000, 2000))
+
+        flushed = []
+        watcher = JSONLWatcher(
+            watch_roots=[
+                WatchRoot("codex", codex_sessions),
+                WatchRoot("cursor", cursor_sessions),
+            ],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+            max_lines_per_file=1,
+        )
+
+        assert watcher.poll_once() == 2
+        assert [item["_provider"] for item in flushed] == ["codex", "cursor"]
+        assert watcher._tailers[str(hot_codex)].offset < hot_codex.stat().st_size
+
+        flushed.clear()
+        assert watcher.poll_once() == 1
+        assert [item["_provider"] for item in flushed] == ["codex"]
+
     def test_codex_root_normalizes_role_content_entries(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
         sessions.mkdir(parents=True)
