@@ -4871,7 +4871,9 @@ final class BrainDatabase: @unchecked Sendable {
 
     func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
         guard let db else { throw DBError.notOpen }
-        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count, mode FROM injection_events"
+        let hasModeColumn = try tableColumns(name: "injection_events", on: db).contains("mode")
+        let modeSelect = hasModeColumn ? "mode" : "'normal'"
+        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count, \(modeSelect) AS mode FROM injection_events"
         var conditions: [String] = []
         if sessionID != nil { conditions.append("session_id = ?") }
         conditions.append(Self.liveInjectionEventSQLPredicate(eventTable: "injection_events"))
@@ -5027,6 +5029,7 @@ final class BrainDatabase: @unchecked Sendable {
             query: event.query,
             chunkIDs: scopedChunkIDs,
             tokenCount: event.tokenCount,
+            mode: event.mode,
             chunks: liveChunks,
             claudeConversationID: event.claudeConversationID
         )
