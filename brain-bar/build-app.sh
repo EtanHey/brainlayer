@@ -508,7 +508,9 @@ notarize_and_staple() {
 
     local notary_zip_base
     local notary_zip
-    notary_zip_base="$(mktemp -t brainbar-notary)"
+    local tmp_parent
+    tmp_parent="${TMPDIR:-/tmp}"
+    notary_zip_base="$(mktemp "${tmp_parent%/}/brainbar-notary.XXXXXX")"
     notary_zip="$notary_zip_base.zip"
     rm -f "$notary_zip_base"
     ditto -c -k --keepParent "$APP_DIR" "$notary_zip"

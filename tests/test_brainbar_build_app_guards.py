@@ -362,6 +362,8 @@ def test_build_app_script_is_notarization_ready_for_developer_id() -> None:
     assert "--wait" in script
     assert "stapler" in script
     assert "staple" in script
+    assert "mktemp -t brainbar-notary" not in script
+    assert "brainbar-notary.XXXXXX" in script
 
 
 def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_available(tmp_path: Path) -> None:
