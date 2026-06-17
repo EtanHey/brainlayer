@@ -226,7 +226,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
 
-    def flush_to_db(entries: list[dict[str, Any]]) -> None:
+    def flush_to_db(entries: list[dict[str, Any]]) -> int:
         """Process raw JSONL entries through pipeline and insert into DB."""
         import time as _time
 
@@ -437,5 +437,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             )
         except Exception:
             pass
+
+        return inserted
 
     return flush_to_db

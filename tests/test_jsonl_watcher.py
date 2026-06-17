@@ -8,6 +8,7 @@ Covers:
 """
 
 import json
+import sqlite3
 import threading
 import time
 
@@ -438,6 +439,78 @@ class TestJSONLWatcher:
         assert flushed[0]["type"] == "user"
         assert flushed[0]["message"]["content"][0]["text"].startswith("Explain the watcher")
         assert flushed[0]["_provider"] == "codex"
+
+    def test_codex_root_normalizes_real_response_item_payload_entries(self, tmp_path):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "session.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-06-17T10:00:00Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Explain the watcher arbitration design with enough detail to index.",
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        flushed = []
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 1
+        assert flushed[0]["type"] == "user"
+        assert flushed[0]["message"]["content"][0]["text"].startswith("Explain the watcher")
+        assert flushed[0]["_provider"] == "codex"
+
+    def test_health_snapshot_uses_db_realtime_insert_rate_when_db_path_is_available(self, tmp_path):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A substantive assistant response that should be observed by the watcher.",
+                }
+            )
+            + "\n"
+        )
+        db_path = tmp_path / "brainlayer.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE chunks (source TEXT, ingested_at INTEGER, created_at TEXT)")
+        conn.commit()
+        conn.close()
+
+        health_path = tmp_path / "watcher-health.json"
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: len(items),
+            batch_size=1,
+            health_path=health_path,
+            db_path=db_path,
+        )
+
+        watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["active_jsonl_entries_per_minute"] > 0
+        assert payload["watcher_chunks_output_per_minute"] > 0
+        assert payload["db_realtime_inserts_per_minute"] == 0
 
     def test_health_snapshot_alerts_on_coverage_drop_and_offset_lag(self, tmp_path):
         now = [0.0]

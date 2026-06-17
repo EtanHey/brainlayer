@@ -2036,6 +2036,7 @@ def watch(
         registry_path=offsets_path,
         on_flush=on_flush,
         on_rewind=on_rewind,
+        db_path=db_path,
         poll_interval_s=poll_interval,
         batch_size=batch_size,
         flush_interval_ms=flush_interval,

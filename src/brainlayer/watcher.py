@@ -17,6 +17,7 @@ Swift DispatchSource kqueue in BrainBar for sub-1ms notification latency.
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -60,7 +61,7 @@ def _content_to_text(content: Any) -> str:
     if isinstance(content, list):
         parts = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") not in {None, "text", "output_text"}:
+            if isinstance(item, dict) and item.get("type") not in {None, "text", "input_text", "output_text"}:
                 continue
             text = _content_to_text(item)
             if text:
@@ -79,12 +80,23 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
         normalized["_provider"] = provider
         return normalized
 
+    payload = entry.get("payload")
+    payload_entry = payload if isinstance(payload, dict) else None
+    if provider == "codex" and entry_type == "response_item":
+        if not payload_entry or payload_entry.get("type") != "message":
+            return None
+        candidate = {**payload_entry, "timestamp": entry.get("timestamp")}
+    elif payload_entry:
+        candidate = {**payload_entry, "timestamp": entry.get("timestamp") or payload_entry.get("timestamp")}
+    else:
+        candidate = entry
+
     role = (
-        entry.get("role")
-        or entry.get("sender")
-        or entry.get("speaker")
-        or (entry.get("author") or {}).get("role")
-        or (entry.get("message") or {}).get("role")
+        candidate.get("role")
+        or candidate.get("sender")
+        or candidate.get("speaker")
+        or (candidate.get("author") or {}).get("role")
+        or (candidate.get("message") or {}).get("role")
     )
     role = str(role or "").lower()
     if role in {"model", "gemini", "ai", "bot"}:
@@ -92,14 +104,16 @@ def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, 
     if role not in {"user", "assistant"}:
         return None
 
-    text = _content_to_text(entry.get("content") or entry.get("text") or entry.get("message"))
+    text = _content_to_text(candidate.get("content") or candidate.get("text") or candidate.get("message"))
     if not text:
         return None
 
     return {
         "type": role,
         "message": {"role": role, "content": [{"type": "text", "text": text}]},
-        "timestamp": entry.get("timestamp") or entry.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "timestamp": candidate.get("timestamp")
+        or candidate.get("created_at")
+        or datetime.now(timezone.utc).isoformat(),
         "_provider": provider,
     }
 
@@ -149,6 +163,7 @@ class CoverageWatchdog:
             self._lag_bad_since = None
 
         return {"alerting": bool(reasons), "alert_reasons": reasons}
+
 
 # ── Offset Registry ──────────────────────────────────────────────────────────
 
@@ -315,7 +330,7 @@ class BatchIndexer:
 
     def __init__(
         self,
-        on_flush: Callable[[list[dict]], None],
+        on_flush: Callable[[list[dict]], int | None],
         batch_size: int = 10,
         flush_interval_ms: int = 100,
     ):
@@ -326,6 +341,7 @@ class BatchIndexer:
         self._lock = threading.Lock()
         self._last_flush = time.monotonic()
         self.total_flushed = 0
+        self.total_outputs = 0
 
     def add(self, items: list[dict]):
         """Add parsed lines to the buffer."""
@@ -357,9 +373,10 @@ class BatchIndexer:
         self._last_flush = time.monotonic()
         count = len(batch)
         try:
-            self.on_flush(batch)
+            result = self.on_flush(batch)
             self._buffer = []  # Clear only after successful flush
             self.total_flushed += count
+            self.total_outputs += result if isinstance(result, int) else count
         except Exception as e:
             logger.error("Batch flush failed (%d items), retaining in buffer: %s", count, e)
 
@@ -390,6 +407,7 @@ class JSONLWatcher:
         on_flush: Callable[[list[dict]], None] | None = None,
         on_rewind: Callable[[str, str, int, int], None] | None = None,
         watch_roots: list[WatchRoot] | None = None,
+        db_path: str | Path | None = None,
         poll_interval_s: float = 1.0,
         batch_size: int = 10,
         flush_interval_ms: int = 100,
@@ -405,7 +423,9 @@ class JSONLWatcher:
             self.watch_roots = default_watch_roots()
         self.watch_dir = self.watch_roots[0].resolved_path if self.watch_roots else Path(".")
         self.on_rewind = on_rewind
-        registry = Path(registry_path).expanduser() if registry_path else Path.home() / ".local/share/brainlayer/offsets.json"
+        registry = (
+            Path(registry_path).expanduser() if registry_path else Path.home() / ".local/share/brainlayer/offsets.json"
+        )
         self.registry = OffsetRegistry(registry)
         self.indexer = BatchIndexer(
             on_flush=on_flush or (lambda _items: None),
@@ -419,10 +439,12 @@ class JSONLWatcher:
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
         self.health_path = Path(health_path).expanduser() if health_path else None
+        self.db_path = Path(db_path).expanduser() if db_path else None
         self.coverage_watchdog = coverage_watchdog or CoverageWatchdog()
         self._health_window_started = time.monotonic()
+        self._health_window_started_epoch = time.time()
         self._health_entries_seen = 0
-        self._health_flushed_at_start = 0
+        self._health_output_at_start = 0
 
     def provider_for_file(self, filepath: str) -> str:
         return self._file_providers.get(filepath, "unknown")
@@ -475,6 +497,26 @@ class JSONLWatcher:
             max_lag = max(max_lag, max(size - offset, 0))
         return max_lag
 
+    def _db_realtime_inserts_since_window_start(self) -> int | None:
+        if not self.db_path:
+            return None
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=1)
+            try:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM chunks
+                    WHERE source = 'realtime_watcher'
+                      AND COALESCE(ingested_at, strftime('%s', created_at)) >= ?
+                    """,
+                    (int(self._health_window_started_epoch),),
+                ).fetchone()
+                return int(row[0]) if row else 0
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+
     def _write_health_snapshot(self, files: list[str]):
         if not self.health_path:
             return
@@ -482,7 +524,9 @@ class JSONLWatcher:
         now = time.monotonic()
         elapsed = max(now - self._health_window_started, 1.0)
         entries_per_min = self._health_entries_seen / elapsed * 60.0
-        inserts_per_min = (self.indexer.total_flushed - self._health_flushed_at_start) / elapsed * 60.0
+        outputs_per_min = (self.indexer.total_outputs - self._health_output_at_start) / elapsed * 60.0
+        db_inserts = self._db_realtime_inserts_since_window_start()
+        inserts_per_min = (db_inserts / elapsed * 60.0) if db_inserts is not None else outputs_per_min
         max_lag = self._max_offset_lag_bytes(files)
         watchdog = self.coverage_watchdog.evaluate(
             active_entries_per_minute=entries_per_min,
@@ -495,6 +539,7 @@ class JSONLWatcher:
             "files_tracked": len(files),
             "active_jsonl_entries_per_minute": entries_per_min,
             "db_realtime_inserts_per_minute": inserts_per_min,
+            "watcher_chunks_output_per_minute": outputs_per_min,
             "max_offset_lag_bytes": max_lag,
             **watchdog,
         }
@@ -508,8 +553,9 @@ class JSONLWatcher:
 
         if elapsed >= 60.0:
             self._health_window_started = now
+            self._health_window_started_epoch = time.time()
             self._health_entries_seen = 0
-            self._health_flushed_at_start = self.indexer.total_flushed
+            self._health_output_at_start = self.indexer.total_outputs
 
     def _ensure_tailer(self, filepath: str) -> JSONLTailer:
         """Get or create a tailer for a file, respecting stored offsets."""

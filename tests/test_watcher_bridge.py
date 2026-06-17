@@ -165,12 +165,13 @@ class TestFlushCallback:
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
         entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl")
 
-        flush([entry])
+        inserted = flush([entry])
 
         queued_files = list(queue_dir.glob("watcher-*.jsonl"))
         conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
         conn.close()
+        assert inserted == 1
         assert len(queued_files) == 1
         assert rows == (0,)
 
