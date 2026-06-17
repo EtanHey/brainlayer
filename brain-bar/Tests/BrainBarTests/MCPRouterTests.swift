@@ -474,6 +474,44 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNil(result["structuredContent"])
     }
 
+    func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperReturnsEmptyResults() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-empty-fallback-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+        try db.insertChunk(
+            id: "empty-helper-fallback-result",
+            content: "brainlayer live search fallback result from Swift database",
+            sessionId: "s1",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+
+        let helper = RecordingHybridSearchClient(
+            response: HybridSearchResponse(
+                text: """
+## Search results for "brainlayer" - 0 of 0 shown
+
+No results found.
+"""
+            )
+        )
+        let router = MCPRouter(hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        let response = router.handle(toolCall(id: 179, name: "brain_search", arguments: [
+            "query": "brainlayer",
+            "num_results": 3,
+            "project": "brainlayer"
+        ]))
+
+        XCTAssertEqual(helper.requests.count, 1)
+        let text = try toolText(response)
+        XCTAssertTrue(text.contains("brainlayer live search fallback result from Swift database"), text)
+        XCTAssertFalse(text.contains("No results found."), text)
+    }
+
     func testBrainStoreMCPResultIsPlainAndShowsTagsWithoutContent() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-store-output-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
