@@ -614,6 +614,56 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
     }
 
+    /// Regression: brain_search(unread_only) marks messages delivered (a write).
+    /// It must run on the writable connection, not the read-only read handle —
+    /// otherwise markDelivered fails with `SQLite step failed: 8` (SQLITE_READONLY).
+    func testUnreadSearchUsesWritableConnectionForMarkDelivered() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-unread-route-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let setupDB = BrainDatabase(path: tempDB)
+        try setupDB.insertChunk(
+            id: "unread-route-target",
+            content: "Unread route target content about sockets",
+            sessionId: "unread-session",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 6,
+            tags: "[\"unread-route\"]"
+        )
+        setupDB.close()
+
+        let writeDB = BrainDatabase(path: tempDB)
+        let readDB = BrainDatabase(
+            path: tempDB,
+            openConfiguration: .init(busyTimeoutMillis: 250, readOnly: true)
+        )
+        defer { writeDB.close() }
+        defer { readDB.close() }
+
+        // Read handle is genuinely read-only; the old path attempted markDelivered
+        // here and failed with SQLITE_READONLY.
+        XCTAssertEqual(try sqlitePragma(handle: readDB.dbHandle, name: "query_only"), "1")
+
+        let router = MCPRouter()
+        router.setDatabases(write: writeDB, read: readDB)
+
+        let response = router.handle(toolCall(id: 401, name: "brain_search", arguments: [
+            "query": "sockets",
+            "num_results": 5,
+            "agent_id": "unread-route-agent",
+            "unread_only": true,
+        ]))
+
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"] as? Bool, "unread search must not error on a read-only read handle")
+        let text = try toolText(response)
+        XCTAssertFalse(text.contains("SQLite step failed"), text)
+        XCTAssertTrue(text.contains("Unread route target content"), text)
+
+        // markDelivered must have written through the writable connection.
+        XCTAssertNotNil(try writeDB.subscription(agentID: "unread-route-agent"))
+    }
+
     func testBrainSearchFallsBackToReadDatabaseWhenHybridHelperExceedsBudget() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-budget-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }

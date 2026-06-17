@@ -316,7 +316,10 @@ final class MCPRouter: @unchecked Sendable {
         if unreadOnly && subscriberID == nil {
             throw ToolError.missingParameter("agent_id")
         }
-        let db = try readDB()
+        // Unread search marks messages delivered (a write), so it must run on the
+        // writable connection. Plain reads stay on the read-only connection to
+        // avoid contending for the single-writer lock.
+        let db = unreadOnly ? try writeDB() : try readDB()
         SearchProfileLogger.log(
             scope: "search.brainbar",
             step: "router_dispatch",
@@ -1137,7 +1140,7 @@ final class MCPRouter: @unchecked Sendable {
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [
             "name": "brain_search",
-            "description": "Search through past conversations and learnings. Hybrid semantic + keyword search.",
+            "description": "Search BrainLayer's memory (past decisions, learnings, notes, project history) with hybrid semantic + keyword ranking. Pass a natural-language query; narrow with project, tag, source, or importance_min. Returns ranked chunks with snippets and a chunk_id — pass that chunk_id to brain_expand for full content.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1157,7 +1160,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_store",
-            "description": "Save decisions, learnings, mistakes, ideas, todos to memory.",
+            "description": "Save a decision, learning, mistake, idea, or todo to durable memory so future sessions can retrieve it with brain_search. Returns the new chunk_id. Add tags, importance (1-10), and project to improve later retrieval. For digesting long raw text use brain_digest instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1172,7 +1175,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_recall",
-            "description": "Get current working context, browse sessions, or inspect session details.",
+            "description": "Get session-level context, not topical search. Modes: context = what you're working on now; sessions = recent session history; operations/summary = details for one session_id; plan = plan linkage; stats = knowledge-base health stats. For looking up facts or past decisions by topic, use brain_search.",
             "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1184,7 +1187,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_entity",
-            "description": "Look up a known entity in the knowledge graph.",
+            "description": "Look up a named entity (person, project, company, tool) in the knowledge graph and return its profile and graph relations. Returns 'No entity found' if the name isn't in the graph yet — for fuzzy topical recall across memories use brain_search instead.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
@@ -1210,27 +1213,28 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_digest",
-            "description": "Ingest raw content (transcripts, docs, articles). Extracts entities, relations, action items.",
+            "description": "Digest a large block of raw text (transcript, doc, article) into one durable, enriched memory chunk that brain_search can find. Entity and relation extraction is attempted and returned as counts, but extracted entities are indexed asynchronously and may not be immediately resolvable via brain_entity. Takes only `content` (no project/title scoping here); for a short scoped note use brain_store with a project instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
-                    "content": ["type": "string", "description": "Raw content to digest"],
+                    "content": ["type": "string", "description": "Raw text to digest into memory"],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])
         ],
         [
             "name": "brain_update",
-            "description": "Update, archive, or merge existing memories.",
+            "description": "Update the importance and/or tags of an existing memory chunk in place. Provide chunk_id plus at least one of importance or tags (tags replace the chunk's existing tag list). This does NOT edit content — to replace content store a new memory with brain_store, to hide a chunk use brain_archive, to mark a replacement use brain_supersede.",
             "annotations": MCPRouter.writeIdempotentAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
-                    "action": ["type": "string", "enum": ["update", "archive", "merge"], "description": "Action to perform"],
-                    "chunk_id": ["type": "string", "description": "Chunk ID to update"],
+                    "chunk_id": ["type": "string", "description": "ID of the chunk to update (from a brain_search or brain_store result)"],
+                    "importance": ["type": "integer", "description": "New importance score, 1-10"],
+                    "tags": ["type": "array", "items": ["type": "string"], "description": "New tag list — replaces the chunk's existing tags"],
                 ] as [String: Any],
-                "required": ["action", "chunk_id"]
+                "required": ["chunk_id"]
             ] as [String: Any])
         ],
         [
@@ -1249,7 +1253,7 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_tags",
-            "description": "List, search, or suggest tags across the knowledge base.",
+            "description": "List tags used across the knowledge base, each with its usage count. Pass an optional query to filter to tags containing that substring.",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
