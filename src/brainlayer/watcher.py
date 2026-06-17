@@ -455,7 +455,7 @@ class JSONLWatcher:
 
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
-        files = []
+        discovered: list[tuple[float, str, str]] = []
         self._file_providers = {}
         for root in self.watch_roots:
             root_path = root.resolved_path
@@ -469,10 +469,16 @@ class JSONLWatcher:
                     for f in base.rglob("*.jsonl"):
                         if f.is_file():
                             path = str(f)
-                            files.append(path)
-                            self._file_providers[path] = root.provider
+                            try:
+                                mtime = f.stat().st_mtime
+                            except OSError:
+                                continue
+                            discovered.append((mtime, path, root.provider))
             except OSError:
                 continue
+        discovered.sort(key=lambda item: item[0], reverse=True)
+        files = [path for _mtime, path, provider in discovered]
+        self._file_providers = {path: provider for _mtime, path, provider in discovered}
         return files
 
     def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:

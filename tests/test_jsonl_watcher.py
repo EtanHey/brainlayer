@@ -8,6 +8,7 @@ Covers:
 """
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -412,6 +413,33 @@ class TestJSONLWatcher:
 
         assert len(files) == 4
         assert {watcher.provider_for_file(path) for path in files} == {"claude", "codex", "cursor", "gemini"}
+
+    def test_multi_root_discovers_newest_jsonl_files_first(self, tmp_path):
+        codex_sessions = tmp_path / "codex" / "sessions"
+        cursor_sessions = tmp_path / "cursor" / "sessions"
+        codex_sessions.mkdir(parents=True)
+        cursor_sessions.mkdir(parents=True)
+        old_codex = codex_sessions / "old.jsonl"
+        fresh_cursor = cursor_sessions / "fresh.jsonl"
+        old_codex.write_text('{"id":"old"}\n')
+        fresh_cursor.write_text('{"id":"fresh"}\n')
+        os.utime(old_codex, (1000, 1000))
+        os.utime(fresh_cursor, (2000, 2000))
+
+        watcher = JSONLWatcher(
+            watch_roots=[
+                WatchRoot("codex", codex_sessions),
+                WatchRoot("cursor", cursor_sessions),
+            ],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda x: None,
+        )
+
+        files = watcher._discover_jsonl_files()
+
+        assert files == [str(fresh_cursor), str(old_codex)]
+        assert watcher.provider_for_file(str(fresh_cursor)) == "cursor"
+        assert watcher.provider_for_file(str(old_codex)) == "codex"
 
     def test_codex_root_normalizes_role_content_entries(self, tmp_path):
         sessions = tmp_path / "codex" / "sessions"
