@@ -1735,6 +1735,62 @@ final class DatabaseTests: XCTestCase {
                       "Digested chunk should be linked to its extracted entity")
     }
 
+    func testDigestReusesExistingConceptEntityWithoutReplacingMetadata() throws {
+        try db.insertEntity(
+            id: "concept-existing-brainlayer",
+            type: "concept",
+            name: "BrainLayer",
+            metadata: "{\"description\":\"enriched concept\"}"
+        )
+
+        let result = try db.digest(content: "BrainLayer architecture uses SQLite and Swift for local retrieval.")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: "BrainLayer"))
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entityID, "concept-existing-brainlayer")
+        XCTAssertEqual(entity["metadata"] as? String, "{\"description\":\"enriched concept\"}")
+
+        let matchingRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer'")
+        XCTAssertEqual(matchingRows, 1, "Digest should not create a duplicate concept row for an existing name")
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+    }
+
+    func testDigestReusesExistingCrossTypeEntityInsteadOfCreatingConceptDuplicate() throws {
+        try db.insertEntity(
+            id: "project-brainlayer",
+            type: "project",
+            name: "BrainLayer",
+            metadata: "{\"description\":\"canonical project\"}"
+        )
+
+        let result = try db.digest(content: "BrainLayer architecture uses SQLite and Swift for local retrieval.")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: "BrainLayer"))
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entityID, "project-brainlayer")
+        XCTAssertEqual(entity["entity_type"] as? String, "project")
+
+        let conceptRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer' AND entity_type = 'concept'")
+        XCTAssertEqual(conceptRows, 0, "Digest should link the canonical entity instead of creating an ambiguous concept duplicate")
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+    }
+
+    func testDigestStorageFailureReportsZeroPersistedEntities() throws {
+        db.failNextStoreAfterInsertForTesting = true
+
+        let result = try db.digest(content: "Etan Heyman discussed BrainLayer architecture with Claude.")
+
+        XCTAssertEqual(result["chunks_created"] as? Int, 0)
+        XCTAssertEqual(result["entities_created"] as? Int, 0)
+        XCTAssertNotNil(result["error"])
+    }
+
     func testDigestTitlePrependedToChunk() throws {
         let content = "The pipeline ingests raw transcripts and produces durable memory chunks for retrieval."
         let result = try db.digest(content: content, title: "Gen16 Digest Title")
@@ -1886,6 +1942,16 @@ private func sqliteCount(path: String, sql: String) throws -> Int {
 private func sqliteScalarString(path: String, sql: String) throws -> String? {
     try withSQLiteConnection(path: path) { db in
         try scalarString(
+            db: db,
+            sql: sql,
+            bind: { _ in }
+        )
+    }
+}
+
+private func sqliteScalarInt(path: String, sql: String) throws -> Int {
+    try withSQLiteConnection(path: path) { db in
+        try scalarInt(
             db: db,
             sql: sql,
             bind: { _ in }

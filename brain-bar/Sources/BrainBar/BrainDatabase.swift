@@ -5166,6 +5166,52 @@ final class BrainDatabase: @unchecked Sendable {
         return "digest-entity-\(trimmed.isEmpty ? "unknown" : trimmed)"
     }
 
+    private func entityIDForDigestEntity(name: String) throws -> String? {
+        guard let db else { throw DBError.notOpen }
+
+        let existingSQL = """
+            SELECT id
+            FROM kg_entities
+            WHERE name = ?
+            ORDER BY CASE entity_type
+                WHEN 'person' THEN 0
+                WHEN 'project' THEN 1
+                WHEN 'company' THEN 2
+                WHEN 'tool' THEN 3
+                WHEN 'concept' THEN 4
+                ELSE 5
+            END, id
+            LIMIT 1
+        """
+        var existingStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, existingSQL, -1, &existingStmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        bindText(name, to: existingStmt, index: 1)
+        if sqlite3_step(existingStmt) == SQLITE_ROW {
+            let existingID = columnText(existingStmt, 0)
+            sqlite3_finalize(existingStmt)
+            return existingID
+        }
+        sqlite3_finalize(existingStmt)
+
+        let entityID = Self.digestEntityID(name: name)
+        let insertSQL = "INSERT OR IGNORE INTO kg_entities (id, entity_type, name, metadata) VALUES (?, 'concept', ?, '{}')"
+        try runWriteStatement(on: db, sql: insertSQL, retries: 3) { stmt in
+            bindText(entityID, to: stmt, index: 1)
+            bindText(name, to: stmt, index: 2)
+        }
+
+        var insertedStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, existingSQL, -1, &insertedStmt, nil) == SQLITE_OK else {
+            throw DBError.prepare(sqlite3_errcode(db))
+        }
+        defer { sqlite3_finalize(insertedStmt) }
+        bindText(name, to: insertedStmt, index: 1)
+        guard sqlite3_step(insertedStmt) == SQLITE_ROW else { return nil }
+        return columnText(insertedStmt, 0)
+    }
+
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
 
@@ -5235,9 +5281,8 @@ final class BrainDatabase: @unchecked Sendable {
             // each to the digested chunk so brain_entity surfaces its memories.
             var entitiesPersisted = 0
             for name in entities {
-                let entityID = Self.digestEntityID(name: name)
                 do {
-                    try insertEntity(id: entityID, type: "concept", name: name)
+                    guard let entityID = try entityIDForDigestEntity(name: name) else { continue }
                     try linkEntityChunk(entityId: entityID, chunkId: stored.chunkID, relevance: 1.0)
                     entitiesPersisted += 1
                 } catch {
@@ -5260,7 +5305,7 @@ final class BrainDatabase: @unchecked Sendable {
             return [
                 "mode": "digest",
                 "entities": entities,
-                "entities_created": entities.count,
+                "entities_created": 0,
                 "urls": urls,
                 "code_identifiers": codeIds,
                 "chunks_created": 0,
