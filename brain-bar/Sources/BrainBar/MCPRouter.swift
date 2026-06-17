@@ -1149,7 +1149,7 @@ final class MCPRouter: @unchecked Sendable {
     nonisolated(unsafe) static let toolDefinitions: [[String: Any]] = [
         [
             "name": "brain_search",
-            "description": "Search BrainLayer's memory (past decisions, learnings, notes, project history) with hybrid semantic + keyword ranking. Pass a natural-language query; narrow with project, tag, source, or importance_min. Returns ranked chunks with snippets and a chunk_id — pass that chunk_id to brain_expand for full content.",
+            "description": "Search BrainLayer's memory (past decisions, learnings, notes, project history) with hybrid semantic + keyword ranking. Pass a natural-language query; narrow with project, tag, source, or importance_min. Returns ranked snippets (title, source, date, preview).",
             "annotations": MCPRouter.readOnlyAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
