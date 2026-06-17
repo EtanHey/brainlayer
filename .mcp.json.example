@@ -6,10 +6,6 @@
       "command": "socat",
       "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     },
-    "brainlayer-legacy": {
-      "_comment": "Fallback: original Python MCP server (remove after BrainBar is stable)",
-      "command": "brainlayer-mcp"
-    },
     "voicelayer": {
       "command": "voicelayer-mcp"
     },

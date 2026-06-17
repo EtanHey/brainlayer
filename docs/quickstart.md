@@ -46,43 +46,37 @@ This parses your Claude Code conversations (JSONL files), classifies content, ch
 
 ## Connect to Your Editor
 
-### Claude Code
+### Claude Code, Codex, Cursor, and Gemini
 
-Add to `~/.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "brainlayer": {
-      "command": "brainlayer-mcp"
-    }
-  }
-}
-```
-
-### Cursor
-
-Add in Cursor's MCP settings:
+Add to each agent's MCP settings under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }
 ```
+
+If a Finder-launched GUI app cannot resolve `socat`, set `command` to the
+absolute Homebrew path: `/opt/homebrew/bin/socat` on Apple Silicon or
+`/usr/local/bin/socat` on Intel.
 
 ### Zed
 
-Add to `settings.json`:
+Add the same socket command to `settings.json`:
 
 ```json
 {
   "context_servers": {
     "brainlayer": {
-      "command": { "path": "brainlayer-mcp" }
+      "command": {
+        "path": "socat",
+        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      }
     }
   }
 }
@@ -96,7 +90,8 @@ Add to `.vscode/mcp.json`:
 {
   "servers": {
     "brainlayer": {
-      "command": "brainlayer-mcp"
+      "command": "socat",
+      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
     }
   }
 }

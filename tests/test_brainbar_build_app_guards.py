@@ -166,8 +166,33 @@ exit 0
     )
     (tool_dir / "codesign").write_text(
         """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${BRAINBAR_FAKE_CODESIGN_LOG:-/dev/null}"
 if [[ "$*" == *"-dv"* ]]; then
-  printf 'Authority=%s\n' "$BRAINBAR_CODESIGN_IDENTITY"
+  printf 'Authority=%s\n' "${BRAINBAR_CODESIGN_IDENTITY:-Developer ID Application: Etan Heyman (PPN23G925Y)}"
+fi
+exit 0
+"""
+    )
+    (tool_dir / "xcrun").write_text(
+        """#!/usr/bin/env bash
+tool="${1:-}"
+shift || true
+case "$tool" in
+  notarytool)
+    printf '%s\n' "$*" >> "${BRAINBAR_FAKE_NOTARYTOOL_LOG:-/dev/null}"
+    ;;
+  stapler)
+    printf '%s\n' "$*" >> "${BRAINBAR_FAKE_STAPLER_LOG:-/dev/null}"
+    ;;
+esac
+exit 0
+"""
+    )
+    (tool_dir / "spctl").write_text(
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${BRAINBAR_FAKE_SPCTL_LOG:-/dev/null}"
+if [[ "${BRAINBAR_FAKE_SPCTL_FAIL:-0}" == "1" ]]; then
+  exit 1
 fi
 exit 0
 """
@@ -225,7 +250,7 @@ exit 0
     (tool_dir / "lsregister").write_text("#!/usr/bin/env bash\nexit 0\n")
     (tool_dir / "pgrep").write_text("#!/usr/bin/env bash\nexit 1\n")
     (tool_dir / "killall").write_text("#!/usr/bin/env bash\nexit 0\n")
-    for tool in ("swift", "codesign", "plistbuddy", "launchctl", "lsregister", "pgrep", "killall"):
+    for tool in ("swift", "codesign", "xcrun", "spctl", "plistbuddy", "launchctl", "lsregister", "pgrep", "killall"):
         os.chmod(tool_dir / tool, 0o755)
     return tool_dir, bin_dir
 
@@ -323,6 +348,101 @@ def test_canonical_build_allows_launchagent_install_when_brainlayer_package_is_i
 
     assert result.returncode == 0, result.stderr
     assert "[build-app] brainlayer package is installed" in result.stdout
+
+
+def test_build_app_script_is_notarization_ready_for_developer_id() -> None:
+    script = (Path(__file__).resolve().parents[1] / "brain-bar" / "build-app.sh").read_text()
+
+    assert "Developer ID Application: Etan Heyman (PPN23G925Y)" in script
+    assert "Apple Development: Etan Heyman" not in script
+    assert "--options runtime" in script
+    assert "--timestamp=none" not in script
+    assert "notarytool" in script
+    assert "submit" in script
+    assert "--wait" in script
+    assert "stapler" in script
+    assert "staple" in script
+
+
+def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_available(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    codesign_log = tmp_path / "codesign.log"
+    notarytool_log = tmp_path / "notarytool.log"
+    stapler_log = tmp_path / "stapler.log"
+    spctl_log = tmp_path / "spctl.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_FAKE_CODESIGN_LOG": str(codesign_log),
+            "BRAINBAR_FAKE_NOTARYTOOL_LOG": str(notarytool_log),
+            "BRAINBAR_FAKE_STAPLER_LOG": str(stapler_log),
+            "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
+            "BRAINBAR_NOTARY_PROFILE": "brainbar-notary-test",
+            "BRAINBAR_CODESIGN_IDENTITY": "Developer ID Application: Etan Heyman (PPN23G925Y)",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    codesign_calls = codesign_log.read_text(encoding="utf-8")
+    assert "--sign Developer ID Application: Etan Heyman (PPN23G925Y)" in codesign_calls
+    assert "--options runtime" in codesign_calls
+    assert "--timestamp " in codesign_calls or codesign_calls.rstrip().endswith("--timestamp")
+    assert "--timestamp=none" not in codesign_calls
+    notarytool_call = notarytool_log.read_text(encoding="utf-8")
+    notarytool_parts = notarytool_call.split()
+    assert notarytool_parts[0] == "submit"
+    assert notarytool_parts[1].endswith(".zip")
+    assert not notarytool_parts[1].endswith(".app")
+    assert "--keychain-profile brainbar-notary-test" in notarytool_call
+    assert "--wait" in notarytool_call
+    assert stapler_log.read_text(encoding="utf-8").startswith("staple ")
+    assert "-a -vvv" in spctl_log.read_text(encoding="utf-8")
+
+
+def test_build_app_submits_before_requiring_post_notary_spctl_acceptance(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-dev-worktree")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    notarytool_log = tmp_path / "notarytool.log"
+    stapler_log = tmp_path / "stapler.log"
+    spctl_log = tmp_path / "spctl.log"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_FAKE_NOTARYTOOL_LOG": str(notarytool_log),
+            "BRAINBAR_FAKE_STAPLER_LOG": str(stapler_log),
+            "BRAINBAR_FAKE_SPCTL_LOG": str(spctl_log),
+            "BRAINBAR_FAKE_SPCTL_FAIL": "1",
+            "BRAINBAR_NOTARY_PROFILE": "brainbar-notary-test",
+            "BRAINBAR_CODESIGN_IDENTITY": "Developer ID Application: Etan Heyman (PPN23G925Y)",
+        },
+    )
+
+    assert result.returncode != 0
+    assert notarytool_log.read_text(encoding="utf-8").startswith("submit ")
+    assert stapler_log.read_text(encoding="utf-8").startswith("staple ")
+    assert spctl_log.read_text(encoding="utf-8").count("-a -vvv") >= 2
+    assert "spctl assessment failed after notarization" in result.stderr
 
 
 def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:

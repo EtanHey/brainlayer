@@ -50,7 +50,14 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 BUNDLE_DIR="$SCRIPT_DIR/bundle"
-SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Apple Development: Etan Heyman (DXHB5E7P2D)}"
+SIGN_IDENTITY="${BRAINBAR_CODESIGN_IDENTITY:-Developer ID Application: Etan Heyman (PPN23G925Y)}"
+BRAINBAR_NOTARY_PROFILE="${BRAINBAR_NOTARY_PROFILE:-${BRAINBAR_NOTARY_KEYCHAIN_PROFILE:-}}"
+BRAINBAR_NOTARY_APPLE_ID="${BRAINBAR_NOTARY_APPLE_ID:-}"
+BRAINBAR_NOTARY_PASSWORD="${BRAINBAR_NOTARY_PASSWORD:-}"
+BRAINBAR_NOTARY_TEAM_ID="${BRAINBAR_NOTARY_TEAM_ID:-PPN23G925Y}"
+BRAINBAR_NOTARY_KEY="${BRAINBAR_NOTARY_KEY:-}"
+BRAINBAR_NOTARY_KEY_ID="${BRAINBAR_NOTARY_KEY_ID:-}"
+BRAINBAR_NOTARY_ISSUER="${BRAINBAR_NOTARY_ISSUER:-}"
 UI_PLIST_LABEL="com.brainlayer.brainbar"
 DAEMON_PLIST_LABEL="com.brainlayer.brainbar-daemon"
 UI_PLIST_FILENAME="$UI_PLIST_LABEL.plist"
@@ -435,6 +442,90 @@ wait_for_socket() {
     return 1
 }
 
+notary_credentials_available() {
+    if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_APPLE_ID" ] && [ -n "$BRAINBAR_NOTARY_PASSWORD" ] && [ -n "$BRAINBAR_NOTARY_TEAM_ID" ]; then
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_KEY" ] && [ -n "$BRAINBAR_NOTARY_KEY_ID" ] && [ -n "$BRAINBAR_NOTARY_ISSUER" ]; then
+        return 0
+    fi
+    return 1
+}
+
+notarytool_auth_args() {
+    if [ -n "$BRAINBAR_NOTARY_PROFILE" ]; then
+        printf '%s\0%s\0' "--keychain-profile" "$BRAINBAR_NOTARY_PROFILE"
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_APPLE_ID" ] && [ -n "$BRAINBAR_NOTARY_PASSWORD" ] && [ -n "$BRAINBAR_NOTARY_TEAM_ID" ]; then
+        printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+            "--apple-id" "$BRAINBAR_NOTARY_APPLE_ID" \
+            "--password" "$BRAINBAR_NOTARY_PASSWORD" \
+            "--team-id" "$BRAINBAR_NOTARY_TEAM_ID"
+        return 0
+    fi
+    if [ -n "$BRAINBAR_NOTARY_KEY" ] && [ -n "$BRAINBAR_NOTARY_KEY_ID" ] && [ -n "$BRAINBAR_NOTARY_ISSUER" ]; then
+        printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+            "--key" "$BRAINBAR_NOTARY_KEY" \
+            "--key-id" "$BRAINBAR_NOTARY_KEY_ID" \
+            "--issuer" "$BRAINBAR_NOTARY_ISSUER"
+        return 0
+    fi
+    return 1
+}
+
+verify_spctl_assessment() {
+    local phase="$1"
+    local required="${2:-0}"
+    if spctl -a -vvv "$APP_DIR"; then
+        return 0
+    fi
+    if [ "$required" -eq 1 ]; then
+        echo "[build-app] ERROR: spctl assessment failed after $phase" >&2
+        return 1
+    fi
+    echo "[build-app] WARNING: spctl assessment failed before notarization; continuing to notary readiness/submit" >&2
+    return 0
+}
+
+notarize_and_staple() {
+    if ! notary_credentials_available; then
+        echo "[build-app] Notary credentials not configured; skipping notarytool submit."
+        echo "[build-app] Ready to submit with one of:"
+        echo "  BRAINBAR_NOTARY_PROFILE=<keychain-profile>"
+        echo "  BRAINBAR_NOTARY_APPLE_ID=<apple-id> BRAINBAR_NOTARY_PASSWORD=<app-specific-password> BRAINBAR_NOTARY_TEAM_ID=<team-id>"
+        echo "  BRAINBAR_NOTARY_KEY=<api-key.p8> BRAINBAR_NOTARY_KEY_ID=<key-id> BRAINBAR_NOTARY_ISSUER=<issuer-id>"
+        return 0
+    fi
+
+    local auth_args=()
+    while IFS= read -r -d '' arg; do
+        auth_args+=("$arg")
+    done < <(notarytool_auth_args)
+
+    local notary_zip_base
+    local notary_zip
+    notary_zip_base="$(mktemp -t brainbar-notary)"
+    notary_zip="$notary_zip_base.zip"
+    rm -f "$notary_zip_base"
+    ditto -c -k --keepParent "$APP_DIR" "$notary_zip"
+
+    echo "[build-app] Submitting for notarization..."
+    if xcrun notarytool submit "$notary_zip" "${auth_args[@]}" --wait; then
+        rm -f "$notary_zip"
+    else
+        local submit_status=$?
+        rm -f "$notary_zip"
+        return "$submit_status"
+    fi
+    echo "[build-app] Stapling notarization ticket..."
+    xcrun stapler staple "$APP_DIR"
+    verify_spctl_assessment "notarization" 1
+}
+
 if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
     # Stop LaunchAgents first so KeepAlive cannot race the rebuild and unlink the
     # freshly rebound socket from an older instance that is still terminating.
@@ -509,7 +600,7 @@ echo "  BuildTimeUTC=$BUILD_UTC"
 
 # Developer signing keeps TCC permissions stable across rebuilds.
 echo "[build-app] Signing..."
-codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none "$APP_DIR"
+codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
 
 echo "[build-app] Verifying signature..."
 if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTITY" >/dev/null; then
@@ -517,6 +608,8 @@ if ! codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -F "Authority=$SIGN_IDENTIT
     codesign -dv --verbose=4 "$APP_DIR" 2>&1
     exit 1
 fi
+verify_spctl_assessment "Developer ID signing"
+notarize_and_staple
 
 # Register URL scheme with Launch Services (ensures brainbar:// works after rebuild)
 "$LSREGISTER" -R "$APP_DIR"
