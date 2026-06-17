@@ -522,7 +522,7 @@ def _exact_chunk_lookup_result(
         structured_results = [item]
 
     structured = {"query": query, "total": 1, "results": structured_results}
-    formatted_text = format_search_results(query, structured_results, 1)
+    formatted_text = format_search_results(query, structured_results, 1, detail=detail)
     return ([TextContent(type="text", text=formatted_text)], structured)
 
 

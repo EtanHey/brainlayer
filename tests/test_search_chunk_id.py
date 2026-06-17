@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from brainlayer.mcp.search_handler import _search
+from brainlayer.mcp.search_handler import _exact_chunk_lookup_result, _search
 
 
 def _make_search_results(chunk_ids, documents, metadatas=None, distances=None):
@@ -190,6 +190,25 @@ class TestSearchReturnsChunkId:
         text = "\n".join(getattr(c, "text", "") for c in content)
         assert "hidden-id-001" not in text
         assert "- ID:" not in text
+
+    @pytest.mark.asyncio
+    async def test_exact_lookup_full_text_output_exposes_chunk_id(self, mock_store, mock_model):
+        """Exact chunk-id lookup must honor detail=full in rendered text."""
+        mock_store.get_chunk.return_value = {
+            "id": "exact-id-001",
+            "content": "Exact document content",
+            "source_file": "session.jsonl",
+            "project": "test-project",
+            "created_at": "2026-03-01T12:00:00",
+            "importance": 5,
+            "summary": "Exact summary",
+        }
+
+        content, structured = _exact_chunk_lookup_result("exact-id-001", mock_store, detail="full")
+
+        text = "\n".join(getattr(c, "text", "") for c in content)
+        assert structured["results"][0]["chunk_id"] == "exact-id-001"
+        assert "- ID: exact-id-001" in text
 
     @pytest.mark.asyncio
     async def test_empty_results_no_crash(self, mock_store, mock_model):
