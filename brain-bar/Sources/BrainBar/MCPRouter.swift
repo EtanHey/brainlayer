@@ -10,17 +10,12 @@
 import Foundation
 
 final class MCPRouter: @unchecked Sendable {
-    // Budget tuned so an interactive brain_store can win the single-writer lock
-    // in the gaps between drain batches instead of fast-failing to the pending
-    // queue on the first contested attempt. 1500ms is well under agent-perceptible
-    // round-trip latency and far below the legacy 30s block (a1bceb01) that PR #475
-    // removed; the pending-queue fallback remains the safety net beyond this budget.
-    // NOTE: this raises the latency bound PR #475 (a6991478) deliberately lowered —
-    // it trades up to ~1.5s tail latency for immediate round-trip reliability under
-    // contention. The systemic fix (drain backlog/backpressure + single-writer) is
-    // tracked separately for orc review.
-    private static let mcpStoreBusyTimeoutMillis: Int32 = 1500
-    private static let mcpStoreRetries = 2
+    // Keep contested MCP writes interactive: make one short attempt, then queue
+    // for replay so brain_store returns well under the 1s prompt-queue budget.
+    // Longer contention handling belongs in the deferred single-writer/backpressure
+    // path, not in the synchronous MCP response.
+    private static let mcpStoreBusyTimeoutMillis: Int32 = 250
+    private static let mcpStoreRetries = 1
 
     private struct ToolOutput {
         let text: String
