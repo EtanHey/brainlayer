@@ -67,6 +67,27 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     struct DashboardStats: Sendable, Equatable {
+        struct WatcherHealth: Sendable, Equatable {
+            let alerting: Bool
+            let filesTracked: Int
+            let maxOffsetLagBytes: Int
+            let activeEntriesPerMinute: Double
+            let realtimeInsertsPerMinute: Double
+
+            var summaryText: String {
+                if alerting {
+                    if maxOffsetLagBytes >= 1_048_576 {
+                        return "lag \(Int((Double(maxOffsetLagBytes) / 1_048_576.0).rounded())) MB"
+                    }
+                    return "coverage alert"
+                }
+                if filesTracked > 0 {
+                    return "\(filesTracked) files"
+                }
+                return "idle"
+            }
+        }
+
         let chunkCount: Int
         let enrichedChunkCount: Int
         let pendingEnrichmentCount: Int
@@ -86,6 +107,7 @@ final class BrainDatabase: @unchecked Sendable {
         let pendingStoreQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
         let pendingStoreFlushRatePerMinute: Double
+        let watcherHealth: WatcherHealth?
 
         init(
             chunkCount: Int,
@@ -106,7 +128,8 @@ final class BrainDatabase: @unchecked Sendable {
             trigramIndexedChunkCount: Int = 0,
             pendingStoreQueueDepth: Int = 0,
             pendingStoreOldestQueuedAt: Date? = nil,
-            pendingStoreFlushRatePerMinute: Double = 0
+            pendingStoreFlushRatePerMinute: Double = 0,
+            watcherHealth: WatcherHealth? = nil
         ) {
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
@@ -127,6 +150,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.pendingStoreQueueDepth = pendingStoreQueueDepth
             self.pendingStoreOldestQueuedAt = pendingStoreOldestQueuedAt
             self.pendingStoreFlushRatePerMinute = pendingStoreFlushRatePerMinute
+            self.watcherHealth = watcherHealth
         }
 
         var recentWriteCount: Int {
@@ -181,7 +205,8 @@ final class BrainDatabase: @unchecked Sendable {
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
                 pendingStoreQueueDepth: pendingStoreQueueDepth,
                 pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
-                pendingStoreFlushRatePerMinute: rate
+                pendingStoreFlushRatePerMinute: rate,
+                watcherHealth: watcherHealth
             )
         }
     }
@@ -1545,6 +1570,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     func dashboardStats(activityWindowMinutes: Int = 30, bucketCount: Int = 12) throws -> DashboardStats {
         let pendingStoreQueue = pendingStoreQueueSnapshot()
+        let watcherHealth = watcherHealthSnapshot()
         return try withReadTransaction {
             let liveWindowMinutes = 1
             let now = Date()
@@ -1562,7 +1588,8 @@ final class BrainDatabase: @unchecked Sendable {
                     recentEnrichmentFiveMinuteCount: 0,
                     activityWindowMinutes: activityWindowMinutes,
                     bucketCount: bucketCount,
-                    liveWindowMinutes: liveWindowMinutes
+                    liveWindowMinutes: liveWindowMinutes,
+                    watcherHealth: watcherHealth
                 )
             }
 
@@ -1604,9 +1631,29 @@ final class BrainDatabase: @unchecked Sendable {
                 lastEnrichedAt: lastEvents.lastEnrichedAt,
                 trigramIndexedChunkCount: (try? countRows(in: "chunks_fts_trigram")) ?? 0,
                 pendingStoreQueueDepth: pendingStoreQueue.depth,
-                pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt
+                pendingStoreOldestQueuedAt: pendingStoreQueue.oldestQueuedAt,
+                watcherHealth: watcherHealth
             )
         }
+    }
+
+    private func watcherHealthSnapshot() -> DashboardStats.WatcherHealth? {
+        let envPath = ProcessInfo.processInfo.environment["BRAINLAYER_WATCHER_HEALTH_PATH"]
+        let healthPath = envPath ?? URL(fileURLWithPath: path)
+            .deletingLastPathComponent()
+            .appendingPathComponent("watcher-health.json")
+            .path
+        guard let data = FileManager.default.contents(atPath: healthPath),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return DashboardStats.WatcherHealth(
+            alerting: payload["alerting"] as? Bool ?? false,
+            filesTracked: payload["files_tracked"] as? Int ?? 0,
+            maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
+            activeEntriesPerMinute: payload["active_jsonl_entries_per_minute"] as? Double ?? 0,
+            realtimeInsertsPerMinute: payload["db_realtime_inserts_per_minute"] as? Double ?? 0
+        )
     }
 
     func dataVersion() throws -> Int {

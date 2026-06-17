@@ -1959,11 +1959,11 @@ def export_obsidian(
 
 @app.command()
 def watch(
-    source: Path = typer.Option(
-        Path.home() / ".claude" / "projects",
+    source: Optional[list[Path]] = typer.Option(
+        None,
         "--source",
         "-s",
-        help="Directory to watch for .jsonl files",
+        help="Directory to watch for .jsonl files. Repeat to override default multi-provider roots.",
     ),
     poll_interval: float = typer.Option(1.0, "--poll", help="Poll interval in seconds"),
     batch_size: int = typer.Option(10, "--batch-size", help="Flush after this many lines"),
@@ -1971,32 +1971,39 @@ def watch(
 ) -> None:
     """Watch for new JSONL conversations and index in real-time.
 
-    Tail-follows .jsonl files under ~/.claude/projects/, processes new lines
-    through the classification/chunking pipeline, and inserts into BrainLayer
-    with deferred embedding. Chunks are immediately searchable via FTS5.
+    Tail-follows Claude, Codex, Cursor, and Gemini JSONL roots by default,
+    processes new lines through the classification/chunking pipeline, and
+    enqueues chunks for the single-writer drain.
 
     This is a persistent process — run it as a LaunchAgent or in a terminal.
     """
+    import os
     import signal
 
     from ..parent_death import install_parent_death_watcher
     from ..paths import get_db_path
-    from ..watcher import JSONLWatcher
+    from ..watcher import JSONLWatcher, WatchRoot, default_watch_roots
     from ..watcher_bridge import create_flush_callback
 
     install_parent_death_watcher()
+    os.environ.setdefault("BRAINLAYER_ARBITRATED", "1")
 
     db_path = get_db_path()
     offsets_path = db_path.parent / "offsets.json"
+    health_path = Path(os.environ.get("BRAINLAYER_WATCHER_HEALTH_PATH", str(db_path.parent / "watcher-health.json")))
+    watch_roots = [WatchRoot("custom", item) for item in source] if source else default_watch_roots()
 
     rprint("[bold blue]זיכרון[/] Real-time JSONL watcher")
-    rprint(f"  Watching: [bold]{source}[/]")
+    for root in watch_roots:
+        rprint(f"  Watching {root.provider}: [bold]{root.resolved_path}[/]")
     rprint(f"  Database: [bold]{db_path}[/]")
     rprint(f"  Offsets:  [bold]{offsets_path}[/]")
+    rprint(f"  Health:   [bold]{health_path}[/]")
     rprint(f"  Poll: {poll_interval}s | Batch: {batch_size} | Flush: {flush_interval}ms")
+    rprint("  Writer:   queue arbitration (drain owns DB writes)")
     rprint()
 
-    on_flush = create_flush_callback(db_path)
+    on_flush = create_flush_callback(db_path, arbitrated=True)
 
     def on_rewind(filepath: str, session_id: str, old_offset: int, new_offset: int):
         """Handle checkpoint restore — soft-archive chunks from reverted timeline."""
@@ -2025,13 +2032,14 @@ def watch(
             rprint(f"  [red]Failed to archive reverted chunks: {e}[/]")
 
     watcher = JSONLWatcher(
-        watch_dir=source,
+        watch_roots=watch_roots,
         registry_path=offsets_path,
         on_flush=on_flush,
         on_rewind=on_rewind,
         poll_interval_s=poll_interval,
         batch_size=batch_size,
         flush_interval_ms=flush_interval,
+        health_path=health_path,
     )
 
     def handle_signal(signum, frame):

@@ -155,11 +155,30 @@ class TestProjectExtraction:
 
 
 class TestFlushCallback:
+    def test_arbitrated_flush_enqueues_watcher_chunks_without_db_write(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        queue_dir = tmp_path / "queue"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+
+        flush = create_flush_callback(db_path, arbitrated=True)
+        entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
+        entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl")
+
+        flush([entry])
+
+        queued_files = list(queue_dir.glob("watcher-*.jsonl"))
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = 'realtime_watcher'").fetchone()
+        conn.close()
+        assert len(queued_files) == 1
+        assert rows == (0,)
+
     def test_inserts_valid_entry(self, tmp_path):
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
         entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / "session.jsonl")
 
@@ -174,7 +193,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         conversation_id = "3679128a-f371-445f-82ba-b3946e2f20b6"
         entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant", sessionId="brainlayer-session-9")
         entry["_source_file"] = str(tmp_path / "projects" / "-Users-test-Gits-myproject" / f"{conversation_id}.jsonl")
@@ -194,7 +213,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(
             text=(
                 "Watcher ingested_at regression coverage should store a fresh unix timestamp "
@@ -221,7 +240,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(text="ok", entry_type="assistant")
         entry["_source_file"] = "/tmp/test.jsonl"
 
@@ -236,7 +255,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         flush([{"type": "progress", "_source_file": "/tmp/test.jsonl", "data": {}}])
 
         conn = sqlite3.connect(str(db_path))
@@ -248,7 +267,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(
             text="This exact same content should only appear once in the database even when flushed twice",
             entry_type="assistant",
@@ -270,7 +289,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         content = "This exact same content should merge even when it appears in a different session file"
         first = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T09:00:00Z")
         second = _make_jsonl_entry(text=content, entry_type="assistant", timestamp="2026-05-16T10:00:00Z")
@@ -297,7 +316,7 @@ class TestFlushCallback:
         db_path = tmp_path / "test.db"
         VectorStore(db_path).close()
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(
             role="user",
             text="No, that's wrong. Avi works at Lightricks.",
@@ -341,7 +360,7 @@ class TestFullPipeline:
         )
         jsonl_file.write_text(json.dumps(entry) + "\n")
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         watcher = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
@@ -370,7 +389,7 @@ class TestFullPipeline:
         )
         jsonl_file.write_text(json.dumps(entry) + "\n")
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         watcher = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",
@@ -404,7 +423,7 @@ class TestFullPipeline:
         )
         jsonl_file.write_text(json.dumps(entry) + "\n")
 
-        flush = create_flush_callback(db_path)
+        flush = create_flush_callback(db_path, arbitrated=False)
         watcher = JSONLWatcher(
             watch_dir=tmp_path / "projects",
             registry_path=tmp_path / "offsets.json",

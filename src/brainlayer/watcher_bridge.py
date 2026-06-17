@@ -216,13 +216,14 @@ def _extract_project_from_source(source_file: str) -> str | None:
 # ── Flush callback ───────────────────────────────────────────────────────────
 
 
-def create_flush_callback(db_path: Path | None = None) -> callable:
+def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | None = None) -> callable:
     """Create an on_flush callback that processes JSONL lines into BrainLayer.
 
     Returns a callable that takes a list[dict] of raw JSONL entries and
     inserts them as chunks into the database (deferred embedding).
     """
-    arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
+    if arbitrated is None:
+        arbitrated = os.environ.get("BRAINLAYER_ARBITRATED") == "1"
     store = None if arbitrated else VectorStore(db_path or get_db_path())
 
     def flush_to_db(entries: list[dict[str, Any]]) -> None:

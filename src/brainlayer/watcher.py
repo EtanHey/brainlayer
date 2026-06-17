@@ -20,10 +20,135 @@ import os
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class WatchRoot:
+    provider: str
+    path: Path | str
+
+    @property
+    def resolved_path(self) -> Path:
+        return Path(self.path).expanduser()
+
+
+def default_watch_roots(home: Path | None = None) -> list[WatchRoot]:
+    root = home or Path.home()
+    return [
+        WatchRoot("claude", root / ".claude" / "projects"),
+        WatchRoot("codex", root / ".codex" / "sessions"),
+        WatchRoot("cursor", root / ".cursor" / "sessions"),
+        WatchRoot("gemini", root / ".gemini" / "sessions"),
+    ]
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        for key in ("text", "content", "message"):
+            text = _content_to_text(content.get(key))
+            if text:
+                return text
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") not in {None, "text", "output_text"}:
+                continue
+            text = _content_to_text(item)
+            if text:
+                parts.append(text)
+        return " ".join(parts)
+    return ""
+
+
+def normalize_provider_entry(entry: dict[str, Any], provider: str) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+
+    entry_type = entry.get("type")
+    if entry_type in {"user", "assistant"} and isinstance(entry.get("message"), dict):
+        normalized = dict(entry)
+        normalized["_provider"] = provider
+        return normalized
+
+    role = (
+        entry.get("role")
+        or entry.get("sender")
+        or entry.get("speaker")
+        or (entry.get("author") or {}).get("role")
+        or (entry.get("message") or {}).get("role")
+    )
+    role = str(role or "").lower()
+    if role in {"model", "gemini", "ai", "bot"}:
+        role = "assistant"
+    if role not in {"user", "assistant"}:
+        return None
+
+    text = _content_to_text(entry.get("content") or entry.get("text") or entry.get("message"))
+    if not text:
+        return None
+
+    return {
+        "type": role,
+        "message": {"role": role, "content": [{"type": "text", "text": text}]},
+        "timestamp": entry.get("timestamp") or entry.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "_provider": provider,
+    }
+
+
+class CoverageWatchdog:
+    def __init__(
+        self,
+        *,
+        coverage_ratio_threshold: float = 0.25,
+        lag_threshold_bytes: int = 1_048_576,
+        alert_after_s: float = 300.0,
+        now_fn: Callable[[], float] = time.monotonic,
+    ):
+        self.coverage_ratio_threshold = coverage_ratio_threshold
+        self.lag_threshold_bytes = lag_threshold_bytes
+        self.alert_after_s = alert_after_s
+        self.now_fn = now_fn
+        self._coverage_bad_since: float | None = None
+        self._lag_bad_since: float | None = None
+
+    def evaluate(
+        self,
+        *,
+        active_entries_per_minute: float,
+        realtime_inserts_per_minute: float,
+        max_offset_lag_bytes: int,
+    ) -> dict[str, Any]:
+        now = self.now_fn()
+        reasons = []
+        coverage_bad = (
+            active_entries_per_minute > 0
+            and realtime_inserts_per_minute / active_entries_per_minute < self.coverage_ratio_threshold
+        )
+        if coverage_bad:
+            self._coverage_bad_since = now if self._coverage_bad_since is None else self._coverage_bad_since
+            if now - self._coverage_bad_since >= self.alert_after_s:
+                reasons.append("coverage_drop")
+        else:
+            self._coverage_bad_since = None
+
+        lag_bad = max_offset_lag_bytes > self.lag_threshold_bytes
+        if lag_bad:
+            self._lag_bad_since = now if self._lag_bad_since is None else self._lag_bad_since
+            if now - self._lag_bad_since >= self.alert_after_s:
+                reasons.append("offset_lag")
+        else:
+            self._lag_bad_since = None
+
+        return {"alerting": bool(reasons), "alert_reasons": reasons}
 
 # ── Offset Registry ──────────────────────────────────────────────────────────
 
@@ -260,46 +385,131 @@ class JSONLWatcher:
 
     def __init__(
         self,
-        watch_dir: str | Path,
-        registry_path: str | Path,
-        on_flush: Callable[[list[dict]], None],
+        watch_dir: str | Path | None = None,
+        registry_path: str | Path | None = None,
+        on_flush: Callable[[list[dict]], None] | None = None,
         on_rewind: Callable[[str, str, int, int], None] | None = None,
+        watch_roots: list[WatchRoot] | None = None,
         poll_interval_s: float = 1.0,
         batch_size: int = 10,
         flush_interval_ms: int = 100,
         registry_flush_interval_s: float = 5.0,
+        health_path: str | Path | None = None,
+        coverage_watchdog: CoverageWatchdog | None = None,
     ):
-        self.watch_dir = Path(watch_dir).expanduser()
+        if watch_roots is not None:
+            self.watch_roots = [WatchRoot(root.provider, root.path) for root in watch_roots]
+        elif watch_dir is not None:
+            self.watch_roots = [WatchRoot("claude", Path(watch_dir).expanduser())]
+        else:
+            self.watch_roots = default_watch_roots()
+        self.watch_dir = self.watch_roots[0].resolved_path if self.watch_roots else Path(".")
         self.on_rewind = on_rewind
-        self.registry = OffsetRegistry(Path(registry_path).expanduser())
+        registry = Path(registry_path).expanduser() if registry_path else Path.home() / ".local/share/brainlayer/offsets.json"
+        self.registry = OffsetRegistry(registry)
         self.indexer = BatchIndexer(
-            on_flush=on_flush,
+            on_flush=on_flush or (lambda _items: None),
             batch_size=batch_size,
             flush_interval_ms=flush_interval_ms,
         )
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
         self._tailers: dict[str, JSONLTailer] = {}
+        self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
         self._last_registry_flush = time.monotonic()
+        self.health_path = Path(health_path).expanduser() if health_path else None
+        self.coverage_watchdog = coverage_watchdog or CoverageWatchdog()
+        self._health_window_started = time.monotonic()
+        self._health_entries_seen = 0
+        self._health_flushed_at_start = 0
+
+    def provider_for_file(self, filepath: str) -> str:
+        return self._file_providers.get(filepath, "unknown")
 
     def _discover_jsonl_files(self) -> list[str]:
         """Find all .jsonl files under each watched project, including nested session artifacts."""
         files = []
-        try:
-            dirs = list(self.watch_dir.iterdir())
-        except OSError:
-            return files
-        for project_dir in dirs:
-            if not project_dir.is_dir():
+        self._file_providers = {}
+        for root in self.watch_roots:
+            root_path = root.resolved_path
+            if not root_path.exists():
                 continue
             try:
-                for f in project_dir.rglob("*.jsonl"):
-                    if f.is_file():
-                        files.append(str(f))
+                bases = [root_path]
+                if root.provider == "claude":
+                    bases = [path for path in root_path.iterdir() if path.is_dir()]
+                for base in bases:
+                    for f in base.rglob("*.jsonl"):
+                        if f.is_file():
+                            path = str(f)
+                            files.append(path)
+                            self._file_providers[path] = root.provider
             except OSError:
                 continue
         return files
+
+    def _normalize_lines(self, filepath: str, new_lines: list[dict]) -> list[dict]:
+        provider = self.provider_for_file(filepath)
+        normalized = []
+        for line in new_lines:
+            entry = normalize_provider_entry(line, provider)
+            if not entry and provider == "claude":
+                entry = dict(line)
+            if not entry:
+                continue
+            entry["_source_file"] = filepath
+            entry["_provider"] = provider
+            normalized.append(entry)
+        return normalized
+
+    def _max_offset_lag_bytes(self, files: list[str]) -> int:
+        max_lag = 0
+        for filepath in files:
+            try:
+                size = os.path.getsize(filepath)
+            except OSError:
+                continue
+            tailer = self._tailers.get(filepath)
+            offset = tailer.offset if tailer else self.registry.get(filepath)[0]
+            max_lag = max(max_lag, max(size - offset, 0))
+        return max_lag
+
+    def _write_health_snapshot(self, files: list[str]):
+        if not self.health_path:
+            return
+
+        now = time.monotonic()
+        elapsed = max(now - self._health_window_started, 1.0)
+        entries_per_min = self._health_entries_seen / elapsed * 60.0
+        inserts_per_min = (self.indexer.total_flushed - self._health_flushed_at_start) / elapsed * 60.0
+        max_lag = self._max_offset_lag_bytes(files)
+        watchdog = self.coverage_watchdog.evaluate(
+            active_entries_per_minute=entries_per_min,
+            realtime_inserts_per_minute=inserts_per_min,
+            max_offset_lag_bytes=max_lag,
+        )
+        payload = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "providers": sorted({root.provider for root in self.watch_roots}),
+            "files_tracked": len(files),
+            "active_jsonl_entries_per_minute": entries_per_min,
+            "db_realtime_inserts_per_minute": inserts_per_min,
+            "max_offset_lag_bytes": max_lag,
+            **watchdog,
+        }
+        try:
+            self.health_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.health_path.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            tmp_path.replace(self.health_path)
+        except OSError:
+            logger.debug("Failed to write watcher health snapshot", exc_info=True)
+
+        if elapsed >= 60.0:
+            self._health_window_started = now
+            self._health_entries_seen = 0
+            self._health_flushed_at_start = self.indexer.total_flushed
 
     def _ensure_tailer(self, filepath: str) -> JSONLTailer:
         """Get or create a tailer for a file, respecting stored offsets."""
@@ -374,12 +584,11 @@ class JSONLWatcher:
                 tailer.rewound = False  # Reset flag
 
             if new_lines:
-                # Tag each line with source metadata
-                for line in new_lines:
-                    line.setdefault("_source_file", filepath)
-                self.indexer.add(new_lines)
+                normalized_lines = self._normalize_lines(filepath, new_lines)
+                self.indexer.add(normalized_lines)
                 self.registry.set(filepath, tailer.offset, tailer.get_inode())
-                total_new += len(new_lines)
+                self._health_entries_seen += len(normalized_lines)
+                total_new += len(normalized_lines)
 
         self.indexer.tick()
 
@@ -388,6 +597,8 @@ class JSONLWatcher:
         if now - self._last_registry_flush >= self.registry_flush_interval_s:
             self.registry.flush()
             self._last_registry_flush = now
+
+        self._write_health_snapshot(files)
 
         return total_new
 

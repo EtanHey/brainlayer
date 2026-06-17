@@ -7,10 +7,11 @@ Covers:
 - JSONLWatcher: file discovery, poll cycle, end-to-end integration
 """
 
+import json
 import threading
 import time
 
-from brainlayer.watcher import BatchIndexer, JSONLTailer, JSONLWatcher, OffsetRegistry
+from brainlayer.watcher import BatchIndexer, CoverageWatchdog, JSONLTailer, JSONLWatcher, OffsetRegistry, WatchRoot
 
 # ── OffsetRegistry Tests ─────────────────────────────────────────────────────
 
@@ -385,3 +386,97 @@ class TestJSONLWatcher:
         watcher.poll_once()
         projects = {f["project"] for f in flushed}
         assert projects == {"a", "b"}
+
+    def test_multi_root_discovers_claude_codex_cursor_and_gemini_files(self, tmp_path):
+        claude_project = tmp_path / "claude" / "projects" / "proj"
+        codex_sessions = tmp_path / "codex" / "sessions"
+        cursor_sessions = tmp_path / "cursor" / "sessions"
+        gemini_sessions = tmp_path / "gemini" / "sessions"
+        for root in (claude_project, codex_sessions, cursor_sessions, gemini_sessions):
+            root.mkdir(parents=True)
+            (root / f"{root.parent.name}.jsonl").write_text('{"id":"1"}\n')
+
+        watcher = JSONLWatcher(
+            watch_roots=[
+                WatchRoot("claude", tmp_path / "claude" / "projects"),
+                WatchRoot("codex", codex_sessions),
+                WatchRoot("cursor", cursor_sessions),
+                WatchRoot("gemini", gemini_sessions),
+            ],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda x: None,
+        )
+
+        files = watcher._discover_jsonl_files()
+
+        assert len(files) == 4
+        assert {watcher.provider_for_file(path) for path in files} == {"claude", "codex", "cursor", "gemini"}
+
+    def test_codex_root_normalizes_role_content_entries(self, tmp_path):
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "session.jsonl").write_text(
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": "Explain the watcher arbitration design with enough detail to index.",
+                    "timestamp": "2026-06-17T10:00:00Z",
+                }
+            )
+            + "\n"
+        )
+
+        flushed = []
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: flushed.extend(items),
+            batch_size=1,
+        )
+
+        assert watcher.poll_once() == 1
+        assert flushed[0]["type"] == "user"
+        assert flushed[0]["message"]["content"][0]["text"].startswith("Explain the watcher")
+        assert flushed[0]["_provider"] == "codex"
+
+    def test_health_snapshot_alerts_on_coverage_drop_and_offset_lag(self, tmp_path):
+        now = [0.0]
+        sessions = tmp_path / "codex" / "sessions"
+        sessions.mkdir(parents=True)
+        transcript = sessions / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "content": "A substantive assistant response that should be observed by the watcher.",
+                }
+            )
+            + "\n"
+        )
+        health_path = tmp_path / "watcher-health.json"
+        watchdog = CoverageWatchdog(
+            lag_threshold_bytes=1,
+            alert_after_s=5,
+            now_fn=lambda: now[0],
+        )
+
+        watcher = JSONLWatcher(
+            watch_roots=[WatchRoot("codex", sessions)],
+            registry_path=tmp_path / "offsets.json",
+            on_flush=lambda items: None,
+            batch_size=100,
+            health_path=health_path,
+            coverage_watchdog=watchdog,
+        )
+
+        watcher.poll_once()
+        transcript.write_text(transcript.read_text() + (" " * 2048))
+        watcher.poll_once()
+        now[0] = 6.0
+        watcher.poll_once()
+
+        payload = json.loads(health_path.read_text())
+        assert payload["providers"] == ["codex"]
+        assert payload["max_offset_lag_bytes"] > 1
+        assert payload["alerting"] is True
+        assert "offset_lag" in payload["alert_reasons"]
