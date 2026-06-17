@@ -471,7 +471,8 @@ class JSONLWatcher:
                             path = str(f)
                             try:
                                 mtime = f.stat().st_mtime
-                            except OSError:
+                            except OSError as e:
+                                logger.debug("Skipping JSONL file during discovery after stat failure: %s: %s", path, e)
                                 continue
                             discovered.append((mtime, path, root.provider))
             except OSError:
