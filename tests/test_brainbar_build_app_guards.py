@@ -197,6 +197,14 @@ fi
 exit 0
 """
     )
+    (tool_dir / "ditto").write_text(
+        """#!/usr/bin/env bash
+out="${@: -1}"
+mkdir -p "$(dirname "$out")"
+: > "$out"
+exit 0
+"""
+    )
     (tool_dir / "plistbuddy").write_text(
         """#!/usr/bin/env bash
 if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
@@ -250,7 +258,18 @@ exit 0
     (tool_dir / "lsregister").write_text("#!/usr/bin/env bash\nexit 0\n")
     (tool_dir / "pgrep").write_text("#!/usr/bin/env bash\nexit 1\n")
     (tool_dir / "killall").write_text("#!/usr/bin/env bash\nexit 0\n")
-    for tool in ("swift", "codesign", "xcrun", "spctl", "plistbuddy", "launchctl", "lsregister", "pgrep", "killall"):
+    for tool in (
+        "swift",
+        "codesign",
+        "xcrun",
+        "spctl",
+        "ditto",
+        "plistbuddy",
+        "launchctl",
+        "lsregister",
+        "pgrep",
+        "killall",
+    ):
         os.chmod(tool_dir / tool, 0o755)
     return tool_dir, bin_dir
 
