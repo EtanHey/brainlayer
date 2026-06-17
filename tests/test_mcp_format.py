@@ -155,6 +155,20 @@ class TestFormatSearchResults:
         # Query should be truncated in header
         assert len(output.split("\n")[0]) < 250
 
+    def test_compact_hides_chunk_id(self):
+        results = [self._make_result(chunk_id="hide-me-123")]
+        # Default and explicit compact must both hide the chunk_id.
+        assert "hide-me-123" not in format_search_results("q", results, 1)
+        assert "hide-me-123" not in format_search_results("q", results, 1, detail="compact")
+        assert "- ID:" not in format_search_results("q", results, 1, detail="compact")
+
+    def test_full_detail_exposes_chunk_id(self):
+        results = [self._make_result(chunk_id="show-me-456")]
+        output = format_search_results("q", results, 1, detail="full")
+        assert "- ID: show-me-456" in output
+        # ID line sits under the result header.
+        assert "### 1." in output
+
 
 # --- format_store_result ---
 

@@ -522,7 +522,7 @@ def _exact_chunk_lookup_result(
         structured_results = [item]
 
     structured = {"query": query, "total": 1, "results": structured_results}
-    formatted_text = format_search_results(query, structured_results, 1)
+    formatted_text = format_search_results(query, structured_results, 1, detail=detail)
     return ([TextContent(type="text", text=formatted_text)], structured)
 
 
@@ -1846,6 +1846,9 @@ async def _search(
             structured_results.append(item)
 
             output_parts.append(f"\n### Result {i + 1} (score: {score:.3f})")
+            # full detail exposes the chunk_id so it can be chained into
+            # brain_update/brain_expand/brain_supersede/brain_archive.
+            output_parts.append(f"- ID: {cid}")
             enrichment_parts = []
             if meta.get("intent"):
                 enrichment_parts.append(f"Intent: {meta['intent']}")

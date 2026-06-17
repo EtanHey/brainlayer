@@ -39,6 +39,62 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertFalse(output.contains("rt-abc123def"))
     }
 
+    func testSearchResultsFullDetailExposesChunkID() {
+        let results = [
+            SearchResult(
+                chunkID: "rt-abc123def4567890",
+                score: 0.87,
+                project: "brainlayer",
+                date: "2026-03-29T19:30:00Z",
+                summary: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
+                snippet: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
+                importance: 8,
+                tags: ["swift", "macos", "mcp"],
+                sourceFile: "/Users/etanheyman/Gits/brainlayer/brain-bar/Sources/BrainBar/MCPRouter.swift"
+            )
+        ]
+
+        let output = TextFormatter.formatSearchResults(
+            query: "brainbar",
+            results: results,
+            total: results.count,
+            detail: "full"
+        )
+
+        XCTAssertTrue(output.contains("- ID: rt-abc123def4567890"), "full detail must expose chunk_id for chaining")
+        // Sanity: the ID line should sit under the result header, before Source.
+        XCTAssertTrue(
+            output.contains("### 1. BrainBar is a native macOS daemon for BrainLayer MCP routing.\n- ID: rt-abc123def4567890\n- Source:"),
+            "ID line must precede Source line"
+        )
+    }
+
+    func testSearchResultsCompactDetailHidesChunkID() {
+        let results = [
+            SearchResult(
+                chunkID: "rt-abc123def4567890",
+                score: 0.87,
+                project: "brainlayer",
+                date: "2026-03-29T19:30:00Z",
+                summary: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
+                snippet: "BrainBar is a native macOS daemon for BrainLayer MCP routing.",
+                importance: 8,
+                sourceFile: "/Users/etanheyman/Gits/brainlayer/brain-bar/Sources/BrainBar/MCPRouter.swift"
+            )
+        ]
+
+        // Explicit compact and the default must both hide the chunk_id.
+        let explicitCompact = TextFormatter.formatSearchResults(
+            query: "brainbar", results: results, total: 1, detail: "compact"
+        )
+        let defaultDetail = TextFormatter.formatSearchResults(query: "brainbar", results: results, total: 1)
+
+        XCTAssertFalse(explicitCompact.contains("rt-abc123def"), "compact must not expose chunk_id")
+        XCTAssertFalse(explicitCompact.contains("- ID:"))
+        XCTAssertFalse(defaultDetail.contains("rt-abc123def"), "default detail must not expose chunk_id")
+        XCTAssertFalse(defaultDetail.contains("- ID:"))
+    }
+
     func testSearchResultSourceBasenameHandlesWindowsPaths() {
         let results = [
             SearchResult(
