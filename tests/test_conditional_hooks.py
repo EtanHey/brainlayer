@@ -266,7 +266,7 @@ class TestPromptSearchConditional:
         [
             "<task-notification>\n<summary>Worker completed</summary>\n</task-notification>",
             "<task-notification><tool-use-id>toolu_123</tool-use-id></task-notification>",
-            "<tool-result tool_use_id=\"toolu_123\">ok</tool-result>",
+            '<tool-result tool_use_id="toolu_123">ok</tool-result>',
             "FLEET TICK gen16: monitor heartbeat only",
             "output_file=/tmp/worker.out",
         ],
@@ -276,11 +276,20 @@ class TestPromptSearchConditional:
 
     def test_real_user_prompt_is_not_operational_noise(self, prompt_search):
         assert (
+            prompt_search.is_operational_noise_prompt("What did we decide about restoring the BrainLayer watcher?")
+            is False
+        )
+
+    def test_real_user_prompt_with_pasted_tool_result_is_not_operational_noise(self, prompt_search):
+        assert (
             prompt_search.is_operational_noise_prompt(
-                "What did we decide about restoring the BrainLayer watcher?"
+                'What did we decide about <tool-result tool_use_id="toolu_123"> output in prompts?'
             )
             is False
         )
+
+    def test_real_user_prompt_with_monitor_tick_phrase_is_not_operational_noise(self, prompt_search):
+        assert prompt_search.is_operational_noise_prompt("Why did the fleet tick monitor fail?") is False
 
     def test_extract_keywords_keeps_short_meaningful_terms(self, prompt_search):
         keywords = prompt_search.extract_keywords("T3 Code AI PR review")
@@ -558,16 +567,10 @@ class TestPromptSearchConditional:
             prompt_search.main()
 
         assert capsys.readouterr().out == ""
-        row = (
-            sqlite3.connect(db_path)
-            .execute("SELECT COUNT(*) FROM injection_events")
-            .fetchone()
-        )
+        row = sqlite3.connect(db_path).execute("SELECT COUNT(*) FROM injection_events").fetchone()
         assert row == (0,)
 
-    def test_operational_noise_prompt_exits_before_classification_and_event(
-        self, prompt_search, monkeypatch, capsys
-    ):
+    def test_operational_noise_prompt_exits_before_classification_and_event(self, prompt_search, monkeypatch, capsys):
         calls = []
 
         def classify_spy(*args, **kwargs):
@@ -601,9 +604,7 @@ class TestPromptSearchConditional:
         assert capsys.readouterr().out == ""
         assert calls == []
 
-    def test_zero_result_real_prompt_stays_out_of_visible_injection_events(
-        self, prompt_search, monkeypatch, capsys
-    ):
+    def test_zero_result_real_prompt_stays_out_of_visible_injection_events(self, prompt_search, monkeypatch, capsys):
         fake_conn = FakeConn()
         events = []
 

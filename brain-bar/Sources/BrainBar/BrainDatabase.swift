@@ -545,7 +545,8 @@ final class BrainDatabase: @unchecked Sendable {
                 timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 query TEXT NOT NULL,
                 chunk_ids TEXT NOT NULL DEFAULT '[]',
-                token_count INTEGER NOT NULL DEFAULT 0
+                token_count INTEGER NOT NULL DEFAULT 0,
+                mode TEXT NOT NULL DEFAULT 'normal'
             )
         """)
 
@@ -553,6 +554,7 @@ final class BrainDatabase: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS idx_injection_events_session_timestamp
             ON injection_events(session_id, timestamp DESC)
         """)
+        try ensureInjectionEventColumns()
 
         // Filtered VIEW excludes co_occurs_with noise from KG queries
         try execute("""
@@ -583,6 +585,7 @@ final class BrainDatabase: @unchecked Sendable {
         try ensureKGEntityColumns()
         try ensureKGRelationColumns()
         try ensureKGEntityAliasTable()
+        try ensureInjectionEventColumns()
         try rebuildFTSTableIfNeeded()
         try rebuildTrigramFTSTableIfNeeded()
     }
@@ -2384,6 +2387,15 @@ final class BrainDatabase: @unchecked Sendable {
             "source": columnText(stmt, 11) as Any,
             "score": score
         ]
+    }
+
+    private func ensureInjectionEventColumns() throws {
+        guard let db else { throw DBError.notOpen }
+        guard (try? tableExists("injection_events")) == true else { return }
+        let existingColumns = try tableColumns(name: "injection_events", on: db)
+        if !existingColumns.contains("mode") {
+            try execute("ALTER TABLE injection_events ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
+        }
     }
 
     private func ensureChunkColumns() throws {
@@ -4859,7 +4871,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     func listInjectionEvents(sessionID: String? = nil, limit: Int = 20) throws -> [InjectionEvent] {
         guard let db else { throw DBError.notOpen }
-        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count FROM injection_events"
+        var sql = "SELECT id, session_id, timestamp, query, chunk_ids, token_count, mode FROM injection_events"
         var conditions: [String] = []
         if sessionID != nil { conditions.append("session_id = ?") }
         conditions.append(Self.liveInjectionEventSQLPredicate(eventTable: "injection_events"))
@@ -4885,7 +4897,8 @@ final class BrainDatabase: @unchecked Sendable {
                 "timestamp": columnText(stmt, 2) as Any,
                 "query": columnText(stmt, 3) as Any,
                 "chunk_ids": columnText(stmt, 4) as Any,
-                "token_count": Int(sqlite3_column_int(stmt, 5))
+                "token_count": Int(sqlite3_column_int(stmt, 5)),
+                "mode": columnText(stmt, 6) as Any
             ]
             if let event = try? InjectionEvent(row: row) {
                 let details = (try? injectionChunkDetails(ids: event.chunkIDs)) ?? []
@@ -4901,6 +4914,7 @@ final class BrainDatabase: @unchecked Sendable {
                         query: scopedEvent.query,
                         chunkIDs: scopedEvent.chunkIDs,
                         tokenCount: scopedEvent.tokenCount,
+                        mode: scopedEvent.mode,
                         chunks: scopedEvent.chunks,
                         claudeConversationID: resumableID
                     )

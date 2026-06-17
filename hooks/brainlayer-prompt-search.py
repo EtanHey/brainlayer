@@ -43,6 +43,7 @@ def degraded_notice(reason):
 def emit_degraded(reason):
     print(degraded_notice(reason))
 
+
 # Prompts shorter than this are probably greetings/commands — skip search
 MIN_PROMPT_LENGTH = 15
 HEBREW_CANDIDATE_RE = re.compile(r"[\u0590-\u05FF]{2,}")
@@ -63,7 +64,7 @@ OPERATIONAL_NOISE_MARKERS = (
     '"tool_use_id"',
     "'tool_use_id'",
 )
-MONITOR_TICK_RE = re.compile(r"\b(fleet|monitor|cron|loop)\s+tick\b", re.IGNORECASE)
+MONITOR_TICK_RE = re.compile(r"^\s*(fleet|monitor|cron|loop)\s+tick\b.*$", re.IGNORECASE | re.DOTALL)
 OUTPUT_FILE_ONLY_RE = re.compile(
     r"^\s*(?:output[-_ ]?file|output_path|artifact_path)\s*[:=]\s*\S+\s*$",
     re.IGNORECASE,
@@ -79,10 +80,11 @@ def is_operational_noise_prompt(prompt: str) -> bool:
     if not normalized:
         return False
 
-    if any(marker in normalized for marker in OPERATIONAL_NOISE_MARKERS):
+    starts_like_envelope = normalized.startswith(("<task-notification", "<tool-result", "<tool-use-id"))
+    if starts_like_envelope and any(marker in normalized for marker in OPERATIONAL_NOISE_MARKERS):
         return True
 
-    if MONITOR_TICK_RE.search(prompt):
+    if MONITOR_TICK_RE.fullmatch(normalized):
         return True
 
     if OUTPUT_FILE_ONLY_RE.match(prompt):
