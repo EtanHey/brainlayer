@@ -686,8 +686,10 @@ final class MCPRouter: @unchecked Sendable {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
+        let project = (args["project"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let title = (args["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let db = try writeDB()
-        let result = try db.digest(content: content)
+        let result = try db.digest(content: content, project: project, title: title)
         return ToolOutput(text: TextFormatter.formatDigestResult(DigestResult(payload: result)))
     }
 
@@ -1222,12 +1224,14 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_digest",
-            "description": "Digest a large block of raw text (transcript, doc, article) into one durable, enriched memory chunk that brain_search can find. Entity and relation extraction is attempted and returned as counts, but extracted entities are indexed asynchronously and may not be immediately resolvable via brain_entity. Takes only `content` (no project/title scoping here); for a short scoped note use brain_store with a project instead.",
+            "description": "Digest a large block of raw text (transcript, doc, article) into one durable, enriched memory chunk that brain_search can find. Pass `project` to scope the chunk so brain_search(project=...) finds it, and an optional `title` to label the digest. Extracted entities are written to the knowledge graph and become resolvable via brain_entity. For a short scoped note use brain_store with a project instead.",
             "annotations": MCPRouter.writeAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
                     "content": ["type": "string", "description": "Raw text to digest into memory"],
+                    "project": ["type": "string", "description": "Project context for the digested chunk (enables brain_search project scoping)"],
+                    "title": ["type": "string", "description": "Optional short title/label for the digest"],
                 ] as [String: Any],
                 "required": ["content"]
             ] as [String: Any])

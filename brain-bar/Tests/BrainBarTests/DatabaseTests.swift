@@ -1704,6 +1704,103 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNotNil(result["chunks_created"])
     }
 
+    func testDigestScopesChunkToProject() throws {
+        let content = "Etan Heyman discussed BrainLayer architecture. The project uses SQLite and Swift to ship a fast retrieval pipeline for memories."
+        let result = try db.digest(content: content, project: "gen16-scope")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let scoped = try db.search(query: "BrainLayer architecture", limit: 10, project: "gen16-scope")
+        XCTAssertTrue(scoped.contains(where: { ($0["chunk_id"] as? String) == chunkID }),
+                      "Digested chunk should be findable via search scoped to its project")
+
+        let otherProject = try db.search(query: "BrainLayer architecture", limit: 10, project: "some-other-project")
+        XCTAssertFalse(otherProject.contains(where: { ($0["chunk_id"] as? String) == chunkID }),
+                       "Digested chunk should NOT appear under a different project scope")
+    }
+
+    func testDigestEntitiesResolvableViaLookup() throws {
+        let content = "Etan Heyman discussed BrainLayer architecture with Claude. The project uses SQLite and Swift."
+        let result = try db.digest(content: content)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let entities = result["entities"] as? [String] ?? []
+        let name = try XCTUnwrap(entities.first(where: { $0.contains("BrainLayer") }))
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: name),
+                                   "Digest-extracted entity should be resolvable via lookupEntity")
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entity["name"] as? String, name)
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }),
+                      "Digested chunk should be linked to its extracted entity")
+    }
+
+    func testDigestReusesExistingConceptEntityWithoutReplacingMetadata() throws {
+        try db.insertEntity(
+            id: "concept-existing-brainlayer",
+            type: "concept",
+            name: "BrainLayer",
+            metadata: "{\"description\":\"enriched concept\"}"
+        )
+
+        let result = try db.digest(content: "BrainLayer architecture uses SQLite and Swift for local retrieval.")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: "BrainLayer"))
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entityID, "concept-existing-brainlayer")
+        XCTAssertEqual(entity["metadata"] as? String, "{\"description\":\"enriched concept\"}")
+
+        let matchingRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer'")
+        XCTAssertEqual(matchingRows, 1, "Digest should not create a duplicate concept row for an existing name")
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+    }
+
+    func testDigestReusesExistingCrossTypeEntityInsteadOfCreatingConceptDuplicate() throws {
+        try db.insertEntity(
+            id: "project-brainlayer",
+            type: "project",
+            name: "BrainLayer",
+            metadata: "{\"description\":\"canonical project\"}"
+        )
+
+        let result = try db.digest(content: "BrainLayer architecture uses SQLite and Swift for local retrieval.")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+
+        let entity = try XCTUnwrap(try db.lookupEntity(query: "BrainLayer"))
+        let entityID = try XCTUnwrap(entity["entity_id"] as? String)
+        XCTAssertEqual(entityID, "project-brainlayer")
+        XCTAssertEqual(entity["entity_type"] as? String, "project")
+
+        let conceptRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer' AND entity_type = 'concept'")
+        XCTAssertEqual(conceptRows, 0, "Digest should link the canonical entity instead of creating an ambiguous concept duplicate")
+
+        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
+        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+    }
+
+    func testDigestStorageFailureReportsZeroPersistedEntities() throws {
+        db.failNextStoreAfterInsertForTesting = true
+
+        let result = try db.digest(content: "Etan Heyman discussed BrainLayer architecture with Claude.")
+
+        XCTAssertEqual(result["chunks_created"] as? Int, 0)
+        XCTAssertEqual(result["entities_created"] as? Int, 0)
+        XCTAssertNotNil(result["error"])
+    }
+
+    func testDigestTitlePrependedToChunk() throws {
+        let content = "The pipeline ingests raw transcripts and produces durable memory chunks for retrieval."
+        let result = try db.digest(content: content, title: "Gen16 Digest Title")
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let chunk = try XCTUnwrap(try db.getChunk(id: chunkID))
+        let storedContent = try XCTUnwrap(chunk["content"] as? String)
+        XCTAssertTrue(storedContent.hasPrefix("Gen16 Digest Title"),
+                      "Title should be prepended to the digested chunk content")
+    }
+
     private func seedTrigramMaintenanceRows(count: Int) throws {
         for index in 0..<count {
             try db.insertChunk(
@@ -1845,6 +1942,16 @@ private func sqliteCount(path: String, sql: String) throws -> Int {
 private func sqliteScalarString(path: String, sql: String) throws -> String? {
     try withSQLiteConnection(path: path) { db in
         try scalarString(
+            db: db,
+            sql: sql,
+            bind: { _ in }
+        )
+    }
+}
+
+private func sqliteScalarInt(path: String, sql: String) throws -> Int {
+    try withSQLiteConnection(path: path) { db in
+        try scalarInt(
             db: db,
             sql: sql,
             bind: { _ in }

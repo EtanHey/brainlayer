@@ -893,6 +893,56 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertTrue(text.contains("content length 200001 exceeds maxLength 200000"))
     }
 
+    func testBrainDigestSchemaExposesProjectAndTitle() throws {
+        let router = MCPRouter()
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/list"
+        ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let digest = try XCTUnwrap(tools.first(where: { $0["name"] as? String == "brain_digest" }))
+        let schema = try XCTUnwrap(digest["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        XCTAssertNotNil(properties["content"], "digest schema must expose content")
+        XCTAssertNotNil(properties["project"], "digest schema must expose project")
+        XCTAssertNotNil(properties["title"], "digest schema must expose title")
+        let required = schema["required"] as? [String] ?? []
+        XCTAssertEqual(required, ["content"], "only content should be required")
+    }
+
+    func testBrainDigestHandlerScopesChunkToProject() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-digest-scope-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let db = BrainDatabase(path: tempDB)
+        defer { db.close() }
+
+        let router = MCPRouter()
+        router.setDatabase(db)
+        let response = router.handle([
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_digest",
+                "arguments": [
+                    "content": "Etan Heyman discussed BrainLayer architecture. The project uses SQLite and Swift for a fast retrieval pipeline.",
+                    "project": "gen16-router-scope"
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertNil(result["isError"] as? Bool)
+
+        let scoped = try db.search(query: "BrainLayer architecture", limit: 10, project: "gen16-router-scope")
+        XCTAssertFalse(scoped.isEmpty, "Digested chunk should be findable under the project passed to brain_digest")
+
+        // And the extracted entity should now resolve via the KG lookup.
+        let entity = try db.lookupEntity(query: "BrainLayer")
+        XCTAssertNotNil(entity, "Digest-extracted entity should resolve via brain_entity lookup")
+    }
+
     func testBrainSubscribeToolIsServerHandled() throws {
         let router = MCPRouter()
         let request: [String: Any] = [
