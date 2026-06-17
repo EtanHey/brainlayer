@@ -276,7 +276,7 @@ class JSONLTailer:
             return True
         return False
 
-    def read_new_lines(self) -> list[dict]:
+    def read_new_lines(self, max_lines: int | None = None) -> list[dict]:
         """Read any new complete lines since last call. Returns parsed JSON dicts."""
         # Check for rewind before reading
         self.check_rewind()
@@ -295,6 +295,8 @@ class JSONLTailer:
         lines = []
 
         while b"\n" in self._buffer:
+            if max_lines is not None and len(lines) >= max_lines:
+                break
             nl_idx = self._buffer.index(b"\n")
             line_data = self._buffer[:nl_idx]
             self._buffer = self._buffer[nl_idx + 1 :]
@@ -418,6 +420,7 @@ class JSONLWatcher:
         registry_flush_interval_s: float = 5.0,
         health_path: str | Path | None = None,
         coverage_watchdog: CoverageWatchdog | None = None,
+        max_lines_per_file: int = 100,
     ):
         if watch_roots is not None:
             self.watch_roots = [WatchRoot(root.provider, root.path) for root in watch_roots]
@@ -438,6 +441,7 @@ class JSONLWatcher:
         )
         self.poll_interval_s = poll_interval_s
         self.registry_flush_interval_s = registry_flush_interval_s
+        self.max_lines_per_file = max(1, max_lines_per_file)
         self._tailers: dict[str, JSONLTailer] = {}
         self._file_providers: dict[str, str] = {}
         self._stop = threading.Event()
@@ -599,7 +603,7 @@ class JSONLWatcher:
 
         for filepath in files:
             tailer = self._ensure_tailer(filepath)
-            new_lines = tailer.read_new_lines()
+            new_lines = tailer.read_new_lines(max_lines=self.max_lines_per_file)
 
             # Handle rewind detection (checkpoint restore)
             if tailer.rewound:
