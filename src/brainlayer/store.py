@@ -411,8 +411,8 @@ def embed_pending_chunks(
         cursor.execute(
             """
             SELECT c.id, c.content FROM chunks c
-            LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
-            WHERE v.chunk_id IS NULL
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+            WHERE r.id IS NULL
               AND c.content IS NOT NULL
               AND c.content != ''
               AND c.archived_at IS NULL

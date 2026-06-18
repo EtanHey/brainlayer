@@ -869,6 +869,43 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(results.first?["chunk_id"] as? String, "test-chunk-1")
     }
 
+    func testFTSSearchLongNaturalLanguageQueryUsesRecallMode() throws {
+        try db.insertChunk(
+            id: "sonnet-role-rule",
+            content: "CURSOR SPAWN RULE: repoGolem launcher Cursor workers must pin model:sonnet with explicit role contracts.",
+            sessionId: "session-sonnet-rule",
+            project: "golems",
+            contentType: "assistant_text",
+            importance: 9
+        )
+
+        let results = try db.search(
+            query: "cursor spawned with model sonnet model not pinned repoGolem under specification",
+            limit: 10,
+            project: "golems"
+        )
+        let resultIDs = results.compactMap { $0["chunk_id"] as? String }
+
+        XCTAssertTrue(resultIDs.contains("sonnet-role-rule"))
+    }
+
+    func testProjectScopedSearchIncludesGlobalChunks() throws {
+        try db.insertChunk(
+            id: "global-role-contract",
+            content: "GlobalRoleContractNeedle applies to every repoGolem worker role.",
+            sessionId: "session-global-role",
+            project: "brainlayer",
+            contentType: "assistant_text",
+            importance: 8
+        )
+        db.exec("UPDATE chunks SET project = NULL WHERE id = 'global-role-contract'")
+
+        let results = try db.search(query: "GlobalRoleContractNeedle", limit: 10, project: "golems")
+        let resultIDs = results.compactMap { $0["chunk_id"] as? String }
+
+        XCTAssertTrue(resultIDs.contains("global-role-contract"))
+    }
+
     func testSearchReturnsEmptyForNoMatch() throws {
         let results = try db.search(query: "xyznonexistent123", limit: 10)
         XCTAssertTrue(results.isEmpty)

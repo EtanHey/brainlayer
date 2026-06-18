@@ -29,6 +29,7 @@ from brainlayer.vector_store import VectorStore
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
 DEFAULT_HOTLANE_ENRICH_LIMIT = 25
+DEFAULT_BACKLOG_BATCH = 128
 
 
 class CycleResult(NamedTuple):
@@ -80,6 +81,7 @@ def run_cycle(
     candidate_chunk_ids_fn: Callable[..., list[str]] = _candidate_chunk_ids,
     hot_embed_fn: Callable[..., bool] = embed_hot_chunk,
     pending_embed_fn: Callable[..., int] = embed_pending_chunks,
+    embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
     enrich_fn: Callable[..., object] = enrich_realtime,
 ) -> CycleResult:
     embedded = 0
@@ -89,7 +91,12 @@ def run_cycle(
             break
 
     if backlog_batch > 0:
-        embedded += pending_embed_fn(store=store, embed_fn=embed_fn, batch_size=backlog_batch)
+        embedded += pending_embed_fn(
+            store=store,
+            embed_fn=embed_fn,
+            batch_size=backlog_batch,
+            embed_batch_fn=embed_batch_fn,
+        )
 
     if enrich_limit <= 0:
         return CycleResult(embedded=embedded)
@@ -126,7 +133,8 @@ def run(
     try:
         model = model_factory()
         embed_fn = model.embed_query
-        last_backlog = time_fn()
+        embed_batch_fn = getattr(model, "embed_texts", None)
+        last_backlog = time_fn() - backlog_interval
         last_enrich = 0.0
         enrich_disabled = False
         cycles = 0
@@ -153,6 +161,7 @@ def run(
                     embed_fn=embed_fn,
                     recent_limit=recent_limit,
                     backlog_batch=cycle_backlog_batch,
+                    embed_batch_fn=embed_batch_fn,
                     enrich_limit=cycle_enrich_limit,
                     enrich_since_hours=enrich_since_hours,
                 )
@@ -183,7 +192,7 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--recent-limit", type=int, default=5)
     parser.add_argument("--backlog-interval", type=float, default=10.0)
-    parser.add_argument("--backlog-batch", type=int, default=0)
+    parser.add_argument("--backlog-batch", type=int, default=DEFAULT_BACKLOG_BATCH)
     parser.add_argument("--enrich-interval", type=float, default=10.0)
     parser.add_argument("--enrich-limit", type=int, default=DEFAULT_HOTLANE_ENRICH_LIMIT)
     parser.add_argument("--enrich-since-hours", type=int, default=DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS)

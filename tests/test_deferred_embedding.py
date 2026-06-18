@@ -348,6 +348,54 @@ class TestBackgroundEmbedder:
         assert len(batch_calls) == 1
         assert len(batch_calls[0]) == 4
 
+    def test_embed_pending_chunks_selects_pending_rows_from_rowid_support_table(self):
+        """Backlog selection must avoid scanning the vec0 virtual table."""
+        from brainlayer.store import embed_pending_chunks
+
+        class FakeCursor:
+            def __init__(self):
+                self.queries = []
+                self.params = []
+
+            def execute(self, sql, params=()):
+                self.queries.append(sql)
+                self.params.append(params)
+                if "SELECT c.id, c.content FROM chunks c" in sql:
+                    return [("pending-rowid", "Needs vector")]
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+        class FakeConn:
+            def __init__(self, cursor):
+                self._cursor = cursor
+
+            def cursor(self):
+                return self._cursor
+
+        class FakeStore:
+            db_path = None
+
+            def __init__(self):
+                self.cursor = FakeCursor()
+                self.conn = FakeConn(self.cursor)
+                self.upserts = []
+
+            def _upsert_chunk_vector(self, cursor, chunk_id, embedding):
+                self.upserts.append((cursor, chunk_id, embedding))
+
+        fake_store = FakeStore()
+        count = embed_pending_chunks(
+            store=fake_store,
+            embed_fn=lambda _text: [1.0] * 1024,
+            batch_size=7,
+        )
+
+        selection_sql = fake_store.cursor.queries[0]
+        assert count == 1
+        assert "chunk_vectors_rowids r ON c.id = r.id" in selection_sql
+        assert "LEFT JOIN chunk_vectors v" not in selection_sql
+        assert fake_store.cursor.params[0] == (7,)
+        assert fake_store.upserts == [(fake_store.cursor, "pending-rowid", [1.0] * 1024)]
+
     def test_g1_fifo_reproduction_new_chunk_waits_behind_old_backlog(self, store, fast_embed):
         """G1 RED proof: oldest-first drain alone starves a just-stored chunk for one pass."""
         from brainlayer.store import embed_pending_chunks, store_memory
