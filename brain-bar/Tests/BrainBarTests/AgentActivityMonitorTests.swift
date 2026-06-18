@@ -150,6 +150,17 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 1)
     }
 
+    func testParseSnapshotDoesNotClassifyCursorDesktopAppAsAgent() {
+        let snapshot = """
+        50101 Cursor /Applications/Cursor.app/Contents/MacOS/Cursor --type=renderer
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .cursor), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 

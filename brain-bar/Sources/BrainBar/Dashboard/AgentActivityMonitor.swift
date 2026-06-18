@@ -174,8 +174,10 @@ final class AgentActivityMonitor {
         }
         if command.hasPrefix("claude ")
             || command.hasPrefix("codex ")
-            || command.hasPrefix("cursor ")
             || command.hasPrefix("gemini ") {
+            return true
+        }
+        if commandHasCursorCLIEntryPoint(command) {
             return true
         }
         if command.contains("/.bun/bin/codex")
@@ -198,8 +200,7 @@ final class AgentActivityMonitor {
             || command.contains(" brainlayercodex") {
             return .codex
         }
-        if command.hasPrefix("cursor ")
-            || (executable == "cursor" && command.contains("/cursor "))
+        if commandHasCursorCLIEntryPoint(command)
             || command.contains(" brainlayercursor") {
             return .cursor
         }
@@ -262,5 +263,13 @@ final class AgentActivityMonitor {
             }
         }
         return false
+    }
+
+    private static func commandHasCursorCLIEntryPoint(_ command: String) -> Bool {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard tokens.count >= 2 else { return false }
+
+        let launcher = tokens[0]
+        return (launcher == "cursor" || launcher.hasSuffix("/cursor")) && tokens[1] == "agent"
     }
 }
