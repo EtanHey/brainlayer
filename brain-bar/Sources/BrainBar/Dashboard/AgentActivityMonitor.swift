@@ -242,10 +242,24 @@ final class AgentActivityMonitor {
         if commandHasCursorAgentSession(command) {
             return .cursor
         }
-        if command.contains(" gemini") {
+        if commandHasExecutableToken(command, executableName: "gemini") {
             return .gemini
         }
         return nil
+    }
+
+    private static func commandHasExecutableToken(_ command: String, executableName: String) -> Bool {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        let promptFlags = ["--prompt", "--prompt-interactive", "--message", "-p", "-i"]
+        for token in tokens {
+            if promptFlags.contains(token) {
+                return false
+            }
+            if token == executableName || token.hasSuffix("/\(executableName)") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func commandHasCursorAgentSession(_ command: String) -> Bool {

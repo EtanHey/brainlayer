@@ -127,6 +127,17 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    func testParseSnapshotDoesNotClassifyWrapperByPromptMentioningGemini() {
+        let snapshot = """
+        19009 node node /Users/etanheyman/tmp/helper.js --prompt Please explain gemini launcher behavior
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .gemini), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func testParseSnapshotClassifiesCursorAgentNodeLauncherAndSkipsWorkerServer() {
         let snapshot = """
         50008 node /Users/etanheyman/.local/bin/cursor-agent --use-system-ca /Users/etanheyman/.local/share/cursor-agent/versions/2026.06.12-01-15-52-7244546/index.js agent
