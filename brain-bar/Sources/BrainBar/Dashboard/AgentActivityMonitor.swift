@@ -169,7 +169,7 @@ final class AgentActivityMonitor {
     }
 
     private static func isAgentEntrypoint(executable: String, command: String) -> Bool {
-        if executable == "agy" || executable == "codex" {
+        if executable == "agy" || executable == "codex" || executable == "cursor" {
             return true
         }
         if command.hasPrefix("claude ")
@@ -198,7 +198,9 @@ final class AgentActivityMonitor {
             || command.contains(" brainlayercodex") {
             return .codex
         }
-        if command.hasPrefix("cursor ") || command.contains(" brainlayercursor") {
+        if command.hasPrefix("cursor ")
+            || (executable == "cursor" && command.contains("/cursor "))
+            || command.contains(" brainlayercursor") {
             return .cursor
         }
         if command.hasPrefix("gemini ")

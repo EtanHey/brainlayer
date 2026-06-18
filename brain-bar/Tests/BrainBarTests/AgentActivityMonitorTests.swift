@@ -139,6 +139,17 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 1)
     }
 
+    func testParseSnapshotClassifiesCursorCliLaunchedByFullPath() {
+        let snapshot = """
+        50100 cursor /Users/etanheyman/.local/bin/cursor agent --resume session-456
+        """
+
+        let activity = AgentActivityMonitor.parse(snapshot)
+
+        XCTAssertEqual(activity.count(for: .cursor), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
     func testRunSnapshotCommandDrainsLargeStdoutWithoutDeadlocking() {
         let script = "python3 -c \"print('codex ' * 20000)\""
 
