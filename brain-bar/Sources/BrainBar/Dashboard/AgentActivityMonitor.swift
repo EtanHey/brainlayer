@@ -96,7 +96,7 @@ final class AgentActivityMonitor {
 
             guard !isIgnoredProcess(executable: executable, command: lowerCommand) else { continue }
 
-            if let family = detectActualFamily(command: lowerCommand) {
+            if let family = detectActualFamily(executable: executable, command: lowerCommand) {
                 actualCounts[family, default: 0] += 1
                 continue
             }
@@ -145,6 +145,10 @@ final class AgentActivityMonitor {
     }
 
     private static func isIgnoredProcess(executable: String, command: String) -> Bool {
+        if isAgentEntrypoint(executable: executable, command: command) {
+            return false
+        }
+
         let noiseTokens = [
             "/applications/claude.app",
             "claude helper",
@@ -164,20 +168,69 @@ final class AgentActivityMonitor {
         return false
     }
 
-    private static func detectActualFamily(command: String) -> AgentFamily? {
+    private static func isAgentEntrypoint(executable: String, command: String) -> Bool {
+        if executable == "agy" || executable == "codex" || executable == "cursor" {
+            return true
+        }
+        if command.hasPrefix("claude ")
+            || command.hasPrefix("codex ")
+            || command.hasPrefix("gemini ") {
+            return true
+        }
+        if commandHasCursorCLIEntryPoint(command) {
+            return true
+        }
+        if command.contains("/.bun/bin/codex")
+            || commandHasCursorAgentSession(command) {
+            return true
+        }
+        return false
+    }
+
+    private static func detectActualFamily(executable: String, command: String) -> AgentFamily? {
+        if executable == "agy" && commandHasModelToken(command, familyToken: "gemini") {
+            return .gemini
+        }
         if command.hasPrefix("claude ") || command.contains("/claude ") || command.contains(" brainlayerclaude") {
             return .claude
         }
-        if command.hasPrefix("codex ") || command.contains("/codex/codex ") || command.contains(" brainlayercodex") {
+        if command.hasPrefix("codex ")
+            || command.contains("/codex/codex ")
+            || (executable == "codex" && command.contains("/bin/codex "))
+            || command.contains(" brainlayercodex") {
             return .codex
         }
-        if command.hasPrefix("cursor ") || command.contains("cursor agent") || command.contains(" brainlayercursor") {
+        if commandHasCursorCLIEntryPoint(command)
+            || commandHasCursorAgentSession(command)
+            || command.contains(" brainlayercursor") {
             return .cursor
         }
-        if command.hasPrefix("gemini ") || command.contains("/gemini ") || command.contains(" brainlayergemini") {
+        if command.hasPrefix("gemini ")
+            || command.contains("/gemini ")
+            || command.contains(" brainlayergemini") {
             return .gemini
         }
         return nil
+    }
+
+    private static func commandHasModelToken(_ command: String, familyToken: String) -> Bool {
+        let tokens = command.split { character in
+            character.isWhitespace || character == "="
+        }
+        let promptFlags = ["--prompt", "--prompt-interactive", "--message", "-p", "-i"]
+        for index in tokens.indices {
+            if promptFlags.contains(String(tokens[index])) {
+                return false
+            }
+            guard tokens[index] == "--model" && index + 1 < tokens.endIndex else {
+                continue
+            }
+            let model = tokens[index + 1]
+            if model == familyToken || model.hasPrefix("\(familyToken)-") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func detectWrapperFamily(executable: String, command: String) -> AgentFamily? {
@@ -187,12 +240,58 @@ final class AgentActivityMonitor {
         if command.contains("/.bun/bin/codex") {
             return .codex
         }
-        if command.contains("cursor agent") {
+        if commandHasCursorAgentSession(command) {
             return .cursor
         }
-        if command.contains(" gemini") {
+        if commandHasExecutableToken(command, executableName: "gemini") {
             return .gemini
         }
         return nil
+    }
+
+    private static func commandHasExecutableToken(_ command: String, executableName: String) -> Bool {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        let promptFlags = ["--prompt", "--prompt-interactive", "--message", "-p", "-i"]
+        for token in tokens {
+            if promptFlags.contains(token) {
+                return false
+            }
+            if token == executableName || token.hasSuffix("/\(executableName)") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func commandHasCursorAgentSession(_ command: String) -> Bool {
+        guard command.contains("cursor-agent") else { return false }
+
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        if tokens.contains("worker-server") {
+            return false
+        }
+        if let launcher = tokens.first,
+           launcher == "cursor-agent" || launcher.hasSuffix("/cursor-agent") {
+            return true
+        }
+        for index in tokens.indices where tokens[index] == "agent" {
+            guard index > tokens.startIndex else { continue }
+            let launcher = tokens[tokens.index(before: index)]
+            if launcher == "index.js"
+                || launcher.hasSuffix("/index.js")
+                || launcher == "cursor-agent"
+                || launcher.hasSuffix("/cursor-agent") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func commandHasCursorCLIEntryPoint(_ command: String) -> Bool {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard tokens.count >= 2 else { return false }
+
+        let launcher = tokens[0]
+        return (launcher == "cursor" || launcher.hasSuffix("/cursor")) && tokens[1] == "agent"
     }
 }
