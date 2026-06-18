@@ -156,8 +156,8 @@ def _build_dataset_record(item: dict[str, Any], index: int) -> dict[str, Any]:
         "label_source": label_source,
         "label_counts": _label_counts(chunks),
         "returned_count": len(chunks),
-        "suspected_miss_present": item.get("suspected_miss") is not None,
-        "suspected_misorder_present": item.get("suspected_misorder") is not None,
+        "suspected_miss_present": bool(item.get("suspected_miss")),
+        "suspected_misorder_present": bool(item.get("suspected_misorder")),
         "notes_redacted": bool(item.get("notes")),
         "raw_text_policy": "query_snippet_why_notes_redacted",
     }

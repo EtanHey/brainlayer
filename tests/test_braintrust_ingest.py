@@ -105,6 +105,22 @@ def test_recall_scorer_uses_expected_relevant_ids():
     assert scorer.__name__ == "recall_at_2"
 
 
+def test_boolean_false_suspected_flags_are_not_marked_present():
+    record = braintrust_ingest._build_dataset_record(
+        {
+            "query": "search query",
+            "returned_chunks": [],
+            "suspected_miss": False,
+            "suspected_misorder": False,
+            "label_source": "machine",
+        },
+        index=1,
+    )
+
+    assert record["metadata"]["suspected_miss_present"] is False
+    assert record["metadata"]["suspected_misorder_present"] is False
+
+
 def test_default_paths_do_not_point_at_user_checkout():
     assert "/Users/" not in str(braintrust_ingest.DEFAULT_RAW_ENRICHED_PATH)
     assert str(braintrust_ingest.DEFAULT_RAW_ENRICHED_PATH).startswith("/tmp/")
