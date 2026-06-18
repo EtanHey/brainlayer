@@ -461,6 +461,22 @@ def _delete_by_chunk_id(cursor: Any, schema: dict[str, list[str]], table_name: s
         cursor.execute(f"DELETE FROM {table_name} WHERE chunk_id = ?", (duplicate_id,))
 
 
+def _delete_fts_rows_for_chunk(cursor: Any, schema: dict[str, list[str]], duplicate_id: str) -> None:
+    if "chunk_fts_rowids" not in schema:
+        return
+    row = cursor.execute(
+        "SELECT fts_rowid, trigram_rowid FROM chunk_fts_rowids WHERE chunk_id = ?",
+        (duplicate_id,),
+    ).fetchone()
+    if row is None:
+        return
+    fts_rowid, trigram_rowid = row
+    if fts_rowid is not None and "chunks_fts" in schema:
+        cursor.execute("DELETE FROM chunks_fts WHERE rowid = ?", (fts_rowid,))
+    if trigram_rowid is not None and "chunks_fts_trigram" in schema:
+        cursor.execute("DELETE FROM chunks_fts_trigram WHERE rowid = ?", (trigram_rowid,))
+
+
 def _record_alias(cursor: Any, duplicate_id: str, canonical_id: str) -> None:
     cursor.execute(
         """
@@ -486,6 +502,8 @@ def _merge_duplicate_references(
     schema: dict[str, list[str]],
     duplicate_id: str,
     canonical_id: str,
+    *,
+    delete_fts_rows: bool = False,
 ) -> None:
     for table_name in ("chunk_tags", "kg_entity_chunks", "chunk_clusters", "agent_reads"):
         if table_name in schema:
@@ -496,6 +514,8 @@ def _merge_duplicate_references(
     for table_name in ("chunk_vectors", "chunk_vectors_binary"):
         _delete_by_chunk_id(cursor, schema, table_name, duplicate_id)
 
+    if delete_fts_rows:
+        _delete_fts_rows_for_chunk(cursor, schema, duplicate_id)
     _delete_by_chunk_id(cursor, schema, "chunk_fts_rowids", duplicate_id)
     _record_alias(cursor, duplicate_id, canonical_id)
     cursor.execute("DELETE FROM chunks WHERE id = ?", (duplicate_id,))
@@ -567,7 +587,8 @@ def apply_content_dedup(
     try:
         cursor = conn.cursor()
         ensure_dedupe_schema(conn)
-        drop_fts_triggers(cursor)
+        if rebuild_fts:
+            drop_fts_triggers(cursor)
         schema = _schema_columns(cursor)
         cursor.execute("PRAGMA wal_checkpoint(FULL)")
         for offset in range(0, len(duplicates), batch_size):
@@ -578,7 +599,13 @@ def apply_content_dedup(
                         continue
                     if cursor.execute("SELECT 1 FROM chunks WHERE id = ?", (canonical_id,)).fetchone() is None:
                         continue
-                    _merge_duplicate_references(cursor, schema, duplicate_id, canonical_id)
+                    _merge_duplicate_references(
+                        cursor,
+                        schema,
+                        duplicate_id,
+                        canonical_id,
+                        delete_fts_rows=not rebuild_fts,
+                    )
                     deleted += 1
                 cursor.execute("COMMIT")
             except Exception:

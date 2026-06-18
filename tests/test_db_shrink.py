@@ -247,3 +247,89 @@ def test_dedupe_deletes_duplicates_and_repoints_refs(tmp_path):
     assert interaction == "qrel-id"
     assert relation == "qrel-id"
     assert vector is None
+
+
+def test_dedupe_without_fts_rebuild_preserves_fts_consistency(tmp_path):
+    from brainlayer.db_shrink import apply_content_dedup
+
+    db_path = tmp_path / "dedup-skip-fts.db"
+    conn = sqlite3.connect(db_path)
+    _init_chunks(conn)
+    conn.executescript(
+        """
+        CREATE TABLE chunk_id_alias (
+            old_chunk_id TEXT PRIMARY KEY,
+            canonical_chunk_id TEXT NOT NULL,
+            deprecated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE dedupe_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chunk_id_dropped TEXT NOT NULL,
+            chunk_id_kept TEXT NOT NULL,
+            mechanism TEXT NOT NULL,
+            hamming_distance INTEGER,
+            ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(
+            content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id UNINDEXED
+        );
+        CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(content, summary, tags, resolved_query, key_facts, resolved_queries, chunk_id)
+            VALUES (
+                new.content,
+                new.summary,
+                new.tags,
+                new.resolved_query,
+                new.key_facts,
+                new.resolved_queries,
+                new.id
+            );
+            INSERT INTO chunk_fts_rowids(chunk_id, fts_rowid, trigram_rowid)
+            VALUES (new.id, last_insert_rowid(), NULL)
+            ON CONFLICT(chunk_id) DO UPDATE SET
+                fts_rowid = excluded.fts_rowid,
+                trigram_rowid = NULL;
+        END;
+        CREATE TRIGGER chunks_fts_delete AFTER DELETE ON chunks BEGIN
+            DELETE FROM chunks_fts
+            WHERE rowid = (SELECT fts_rowid FROM chunk_fts_rowids WHERE chunk_id = old.id);
+            DELETE FROM chunk_fts_rowids WHERE chunk_id = old.id;
+        END;
+        """
+    )
+    rows = [
+        ("canonical-id", "Duplicate content that should collapse", "2026-01-01"),
+        ("dupe-id", "duplicate   content that should collapse", "2026-01-02"),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO chunks(id, content, summary, tags, resolved_query, key_facts, resolved_queries, created_at)
+        VALUES (?, ?, '', '', '', '', '', ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+    result = apply_content_dedup(db_path, rebuild_fts=False)
+
+    checked = sqlite3.connect(db_path)
+    remaining_fts_ids = {
+        row[0] for row in checked.execute("SELECT chunk_id FROM chunks_fts WHERE chunk_id IS NOT NULL")
+    }
+    delete_trigger = checked.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'chunks_fts_delete'"
+    ).fetchone()
+    checked.execute(
+        """
+        INSERT INTO chunks(id, content, summary, tags, resolved_query, key_facts, resolved_queries, created_at)
+        VALUES ('fresh-id', 'Fresh searchable note', '', '', '', '', '', '2026-01-03')
+        """
+    )
+    fresh_fts = checked.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunk_id = 'fresh-id'").fetchone()[0]
+    checked.close()
+
+    assert result.deleted_rows == 1
+    assert remaining_fts_ids == {"canonical-id"}
+    assert delete_trigger is not None
+    assert fresh_fts == 1
