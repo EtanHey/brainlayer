@@ -75,6 +75,16 @@ tests/eval_results/
 # Aggregate metrics go in results/ instead; raw rows archived to Brain Drive.
 eval_results/*.jsonl
 
+# Generated local eval/graph outputs
+eval_results/
+graphify-out/
+*.bak-*
+*.json.lock
+
+# Local agent/graph tooling state
+.agents/
+.graphifyignore
+
 # Progress trackers (ephemeral)
 scripts/.kg_rebuild_progress.json
 
