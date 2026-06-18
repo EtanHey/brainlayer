@@ -201,6 +201,7 @@ final class AgentActivityMonitor {
             return .codex
         }
         if commandHasCursorCLIEntryPoint(command)
+            || commandHasCursorAgentSession(command)
             || command.contains(" brainlayercursor") {
             return .cursor
         }
@@ -266,6 +267,13 @@ final class AgentActivityMonitor {
         guard command.contains("cursor-agent") else { return false }
 
         let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        if tokens.contains("worker-server") {
+            return false
+        }
+        if let launcher = tokens.first,
+           launcher == "cursor-agent" || launcher.hasSuffix("/cursor-agent") {
+            return true
+        }
         for index in tokens.indices where tokens[index] == "agent" {
             guard index > tokens.startIndex else { continue }
             let launcher = tokens[tokens.index(before: index)]
