@@ -1043,6 +1043,8 @@ def burn_drain_once(
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 store_chunk_ids: list[str] = []
+                attempt_applied_events = 0
+                attempt_skipped_verified_stale = 0
                 for _, events in batch:
                     for event in events:
                         if _is_verified_redundant_enrichment(event, prefetched_state):
@@ -1053,15 +1055,17 @@ def burn_drain_once(
                                 chunk_id=payload.get("chunk_id"),
                                 commit=False,
                             )
-                            result.skipped_verified_stale += 1
+                            attempt_skipped_verified_stale += 1
                             continue
                         applied = _apply_event(conn, event)
-                        result.applied_events += 1
+                        attempt_applied_events += 1
                         if applied.chunk_id:
                             store_chunk_ids.append(applied.chunk_id)
                 if _embedding_enabled():
                     _embed_store_chunks(conn, store_chunk_ids, embed_fn)
                 conn.execute("COMMIT")
+                result.applied_events += attempt_applied_events
+                result.skipped_verified_stale += attempt_skipped_verified_stale
                 conn.setbusytimeout(_checkpoint_busy_timeout_ms())
                 try:
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1160,6 +1164,7 @@ def drain_once(
             ):
                 break
 
+            stop_draining = False
             for attempt in range(5):
                 conn: apsw.Connection | None = None
                 attempt_drained = 0
@@ -1229,6 +1234,7 @@ def drain_once(
                             context=f"drain failed for {path.name}",
                             force=True,
                         ):
+                            stop_draining = True
                             break
                         continue
                     _log(log_path, f"drain failed for {path.name}: {exc}")
@@ -1236,6 +1242,8 @@ def drain_once(
                 finally:
                     if conn is not None:
                         conn.close()
+            if stop_draining:
+                break
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
