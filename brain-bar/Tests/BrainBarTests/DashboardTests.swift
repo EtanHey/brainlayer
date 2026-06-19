@@ -242,13 +242,17 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentCount, 4)
     }
 
-    func testDashboardStatsSplitsAgentAndWatcherWriteBuckets() throws {
+    func testDashboardStatsSplitsAgentWatcherAndDigestWriteBuckets() throws {
         let fixtures: [(id: String, source: String, offset: TimeInterval)] = [
             ("agent-27m", "mcp", -27 * 60),
-            ("agent-4m", "mcp", -4 * 60),
+            ("agent-manual-4m", "manual", -4 * 60),
+            ("agent-precompact-4m", "precompact-hook", -4 * 60),
+            ("quick-capture-4m", "quick-capture", -4 * 60),
             ("watcher-52m", "realtime_watcher", -52 * 60),
             ("watcher-27m", "realtime_watcher", -27 * 60),
             ("watcher-4m", "realtime", -4 * 60),
+            ("claude-code-4m", "claude_code", -4 * 60),
+            ("digest-4m", "digest", -4 * 60),
         ]
         for fixture in fixtures {
             _ = try db.store(
@@ -267,9 +271,33 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
-        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2])
         XCTAssertEqual(stats.recentWatcherWriteBuckets, [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2])
+        XCTAssertEqual(stats.recentDigestWriteBuckets, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 6])
+    }
+
+    func testDashboardFlowLabelsWriteSeriesBySourcePath() {
+        let stats = DashboardStats(
+            chunkCount: 9,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [1, 2, 3],
+            recentAgentWriteBuckets: [1, 0, 1],
+            recentWatcherWriteBuckets: [0, 2, 1],
+            recentDigestWriteBuckets: [0, 0, 1],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
+
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent stores")
+        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
+        XCTAssertEqual(summary.ingress.tertiarySeriesLabel, "Digest")
     }
 
     func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {

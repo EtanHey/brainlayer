@@ -198,6 +198,9 @@ struct DashboardFlowLane: Sendable, Equatable {
     let secondaryValues: [Int]
     let secondarySeriesLabel: String?
     let secondaryAccentColor: NSColor?
+    let tertiaryValues: [Int]
+    let tertiarySeriesLabel: String?
+    let tertiaryAccentColor: NSColor?
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {
@@ -229,7 +232,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes)
-        let ingressColor = BrainBarStateTheme.loading.theme.color
+        let agentStoresColor = NSColor.systemGreen
+        let jsonlWatcherColor = NSColor.systemOrange
+        let digestColor = NSColor.systemPurple
         let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
@@ -329,11 +334,14 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 values: stats.recentAgentWriteBuckets,
                 sparklineLabel: "Writes over \(windowLabel)",
                 latestBucketName: "latest write bucket",
-                accentColor: ingressColor,
-                primarySeriesLabel: "Agent",
+                accentColor: agentStoresColor,
+                primarySeriesLabel: "Agent stores",
                 secondaryValues: stats.recentWatcherWriteBuckets,
-                secondarySeriesLabel: "Watcher",
-                secondaryAccentColor: BrainBarStateTheme.active.theme.color
+                secondarySeriesLabel: "JSONL watcher",
+                secondaryAccentColor: jsonlWatcherColor,
+                tertiaryValues: stats.recentDigestWriteBuckets,
+                tertiarySeriesLabel: "Digest",
+                tertiaryAccentColor: digestColor
             ),
             queue: DashboardQueueSummary(
                 status: queueStatus,
@@ -390,7 +398,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 primarySeriesLabel: nil,
                 secondaryValues: [],
                 secondarySeriesLabel: nil,
-                secondaryAccentColor: nil
+                secondaryAccentColor: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
             )
         )
     }

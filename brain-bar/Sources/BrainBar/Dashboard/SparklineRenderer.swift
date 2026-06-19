@@ -15,8 +15,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let label: String
     let values: [Int]
     let secondaryValues: [Int]
+    let tertiaryValues: [Int]
     let primarySeriesLabel: String?
     let secondarySeriesLabel: String?
+    let tertiarySeriesLabel: String?
     let activityWindowMinutes: Int
     let latestBucketName: String
     let fetchedAt: Date
@@ -25,8 +27,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
         label: String,
         values: [Int],
         secondaryValues: [Int] = [],
+        tertiaryValues: [Int] = [],
         primarySeriesLabel: String? = nil,
         secondarySeriesLabel: String? = nil,
+        tertiarySeriesLabel: String? = nil,
         activityWindowMinutes: Int = 30,
         latestBucketName: String = "latest bucket count",
         fetchedAt: Date = Date()
@@ -34,8 +38,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.label = label
         self.values = values
         self.secondaryValues = secondaryValues
+        self.tertiaryValues = tertiaryValues
         self.primarySeriesLabel = primarySeriesLabel
         self.secondarySeriesLabel = secondarySeriesLabel
+        self.tertiarySeriesLabel = tertiarySeriesLabel
         self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
         self.fetchedAt = fetchedAt
@@ -57,8 +63,34 @@ struct SparklineChartPresentation: Equatable, Sendable {
         }
     }
 
+    var tertiaryPoints: [SparklineChartPoint] {
+        tertiaryValues.enumerated().map { index, value in
+            SparklineChartPoint(bucket: index, value: value, timestamp: bucketMidpoint(for: index))
+        }
+    }
+
     var hasSecondarySeries: Bool {
         !secondaryValues.isEmpty
+    }
+
+    var hasTertiarySeries: Bool {
+        !tertiaryValues.isEmpty
+    }
+
+    var hasMultipleSeries: Bool {
+        hasSecondarySeries || hasTertiarySeries
+    }
+
+    var primaryLegendLabel: String {
+        primarySeriesLabel ?? "Primary"
+    }
+
+    var secondaryLegendLabel: String {
+        secondarySeriesLabel ?? "Secondary"
+    }
+
+    var tertiaryLegendLabel: String {
+        tertiarySeriesLabel ?? "Tertiary"
     }
 
     var accessibilityLabel: String {
@@ -67,14 +99,20 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var accessibilityValue: String {
         var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if let primarySeriesLabel {
+            components.append("\(primarySeriesLabel) latest bucket \(values.last ?? 0)")
+        }
         if let secondarySeriesLabel, hasSecondarySeries {
             components.append("\(secondarySeriesLabel) latest bucket \(secondaryValues.last ?? 0)")
+        }
+        if let tertiarySeriesLabel, hasTertiarySeries {
+            components.append("\(tertiarySeriesLabel) latest bucket \(tertiaryValues.last ?? 0)")
         }
         return components.joined(separator: ", ")
     }
 
     var maxValue: Int {
-        max(values.max() ?? 0, secondaryValues.max() ?? 0, 1)
+        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 1)
     }
 
     var xAxisDomainStart: Date {
@@ -110,8 +148,21 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     func tooltipText(forBucket bucket: Int) -> String {
         let clampedBucket = min(max(bucket, 0), max(values.count - 1, 0))
-        let value = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
-        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(value)"
+        let primaryValue = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
+        guard hasMultipleSeries else {
+            return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(primaryValue)"
+        }
+
+        var seriesComponents = ["\(primarySeriesLabel ?? "Primary") \(primaryValue)"]
+        if let secondarySeriesLabel, hasSecondarySeries {
+            let value = secondaryValues.indices.contains(clampedBucket) ? secondaryValues[clampedBucket] : 0
+            seriesComponents.append("\(secondarySeriesLabel) \(value)")
+        }
+        if let tertiarySeriesLabel, hasTertiarySeries {
+            let value = tertiaryValues.indices.contains(clampedBucket) ? tertiaryValues[clampedBucket] : 0
+            seriesComponents.append("\(tertiarySeriesLabel) \(value)")
+        }
+        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(seriesComponents.joined(separator: ", "))"
     }
 
     private func bucketRange(for bucket: Int) -> (start: Date, end: Date) {
@@ -164,6 +215,7 @@ struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
     let secondaryAccentColor: NSColor?
+    let tertiaryAccentColor: NSColor?
     let compact: Bool
     @State private var hoveredBucket: Int?
     @State private var hoverLocation: CGPoint?
@@ -172,11 +224,13 @@ struct SparklineChart: View {
         presentation: SparklineChartPresentation,
         accentColor: NSColor,
         secondaryAccentColor: NSColor? = nil,
+        tertiaryAccentColor: NSColor? = nil,
         compact: Bool = false
     ) {
         self.presentation = presentation
         self.accentColor = accentColor
         self.secondaryAccentColor = secondaryAccentColor
+        self.tertiaryAccentColor = tertiaryAccentColor
         self.compact = compact
     }
 
@@ -184,7 +238,7 @@ struct SparklineChart: View {
         VStack(spacing: 2) {
             Chart {
                 ForEach(presentation.points) { point in
-                    if !compact {
+                    if !compact && !presentation.hasMultipleSeries {
                         AreaMark(
                             x: .value("Time", point.timestamp),
                             y: .value("Count", point.value)
@@ -194,10 +248,11 @@ struct SparklineChart: View {
 
                     LineMark(
                         x: .value("Time", point.timestamp),
-                        y: .value("Count", point.value)
+                        y: .value("Count", point.value),
+                        series: .value("Series", presentation.primaryLegendLabel)
                     )
                     .interpolationMethod(.linear)
-                    .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
+                    .foregroundStyle(by: .value("Series", presentation.primaryLegendLabel))
                     .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
 
                     if point == presentation.latestPoint {
@@ -214,16 +269,32 @@ struct SparklineChart: View {
                     ForEach(presentation.secondaryPoints) { point in
                         LineMark(
                             x: .value("Time", point.timestamp),
-                            y: .value("Count", point.value)
+                            y: .value("Count", point.value),
+                            series: .value("Series", presentation.secondaryLegendLabel)
                         )
                         .interpolationMethod(.linear)
-                        .foregroundStyle(Color.brainBar(nsColor: secondaryAccentColor ?? .systemPurple).opacity(0.88))
+                        .foregroundStyle(by: .value("Series", presentation.secondaryLegendLabel))
                         .lineStyle(StrokeStyle(lineWidth: compact ? 1.4 : 2, lineCap: .round, lineJoin: .round, dash: compact ? [] : [4, 3]))
+                    }
+                }
+
+                if presentation.hasTertiarySeries {
+                    ForEach(presentation.tertiaryPoints) { point in
+                        LineMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Count", point.value),
+                            series: .value("Series", presentation.tertiaryLegendLabel)
+                        )
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(by: .value("Series", presentation.tertiaryLegendLabel))
+                        .lineStyle(StrokeStyle(lineWidth: compact ? 1.4 : 2, lineCap: .round, lineJoin: .round, dash: compact ? [] : [2, 3]))
                     }
                 }
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
+            .chartLegend(.hidden)
+            .chartForegroundStyleScale(chartForegroundStyleScale)
             .chartXScale(domain: presentation.xAxisDomainStart...presentation.xAxisDomainEnd)
             .chartYScale(domain: 0...presentation.maxValue)
             .chartPlotStyle { plotArea in
@@ -321,6 +392,33 @@ struct SparklineChart: View {
         let last = presentation.values.count - 1
         if last <= 0 { return [0] }
         return Array(Set([0, last / 2, last])).sorted()
+    }
+
+    private var chartForegroundStyleScale: KeyValuePairs<String, Color> {
+        let primaryColor = Color.brainBar(nsColor: accentColor)
+        let secondaryColor = Color.brainBar(nsColor: secondaryAccentColor ?? .systemOrange)
+        let tertiaryColor = Color.brainBar(nsColor: tertiaryAccentColor ?? .systemPurple)
+
+        if presentation.hasSecondarySeries && presentation.hasTertiarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.secondaryLegendLabel: secondaryColor,
+                presentation.tertiaryLegendLabel: tertiaryColor,
+            ]
+        }
+        if presentation.hasSecondarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.secondaryLegendLabel: secondaryColor,
+            ]
+        }
+        if presentation.hasTertiarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.tertiaryLegendLabel: tertiaryColor,
+            ]
+        }
+        return [presentation.primaryLegendLabel: primaryColor]
     }
 
     @ViewBuilder

@@ -1038,9 +1038,12 @@ private struct BrainBarFlowLaneCard: View {
                 secondaryValues: lane.secondaryValues,
                 primarySeriesLabel: lane.primarySeriesLabel,
                 secondarySeriesLabel: lane.secondarySeriesLabel,
+                tertiaryValues: lane.tertiaryValues,
+                tertiarySeriesLabel: lane.tertiarySeriesLabel,
                 latestBucketName: lane.latestBucketName,
                 accentColor: lane.accentColor,
                 secondaryAccentColor: lane.secondaryAccentColor,
+                tertiaryAccentColor: lane.tertiaryAccentColor,
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
                 pulseRevision: pulseRevision
@@ -1054,7 +1057,9 @@ private struct BrainBarFlowLaneCard: View {
                     primaryLabel: primarySeriesLabel,
                     primaryColor: lane.accentColor,
                     secondaryLabel: secondarySeriesLabel,
-                    secondaryColor: secondaryAccentColor
+                    secondaryColor: secondaryAccentColor,
+                    tertiaryLabel: lane.tertiarySeriesLabel,
+                    tertiaryColor: lane.tertiaryAccentColor
                 )
             }
 
@@ -1198,39 +1203,88 @@ private struct BrainBarSeriesLegend: View {
     let primaryColor: NSColor
     let secondaryLabel: String
     let secondaryColor: NSColor
+    let tertiaryLabel: String?
+    let tertiaryColor: NSColor?
 
     var body: some View {
-        HStack(spacing: 12) {
-            legendItem(label: primaryLabel, color: primaryColor, dashed: false)
-            legendItem(label: secondaryLabel, color: secondaryColor, dashed: true)
-            Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                legendItems
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                legendItems
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(primaryLabel) and \(secondaryLabel) write series")
+        .accessibilityLabel(accessibilityLabel)
     }
 
-    private func legendItem(label: String, color: NSColor, dashed: Bool) -> some View {
+    @ViewBuilder
+    private var legendItems: some View {
+        legendItem(label: primaryLabel, color: primaryColor, style: .solid)
+        legendItem(label: secondaryLabel, color: secondaryColor, style: .dash)
+        if let tertiaryLabel, let tertiaryColor {
+            legendItem(label: tertiaryLabel, color: tertiaryColor, style: .dotDash)
+        }
+    }
+
+    private var accessibilityLabel: String {
+        var labels = [primaryLabel, secondaryLabel]
+        if let tertiaryLabel {
+            labels.append(tertiaryLabel)
+        }
+        return "\(labels.joined(separator: ", ")) write series"
+    }
+
+    private func legendItem(label: String, color: NSColor, style: LegendSwatchStyle) -> some View {
         HStack(spacing: 6) {
-            Capsule()
-                .fill(Color.brainBar(nsColor: color).opacity(dashed ? 0.55 : 0.9))
-                .frame(width: dashed ? 14 : 18, height: 3)
-                .overlay {
-                    if dashed {
-                        HStack(spacing: 2) {
-                            ForEach(0..<3, id: \.self) { _ in
-                                Capsule()
-                                    .fill(Color.brainBarGlassSecondary)
-                                    .frame(width: 2, height: 3)
-                            }
-                        }
-                    }
-                }
+            LegendSwatch(color: color, style: style)
             Text(label)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Color.brainBarTextMuted)
                 .lineLimit(1)
         }
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private enum LegendSwatchStyle {
+        case solid
+        case dash
+        case dotDash
+    }
+
+    private struct LegendSwatch: View {
+        let color: NSColor
+        let style: LegendSwatchStyle
+
+        var body: some View {
+            HStack(spacing: 2) {
+                switch style {
+                case .solid:
+                    Capsule()
+                        .fill(Color.brainBar(nsColor: color))
+                        .frame(width: 18, height: 3)
+                case .dash:
+                    ForEach(0..<3, id: \.self) { _ in
+                        Capsule()
+                            .fill(Color.brainBar(nsColor: color))
+                            .frame(width: 4, height: 3)
+                    }
+                case .dotDash:
+                    Capsule()
+                        .fill(Color.brainBar(nsColor: color))
+                        .frame(width: 8, height: 3)
+                    Capsule()
+                        .fill(Color.brainBar(nsColor: color))
+                        .frame(width: 3, height: 3)
+                    Capsule()
+                        .fill(Color.brainBar(nsColor: color))
+                        .frame(width: 3, height: 3)
+                }
+            }
+            .frame(width: 18, height: 6, alignment: .leading)
+        }
     }
 }
 
@@ -1617,9 +1671,12 @@ private struct BrainBarHeroSparkline: View {
     let secondaryValues: [Int]
     let primarySeriesLabel: String?
     let secondarySeriesLabel: String?
+    let tertiaryValues: [Int]
+    let tertiarySeriesLabel: String?
     let latestBucketName: String
     let accentColor: NSColor
     let secondaryAccentColor: NSColor?
+    let tertiaryAccentColor: NSColor?
     let activityWindowMinutes: Int
     let fetchedAt: Date
     let pulseRevision: Int
@@ -1636,14 +1693,17 @@ private struct BrainBarHeroSparkline: View {
                     label: label,
                     values: values,
                     secondaryValues: secondaryValues,
+                    tertiaryValues: tertiaryValues,
                     primarySeriesLabel: primarySeriesLabel,
                     secondarySeriesLabel: secondarySeriesLabel,
+                    tertiarySeriesLabel: tertiarySeriesLabel,
                     activityWindowMinutes: activityWindowMinutes,
                     latestBucketName: latestBucketName,
                     fetchedAt: fetchedAt
                 ),
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,
+                tertiaryAccentColor: tertiaryAccentColor,
                 compact: SparklineRenderer.isCompact(size: renderSize)
             )
             .id(pulseRevision)
