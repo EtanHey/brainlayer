@@ -11,9 +11,25 @@ struct SparklineChartPoint: Identifiable, Equatable, Sendable {
     var id: Int { bucket }
 }
 
+struct SparklineLegendEntry: Equatable, Sendable {
+    let label: String
+    let isActive: Bool
+}
+
+enum SparklineSeriesRole: CaseIterable, Equatable, Sendable {
+    case primary
+    case secondary
+    case tertiary
+}
+
 struct SparklineChartPresentation: Equatable, Sendable {
     let label: String
     let values: [Int]
+    let secondaryValues: [Int]
+    let tertiaryValues: [Int]
+    let primarySeriesLabel: String?
+    let secondarySeriesLabel: String?
+    let tertiarySeriesLabel: String?
     let activityWindowMinutes: Int
     let latestBucketName: String
     let fetchedAt: Date
@@ -21,12 +37,22 @@ struct SparklineChartPresentation: Equatable, Sendable {
     init(
         label: String,
         values: [Int],
+        secondaryValues: [Int] = [],
+        tertiaryValues: [Int] = [],
+        primarySeriesLabel: String? = nil,
+        secondarySeriesLabel: String? = nil,
+        tertiarySeriesLabel: String? = nil,
         activityWindowMinutes: Int = 30,
         latestBucketName: String = "latest bucket count",
         fetchedAt: Date = Date()
     ) {
         self.label = label
         self.values = values
+        self.secondaryValues = secondaryValues
+        self.tertiaryValues = tertiaryValues
+        self.primarySeriesLabel = primarySeriesLabel
+        self.secondarySeriesLabel = secondarySeriesLabel
+        self.tertiarySeriesLabel = tertiarySeriesLabel
         self.activityWindowMinutes = activityWindowMinutes
         self.latestBucketName = latestBucketName
         self.fetchedAt = fetchedAt
@@ -42,16 +68,135 @@ struct SparklineChartPresentation: Equatable, Sendable {
         points.last
     }
 
+    var secondaryPoints: [SparklineChartPoint] {
+        secondaryValues.enumerated().map { index, value in
+            SparklineChartPoint(bucket: index, value: value, timestamp: bucketMidpoint(for: index))
+        }
+    }
+
+    var tertiaryPoints: [SparklineChartPoint] {
+        tertiaryValues.enumerated().map { index, value in
+            SparklineChartPoint(bucket: index, value: value, timestamp: bucketMidpoint(for: index))
+        }
+    }
+
+    var hasSecondarySeries: Bool {
+        !secondaryValues.isEmpty
+    }
+
+    var hasTertiarySeries: Bool {
+        !tertiaryValues.isEmpty
+    }
+
+    var hasMultipleSeries: Bool {
+        hasSecondarySeries || hasTertiarySeries
+    }
+
+    var legendEntries: [SparklineLegendEntry] {
+        var entries = [
+            SparklineLegendEntry(label: primaryLegendLabel, isActive: isSeriesActive(.primary)),
+        ]
+        if hasSecondarySeries {
+            entries.append(SparklineLegendEntry(label: secondaryLegendLabel, isActive: isSeriesActive(.secondary)))
+        }
+        if hasTertiarySeries {
+            entries.append(SparklineLegendEntry(label: tertiaryLegendLabel, isActive: isSeriesActive(.tertiary)))
+        }
+        return entries
+    }
+
+    var visibleSeriesLabels: [String] {
+        SparklineSeriesRole.allCases.compactMap { role in
+            guard shouldPlotSeries(role) else { return nil }
+            return label(for: role)
+        }
+    }
+
+    var showsListeningForWritesCaption: Bool {
+        hasMultipleSeries &&
+            label.localizedCaseInsensitiveContains("writes") &&
+            !legendEntries.contains(where: \.isActive)
+    }
+
+    var primaryLegendLabel: String {
+        primarySeriesLabel ?? "Primary"
+    }
+
+    var secondaryLegendLabel: String {
+        secondarySeriesLabel ?? "Secondary"
+    }
+
+    var tertiaryLegendLabel: String {
+        tertiarySeriesLabel ?? "Tertiary"
+    }
+
     var accessibilityLabel: String {
         label
     }
 
     var accessibilityValue: String {
-        "\(latestBucketName) \(values.last ?? 0), \(trendDescription)"
+        var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if let primarySeriesLabel {
+            components.append("\(primarySeriesLabel) latest bucket \(values.last ?? 0)")
+        }
+        if let secondarySeriesLabel, hasSecondarySeries {
+            components.append("\(secondarySeriesLabel) latest bucket \(secondaryValues.last ?? 0)")
+        }
+        if let tertiarySeriesLabel, hasTertiarySeries {
+            components.append("\(tertiarySeriesLabel) latest bucket \(tertiaryValues.last ?? 0)")
+        }
+        return components.joined(separator: ", ")
     }
 
     var maxValue: Int {
-        max(values.max() ?? 0, 1)
+        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 1)
+    }
+
+    func points(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        switch role {
+        case .primary:
+            points
+        case .secondary:
+            secondaryPoints
+        case .tertiary:
+            tertiaryPoints
+        }
+    }
+
+    func label(for role: SparklineSeriesRole) -> String? {
+        switch role {
+        case .primary:
+            primaryLegendLabel
+        case .secondary:
+            hasSecondarySeries ? secondaryLegendLabel : nil
+        case .tertiary:
+            hasTertiarySeries ? tertiaryLegendLabel : nil
+        }
+    }
+
+    func isSeriesActive(_ role: SparklineSeriesRole) -> Bool {
+        switch role {
+        case .primary:
+            values.reduce(0, +) > 0
+        case .secondary:
+            secondaryValues.reduce(0, +) > 0
+        case .tertiary:
+            tertiaryValues.reduce(0, +) > 0
+        }
+    }
+
+    func shouldPlotSeries(_ role: SparklineSeriesRole) -> Bool {
+        guard label(for: role) != nil else { return false }
+        if hasMultipleSeries {
+            return isSeriesActive(role)
+        }
+        return !points(for: role).isEmpty
+    }
+
+    func shouldEmphasizeSparsePoints(_ role: SparklineSeriesRole) -> Bool {
+        guard shouldPlotSeries(role) else { return false }
+        let total = points(for: role).reduce(0) { $0 + $1.value }
+        return (1...2).contains(total)
     }
 
     var xAxisDomainStart: Date {
@@ -87,8 +232,21 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     func tooltipText(forBucket bucket: Int) -> String {
         let clampedBucket = min(max(bucket, 0), max(values.count - 1, 0))
-        let value = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
-        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(value)"
+        let primaryValue = values.indices.contains(clampedBucket) ? values[clampedBucket] : 0
+        guard hasMultipleSeries else {
+            return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(primaryValue)"
+        }
+
+        var seriesComponents = ["\(primarySeriesLabel ?? "Primary") \(primaryValue)"]
+        if let secondarySeriesLabel, hasSecondarySeries {
+            let value = secondaryValues.indices.contains(clampedBucket) ? secondaryValues[clampedBucket] : 0
+            seriesComponents.append("\(secondarySeriesLabel) \(value)")
+        }
+        if let tertiarySeriesLabel, hasTertiarySeries {
+            let value = tertiaryValues.indices.contains(clampedBucket) ? tertiaryValues[clampedBucket] : 0
+            seriesComponents.append("\(tertiarySeriesLabel) \(value)")
+        }
+        return "\(bucketLabel(for: clampedBucket)) (\(relativeBucketLabel(for: clampedBucket))): \(seriesComponents.joined(separator: ", "))"
     }
 
     private func bucketRange(for bucket: Int) -> (start: Date, end: Date) {
@@ -140,97 +298,38 @@ struct SparklineChartPresentation: Equatable, Sendable {
 struct SparklineChart: View {
     let presentation: SparklineChartPresentation
     let accentColor: NSColor
+    let secondaryAccentColor: NSColor?
+    let tertiaryAccentColor: NSColor?
     let compact: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredBucket: Int?
     @State private var hoverLocation: CGPoint?
+    @State private var lineRevealProgress: CGFloat = 1
 
     init(
         presentation: SparklineChartPresentation,
         accentColor: NSColor,
+        secondaryAccentColor: NSColor? = nil,
+        tertiaryAccentColor: NSColor? = nil,
         compact: Bool = false
     ) {
         self.presentation = presentation
         self.accentColor = accentColor
+        self.secondaryAccentColor = secondaryAccentColor
+        self.tertiaryAccentColor = tertiaryAccentColor
         self.compact = compact
     }
 
     var body: some View {
         VStack(spacing: 2) {
-            Chart(presentation.points) { point in
-                if !compact {
-                    AreaMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Count", point.value)
-                    )
-                    .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.10))
-                }
-
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("Count", point.value)
-                )
-                .interpolationMethod(.linear)
-                .foregroundStyle(Color.brainBar(nsColor: accentColor).opacity(0.85))
-                .lineStyle(StrokeStyle(lineWidth: compact ? 1.6 : 2, lineCap: .round, lineJoin: .round))
-
-                if point == presentation.latestPoint {
-                    PointMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Count", point.value)
-                    )
-                    .foregroundStyle(Color.brainBar(nsColor: accentColor))
-                    .symbolSize(compact ? 18 : 42)
-                }
-            }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartXScale(domain: presentation.xAxisDomainStart...presentation.xAxisDomainEnd)
-            .chartYScale(domain: 0...presentation.maxValue)
-            .chartPlotStyle { plotArea in
-                plotArea
-                    .background(Color.brainBarClear)
-                    .padding(compact ? 2 : 10)
-            }
-            .chartOverlay { chartProxy in
-                GeometryReader { geometry in
-                    if let plotAnchor = chartProxy.plotFrame {
-                        let plotFrame = geometry[plotAnchor]
-
-                        Rectangle()
-                            .fill(.clear)
-                            .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                switch phase {
-                                case .active(let location):
-                                    hoveredBucket = nearestBucket(
-                                        to: location,
-                                        plotFrame: plotFrame,
-                                        chartProxy: chartProxy
-                                    )
-                                    hoverLocation = location
-                                case .ended:
-                                    hoveredBucket = nil
-                                    hoverLocation = nil
-                                }
-                            }
-
-                        if let hoveredBucket,
-                           let hoverLocation,
-                           !compact {
-                            let tooltipSize = SparklineTooltipPlacement.tooltipSize(in: geometry.size)
-                            sparklineTooltip(forBucket: hoveredBucket)
-                                .frame(width: tooltipSize.width, alignment: .leading)
-                                .position(
-                                    SparklineTooltipPlacement.position(
-                                        near: hoverLocation,
-                                        in: geometry.size,
-                                        tooltipSize: tooltipSize
-                                    )
-                                )
-                                .allowsHitTesting(false)
-                        }
-                    }
-                }
+            if presentation.showsListeningForWritesCaption {
+                Text("Listening for writes...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.60))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+            } else {
+                chartBody
             }
 
             if !compact {
@@ -252,6 +351,117 @@ struct SparklineChart: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(presentation.accessibilityLabel))
         .accessibilityValue(Text(presentation.accessibilityValue))
+        .onAppear {
+            if reduceMotion {
+                lineRevealProgress = 1
+            } else {
+                lineRevealProgress = 0
+                withAnimation(.easeOut(duration: 0.6)) {
+                    lineRevealProgress = 1
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: presentation)
+    }
+
+    private var chartBody: some View {
+        GeometryReader { geometry in
+            let plotFrame = plotFrame(in: geometry.size)
+
+            ZStack(alignment: .topLeading) {
+                ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
+                    if presentation.shouldPlotSeries(role) {
+                        SparklineSeriesPathShape(
+                            points: presentation.points(for: role),
+                            maxValue: presentation.maxValue,
+                            plotFrame: plotFrame
+                        )
+                        .stroke(color(for: role), style: lineStyle(for: role))
+
+                        ForEach(visiblePointMarkers(for: role)) { point in
+                            Circle()
+                                .fill(color(for: role))
+                                .frame(width: compact ? 4.4 : 9, height: compact ? 4.4 : 9)
+                                .position(
+                                    self.point(
+                                        for: point,
+                                        bucketCount: presentation.points(for: role).count,
+                                        in: plotFrame
+                                    )
+                                )
+                        }
+                    }
+                }
+
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            hoveredBucket = nearestBucket(to: location, plotFrame: plotFrame)
+                            hoverLocation = location
+                        case .ended:
+                            hoveredBucket = nil
+                            hoverLocation = nil
+                        }
+                    }
+
+                if let hoveredBucket,
+                   let hoverLocation,
+                   !compact {
+                    let tooltipSize = SparklineTooltipPlacement.tooltipSize(in: geometry.size)
+                    sparklineTooltip(forBucket: hoveredBucket)
+                        .frame(width: tooltipSize.width, alignment: .leading)
+                        .position(
+                            SparklineTooltipPlacement.position(
+                                near: hoverLocation,
+                                in: geometry.size,
+                                tooltipSize: tooltipSize
+                            )
+                        )
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
+    private func visiblePointMarkers(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        let points = presentation.points(for: role)
+        guard let last = points.last else { return [] }
+        if presentation.shouldEmphasizeSparsePoints(role) {
+            return points.filter { $0.value > 0 }
+        }
+        return [last]
+    }
+
+    private func point(for point: SparklineChartPoint, bucketCount: Int, in plotFrame: CGRect) -> CGPoint {
+        let x: CGFloat
+        if bucketCount <= 1 {
+            x = plotFrame.midX
+        } else {
+            x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
+        }
+        let normalizedValue = CGFloat(point.value) / CGFloat(max(presentation.maxValue, 1))
+        return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
+    }
+
+    private func plotFrame(in size: CGSize) -> CGRect {
+        let inset: CGFloat = compact ? 2 : 10
+        return CGRect(
+            x: inset,
+            y: inset,
+            width: max(size.width - inset * 2, 1),
+            height: max(size.height - inset * 2, 1)
+        )
+    }
+
+    private func nearestBucket(to location: CGPoint, plotFrame: CGRect) -> Int? {
+        guard !presentation.points.isEmpty, plotFrame.contains(location) else { return nil }
+        let bucketCount = max(presentation.points.count, 1)
+        if bucketCount == 1 { return 0 }
+        let normalizedX = min(max((location.x - plotFrame.minX) / max(plotFrame.width, 1), 0), 1)
+        return Int((normalizedX * CGFloat(bucketCount - 1)).rounded())
     }
 
     private func nearestBucket(
@@ -283,6 +493,55 @@ struct SparklineChart: View {
         return Array(Set([0, last / 2, last])).sorted()
     }
 
+    private var chartForegroundStyleScale: KeyValuePairs<String, Color> {
+        let primaryColor = color(for: .primary)
+        let secondaryColor = color(for: .secondary)
+        let tertiaryColor = color(for: .tertiary)
+
+        if presentation.hasSecondarySeries && presentation.hasTertiarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.secondaryLegendLabel: secondaryColor,
+                presentation.tertiaryLegendLabel: tertiaryColor,
+            ]
+        }
+        if presentation.hasSecondarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.secondaryLegendLabel: secondaryColor,
+            ]
+        }
+        if presentation.hasTertiarySeries {
+            return [
+                presentation.primaryLegendLabel: primaryColor,
+                presentation.tertiaryLegendLabel: tertiaryColor,
+            ]
+        }
+        return [presentation.primaryLegendLabel: primaryColor]
+    }
+
+    private func color(for role: SparklineSeriesRole) -> Color {
+        switch role {
+        case .primary:
+            Color.brainBar(nsColor: accentColor)
+        case .secondary:
+            Color.brainBar(nsColor: secondaryAccentColor ?? BrainBarDesignTokens.Colors.seriesWatcher)
+        case .tertiary:
+            Color.brainBar(nsColor: tertiaryAccentColor ?? BrainBarDesignTokens.Colors.signalTrigram)
+        }
+    }
+
+    private func lineStyle(for role: SparklineSeriesRole) -> StrokeStyle {
+        switch role {
+        case .primary:
+            StrokeStyle(lineWidth: compact ? 1.6 : 2.0, lineCap: .round, lineJoin: .round)
+        case .secondary:
+            StrokeStyle(lineWidth: compact ? 1.4 : 1.75, lineCap: .round, lineJoin: .round)
+        case .tertiary:
+            StrokeStyle(lineWidth: compact ? 1.25 : 1.5, lineCap: .round, lineJoin: .round)
+        }
+    }
+
     @ViewBuilder
     private func sparklineTooltip(forBucket bucket: Int) -> some View {
         Text(presentation.tooltipText(forBucket: bucket))
@@ -299,6 +558,36 @@ struct SparklineChart: View {
                     .stroke(Color.brainBar(nsColor: accentColor).opacity(0.35), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+    }
+}
+
+private struct SparklineSeriesPathShape: Shape {
+    let points: [SparklineChartPoint]
+    let maxValue: Int
+    let plotFrame: CGRect
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for (index, point) in points.enumerated() {
+            let renderedPoint = renderedPoint(for: point, bucketCount: points.count)
+            if index == 0 {
+                path.move(to: renderedPoint)
+            } else {
+                path.addLine(to: renderedPoint)
+            }
+        }
+        return path
+    }
+
+    private func renderedPoint(for point: SparklineChartPoint, bucketCount: Int) -> CGPoint {
+        let x: CGFloat
+        if bucketCount <= 1 {
+            x = plotFrame.midX
+        } else {
+            x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
+        }
+        let normalizedValue = CGFloat(point.value) / CGFloat(max(maxValue, 1))
+        return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
     }
 }
 

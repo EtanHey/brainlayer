@@ -29,6 +29,8 @@ final class BrainDatabase: @unchecked Sendable {
     static let maximumTrigramMaintenanceBatchSize = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
+    private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store')"
+    private static let watcherWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('realtime_watcher', 'realtime')"
     private static let lexicalDefenseReplacements: [String: [String]] = [
         "hershkovitz": ["Hershkovits"],
         "hershkovits": ["Hershkovitz"]
@@ -95,6 +97,8 @@ final class BrainDatabase: @unchecked Sendable {
         let enrichmentRatePerMinute: Double
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
+        let recentAgentWriteBuckets: [Int]
+        let recentWatcherWriteBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
         let recentWriteFiveMinuteCount: Int
         let recentEnrichmentFiveMinuteCount: Int
@@ -120,6 +124,8 @@ final class BrainDatabase: @unchecked Sendable {
             enrichmentRatePerMinute: Double,
             databaseSizeBytes: Int64,
             recentActivityBuckets: [Int],
+            recentAgentWriteBuckets: [Int]? = nil,
+            recentWatcherWriteBuckets: [Int]? = nil,
             recentEnrichmentBuckets: [Int],
             recentWriteFiveMinuteCount: Int = 0,
             recentEnrichmentFiveMinuteCount: Int = 0,
@@ -144,6 +150,8 @@ final class BrainDatabase: @unchecked Sendable {
             self.enrichmentRatePerMinute = enrichmentRatePerMinute
             self.databaseSizeBytes = databaseSizeBytes
             self.recentActivityBuckets = recentActivityBuckets
+            self.recentAgentWriteBuckets = recentAgentWriteBuckets ?? recentActivityBuckets
+            self.recentWatcherWriteBuckets = recentWatcherWriteBuckets ?? Array(repeating: 0, count: recentActivityBuckets.count)
             self.recentEnrichmentBuckets = recentEnrichmentBuckets
             self.recentWriteFiveMinuteCount = recentWriteFiveMinuteCount
             self.recentEnrichmentFiveMinuteCount = recentEnrichmentFiveMinuteCount
@@ -166,6 +174,14 @@ final class BrainDatabase: @unchecked Sendable {
             recentActivityBuckets.reduce(0, +)
         }
 
+        var recentAgentWriteCount: Int {
+            recentAgentWriteBuckets.reduce(0, +)
+        }
+
+        var recentWatcherWriteCount: Int {
+            recentWatcherWriteBuckets.reduce(0, +)
+        }
+
         var recentEnrichmentCount: Int {
             recentEnrichmentBuckets.reduce(0, +)
         }
@@ -173,6 +189,28 @@ final class BrainDatabase: @unchecked Sendable {
         var writeRatePerMinute: Double {
             guard activityWindowMinutes > 0 else { return 0 }
             return Double(recentWriteCount) / Double(activityWindowMinutes)
+        }
+
+        var recentWriteRatePerHour: Double {
+            writeRatePerMinute * 60
+        }
+
+        var recentEnrichmentRatePerHour: Double {
+            guard activityWindowMinutes > 0 else { return 0 }
+            return (Double(recentEnrichmentCount) / Double(activityWindowMinutes)) * 60
+        }
+
+        var vectorNetDrainRatePerHour: Double {
+            // Vector rows do not currently carry per-vector timestamps. Until
+            // they do, use the real dashboard window: recent enrichment
+            // completions minus recent writes, which is the net backlog drain
+            // signal available in DashboardStats.
+            max(recentEnrichmentRatePerHour - recentWriteRatePerHour, 0)
+        }
+
+        var vectorBacklogETAHours: Double? {
+            guard vectorBacklogCount > 0, vectorNetDrainRatePerHour > 0 else { return nil }
+            return Double(vectorBacklogCount) / vectorNetDrainRatePerHour
         }
 
         func eventIsLive(_ date: Date?, now: Date = Date()) -> Bool {
@@ -227,6 +265,8 @@ final class BrainDatabase: @unchecked Sendable {
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
                 recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
@@ -1645,6 +1685,18 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
+            let recentAgentWriteBuckets = try recentWriteBuckets(
+                whereClause: Self.agentWriteSourceWhereClause,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
+            let recentWatcherWriteBuckets = try recentWriteBuckets(
+                whereClause: Self.watcherWriteSourceWhereClause,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                now: now
+            )
             let recentEnrichmentBuckets = try recentEnrichmentBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
@@ -1661,6 +1713,8 @@ final class BrainDatabase: @unchecked Sendable {
                 enrichmentRatePerMinute: enrichmentRatePerMinute,
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
                 recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
@@ -1843,6 +1897,23 @@ final class BrainDatabase: @unchecked Sendable {
         return try indexedTimestampBuckets(
             column: "created_at",
             whereClause: nil,
+            activityWindowMinutes: activityWindowMinutes,
+            bucketCount: bucketCount,
+            now: now
+        )
+    }
+
+    private func recentWriteBuckets(
+        whereClause: String,
+        activityWindowMinutes: Int,
+        bucketCount: Int,
+        now: Date
+    ) throws -> [Int] {
+        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
+
+        return try indexedTimestampBuckets(
+            column: "created_at",
+            whereClause: whereClause,
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: bucketCount,
             now: now

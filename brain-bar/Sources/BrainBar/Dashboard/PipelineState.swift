@@ -194,6 +194,13 @@ struct DashboardFlowLane: Sendable, Equatable {
     let sparklineLabel: String
     let latestBucketName: String
     let accentColor: NSColor
+    let primarySeriesLabel: String?
+    let secondaryValues: [Int]
+    let secondarySeriesLabel: String?
+    let secondaryAccentColor: NSColor?
+    let tertiaryValues: [Int]
+    let tertiarySeriesLabel: String?
+    let tertiaryAccentColor: NSColor?
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {
@@ -225,7 +232,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes)
-        let ingressColor = BrainBarStateTheme.loading.theme.color
+        let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
+        let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
         let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
@@ -322,10 +330,17 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     activityWindowMinutes: stats.activityWindowMinutes,
                     now: now
                 ),
-                values: stats.recentActivityBuckets,
+                values: stats.recentAgentWriteBuckets,
                 sparklineLabel: "Writes over \(windowLabel)",
                 latestBucketName: "latest write bucket",
-                accentColor: ingressColor
+                accentColor: agentStoresColor,
+                primarySeriesLabel: "Agent stores",
+                secondaryValues: stats.recentWatcherWriteBuckets,
+                secondarySeriesLabel: "JSONL watcher",
+                secondaryAccentColor: jsonlWatcherColor,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
             ),
             queue: DashboardQueueSummary(
                 status: queueStatus,
@@ -378,7 +393,14 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 values: stats.recentEnrichmentBuckets,
                 sparklineLabel: "Enrichment completions over \(windowLabel)",
                 latestBucketName: "latest enrichment bucket",
-                accentColor: enrichmentColor
+                accentColor: enrichmentColor,
+                primarySeriesLabel: nil,
+                secondaryValues: [],
+                secondarySeriesLabel: nil,
+                secondaryAccentColor: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
             )
         )
     }

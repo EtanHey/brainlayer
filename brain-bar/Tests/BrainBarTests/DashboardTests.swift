@@ -242,6 +242,107 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentCount, 4)
     }
 
+    func testDashboardStatsSplitsLiveWritesIntoAgentStoresAndJSONLWatcherPaths() throws {
+        let fixtures: [(id: String, source: String, offset: TimeInterval)] = [
+            ("agent-27m", "mcp", -27 * 60),
+            ("agent-manual-4m", "manual", -4 * 60),
+            ("agent-precompact-4m", "precompact-hook", -4 * 60),
+            ("quick-capture-4m", "quick-capture", -4 * 60),
+            ("watcher-52m", "realtime_watcher", -52 * 60),
+            ("watcher-27m", "realtime_watcher", -27 * 60),
+            ("watcher-4m", "realtime", -4 * 60),
+            ("claude-code-4m", "claude_code", -4 * 60),
+            ("digest-4m", "digest", -4 * 60),
+            ("youtube-4m", "youtube", -4 * 60),
+            ("whatsapp-4m", "whatsapp", -4 * 60),
+        ]
+        for fixture in fixtures {
+            _ = try db.store(
+                content: "Write source split fixture \(fixture.id)",
+                tags: ["dashboard"],
+                importance: 5,
+                source: fixture.source,
+                chunkID: fixture.id
+            )
+            db.exec("""
+                UPDATE chunks
+                SET created_at = datetime('now', '\(Int(fixture.offset)) seconds')
+                WHERE id = '\(fixture.id)'
+            """)
+        }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
+
+        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3])
+        XCTAssertEqual(stats.recentWatcherWriteBuckets, [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8])
+    }
+
+    func testDashboardFlowLabelsWriteSeriesBySourcePath() {
+        let stats = DashboardStats(
+            chunkCount: 9,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [1, 2, 3],
+            recentAgentWriteBuckets: [1, 0, 1],
+            recentWatcherWriteBuckets: [0, 2, 1],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
+
+        XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent stores")
+        XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
+        XCTAssertNil(summary.ingress.tertiarySeriesLabel)
+        XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
+    }
+
+    func testDashboardFlowUsesDistinctV1WriteSeriesPalette() {
+        let stats = DashboardStats(
+            chunkCount: 9,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [1, 2, 3],
+            recentAgentWriteBuckets: [1, 0, 1],
+            recentWatcherWriteBuckets: [0, 2, 1],
+            recentEnrichmentBuckets: [0, 0, 0],
+            activityWindowMinutes: 15
+        )
+
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: Date(timeIntervalSince1970: 1_764_236_400))
+
+        XCTAssertEqual(summary.ingress.accentColor, BrainBarDesignTokens.Colors.seriesAgent)
+        XCTAssertEqual(summary.ingress.secondaryAccentColor, BrainBarDesignTokens.Colors.seriesWatcher)
+        XCTAssertNil(summary.ingress.tertiaryAccentColor)
+    }
+
+    func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
+        let stats = DashboardStats(
+            chunkCount: 10_105,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [10],
+            recentEnrichmentBuckets: [65],
+            activityWindowMinutes: 1,
+            bucketCount: 1,
+            signalEligibleChunkCount: 10_105,
+            vectorIndexedChunkCount: 0
+        )
+
+        XCTAssertEqual(stats.vectorNetDrainRatePerHour, 3_300, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(stats.vectorBacklogETAHours), 10_105.0 / 3_300.0, accuracy: 0.001)
+    }
+
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainDatabase.swift")
         let methodRange = try XCTUnwrap(source.range(of: "func dashboardStats("))
@@ -680,6 +781,38 @@ final class DashboardTests: XCTestCase {
         ])
         XCTAssertEqual(presentation.xAxisDomainStart, now.addingTimeInterval(-20 * 60))
         XCTAssertEqual(presentation.xAxisDomainEnd, now)
+    }
+
+    func testSparklinePresentationOmitsZeroWriteSourcesButKeepsDimmedLegendEntries() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 1, 0],
+            secondaryValues: [0, 0, 0],
+            primarySeriesLabel: "Agent stores",
+            secondarySeriesLabel: "JSONL watcher",
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent stores"])
+        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent stores", "JSONL watcher"])
+        XCTAssertEqual(presentation.legendEntries.map(\.isActive), [true, false])
+    }
+
+    func testSparklinePresentationShowsListeningCaptionForColdWriteStart() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 0, 0],
+            secondaryValues: [0, 0, 0],
+            primarySeriesLabel: "Agent stores",
+            secondarySeriesLabel: "JSONL watcher",
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertTrue(presentation.showsListeningForWritesCaption)
+        XCTAssertEqual(presentation.visibleSeriesLabels, [])
+        XCTAssertTrue(presentation.legendEntries.allSatisfy { !$0.isActive })
     }
 
     func testSparklineTooltipPlacementClampsHorizontally() {
