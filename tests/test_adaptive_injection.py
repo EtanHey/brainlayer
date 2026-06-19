@@ -167,18 +167,57 @@ class TestSearchFallback:
         monkeypatch.setattr(prompt_search, "run_hybrid_search", slow_hybrid)
         monkeypatch.setattr(prompt_search, "run_fts_search", lambda *args, **kwargs: fts_rows)
 
-        started = time.monotonic()
-        rows, used_hybrid = prompt_search.search_prompt_chunks(
-            prompt="keyword fallback query",
-            db_path="/tmp/test.db",
-            keywords=["keyword", "fallback"],
-            limit=8,
-        )
-        elapsed = time.monotonic() - started
+        try:
+            started = time.monotonic()
+            rows, used_hybrid = prompt_search.search_prompt_chunks(
+                prompt="keyword fallback query",
+                db_path="/tmp/test.db",
+                keywords=["keyword", "fallback"],
+                limit=8,
+            )
+            elapsed = time.monotonic() - started
 
-        assert elapsed < 0.5
-        assert used_hybrid is False
-        assert [row["id"] for row in rows] == ["fts-timeout"]
+            assert elapsed < 0.5
+            assert used_hybrid is False
+            assert [row["id"] for row in rows] == ["fts-timeout"]
+        finally:
+            time.sleep(0.06)
+
+    def test_timed_out_hybrid_search_does_not_spawn_parallel_workers(self, prompt_search, monkeypatch):
+        fts_rows = [_row("fts-busy", 0.0)]
+        calls = 0
+
+        def slow_hybrid(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            time.sleep(0.2)
+            return [_row("late-hybrid", 0.02)]
+
+        monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1")
+        monkeypatch.setattr(prompt_search, "run_hybrid_search", slow_hybrid)
+        monkeypatch.setattr(prompt_search, "run_fts_search", lambda *args, **kwargs: fts_rows)
+
+        try:
+            rows1, used_hybrid1 = prompt_search.search_prompt_chunks(
+                prompt="keyword fallback query",
+                db_path="/tmp/test.db",
+                keywords=["keyword", "fallback"],
+                limit=8,
+            )
+            rows2, used_hybrid2 = prompt_search.search_prompt_chunks(
+                prompt="keyword fallback query",
+                db_path="/tmp/test.db",
+                keywords=["keyword", "fallback"],
+                limit=8,
+            )
+
+            assert calls == 1
+            assert used_hybrid1 is False
+            assert used_hybrid2 is False
+            assert [row["id"] for row in rows1] == ["fts-busy"]
+            assert [row["id"] for row in rows2] == ["fts-busy"]
+        finally:
+            time.sleep(0.25)
 
     def test_fast_hybrid_search_stays_on_hybrid_path(self, prompt_search, monkeypatch):
         hybrid_rows = [_row("hybrid-best", 0.02)]

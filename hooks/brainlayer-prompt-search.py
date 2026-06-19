@@ -37,6 +37,7 @@ MAX_ADAPTIVE_INJECTION = 3
 MAX_HYBRID_CANDIDATES = 8
 DEGRADED_PREFIX = "⚠️ DEGRADED: BrainLayer"
 DEFAULT_EMBED_TIMEOUT_MS = 1000.0
+HYBRID_IN_FLIGHT = threading.Lock()
 
 
 def degraded_notice(reason):
@@ -59,6 +60,9 @@ def embed_timeout_ms():
 
 
 def run_with_timeout(func, timeout_ms, *args, **kwargs):
+    if not HYBRID_IN_FLIGHT.acquire(blocking=False):
+        raise TimeoutError("hybrid search already in progress")
+
     results = queue.Queue(maxsize=1)
 
     def target():
@@ -66,6 +70,8 @@ def run_with_timeout(func, timeout_ms, *args, **kwargs):
             results.put((True, func(*args, **kwargs)))
         except BaseException as exc:
             results.put((False, exc))
+        finally:
+            HYBRID_IN_FLIGHT.release()
 
     thread = threading.Thread(target=target, name="brainlayer-hook-hybrid", daemon=True)
     thread.start()
