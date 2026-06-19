@@ -29,9 +29,8 @@ final class BrainDatabase: @unchecked Sendable {
     static let maximumTrigramMaintenanceBatchSize = 10_000
     private static let defaultPendingStoreMaxLines = 10_000
     private static let pendingStoreMaxLinesEnv = "BRAINBAR_PENDING_STORES_MAX_LINES"
-    private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'precompact-hook')"
+    private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store')"
     private static let watcherWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('realtime_watcher', 'realtime')"
-    private static let digestWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') = 'digest'"
     private static let lexicalDefenseReplacements: [String: [String]] = [
         "hershkovitz": ["Hershkovits"],
         "hershkovits": ["Hershkovitz"]
@@ -100,7 +99,6 @@ final class BrainDatabase: @unchecked Sendable {
         let recentActivityBuckets: [Int]
         let recentAgentWriteBuckets: [Int]
         let recentWatcherWriteBuckets: [Int]
-        let recentDigestWriteBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
         let recentWriteFiveMinuteCount: Int
         let recentEnrichmentFiveMinuteCount: Int
@@ -128,7 +126,6 @@ final class BrainDatabase: @unchecked Sendable {
             recentActivityBuckets: [Int],
             recentAgentWriteBuckets: [Int]? = nil,
             recentWatcherWriteBuckets: [Int]? = nil,
-            recentDigestWriteBuckets: [Int]? = nil,
             recentEnrichmentBuckets: [Int],
             recentWriteFiveMinuteCount: Int = 0,
             recentEnrichmentFiveMinuteCount: Int = 0,
@@ -155,7 +152,6 @@ final class BrainDatabase: @unchecked Sendable {
             self.recentActivityBuckets = recentActivityBuckets
             self.recentAgentWriteBuckets = recentAgentWriteBuckets ?? recentActivityBuckets
             self.recentWatcherWriteBuckets = recentWatcherWriteBuckets ?? Array(repeating: 0, count: recentActivityBuckets.count)
-            self.recentDigestWriteBuckets = recentDigestWriteBuckets ?? Array(repeating: 0, count: recentActivityBuckets.count)
             self.recentEnrichmentBuckets = recentEnrichmentBuckets
             self.recentWriteFiveMinuteCount = recentWriteFiveMinuteCount
             self.recentEnrichmentFiveMinuteCount = recentEnrichmentFiveMinuteCount
@@ -184,10 +180,6 @@ final class BrainDatabase: @unchecked Sendable {
 
         var recentWatcherWriteCount: Int {
             recentWatcherWriteBuckets.reduce(0, +)
-        }
-
-        var recentDigestWriteCount: Int {
-            recentDigestWriteBuckets.reduce(0, +)
         }
 
         var recentEnrichmentCount: Int {
@@ -275,7 +267,6 @@ final class BrainDatabase: @unchecked Sendable {
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
-                recentDigestWriteBuckets: recentDigestWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
                 recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
@@ -1706,12 +1697,6 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let recentDigestWriteBuckets = try recentWriteBuckets(
-                whereClause: Self.digestWriteSourceWhereClause,
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
             let recentEnrichmentBuckets = try recentEnrichmentBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
@@ -1730,7 +1715,6 @@ final class BrainDatabase: @unchecked Sendable {
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
-                recentDigestWriteBuckets: recentDigestWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
                 recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,

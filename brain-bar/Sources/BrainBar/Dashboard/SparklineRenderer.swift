@@ -527,7 +527,7 @@ struct SparklineChart: View {
         case .secondary:
             Color.brainBar(nsColor: secondaryAccentColor ?? BrainBarDesignTokens.Colors.seriesWatcher)
         case .tertiary:
-            Color.brainBar(nsColor: tertiaryAccentColor ?? BrainBarDesignTokens.Colors.seriesDigest)
+            Color.brainBar(nsColor: tertiaryAccentColor ?? BrainBarDesignTokens.Colors.signalTrigram)
         }
     }
 

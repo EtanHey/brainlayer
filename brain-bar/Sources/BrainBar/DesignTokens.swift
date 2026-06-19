@@ -34,10 +34,8 @@ enum BrainBarDesignTokens {
 
         static let seriesAgent = NSColor.brainBarHex(0x22D3EE)
         static let seriesWatcher = NSColor.brainBarHex(0xFB7185)
-        static let seriesDigest = NSColor.brainBarHex(0xA3E635)
         static let seriesAgentDimmed = NSColor.brainBarHex(0x22D3EE, alpha: 0.35)
         static let seriesWatcherDimmed = NSColor.brainBarHex(0xFB7185, alpha: 0.35)
-        static let seriesDigestDimmed = NSColor.brainBarHex(0xA3E635, alpha: 0.35)
 
         static let white = NSColor.white
         static let black = NSColor.black
@@ -176,10 +174,8 @@ extension Color {
     static let brainBarSignalTrigram = Color(nsColor: BrainBarDesignTokens.Colors.signalTrigram)
     static let brainBarSeriesAgent = Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)
     static let brainBarSeriesWatcher = Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)
-    static let brainBarSeriesDigest = Color(nsColor: BrainBarDesignTokens.Colors.seriesDigest)
     static let brainBarSeriesAgentDimmed = Color(nsColor: BrainBarDesignTokens.Colors.seriesAgentDimmed)
     static let brainBarSeriesWatcherDimmed = Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcherDimmed)
-    static let brainBarSeriesDigestDimmed = Color(nsColor: BrainBarDesignTokens.Colors.seriesDigestDimmed)
     static let brainBarWhite = Color(nsColor: BrainBarDesignTokens.Colors.white)
     static let brainBarBlack = Color(nsColor: BrainBarDesignTokens.Colors.black)
     static let brainBarClear = Color.clear

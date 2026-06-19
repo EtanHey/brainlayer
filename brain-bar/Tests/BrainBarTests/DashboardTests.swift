@@ -242,7 +242,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.recentEnrichmentCount, 4)
     }
 
-    func testDashboardStatsSplitsAgentWatcherAndDigestWriteBuckets() throws {
+    func testDashboardStatsSplitsLiveWritesIntoAgentStoresAndJSONLWatcherPaths() throws {
         let fixtures: [(id: String, source: String, offset: TimeInterval)] = [
             ("agent-27m", "mcp", -27 * 60),
             ("agent-manual-4m", "manual", -4 * 60),
@@ -253,6 +253,8 @@ final class DashboardTests: XCTestCase {
             ("watcher-4m", "realtime", -4 * 60),
             ("claude-code-4m", "claude_code", -4 * 60),
             ("digest-4m", "digest", -4 * 60),
+            ("youtube-4m", "youtube", -4 * 60),
+            ("whatsapp-4m", "whatsapp", -4 * 60),
         ]
         for fixture in fixtures {
             _ = try db.store(
@@ -271,10 +273,9 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
-        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2])
+        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3])
         XCTAssertEqual(stats.recentWatcherWriteBuckets, [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-        XCTAssertEqual(stats.recentDigestWriteBuckets, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
-        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 6])
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 8])
     }
 
     func testDashboardFlowLabelsWriteSeriesBySourcePath() {
@@ -288,7 +289,6 @@ final class DashboardTests: XCTestCase {
             recentActivityBuckets: [1, 2, 3],
             recentAgentWriteBuckets: [1, 0, 1],
             recentWatcherWriteBuckets: [0, 2, 1],
-            recentDigestWriteBuckets: [0, 0, 1],
             recentEnrichmentBuckets: [0, 0, 0],
             activityWindowMinutes: 15
         )
@@ -297,7 +297,8 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.primarySeriesLabel, "Agent stores")
         XCTAssertEqual(summary.ingress.secondarySeriesLabel, "JSONL watcher")
-        XCTAssertEqual(summary.ingress.tertiarySeriesLabel, "Digest")
+        XCTAssertNil(summary.ingress.tertiarySeriesLabel)
+        XCTAssertTrue(summary.ingress.tertiaryValues.isEmpty)
     }
 
     func testDashboardFlowUsesDistinctV1WriteSeriesPalette() {
@@ -311,7 +312,6 @@ final class DashboardTests: XCTestCase {
             recentActivityBuckets: [1, 2, 3],
             recentAgentWriteBuckets: [1, 0, 1],
             recentWatcherWriteBuckets: [0, 2, 1],
-            recentDigestWriteBuckets: [0, 0, 1],
             recentEnrichmentBuckets: [0, 0, 0],
             activityWindowMinutes: 15
         )
@@ -320,7 +320,7 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.accentColor, BrainBarDesignTokens.Colors.seriesAgent)
         XCTAssertEqual(summary.ingress.secondaryAccentColor, BrainBarDesignTokens.Colors.seriesWatcher)
-        XCTAssertEqual(summary.ingress.tertiaryAccentColor, BrainBarDesignTokens.Colors.seriesDigest)
+        XCTAssertNil(summary.ingress.tertiaryAccentColor)
     }
 
     func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
@@ -788,17 +788,15 @@ final class DashboardTests: XCTestCase {
             label: "Writes over 30m",
             values: [0, 1, 0],
             secondaryValues: [0, 0, 0],
-            tertiaryValues: [0, 0, 2],
             primarySeriesLabel: "Agent stores",
             secondarySeriesLabel: "JSONL watcher",
-            tertiarySeriesLabel: "Digest",
             activityWindowMinutes: 30,
             fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
         )
 
-        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent stores", "Digest"])
-        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent stores", "JSONL watcher", "Digest"])
-        XCTAssertEqual(presentation.legendEntries.map(\.isActive), [true, false, true])
+        XCTAssertEqual(presentation.visibleSeriesLabels, ["Agent stores"])
+        XCTAssertEqual(presentation.legendEntries.map(\.label), ["Agent stores", "JSONL watcher"])
+        XCTAssertEqual(presentation.legendEntries.map(\.isActive), [true, false])
     }
 
     func testSparklinePresentationShowsListeningCaptionForColdWriteStart() {
@@ -806,10 +804,8 @@ final class DashboardTests: XCTestCase {
             label: "Writes over 30m",
             values: [0, 0, 0],
             secondaryValues: [0, 0, 0],
-            tertiaryValues: [0, 0, 0],
             primarySeriesLabel: "Agent stores",
             secondarySeriesLabel: "JSONL watcher",
-            tertiarySeriesLabel: "Digest",
             activityWindowMinutes: 30,
             fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
         )

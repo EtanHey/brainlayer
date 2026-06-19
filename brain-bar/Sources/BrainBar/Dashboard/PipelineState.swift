@@ -234,7 +234,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let windowLabel = DashboardMetricFormatter.windowLabel(minutes: stats.activityWindowMinutes)
         let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
         let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
-        let digestColor = BrainBarDesignTokens.Colors.seriesDigest
         let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
@@ -339,9 +338,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 secondaryValues: stats.recentWatcherWriteBuckets,
                 secondarySeriesLabel: "JSONL watcher",
                 secondaryAccentColor: jsonlWatcherColor,
-                tertiaryValues: stats.recentDigestWriteBuckets,
-                tertiarySeriesLabel: "Digest",
-                tertiaryAccentColor: digestColor
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                tertiaryAccentColor: nil
             ),
             queue: DashboardQueueSummary(
                 status: queueStatus,
