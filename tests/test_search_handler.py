@@ -205,6 +205,36 @@ async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_
 
 
 @pytest.mark.asyncio
+async def test_brain_search_origin_order_filters_explicit_file_path(monkeypatch, tmp_path):
+    store, query_embedding = _seed_origin_search_store(tmp_path / "origin-file.db")
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._get_embedding_model",
+        lambda: OriginEmbeddingModel(query_embedding),
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+
+    try:
+        _content, structured = await _brain_search(
+            query="originmarker retention architecture",
+            file_path="origin-mid.jsonl",
+            project="origin-test",
+            source="all",
+            num_results=2,
+            order="origin",
+            allow_helper_route=False,
+        )
+
+        assert [item["chunk_id"] for item in structured["results"]] == ["origin-mid"]
+        assert structured["order"] == "origin"
+        assert structured["order_scope"] == "expanded_hybrid_candidates"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_brain_search_origin_order_sorts_entity_route_chunks(monkeypatch):
     store = OriginKgSearchStore()
 
@@ -288,6 +318,85 @@ async def test_brain_search_origin_order_bypasses_smart_routes(monkeypatch, sign
     assert store.hybrid_kwargs is not None
     assert structured["order"] == "origin"
     assert structured["order_scope"] == "expanded_hybrid_candidates"
+
+
+@pytest.mark.parametrize(
+    ("query", "file_path", "regression_signal", "extracted_file"),
+    [
+        ("auth implementation", "src/auth.py", False, None),
+        ("regression history for auth", "src/auth.py", True, None),
+        ("src/auth.py originmarker", None, False, "src/auth.py"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_brain_search_origin_order_bypasses_file_routes(
+    monkeypatch, query, file_path, regression_signal, extracted_file
+):
+    store = RecordingSearchStore()
+
+    async def fail_file_route(*_args, **_kwargs):
+        raise AssertionError("origin order must stay on search route")
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._query_has_regression_signal", lambda _query: regression_signal)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._extract_file_path", lambda _query: extracted_file)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._file_timeline", fail_file_route)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._regression", fail_file_route)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._recall", fail_file_route)
+
+    _content, structured = await _brain_search(
+        query=query,
+        file_path=file_path,
+        project="brainlayer",
+        source="all",
+        num_results=1,
+        order="origin",
+        allow_helper_route=False,
+    )
+
+    expected_file = file_path or extracted_file
+    assert store.hybrid_kwargs is not None
+    assert store.hybrid_kwargs["source_file_filter_like"] == f"%{expected_file}%"
+    assert structured["order"] == "origin"
+    assert structured["order_scope"] == "expanded_hybrid_candidates"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_origin_file_path_skips_entity_route(monkeypatch):
+    store = RecordingKgSearchStore()
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._expanded_fts_query", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._exact_chunk_lookup_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._kg_facts_sql", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._detect_entities",
+        lambda *_args, **_kwargs: [{"name": "Alice"}],
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+
+    _content, structured = await _brain_search(
+        query="Alice auth implementation",
+        file_path="src/auth.py",
+        project="brainlayer",
+        source="all",
+        num_results=1,
+        order="origin",
+        allow_helper_route=False,
+    )
+
+    assert store.kg_hybrid_kwargs is None
+    assert store.hybrid_kwargs is not None
+    assert store.hybrid_kwargs["source_file_filter_like"] == "%src/auth.py%"
+    assert structured["order"] == "origin"
 
 
 @pytest.mark.asyncio

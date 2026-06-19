@@ -1021,7 +1021,10 @@ async def _brain_search_dispatch(
             consumer_scope=consumer_scope,
         )
 
-    if file_path is not None and _query_has_regression_signal(query):
+    allow_file_route = order == "relevance"
+    origin_file_path = file_path if order == "origin" else None
+
+    if allow_file_route and file_path is not None and _query_has_regression_signal(query):
         regression_result = await _regression(file_path=file_path, project=project, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
@@ -1040,7 +1043,7 @@ async def _brain_search_dispatch(
             merged_text.extend(recall_result)
         return merged_text
 
-    if file_path is not None:
+    if allow_file_route and file_path is not None:
         timeline = await _file_timeline(file_path=file_path, project=project, limit=50, consumer_scope=consumer_scope)
         recall_result = await _recall(
             file_path=file_path,
@@ -1061,34 +1064,36 @@ async def _brain_search_dispatch(
 
     extracted_file = _extract_file_path(query)
     if extracted_file:
-        return await _brain_search(
-            query=query,
-            project=project,
-            consumer=consumer,
-            file_path=extracted_file,
-            content_type=content_type,
-            source=source,
-            tag=tag,
-            intent=intent,
-            importance_min=importance_min,
-            date_from=date_from,
-            date_to=date_to,
-            sentiment=sentiment,
-            agent_id=agent_id,
-            num_results=num_results,
-            order=order,
-            max_results=max_results,
-            detail=detail,
-            source_filter=source_filter,
-            correction_category=correction_category,
-            include_checkpoints=include_checkpoints,
-            include_audit=include_audit,
-            include_operational=include_operational,
-            content_class_filter=content_class_filter,
-            profile_query_id=profile_query_id,
-            profile_scope=profile_scope,
-            brainbar_helper_fast_profile=brainbar_helper_fast_profile,
-        )
+        if allow_file_route:
+            return await _brain_search(
+                query=query,
+                project=project,
+                consumer=consumer,
+                file_path=extracted_file,
+                content_type=content_type,
+                source=source,
+                tag=tag,
+                intent=intent,
+                importance_min=importance_min,
+                date_from=date_from,
+                date_to=date_to,
+                sentiment=sentiment,
+                agent_id=agent_id,
+                num_results=num_results,
+                order=order,
+                max_results=max_results,
+                detail=detail,
+                source_filter=source_filter,
+                correction_category=correction_category,
+                include_checkpoints=include_checkpoints,
+                include_audit=include_audit,
+                include_operational=include_operational,
+                content_class_filter=content_class_filter,
+                profile_query_id=profile_query_id,
+                profile_scope=profile_scope,
+                brainbar_helper_fast_profile=brainbar_helper_fast_profile,
+            )
+        origin_file_path = origin_file_path or extracted_file
 
     allow_smart_route = order == "relevance"
 
@@ -1159,6 +1164,7 @@ async def _brain_search_dispatch(
     if exact_chunk_hit is not None:
         return exact_chunk_hit
     fts_query_override = _expanded_fts_query(query, store)
+    source_file_filter_like = _source_file_like_pattern(origin_file_path)
 
     # Entity-aware routing: detect known entity names in query.
     # Path 1: Pure SQL KG lookup (no embeddings, always works).
@@ -1177,6 +1183,7 @@ async def _brain_search_dispatch(
             source_filter,
             correction_category,
             content_class_filter,
+            source_file_filter_like,
         ]
     )
     detected_entities = _detect_entities(query, store) if not has_active_filters else []
@@ -1355,6 +1362,7 @@ async def _brain_search_dispatch(
         order=order,
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
+        source_file_filter_like=source_file_filter_like,
         correction_category=correction_category,
         include_checkpoints=include_checkpoints,
         include_audit=include_audit,
@@ -1372,6 +1380,12 @@ async def _brain_search_dispatch(
 def _escape_like_pattern(value: str) -> str:
     """Escape user text for a literal SQLite LIKE pattern."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _source_file_like_pattern(file_path: str | None) -> str | None:
+    if not file_path:
+        return None
+    return f"%{_escape_like_pattern(file_path)}%"
 
 
 async def _execute_resume_query_with_retry(store: Any, query: str, params: list[Any]) -> list:
@@ -1716,6 +1730,7 @@ async def _search(
     output_format: str | None = None,
     # --- T3 filter additions ---
     source_filter_like: str | None = None,
+    source_file_filter_like: str | None = None,
     correction_category: str | None = None,
     include_checkpoints: bool = False,
     include_audit: bool = False,
@@ -1804,6 +1819,7 @@ async def _search(
                         entity_id=entity_id,
                         agent_id=agent_id,
                         source_filter_like=source_filter_like,
+                        source_file_filter_like=source_file_filter_like,
                         correction_category=correction_category,
                         include_checkpoints=include_checkpoints,
                         include_audit=include_audit,
