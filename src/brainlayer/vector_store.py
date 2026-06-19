@@ -65,6 +65,7 @@ _DEFAULT_BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_READ_BUSY_TIMEOUT_MS = 5_000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _WRITE_BUSY_TIMEOUT_STATE = threading.local()
+_NO_EXEC_TRACE = object()
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -105,6 +106,34 @@ def _write_busy_timeout_ms() -> int:
 
 def _default_write_busy_timeout_ms() -> int:
     return max(1, min(_DEFAULT_BUSY_TIMEOUT_MS, _MAX_APSW_BUSY_TIMEOUT_MS))
+
+
+def _refresh_write_busy_timeout_for_deadline(conn: apsw.Connection) -> None:
+    if _write_busy_deadline() is None:
+        return
+    conn.setbusytimeout(_write_busy_timeout_ms())
+
+
+def _install_write_busy_deadline_trace(conn: apsw.Connection):
+    if _write_busy_deadline() is None:
+        return _NO_EXEC_TRACE
+    old_trace = conn.getexectrace()
+
+    def refresh_timeout(cursor, statement, bindings):
+        _refresh_write_busy_timeout_for_deadline(conn)
+        if old_trace is None:
+            return True
+        result = old_trace(cursor, statement, bindings)
+        return True if result is None else result
+
+    conn.setexectrace(refresh_timeout)
+    return old_trace
+
+
+def _restore_write_busy_deadline_trace(conn: apsw.Connection, old_trace) -> None:
+    if old_trace is _NO_EXEC_TRACE:
+        return
+    conn.setexectrace(old_trace)
 
 
 @contextmanager
@@ -615,6 +644,11 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         conn = getattr(self, "conn", None)
         if conn is None:
             return
+        _restore_write_busy_deadline_trace(
+            conn,
+            getattr(self, "_init_write_busy_deadline_trace", _NO_EXEC_TRACE),
+        )
+        self._init_write_busy_deadline_trace = _NO_EXEC_TRACE
         try:
             if conn.readonly("main"):
                 return
@@ -628,6 +662,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
 
         # Set busy timeout IMMEDIATELY via APSW native method — before any DDL.
         self.conn.setbusytimeout(_write_busy_timeout_ms())
+        self._init_write_busy_deadline_trace = _install_write_busy_deadline_trace(self.conn)
 
         self.conn.enableloadextension(True)
         self.conn.loadextension(sqlite_vec.loadable_path())

@@ -429,6 +429,81 @@ async def test_store_busy_budget_restores_cold_vector_store_write_timeout(tmp_pa
     assert _shared._vector_store.conn.timeout_ms == vector_store_module._DEFAULT_BUSY_TIMEOUT_MS
 
 
+def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_path, monkeypatch):
+    """Cold init must spend one absolute store budget across multiple DDL statements."""
+    import brainlayer.vector_store as vector_store_module
+    from brainlayer.vector_store import VectorStore, temporary_write_busy_timeout_ms
+
+    class StopInit(Exception):
+        pass
+
+    fake_clock = {"now": 0.0}
+    seen_timeouts = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            seen_timeouts.append(self.conn.timeout_ms)
+            fake_clock["now"] += 0.04
+            if len(seen_timeouts) == 3:
+                raise StopInit
+            return self
+
+        def fetchone(self):
+            return None
+
+        def __iter__(self):
+            return iter(())
+
+    class FakeConnection:
+        def __init__(self, path):
+            self.path = path
+            self.timeout_ms = None
+            self.exec_trace = None
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+        def enableloadextension(self, enabled):
+            self.load_extension_enabled = enabled
+
+        def loadextension(self, path):
+            self.loaded_extension = path
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def readonly(self, name):
+            return False
+
+    monkeypatch.setattr(vector_store_module.apsw, "Connection", FakeConnection)
+    monkeypatch.setattr(vector_store_module.sqlite_vec, "loadable_path", lambda: "sqlite-vec")
+    monkeypatch.setattr(vector_store_module.time, "monotonic", lambda: fake_clock["now"])
+
+    store = object.__new__(VectorStore)
+    store.db_path = tmp_path / "cold-init-deadline.db"
+
+    with temporary_write_busy_timeout_ms(200, deadline=0.2), pytest.raises(StopInit):
+        store._init_db()
+
+    assert len(seen_timeouts) == 3
+    assert seen_timeouts[1] < seen_timeouts[0]
+    assert seen_timeouts[2] < seen_timeouts[1]
+
+
 @pytest.mark.asyncio
 async def test_store_busy_budget_bounds_singleton_init_lock_wait(tmp_path, monkeypatch):
     """Waiting for another cold VectorStore init must not exceed the store budget."""
