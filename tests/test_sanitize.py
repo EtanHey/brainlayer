@@ -129,6 +129,61 @@ class TestRegexSanitization:
 class TestNameDictionary:
     """Test known-names dictionary matching (Layer 2)."""
 
+    def test_owner_and_tool_names_preserved_from_person_pseudonyms(self):
+        s = Sanitizer(
+            SanitizeConfig(
+                known_names=frozenset(
+                    {
+                        "Etan",
+                        "EtanHey",
+                        "Claude",
+                        "Codex",
+                        "Cursor",
+                        "Gemini",
+                        "John Smith",
+                    }
+                ),
+                use_spacy_ner=False,
+            )
+        )
+
+        result = s.sanitize("Etan EtanHey Claude Codex Cursor Gemini discussed it with John Smith")
+
+        for allowed_name in ("Etan", "EtanHey", "Claude", "Codex", "Cursor", "Gemini"):
+            assert allowed_name in result.sanitized
+            assert allowed_name not in {replacement.original for replacement in result.replacements}
+
+        assert "John Smith" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+        assert any(replacement.original == "John Smith" for replacement in result.replacements)
+
+    def test_env_redaction_allowlist_extends_person_pseudonym_exclusions(self, monkeypatch):
+        monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
+        monkeypatch.setenv("BRAINLAYER_SANITIZE_EXTRA_NAMES", "BrainLayerBot,John Smith")
+        monkeypatch.setenv("BRAINLAYER_REDACTION_ALLOWLIST", "BrainLayerBot")
+
+        s = Sanitizer.from_env()
+        result = s.sanitize("BrainLayerBot discussed it with John Smith")
+
+        assert "BrainLayerBot" in result.sanitized
+        assert "John Smith" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+
+    def test_allowlisted_token_in_span_preserves_tool_spans_not_people(self):
+        s = Sanitizer(
+            SanitizeConfig(
+                known_names=frozenset({"Claude Code", "Claude Shannon", "John Smith"}),
+                use_spacy_ner=False,
+            )
+        )
+
+        result = s.sanitize("Claude Code discussed Claude Shannon with John Smith")
+
+        assert "Claude Code" in result.sanitized
+        assert "Claude Shannon" not in result.sanitized
+        assert "John Smith" not in result.sanitized
+        assert {replacement.original for replacement in result.replacements} == {"Claude Shannon", "John Smith"}
+
     def test_english_name_replaced(self, full_sanitizer):
         result = full_sanitizer.sanitize("David Cohen joined the meeting")
         assert "David Cohen" not in result.sanitized
