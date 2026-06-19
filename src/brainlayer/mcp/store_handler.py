@@ -658,7 +658,7 @@ async def _store_memory_with_retries(store_memory, *, deadline: float | None = N
             raise last_err
         try:
             with _temporary_store_busy_timeout(conn, deadline):
-                return store_memory(**kwargs, busy_deadline=deadline)
+                return store_memory(**kwargs, busy_deadline=deadline, retry_on_busy=False)
         except Exception as exc:
             if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
                 raise
@@ -687,6 +687,16 @@ async def _store_memory_with_retries(store_memory, *, deadline: float | None = N
             )
             await asyncio.sleep(delay)
     raise last_err  # type: ignore[misc]
+
+
+def _get_store_vector_store(deadline: float):
+    timeout = max(0.0, deadline - time.monotonic())
+    try:
+        return _get_vector_store(timeout=timeout)
+    except TypeError as exc:
+        if "timeout" not in str(exc):
+            raise
+        return _get_vector_store()
 
 
 async def _store(
@@ -760,7 +770,7 @@ async def _store(
 
         deadline = _store_busy_deadline()
         with temporary_write_busy_timeout_ms(_remaining_store_busy_budget_ms(deadline), deadline=deadline):
-            store = _get_vector_store()
+            store = _get_store_vector_store(deadline)
         normalized_project = _normalize_project_name(project)
 
         # Store WITHOUT embedding — returns immediately (no executor needed)

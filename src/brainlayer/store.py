@@ -103,6 +103,7 @@ def store_memory(
     replayed_by: Optional[str] = None,
     chunk_origin: Optional[str] = None,
     busy_deadline: Optional[float] = None,
+    retry_on_busy: bool = True,
 ) -> Dict[str, Any]:
     """Persistently store a memory into BrainLayer.
 
@@ -135,6 +136,7 @@ def store_memory(
         replayed_by: Optional replay worker identifier.
         chunk_origin: Optional explicit origin classification preserved from queued fallback metadata.
         busy_deadline: Optional monotonic deadline for internal BusyError retries.
+        retry_on_busy: Whether store_memory should run its own synchronous BusyError retry loop.
 
     Returns:
         Dict with 'id' (chunk ID) and 'related' (list of similar existing memories).
@@ -366,7 +368,7 @@ def store_memory(
         except apsw.BusyError:
             if transaction_started:
                 cursor.execute("ROLLBACK")
-            if attempt == 4:
+            if not retry_on_busy or attempt == 4:
                 raise
             _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
         except Exception:
@@ -391,7 +393,7 @@ def store_memory(
             except apsw.BusyError:
                 if transaction_started:
                     cursor.execute("ROLLBACK")
-                if attempt == 4:
+                if not retry_on_busy or attempt == 4:
                     raise
                 _sleep_before_busy_retry(0.1 * (2**attempt), busy_deadline)
             except Exception:
