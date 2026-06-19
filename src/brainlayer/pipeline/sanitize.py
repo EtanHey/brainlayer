@@ -115,6 +115,7 @@ class SanitizeConfig:
     owner_emails: tuple[str, ...] = ()
     owner_paths: tuple[str, ...] = ()
     known_names: frozenset[str] = frozenset()
+    confirmed_person_names: frozenset[str] = frozenset()
     strip_emails: bool = True
     strip_ips: bool = True
     strip_jwts: bool = True
@@ -206,6 +207,7 @@ class Sanitizer:
         self._pseudo_lock = threading.Lock()  # Thread-safe pseudonym access
         self._owner_re: Optional[re.Pattern[str]] = None
         self._known_names_re: Optional[re.Pattern[str]] = None
+        self._confirmed_person_names_re: Optional[re.Pattern[str]] = None
         self._person_redaction_allowlist = frozenset(
             normalized
             for normalized in (
@@ -242,13 +244,18 @@ class Sanitizer:
         Hebrew Unicode chars), uses lookahead/lookbehind on whitespace since
         \\b doesn't work reliably with Hebrew script.
         """
-        if not self.config.known_names:
+        self._known_names_re = self._compile_name_regex(self.config.known_names)
+        self._confirmed_person_names_re = self._compile_name_regex(self.config.confirmed_person_names)
+
+    def _compile_name_regex(self, names: frozenset[str]) -> Optional[re.Pattern[str]]:
+        """Build a compiled regex for a set of personal names."""
+        if not names:
             return
 
         latin_names: list[str] = []
         hebrew_names: list[str] = []
 
-        for name in sorted(self.config.known_names, key=len, reverse=True):
+        for name in sorted(names, key=len, reverse=True):
             name = name.strip()
             if not name or len(name) < 2:
                 continue
@@ -268,7 +275,8 @@ class Sanitizer:
             parts.append(r"(?:^|(?<=\s))(?:" + "|".join(hebrew_names) + r")(?=\s|$)")
 
         if parts:
-            self._known_names_re = re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)
+            return re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)
+        return None
 
     def _get_nlp(self):
         """Lazy-load spaCy model on first use."""
@@ -431,13 +439,17 @@ class Sanitizer:
 
         # ── Layer 2: Known names dictionary ──
 
-        if self._known_names_re:
+        def _collect_name_dict_matches(
+            pattern: re.Pattern[str],
+            *,
+            allow_allowlist_skip: bool,
+        ) -> list[tuple[int, int, str, str, str]]:
             # Match against nikud-stripped text but replace in original
             text_no_nikud = _strip_nikud(text)
             if text_no_nikud != text:
                 # Hebrew text with nikud — match on stripped version, map positions back
                 omap = _nikud_offset_map(text)
-                name_matches = [
+                return [
                     (
                         omap[m.start()],
                         omap[m.end()],
@@ -445,15 +457,27 @@ class Sanitizer:
                         "person_name",
                         "name_dict",
                     )
-                    for m in self._known_names_re.finditer(text_no_nikud)
-                    if not self._is_person_redaction_allowlisted(m.group(0))
+                    for m in pattern.finditer(text_no_nikud)
+                    if not (allow_allowlist_skip and self._is_person_redaction_allowlisted(m.group(0)))
                 ]
-            else:
-                name_matches = [
-                    (m.start(), m.end(), self._pseudonym(m.group(0)), "person_name", "name_dict")
-                    for m in self._known_names_re.finditer(text)
-                    if not self._is_person_redaction_allowlisted(m.group(0))
-                ]
+            return [
+                (m.start(), m.end(), self._pseudonym(m.group(0)), "person_name", "name_dict")
+                for m in pattern.finditer(text)
+                if not (allow_allowlist_skip and self._is_person_redaction_allowlisted(m.group(0)))
+            ]
+
+        if self._confirmed_person_names_re:
+            name_matches = _collect_name_dict_matches(
+                self._confirmed_person_names_re,
+                allow_allowlist_skip=False,
+            )
+            text = _apply_replacements(text, name_matches)
+
+        if self._known_names_re:
+            name_matches = _collect_name_dict_matches(
+                self._known_names_re,
+                allow_allowlist_skip=True,
+            )
             text = _apply_replacements(text, name_matches)
 
         # ── Layer 3: spaCy NER (English names only) ──
@@ -556,7 +580,7 @@ class Sanitizer:
         """Extract unique sender names from WhatsApp chunks in the DB.
 
         Queries the chunks table for distinct sender values where source='whatsapp'.
-        Returns the set of names found (can be passed to SanitizeConfig.known_names).
+        Returns the set of names found (can be passed to SanitizeConfig.confirmed_person_names).
         """
         cursor = store.conn.cursor()
         rows = list(

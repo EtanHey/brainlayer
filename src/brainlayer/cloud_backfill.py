@@ -489,7 +489,7 @@ def _init_sanitizer(store: VectorStore) -> Sanitizer:
         # Rebuild sanitizer with the full name dictionary
         new_config = replace(
             sanitizer.config,
-            known_names=frozenset(known_names) | sanitizer.config.known_names,
+            confirmed_person_names=frozenset(known_names) | sanitizer.config.confirmed_person_names,
         )
         sanitizer = Sanitizer(new_config)
 
