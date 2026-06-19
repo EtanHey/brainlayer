@@ -322,6 +322,8 @@ private struct BrainBarDashboardView: View {
     @State private var writePulseRevision = 0
     @State private var enrichmentPulseRevision = 0
     @State private var detailsExpanded = false
+    @State private var signalCoverageExpanded = false
+    @State private var vectorSignalDetailExpanded = false
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
@@ -336,7 +338,6 @@ private struct BrainBarDashboardView: View {
                     overviewCard(layout: layout)
                     freshnessLine
                     pipelinePanel(layout: layout)
-                    signalCoveragePanel(layout: layout)
                     diagnostics(layout: layout)
                 }
                 .padding(layout.outerPadding)
@@ -489,12 +490,17 @@ private struct BrainBarDashboardView: View {
 
             if layout.chartColumns == 2 {
                 HStack(alignment: .top, spacing: layout.gridSpacing) {
-                    writesCard(layout: layout)
+                    VStack(alignment: .leading, spacing: 12) {
+                        writesCard(layout: layout)
+                        signalCoveragePanel(layout: layout)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     enrichmentsCard(layout: layout)
                 }
             } else {
                 VStack(spacing: layout.gridSpacing) {
                     writesCard(layout: layout)
+                    signalCoveragePanel(layout: layout)
                     enrichmentsCard(layout: layout)
                 }
             }
@@ -549,7 +555,9 @@ private struct BrainBarDashboardView: View {
     private func signalCoveragePanel(layout: BrainBarDashboardLayout) -> some View {
         BrainBarSignalCoveragePanel(
             stats: collector.stats,
-            compact: layout.compactCards
+            compact: layout.compactCards,
+            isExpanded: $signalCoverageExpanded,
+            isVectorDetailExpanded: $vectorSignalDetailExpanded
         )
     }
 
@@ -692,24 +700,31 @@ private struct BrainBarTrigramProgress: View {
 private struct BrainBarSignalCoveragePanel: View {
     let stats: BrainDatabase.DashboardStats
     let compact: Bool
+    @Binding var isExpanded: Bool
+    @Binding var isVectorDetailExpanded: Bool
 
     private var signals: [BrainBarSignalCoverage] {
-        [
+        let green = BrainBarStateTheme.active.theme.swiftUIColor
+        let amber = BrainBarStateTheme.degraded.theme.swiftUIColor
+
+        return [
             BrainBarSignalCoverage(
                 name: "Vector",
                 indexedCount: stats.vectorIndexedChunkCount,
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
-                accentColor: .brainBarAccent
+                accentColor: amber,
+                showsDetail: true
             ),
             BrainBarSignalCoverage(
-                name: "FTS",
+                name: "FTS5",
                 indexedCount: stats.ftsIndexedChunkCount,
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
-                accentColor: .brainBarAccentBright
+                accentColor: green,
+                showsDetail: false
             ),
             BrainBarSignalCoverage(
                 name: "Trigram",
@@ -717,50 +732,91 @@ private struct BrainBarSignalCoveragePanel: View {
                 totalCount: stats.signalEligibleChunkCount,
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
-                accentColor: .brainBarAccentViolet
+                accentColor: green,
+                showsDetail: false
             ),
         ]
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    BrainBarSectionLabel("Signal Coverage")
-                    Text("Coverage is counted per retrieval signal; backlogs stay separate.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
+        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
+            disclosureButton
 
-                VStack(alignment: .leading, spacing: 6) {
-                    BrainBarSectionLabel("Signal Coverage")
-                    Text("Coverage is counted per retrieval signal; backlogs stay separate.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            if isExpanded {
+                signalBars
+                    .transition(.opacity.combined(with: .move(edge: .top)))
 
-            if compact {
-                VStack(spacing: 10) {
-                    ForEach(signals) { signal in
-                        BrainBarSignalCoverageRow(signal: signal, compact: true)
-                    }
-                }
-            } else {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(signals) { signal in
-                        BrainBarSignalCoverageRow(signal: signal, compact: false)
-                    }
+                if isVectorDetailExpanded, let vector = signals.first(where: { $0.showsDetail }) {
+                    BrainBarVectorSignalDetail(signal: vector, compact: compact)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
-        .padding(compact ? 18 : 22)
-        .background(
-            BrainBarGlassPanel(cornerRadius: BrainBarDesignTokens.Radius.lg, tint: .brainBarAccentBright)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var disclosureButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isExpanded.toggle()
+                if !isExpanded {
+                    isVectorDetailExpanded = false
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 12, height: 12)
+
+                Text("see under the hood")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show retrieval signal coverage")
+    }
+
+    @ViewBuilder
+    private var signalBars: some View {
+        if compact {
+            VStack(spacing: 8) {
+                ForEach(signals) { signal in
+                    signalRow(for: signal)
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(signals) { signal in
+                    signalRow(for: signal)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func signalRow(for signal: BrainBarSignalCoverage) -> some View {
+        if signal.showsDetail {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isVectorDetailExpanded.toggle()
+                }
+            } label: {
+                BrainBarSignalCoverageRow(
+                    signal: signal,
+                    compact: compact,
+                    isSelected: isVectorDetailExpanded
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Show Vector backlog details")
+        } else {
+            BrainBarSignalCoverageRow(signal: signal, compact: compact, isSelected: false)
+        }
     }
 }
 
@@ -771,53 +827,155 @@ private struct BrainBarSignalCoverage: Identifiable {
     let backlogCount: Int
     let coveragePercent: Double
     let accentColor: Color
+    let showsDetail: Bool
 
     var id: String { name }
-
-    var countText: String {
-        "\(indexedCount)/\(totalCount)"
-    }
 
     var percentText: String {
         String(format: "%.0f%%", coveragePercent)
     }
 
+    var clampedCoveragePercent: Double {
+        min(max(coveragePercent, 0), 100)
+    }
+
     var backlogText: String {
-        "backlog \(backlogCount)"
+        NumberFormatter.localizedString(from: NSNumber(value: backlogCount), number: .decimal)
     }
 }
 
 private struct BrainBarSignalCoverageRow: View {
     let signal: BrainBarSignalCoverage
     let compact: Bool
+    let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+        VStack(alignment: .leading, spacing: compact ? 7 : 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(signal.name)
-                    .font(.system(size: compact ? 13 : 14, weight: .semibold))
+                    .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                    .foregroundStyle(Color.brainBarTextPrimary)
                 Spacer(minLength: 8)
                 Text(signal.percentText)
-                    .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 13 : 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(signal.accentColor)
                     .monospacedDigit()
             }
 
-            ProgressView(value: min(max(signal.coveragePercent, 0), 100), total: 100)
-                .tint(signal.accentColor)
-
-            HStack(spacing: 10) {
-                BrainBarLaneMetric(label: "Indexed", value: signal.countText)
-                BrainBarLaneMetric(label: "Backlog", value: "\(signal.backlogCount)")
-                Spacer(minLength: 0)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(signal.accentColor.opacity(0.16))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [signal.accentColor.opacity(0.68), signal.accentColor],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: proxy.size.width * signal.clampedCoveragePercent / 100)
+                }
             }
-
-            Text(signal.backlogText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+            .frame(height: 6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(compact ? 12 : 14)
-        .background(BrainBarDashboardCardStyle())
+        .padding(.vertical, compact ? 10 : 11)
+        .padding(.horizontal, compact ? 11 : 12)
+        .background(BrainBarDashboardCardStyle(emphasized: isSelected))
+        .overlay {
+            RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                .stroke(signal.accentColor.opacity(isSelected ? 0.48 : 0.2), lineWidth: isSelected ? 1.2 : 1)
+        }
+    }
+}
+
+private struct BrainBarVectorSignalDetail: View {
+    let signal: BrainBarSignalCoverage
+    let compact: Bool
+
+    // TODO: Replace these rollout estimates with measured vector drain fields
+    // once DashboardStats carries vector indexing history.
+    private let estimatedDrainRatePerHour = 3_300
+    private let estimatedETAHours = 13
+
+    var body: some View {
+        Group {
+            if compact {
+                VStack(alignment: .leading, spacing: 12) {
+                    metrics
+                    trend
+                }
+            } else {
+                HStack(alignment: .center, spacing: 18) {
+                    metrics
+                    Spacer(minLength: 8)
+                    trend
+                }
+            }
+        }
+        .padding(.vertical, compact ? 12 : 14)
+        .padding(.horizontal, compact ? 12 : 16)
+        .background(
+            RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                .fill(signal.accentColor.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
+                        .stroke(signal.accentColor.opacity(0.28), lineWidth: 1)
+                )
+        )
+    }
+
+    private var metrics: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: compact ? 14 : 22) {
+                BrainBarSignalDetailMetric(label: "drain", value: "~\(formatted(estimatedDrainRatePerHour))/hr", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "ETA", value: "~\(estimatedETAHours)h", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "backlog", value: signal.backlogText, tint: Color.brainBarTextPrimary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                BrainBarSignalDetailMetric(label: "drain", value: "~\(formatted(estimatedDrainRatePerHour))/hr", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "ETA", value: "~\(estimatedETAHours)h", tint: signal.accentColor)
+                BrainBarSignalDetailMetric(label: "backlog", value: signal.backlogText, tint: Color.brainBarTextPrimary)
+            }
+        }
+    }
+
+    private var trend: some View {
+        Label("falling", systemImage: "arrow.down.right")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(signal.accentColor)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .background(Capsule().fill(signal.accentColor.opacity(0.12)))
+            .overlay(Capsule().stroke(signal.accentColor.opacity(0.32), lineWidth: 1))
+            .help("Vector backlog trend")
+    }
+
+    private func formatted(_ value: Int) -> String {
+        NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    }
+}
+
+private struct BrainBarSignalDetailMetric: View {
+    let label: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(value)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundStyle(tint)
+                .monospacedDigit()
+                .lineLimit(1)
+
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextMuted)
+                .textCase(.uppercase)
+        }
     }
 }
 
