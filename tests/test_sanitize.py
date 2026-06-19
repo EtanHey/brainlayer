@@ -184,6 +184,20 @@ class TestNameDictionary:
         assert "John Smith" not in result.sanitized
         assert {replacement.original for replacement in result.replacements} == {"Claude Shannon", "John Smith"}
 
+    def test_single_token_from_multiword_allowlist_still_pseudonymizes(self):
+        s = Sanitizer(
+            SanitizeConfig(
+                known_names=frozenset({"Heyman"}),
+                use_spacy_ner=False,
+            )
+        )
+
+        result = s.sanitize("Heyman joined the thread")
+
+        assert "Heyman" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+        assert any(replacement.original == "Heyman" for replacement in result.replacements)
+
     def test_english_name_replaced(self, full_sanitizer):
         result = full_sanitizer.sanitize("David Cohen joined the meeting")
         assert "David Cohen" not in result.sanitized

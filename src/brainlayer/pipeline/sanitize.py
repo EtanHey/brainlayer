@@ -213,9 +213,12 @@ class Sanitizer:
             )
             if normalized
         )
-        self._person_redaction_allowlist_tokens = frozenset(
-            token for name in self.config.person_redaction_allowlist for token in _person_allowlist_tokens(name)
-        )
+        single_token_allowlist: set[str] = set()
+        for name in self.config.person_redaction_allowlist:
+            tokens = _person_allowlist_tokens(name)
+            if len(tokens) == 1:
+                single_token_allowlist.update(tokens)
+        self._person_redaction_allowlist_tokens = frozenset(single_token_allowlist)
 
         self._build_owner_regex()
         self._build_known_names_regex()
@@ -298,9 +301,7 @@ class Sanitizer:
         tokens = _person_allowlist_tokens(name)
         if not tokens or not (tokens & self._person_redaction_allowlist_tokens):
             return False
-        allowed_mixed_span_tokens = (
-            self._person_redaction_allowlist_tokens | _PERSON_ALLOWLIST_TOOL_DESCRIPTOR_TOKENS
-        )
+        allowed_mixed_span_tokens = self._person_redaction_allowlist_tokens | _PERSON_ALLOWLIST_TOOL_DESCRIPTOR_TOKENS
         return tokens <= allowed_mixed_span_tokens
 
     def sanitize(
