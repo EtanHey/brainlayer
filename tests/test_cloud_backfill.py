@@ -64,6 +64,39 @@ def test_export_unenriched_chunks_disables_thinking(tmp_path, monkeypatch):
         store.close()
 
 
+def test_init_sanitizer_preserves_env_allowlist_when_adding_whatsapp_names(tmp_path, monkeypatch):
+    """DB-derived contact names should not discard env-extended redaction allowlist entries."""
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+    monkeypatch.setenv("BRAINLAYER_REDACTION_ALLOWLIST", "BrainLayerBot")
+
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        cursor = store.conn.cursor()
+        for chunk_id, sender in [("contact-tool", "BrainLayerBot"), ("contact-person", "John Smith")]:
+            cursor.execute(
+                """
+                INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source, sender)
+                VALUES (?, ?, '{}', 'whatsapp.jsonl', 'test-project', 'message', ?, 'whatsapp', ?)
+                """,
+                (
+                    chunk_id,
+                    f"{sender} sent a long enough WhatsApp message to populate sanitizer contacts.",
+                    70,
+                    sender,
+                ),
+            )
+
+        sanitizer = cloud_backfill._init_sanitizer(store)
+        result = sanitizer.sanitize("BrainLayerBot coordinated with John Smith.")
+
+        assert "BrainLayerBot" in result.sanitized
+        assert "John Smith" not in result.sanitized
+        assert "[PERSON_" in result.sanitized
+    finally:
+        store.close()
+
+
 def test_estimate_batch_cost_uses_discounted_batch_rates():
     """Batch usage cost helper should apply the documented 50% discount."""
     cost = cloud_backfill.estimate_batch_cost_usd(1_000_000, 2_000_000)
