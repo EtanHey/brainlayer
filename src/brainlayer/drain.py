@@ -441,6 +441,24 @@ def _run_enrichment_provenance_hooks(
         logger.exception("drain auto_supersede failed for chunk_id=%s", chunk_id)
 
 
+def _apply_store_supersedes(conn: apsw.Connection, old_chunk_id: str | None, new_chunk_id: str) -> None:
+    if not old_chunk_id:
+        return
+    cols = _columns(conn, "chunks")
+    if "superseded_by" not in cols:
+        return
+    if "status" in cols:
+        conn.execute(
+            "UPDATE chunks SET superseded_by = ?, status = 'superseded' WHERE id = ?",
+            (new_chunk_id, old_chunk_id),
+        )
+    else:
+        conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (new_chunk_id, old_chunk_id))
+    for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
+        if conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)).fetchone():
+            conn.execute(f"DELETE FROM {vector_table} WHERE chunk_id = ?", (old_chunk_id,))
+
+
 def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     raw_content = event.get("content")
     if raw_content is None:
@@ -468,6 +486,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         metadata.update(raw_metadata)
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
+    supersedes = event.get("supersedes") or metadata.get("supersedes")
     tags = event.get("tags")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
@@ -485,6 +504,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
                     "last_seen_at": now,
                 },
             )
+            _apply_store_supersedes(conn, supersedes, chunk_id)
             return ApplyResult(chunk_id=chunk_id)
         return ApplyResult(collision_chunk_id=chunk_id)
     stored_chunk_id = _insert_or_merge_chunk(
@@ -509,21 +529,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
             "chunk_origin": detect_chunk_origin(content, explicit_chunk_origin),
         },
     )
-    supersedes = event.get("supersedes") or metadata.get("supersedes")
-    cols = _columns(conn, "chunks")
-    if supersedes and "superseded_by" in cols:
-        if "status" in cols:
-            conn.execute(
-                "UPDATE chunks SET superseded_by = ?, status = 'superseded' WHERE id = ?",
-                (stored_chunk_id, supersedes),
-            )
-        else:
-            conn.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", (stored_chunk_id, supersedes))
-        for vector_table in ("chunk_vectors", "chunk_vectors_binary"):
-            if conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (vector_table,)
-            ).fetchone():
-                conn.execute(f"DELETE FROM {vector_table} WHERE chunk_id = ?", (supersedes,))
+    _apply_store_supersedes(conn, supersedes, stored_chunk_id)
     entity_id = event.get("entity_id") or metadata.get("entity_id")
     if entity_id and {"kg_entities", "kg_entity_chunks"}.issubset(_table_names(conn)):
         if conn.execute("SELECT id FROM kg_entities WHERE id = ?", (entity_id,)).fetchone():

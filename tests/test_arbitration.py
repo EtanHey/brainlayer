@@ -515,6 +515,53 @@ def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
     assert entity_link == replacement_id
 
 
+def test_drain_existing_promised_chunk_still_applies_supersedes(tmp_path, monkeypatch):
+    """A queued replay after post-store supersede contention must finish lifecycle work."""
+    from brainlayer.drain import drain_once
+
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    _create_minimal_db(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('old-id', 'old content', '{}', 'seed')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO chunks (id, content, metadata, source_file)
+            VALUES ('manual-new1234', 'replacement content', '{}', 'mcp')
+            """
+        )
+        conn.commit()
+
+    (queue_dir / "store-replay.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "store_memory",
+                "chunk_id": "manual-new1234",
+                "content": "replacement content",
+                "memory_type": "note",
+                "project": "arbitration-test",
+                "supersedes": "old-id",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1) == 1
+
+    with sqlite3.connect(db_path) as conn:
+        superseded_by = conn.execute("SELECT superseded_by FROM chunks WHERE id = 'old-id'").fetchone()[0]
+
+    assert superseded_by == "manual-new1234"
+
+
 def test_drain_store_events_merge_duplicates_and_write_alias(tmp_path):
     from brainlayer.drain import drain_once
     from brainlayer.queue_io import enqueue_store
