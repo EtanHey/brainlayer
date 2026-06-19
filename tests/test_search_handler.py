@@ -331,6 +331,54 @@ async def test_brain_search_releases_embed_lock_when_executor_timeout_cancels_qu
     assert search_handler_module._EMBED_IN_FLIGHT.locked() is False
 
 
+@pytest.mark.asyncio
+async def test_brain_search_releases_embed_lock_when_cancelled_before_executor_starts(monkeypatch):
+    store = FtsFallbackSearchStore()
+    loop = asyncio.get_running_loop()
+    original_run_in_executor = loop.run_in_executor
+
+    def queued_forever(_executor, _func, *_args):
+        return loop.create_future()
+
+    monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "1000")
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr("brainlayer.mcp.search_handler._normalize_project_name", lambda project: project)
+    monkeypatch.setattr(loop, "run_in_executor", queued_forever)
+
+    task = asyncio.create_task(
+        _search(
+            query="keyword fallback",
+            source="all",
+            num_results=1,
+        )
+    )
+    try:
+        deadline = time.monotonic() + 1.0
+        while not search_handler_module._EMBED_IN_FLIGHT.locked() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert search_handler_module._EMBED_IN_FLIGHT.locked()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        monkeypatch.setattr(loop, "run_in_executor", original_run_in_executor)
+        _content, structured = await _search(
+            query="keyword fallback",
+            source="all",
+            num_results=1,
+        )
+
+        assert structured["search_mode"] == "hybrid"
+        assert search_handler_module._EMBED_IN_FLIGHT.locked() is False
+    finally:
+        if not task.done():
+            task.cancel()
+        if search_handler_module._EMBED_IN_FLIGHT.locked():
+            search_handler_module._EMBED_IN_FLIGHT.release()
+
+
 def test_embed_timeout_rejects_non_finite_env_values(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_EMBED_TIMEOUT_MS", "nan")
     assert search_handler_module._embed_timeout_ms() == 1000.0

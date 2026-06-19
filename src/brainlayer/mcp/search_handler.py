@@ -1837,7 +1837,10 @@ async def _search(
                     release_embed_lock_once()
                     raise
                 query_embedding = await asyncio.wait_for(embed_future, timeout=embed_timeout_ms / 1000.0)
-            except TimeoutError as exc:
+            except asyncio.CancelledError:
+                release_if_embed_never_started()
+                raise
+            except asyncio.TimeoutError as exc:
                 release_if_embed_never_started()
                 search_mode = "fts_only"
                 fallback_reason = "embed_timeout"
@@ -1851,6 +1854,7 @@ async def _search(
                     fallback="fts_only",
                 )
             except Exception as exc:
+                release_if_embed_never_started()
                 search_mode = "fts_only"
                 fallback_reason = f"embed_error:{exc.__class__.__name__}"
                 search_profile.emit(
