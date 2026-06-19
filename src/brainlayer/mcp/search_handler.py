@@ -26,8 +26,10 @@ from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_projec
 _RETRY_MAX_ATTEMPTS = 3
 _retry_delay = 0.1  # base delay in seconds (exposed for test patching)
 _VALID_SEARCH_DETAILS = frozenset({"compact", "full"})
+_VALID_SEARCH_ORDERS = frozenset({"relevance", "origin"})
 _MAX_PUBLIC_NUM_RESULTS = 100
 _MIN_PUBLIC_NUM_RESULTS = 1
+_ORIGIN_CANDIDATE_LIMIT = 100
 _HELPER_SOCKET_GLOB = "/tmp/brainbar-hybrid-*.sock"
 _HELPER_SOCKET_TIMEOUT_SECONDS = 2.0
 
@@ -54,6 +56,46 @@ from ._shared import (
 def _get_vector_store():
     """Compatibility hook for tests; search handlers use the readonly store by default."""
     return _get_search_vector_store()
+
+
+def _origin_candidate_count(num_results: int) -> int:
+    return min(_MAX_PUBLIC_NUM_RESULTS, max(num_results, _ORIGIN_CANDIDATE_LIMIT))
+
+
+def _created_at_origin_key(meta: dict[str, Any], index: int) -> tuple[int, float | str, int]:
+    created_at = meta.get("created_at") if isinstance(meta, dict) else None
+    if isinstance(created_at, str) and created_at:
+        try:
+            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return (0, parsed.timestamp(), index)
+        except (TypeError, ValueError, OverflowError):
+            return (1, created_at, index)
+    return (2, "", index)
+
+
+def _sort_hybrid_results_by_origin(results: dict[str, list], num_results: int) -> dict[str, list]:
+    rows = [
+        (index, chunk_id, document, metadata, distance)
+        for index, (chunk_id, document, metadata, distance) in enumerate(
+            zip(
+                results.get("ids", [[]])[0],
+                results.get("documents", [[]])[0],
+                results.get("metadatas", [[]])[0],
+                results.get("distances", [[]])[0],
+            )
+        )
+    ]
+    rows.sort(key=lambda row: _created_at_origin_key(row[3], row[0]))
+    rows = rows[:num_results]
+
+    ordered = dict(results)
+    ordered["ids"] = [[row[1] for row in rows]]
+    ordered["documents"] = [[row[2] for row in rows]]
+    ordered["metadatas"] = [[row[3] for row in rows]]
+    ordered["distances"] = [[row[4] for row in rows]]
+    return ordered
 
 
 def _is_sqlite_vec_knn_error(exc: Exception) -> bool:
@@ -734,6 +776,7 @@ async def _brain_search(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -756,6 +799,7 @@ async def _brain_search(
     try:
         if (
             allow_helper_route
+            and order == "relevance"
             and _helper_route_enabled()
             and _should_try_helper_route(
                 query,
@@ -823,6 +867,7 @@ async def _brain_search(
             entity_id=entity_id,
             agent_id=agent_id,
             num_results=num_results,
+            order=order,
             before=before,
             after=after,
             max_results=max_results,
@@ -858,6 +903,7 @@ async def _brain_search_dispatch(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -874,6 +920,8 @@ async def _brain_search_dispatch(
 ):
     if detail not in _VALID_SEARCH_DETAILS:
         return _error_result(f"Invalid detail='{detail}'. Must be one of: {sorted(_VALID_SEARCH_DETAILS)}")
+    if order not in _VALID_SEARCH_ORDERS:
+        return _error_result(f"Invalid order='{order}'. Must be one of: {sorted(_VALID_SEARCH_ORDERS)}")
     if num_results < _MIN_PUBLIC_NUM_RESULTS or num_results > _MAX_PUBLIC_NUM_RESULTS:
         return _error_result(
             f"num_results={num_results} must be between {_MIN_PUBLIC_NUM_RESULTS} and {_MAX_PUBLIC_NUM_RESULTS}"
@@ -909,6 +957,7 @@ async def _brain_search_dispatch(
             entity_id=entity_id,
             agent_id=agent_id,
             detail=detail,
+            order=order,
             source_filter_like=source_filter,
             correction_category=correction_category,
             include_checkpoints=include_checkpoints,
@@ -1025,6 +1074,7 @@ async def _brain_search_dispatch(
             sentiment=sentiment,
             agent_id=agent_id,
             num_results=num_results,
+            order=order,
             max_results=max_results,
             detail=detail,
             source_filter=source_filter,
@@ -1290,6 +1340,7 @@ async def _brain_search_dispatch(
         date_to=date_to,
         sentiment=sentiment,
         detail=detail,
+        order=order,
         fts_query_override=fts_query_override,
         source_filter_like=source_filter,
         correction_category=correction_category,
@@ -1493,6 +1544,7 @@ async def _brain_recall(
     entity_id: str | None = None,
     agent_id: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     before: int = 3,
     after: int = 3,
     max_results: int = 10,
@@ -1575,6 +1627,7 @@ async def _brain_recall(
             entity_id=entity_id,
             agent_id=agent_id,
             num_results=num_results,
+            order=order,
             before=before,
             after=after,
             max_results=max_results,
@@ -1635,6 +1688,7 @@ async def _search(
     project: str | None = None,
     content_type: str | None = None,
     num_results: int = 5,
+    order: str = "relevance",
     source: str | None = None,
     tag: str | None = None,
     intent: str | None = None,
@@ -1666,10 +1720,14 @@ async def _search(
         if output_format is not None:
             detail = output_format
 
+        if order not in _VALID_SEARCH_ORDERS:
+            return _error_result(f"Invalid order='{order}'. Must be one of: {sorted(_VALID_SEARCH_ORDERS)}")
+
         if num_results < 1:
             num_results = 5
         elif num_results > 100:
             num_results = 100
+        hybrid_n_results = _origin_candidate_count(num_results) if order == "origin" else num_results
 
         store = _get_vector_store()
 
@@ -1721,7 +1779,7 @@ async def _search(
                         query_embedding=query_embedding,
                         query_text=query,
                         fts_query_override=fts_query_override,
-                        n_results=num_results,
+                        n_results=hybrid_n_results,
                         project_filter=normalized_project,
                         content_type_filter=content_type,
                         source_filter=source_filter,
@@ -1777,6 +1835,8 @@ async def _search(
             return ([TextContent(type="text", text="No results found.")], empty)
 
         results = store.enrich_results_with_session_context(results)
+        if order == "origin":
+            results = _sort_hybrid_results_by_origin(results, num_results)
 
         if detail == "compact":
             structured_results = []
@@ -1803,10 +1863,19 @@ async def _search(
                 )
                 structured_results.append(item)
             structured = {"query": query, "total": len(structured_results), "results": structured_results}
-            formatted_text = format_search_results(query, structured_results, len(structured_results))
+            if order == "origin":
+                structured["order"] = order
+            formatted_text = format_search_results(
+                query,
+                structured_results,
+                len(structured_results),
+                order=order if order == "origin" else None,
+            )
             return ([TextContent(type="text", text=formatted_text)], structured)
 
         output_parts = [f"## Search Results for: {query}\n"]
+        if order == "origin":
+            output_parts.append("- Order: origin")
         structured_results = []
 
         for i, (cid, doc, meta, dist) in enumerate(
@@ -1876,6 +1945,8 @@ async def _search(
             output_parts.append("\n---")
 
         structured = {"query": query, "total": len(structured_results), "results": structured_results}
+        if order == "origin":
+            structured["order"] = order
         return ([TextContent(type="text", text="\n".join(output_parts))], structured)
 
     except Exception as e:

@@ -121,6 +121,18 @@ class TestBrainRecallSearchMode:
         assert call_kwargs["num_results"] == 10
         assert call_kwargs["detail"] == "full"
 
+    def test_search_mode_passes_order(self):
+        """mode=search passes order through to brain_search."""
+        with patch(
+            "brainlayer.mcp.search_handler._brain_search",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_search:
+            asyncio.run(_brain_recall(mode="search", query="auth origin", order="origin"))
+
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["order"] == "origin"
+
     def test_search_mode_requires_query(self):
         """mode=search without query returns error."""
         result = asyncio.run(_brain_recall(mode="search", query=None))

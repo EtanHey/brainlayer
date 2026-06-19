@@ -540,6 +540,16 @@ class TestInputSchemaPresence:
         assert "source_filter" in props
         assert "correction_category" in props
         assert "include_checkpoints" in props
+        assert "order" in props
+
+    def test_order_enum_values(self):
+        """order exposes default relevance ranking and origin-first ranking."""
+        props = self._get_brain_search_props()
+        order = props["order"]
+
+        assert order["type"] == "string"
+        assert order["enum"] == ["relevance", "origin"]
+        assert order["default"] == "relevance"
 
     def test_sentiment_filter_enum_values(self):
         """sentiment_filter has the standardized enum values."""
@@ -743,6 +753,28 @@ class TestAliasResolution:
 
         call_kwargs = mock_recall.call_args[1]
         assert call_kwargs["consumer"] == "orchestrator"
+
+    def test_order_passes_from_call_tool(self):
+        """order is forwarded from brain_search to recall search."""
+        from brainlayer.mcp import call_tool
+
+        with patch(
+            "brainlayer.mcp._brain_recall",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_recall:
+            asyncio.run(
+                call_tool(
+                    "brain_search",
+                    {
+                        "query": "auth origin",
+                        "order": "origin",
+                    },
+                )
+            )
+
+        call_kwargs = mock_recall.call_args[1]
+        assert call_kwargs["order"] == "origin"
 
     def test_consumer_passes_from_direct_brain_recall_call_tool(self):
         """consumer is forwarded through the direct brain_recall route too."""

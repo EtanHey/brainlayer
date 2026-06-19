@@ -2,11 +2,20 @@ import pytest
 
 from brainlayer.mcp import call_tool
 from brainlayer.mcp.search_handler import _brain_search
+from brainlayer.vector_store import VectorStore
 
 
 class FakeEmbeddingModel:
     def embed_query(self, _query: str) -> list[float]:
         return [0.1, 0.2, 0.3]
+
+
+class OriginEmbeddingModel:
+    def __init__(self, embedding: list[float]) -> None:
+        self.embedding = embedding
+
+    def embed_query(self, _query: str) -> list[float]:
+        return self.embedding
 
 
 class RecordingSearchStore:
@@ -47,6 +56,59 @@ class RecordingKgSearchStore(RecordingSearchStore):
         }
 
 
+def _origin_embedding(seed: float) -> list[float]:
+    return [seed + (i / 100000.0) for i in range(1024)]
+
+
+def _seed_origin_search_store(db_path) -> tuple[VectorStore, list[float]]:
+    store = VectorStore(db_path)
+    query_embedding = _origin_embedding(0.01)
+    chunks = [
+        {
+            "id": "origin-old",
+            "content": "originmarker retention first decision from the earliest architecture note",
+            "metadata": {"role": "assistant"},
+            "source_file": "origin-old.jsonl",
+            "project": "origin-test",
+            "content_type": "assistant_text",
+            "char_count": 70,
+            "source": "claude_code",
+            "created_at": "2026-01-05T09:00:00Z",
+        },
+        {
+            "id": "origin-mid",
+            "content": "originmarker retention architecture followup after the first decision",
+            "metadata": {"role": "assistant"},
+            "source_file": "origin-mid.jsonl",
+            "project": "origin-test",
+            "content_type": "assistant_text",
+            "char_count": 68,
+            "source": "claude_code",
+            "created_at": "2026-02-05T09:00:00Z",
+        },
+        {
+            "id": "origin-new",
+            "content": "originmarker retention architecture final implementation note with exact query terms",
+            "metadata": {"role": "assistant"},
+            "source_file": "origin-new.jsonl",
+            "project": "origin-test",
+            "content_type": "assistant_text",
+            "char_count": 76,
+            "source": "claude_code",
+            "created_at": "2026-03-05T09:00:00Z",
+        },
+    ]
+    store.upsert_chunks(
+        chunks,
+        [
+            _origin_embedding(0.90),
+            _origin_embedding(0.50),
+            query_embedding,
+        ],
+    )
+    return store, query_embedding
+
+
 @pytest.mark.asyncio
 async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
     store = RecordingSearchStore()
@@ -70,6 +132,49 @@ async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
 
     assert store.hybrid_kwargs is not None
     assert store.hybrid_kwargs["agent_id"] == "codex-test-agent"
+
+
+@pytest.mark.asyncio
+async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_changing_default(
+    monkeypatch, tmp_path
+):
+    store, query_embedding = _seed_origin_search_store(tmp_path / "origin.db")
+
+    monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
+    monkeypatch.setattr("brainlayer.mcp.search_handler._get_vector_store", lambda: store)
+    monkeypatch.setattr(
+        "brainlayer.mcp.search_handler._get_embedding_model",
+        lambda: OriginEmbeddingModel(query_embedding),
+    )
+    monkeypatch.setattr("brainlayer.mcp.search_handler._detect_entities", lambda *_args, **_kwargs: [])
+
+    try:
+        _default_content, default_structured = await _brain_search(
+            query="originmarker retention architecture",
+            project="origin-test",
+            source="all",
+            num_results=2,
+            allow_helper_route=False,
+        )
+        default_ids = [item["chunk_id"] for item in default_structured["results"]]
+        assert default_ids[0] == "origin-new"
+
+        origin_content, origin_structured = await _brain_search(
+            query="originmarker retention architecture",
+            project="origin-test",
+            source="all",
+            num_results=2,
+            order="origin",
+            allow_helper_route=False,
+        )
+
+        origin_ids = [item["chunk_id"] for item in origin_structured["results"]]
+        assert origin_ids == ["origin-old", "origin-mid"]
+        assert [item["date"] for item in origin_structured["results"]] == ["2026-01-05", "2026-02-05"]
+        assert origin_structured["order"] == "origin"
+        assert "- Order: origin" in origin_content[0].text
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio
