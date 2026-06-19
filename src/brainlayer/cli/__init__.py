@@ -359,6 +359,58 @@ def context(
         raise typer.Exit(1)
 
 
+@app.command("health-check")
+def health_check_command(
+    db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
+    state_path: Path = typer.Option(
+        Path("~/.local/share/brainlayer/health-check-state.json"),
+        "--state-path",
+        help="State file used to compare missing-vector progress between ticks.",
+    ),
+    socket_path: Path = typer.Option(Path("/tmp/brainbar.sock"), "--socket-path", help="BrainBar MCP socket path."),
+    canary_query: str = typer.Option("agentopology", "--canary-query", help="brain_search canary query."),
+    max_stalled_ticks: int = typer.Option(
+        2,
+        "--max-stalled-ticks",
+        min=1,
+        help="Number of unchanged missing-vector checks before alerting.",
+    ),
+    socket_timeout_seconds: float = typer.Option(
+        5.0,
+        "--socket-timeout",
+        min=0.5,
+        help="Seconds to wait for the BrainBar socket canary.",
+    ),
+    heal: bool = typer.Option(False, "--heal/--no-heal", help="Kickstart launchd services for cheap self-heals."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run the lightweight BrainLayer stability health-check."""
+    from ..health_check import HealthCheckConfig, run_health_check
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db or get_db_path(),
+            state_path=state_path.expanduser(),
+            socket_path=socket_path.expanduser(),
+            canary_query=canary_query,
+            heal=heal,
+            socket_timeout_seconds=socket_timeout_seconds,
+            max_stalled_ticks=max_stalled_ticks,
+        )
+    )
+    payload = result.to_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        status = "ok" if result.ok else "unhealthy"
+        rprint(f"[bold]{status}[/] missing_vectors={result.missing_vectors} canary_ok={result.canary_ok}")
+        for issue in result.issues:
+            rprint(f"[red]{issue.severity}[/] {issue.code}: {issue.message}")
+        for action in result.actions:
+            rprint(f"[yellow]action[/] {action}")
+    raise typer.Exit(0 if result.ok else 1)
+
+
 @app.command("reembed-backfill")
 def reembed_backfill_command(
     db: Optional[Path] = typer.Option(None, "--db", help="Path to brainlayer.db"),
