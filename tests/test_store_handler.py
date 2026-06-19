@@ -1,5 +1,6 @@
 """Tests for MCP store handler responses."""
 
+import asyncio
 import json
 import time
 from unittest.mock import MagicMock, patch
@@ -122,6 +123,52 @@ async def test_store_busy_budget_defers_promptly_and_pending_flush_replays(tmp_p
     assert not pending_path.exists()
     assert replay.call_args.kwargs["chunk_id"] == structured["chunk_id"]
     assert replay.call_args.kwargs["content"] == "queued within busy budget"
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_restores_timeout_between_concurrent_retries(monkeypatch):
+    """Overlapping retry sleeps must not snapshot another store call's temporary timeout."""
+    from brainlayer.mcp import store_handler
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 5000
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def locked_store_memory(**kwargs):
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "1000")
+    monkeypatch.setattr(store_handler, "_retry_delay", 0.02)
+    monkeypatch.setattr(store_handler, "_RETRY_MAX_ATTEMPTS", 2)
+
+    results = await asyncio.gather(
+        store_handler._store_memory_with_retries(locked_store_memory, store=store),
+        store_handler._store_memory_with_retries(locked_store_memory, store=store),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, apsw.BusyError) for result in results)
+    assert store.conn.timeout_ms == 5000
 
 
 @pytest.mark.asyncio
