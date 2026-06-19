@@ -162,9 +162,7 @@ async def test_brain_search_mcp_threads_agent_id_to_hybrid_search(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_changing_default(
-    monkeypatch, tmp_path
-):
+async def test_brain_search_origin_order_returns_oldest_matching_chunks_without_changing_default(monkeypatch, tmp_path):
     store, query_embedding = _seed_origin_search_store(tmp_path / "origin.db")
 
     monkeypatch.setattr("brainlayer.mcp.search_handler._helper_route_enabled", lambda: False)
