@@ -20,7 +20,7 @@ DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
 DEFAULT_STATE_PATH = Path("~/.local/share/brainlayer/health-check-state.json").expanduser()
 DEFAULT_CANARY_QUERY = "agentopology"
 DEFAULT_HOTLANE_LABEL = "com.brainlayer.hotlane-brainbar"
-DEFAULT_BRAINBAR_LABEL = "com.brainlayer.brainbar"
+DEFAULT_BRAINBAR_DAEMON_LABEL = "com.brainlayer.brainbar-daemon"
 DEFAULT_BACKLOG_BATCH = 128
 
 
@@ -38,7 +38,7 @@ class HealthCheckConfig:
     socket_path: Path = DEFAULT_SOCKET_PATH
     canary_query: str = DEFAULT_CANARY_QUERY
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
-    brainbar_label: str = DEFAULT_BRAINBAR_LABEL
+    brainbar_daemon_label: str = DEFAULT_BRAINBAR_DAEMON_LABEL
     heal: bool = False
     socket_timeout_seconds: float = 5.0
     max_stalled_ticks: int = 2
@@ -245,8 +245,8 @@ def run_health_check(
         if config.heal:
             _kickstart_once(result, config.hotlane_label, command_runner)
     else:
-        result.backlog_batch = max(process.backlog_batch for process in hotlane_processes)
-        if result.backlog_batch <= 0:
+        result.backlog_batch = min(process.backlog_batch for process in hotlane_processes)
+        if any(process.backlog_batch <= 0 for process in hotlane_processes):
             result.issues.append(
                 HealthIssue("hotlane_backlog_disabled", "critical", "--backlog-batch is 0; embeddings will not drain")
             )
@@ -279,7 +279,7 @@ def run_health_check(
                         f"missing embeddings increased {result.previous_missing_vectors} -> {result.missing_vectors}",
                     )
                 )
-                stalled_ticks = prior_stalled_ticks + 1
+                stalled_ticks = 0
                 if config.heal:
                     _kickstart_once(result, config.hotlane_label, command_runner)
             elif result.missing_vectors == result.previous_missing_vectors and result.missing_vectors > 0:
@@ -320,14 +320,14 @@ def run_health_check(
                 )
             )
             if config.heal:
-                _kickstart_once(result, config.brainbar_label, command_runner)
+                _kickstart_once(result, config.brainbar_daemon_label, command_runner)
     except Exception as exc:
         result.canary_ok = False
         result.issues.append(
             HealthIssue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
         )
         if config.heal:
-            _kickstart_once(result, config.brainbar_label, command_runner)
+            _kickstart_once(result, config.brainbar_daemon_label, command_runner)
 
     result.ok = not result.issues
     return result

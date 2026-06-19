@@ -317,3 +317,12 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
     assert result.returncode != 0
     assert "missing BRAINLAYER_ENRICH_ENABLED" in result.stderr
     assert "missing required enrichment config keys" in result.stdout
+
+
+def test_launchd_installer_wires_health_check_target():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert "./scripts/launchd/install.sh health-check" in install_source
+    assert "health-check)" in install_source
+    assert "install_plist health-check" in install_source
+    assert "remove_plist health-check" in install_source

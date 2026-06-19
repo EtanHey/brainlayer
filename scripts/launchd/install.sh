@@ -15,6 +15,7 @@
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
+#   ./scripts/launchd/install.sh health-check # Install stability health check only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
 set -euo pipefail
 
@@ -248,6 +249,9 @@ case "${1:-all}" in
         install_plist maintenance-nightly
         install_plist maintenance-weekly
         ;;
+    health-check)
+        install_plist health-check
+        ;;
     all)
         install_env_runner
         verify_config_file
@@ -265,6 +269,7 @@ case "${1:-all}" in
         install_plist jsonl-backup
         install_plist maintenance-nightly
         install_plist maintenance-weekly
+        install_plist health-check
         # Remove old enrich plist if present
         remove_plist enrich 2>/dev/null || true
         ;;
@@ -281,11 +286,12 @@ case "${1:-all}" in
         remove_plist jsonl-backup 2>/dev/null || true
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true
+        remove_plist health-check 2>/dev/null || true
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         ;;
     *)
-        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|all|remove]"
+        echo "Usage: $0 [index|watch|enrich|enrichment|decay|drain|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|all|remove]"
         exit 1
         ;;
 esac
