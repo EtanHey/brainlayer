@@ -4,17 +4,22 @@ import XCTest
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
-    func testDashboardPopoverUsesTransientMenuBarMountedContract() {
+    func testDashboardPanelUsesResizableMenuBarWindowContract() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let panel = controller.panelForTesting
 
-        XCTAssertEqual(controller.popoverForTesting.behavior, .transient)
         XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
         XCTAssertEqual(BrainBarDashboardPanelController.minSize, NSSize(width: 760, height: 560))
-        XCTAssertEqual(controller.popoverForTesting.contentSize, NSSize(width: 900, height: 640))
-        XCTAssertNotNil(controller.popoverForTesting.contentViewController)
+        XCTAssertGreaterThan(panel.maxSize.width, BrainBarDashboardPanelController.defaultSize.width)
+        XCTAssertGreaterThan(panel.maxSize.height, BrainBarDashboardPanelController.defaultSize.height)
+        XCTAssertEqual(panel.minSize, BrainBarDashboardPanelController.minSize)
+        XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertFalse(panel.hidesOnDeactivate)
+        XCTAssertEqual(panel.contentViewController, controller.contentViewControllerForTesting)
+        XCTAssertEqual(controller.contentViewControllerForTesting.view.frame.size, BrainBarDashboardPanelController.defaultSize)
     }
 
-    func testDashboardPopoverDoesNotOpenWithoutStatusItemAnchor() {
+    func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
 
         controller.toggle()
@@ -79,7 +84,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
         XCTAssertNotNil(
             field,
-            "Command bar should create its ready text field when runtime.database was installed before the popover became visible."
+            "Command bar should create its ready text field when runtime.database was installed before the panel became visible."
         )
     }
 

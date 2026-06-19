@@ -4,21 +4,21 @@ import XCTest
 
 @MainActor
 final class BrainBarStatusPopoverControllerTests: XCTestCase {
-    func testControllerWiresVariableLengthStatusItemToMenuBarPopover() {
+    func testControllerWiresVariableLengthStatusItemToMenuBarPanel() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let popoverController = BrainBarDashboardPanelController(runtime: runtime)
+        let panelController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: popoverController
+            dashboardPanelController: panelController
         )
         defer { controller.stop() }
 
         XCTAssertEqual(controller.statusItemForTesting.length, NSStatusItem.variableLength)
         XCTAssertEqual(controller.statusItemForTesting.button?.target as? BrainBarStatusPopoverController, controller)
         XCTAssertTrue(BrainBarStatusPopoverController.statusItemEventMask.contains(.rightMouseUp))
-        XCTAssertEqual(popoverController.popoverForTesting.behavior, .transient)
-        XCTAssertNotNil(popoverController.popoverForTesting.contentViewController)
-        XCTAssertEqual(popoverController.popoverForTesting.contentSize, NSSize(width: 900, height: 640))
+        XCTAssertEqual(panelController.panelForTesting.contentViewController, panelController.contentViewControllerForTesting)
+        XCTAssertEqual(panelController.panelForTesting.contentViewController?.view.frame.size, NSSize(width: 900, height: 640))
+        XCTAssertTrue(panelController.panelForTesting.styleMask.contains(.resizable))
     }
 
     func testStatusItemContextMenuContainsNoLaunchModeSwitchingChoices() {
