@@ -31,6 +31,7 @@ _QUEUE_MAX_SIZE = 100
 _DEFAULT_STORE_BUSY_BUDGET_MS = 3_000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _STORE_BUSY_TIMEOUT_LOCK = threading.Lock()
+_NO_EXEC_TRACE = object()
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -551,6 +552,25 @@ def _set_connection_busy_timeout(conn, timeout_ms: int | None) -> None:
         logger.debug("Failed to set store busy timeout", exc_info=True)
 
 
+def _connection_exec_trace(conn):
+    if conn is None or not hasattr(conn, "getexectrace"):
+        return _NO_EXEC_TRACE
+    try:
+        return conn.getexectrace()
+    except Exception:
+        logger.debug("Failed to read store exec trace", exc_info=True)
+        return _NO_EXEC_TRACE
+
+
+def _set_connection_exec_trace(conn, trace) -> None:
+    if conn is None or not hasattr(conn, "setexectrace") or trace is _NO_EXEC_TRACE:
+        return
+    try:
+        conn.setexectrace(trace)
+    except Exception:
+        logger.debug("Failed to set store exec trace", exc_info=True)
+
+
 def _remaining_store_busy_budget_ms(deadline: float) -> int:
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms <= 0:
@@ -570,11 +590,22 @@ def _temporary_store_busy_timeout(conn, deadline: float):
         raise apsw.BusyError("brain_store busy_timeout lock wait exceeded")
 
     original_busy_timeout_ms = _connection_busy_timeout_ms(conn)
+    original_exec_trace = _connection_exec_trace(conn)
+
+    def refresh_timeout(cursor, statement, bindings):
+        _set_connection_busy_timeout(conn, _remaining_store_busy_budget_ms(deadline))
+        if original_exec_trace is _NO_EXEC_TRACE or original_exec_trace is None:
+            return True
+        result = original_exec_trace(cursor, statement, bindings)
+        return True if result is None else result
+
     try:
         timeout_ms = _remaining_store_busy_budget_ms(deadline)
         _set_connection_busy_timeout(conn, timeout_ms)
+        _set_connection_exec_trace(conn, refresh_timeout)
         yield
     finally:
+        _set_connection_exec_trace(conn, original_exec_trace)
         _set_connection_busy_timeout(conn, original_busy_timeout_ms)
         _STORE_BUSY_TIMEOUT_LOCK.release()
 

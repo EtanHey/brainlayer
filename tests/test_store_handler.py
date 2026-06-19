@@ -666,6 +666,68 @@ async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
     assert json.loads(pending_path.read_text())["supersedes"] == "manual-old"
 
 
+def test_store_busy_budget_refreshes_supersede_timeout_between_statements(monkeypatch):
+    """Store busy context must refresh the deadline before each SQL statement."""
+    from brainlayer.mcp import store_handler
+
+    fake_clock = {"now": 0.0}
+    seen_timeouts = []
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self._pragma = False
+
+        def execute(self, sql, *args):
+            if sql == "PRAGMA busy_timeout":
+                self._pragma = True
+                return self
+            if self.conn.exec_trace is not None:
+                bindings = args[0] if args else None
+                result = self.conn.exec_trace(self, sql, bindings)
+                if result is False:
+                    raise apsw.ExecTraceAbort("exec trace aborted")
+            seen_timeouts.append(self.conn.timeout_ms)
+            fake_clock["now"] += 0.04
+            return self
+
+        def fetchone(self):
+            if self._pragma:
+                return (self.conn.timeout_ms,)
+            return None
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+            self.exec_trace = None
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+        def getexectrace(self):
+            return self.exec_trace
+
+        def setexectrace(self, trace):
+            self.exec_trace = trace
+
+    conn = FakeConn()
+    monkeypatch.setattr(store_handler.time, "monotonic", lambda: fake_clock["now"])
+
+    with store_handler._temporary_store_busy_timeout(conn, 0.2):
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM chunks WHERE id = ?", ("old",))
+        cursor.execute("UPDATE chunks SET superseded_by = ? WHERE id = ?", ("new", "old"))
+        cursor.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", ("old",))
+
+    assert seen_timeouts[1] < seen_timeouts[0]
+    assert seen_timeouts[2] < seen_timeouts[1]
+    assert conn.timeout_ms == 250
+    assert conn.exec_trace is None
+
+
 @pytest.mark.asyncio
 async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkeypatch):
     """The MCP handler promises one chunk ID before the first write attempt."""
