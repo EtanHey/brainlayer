@@ -1,7 +1,8 @@
 """Tests for MCP store handler responses."""
 
 import json
-from unittest.mock import patch
+import time
+from unittest.mock import MagicMock, patch
 
 import apsw
 import pytest
@@ -66,6 +67,61 @@ async def test_busy_queue_fallback_returns_loud_deferred_receipt(tmp_path):
     assert structured["deferred"]["queue_path"] == str(queued_files[0])
     assert structured["deferred"]["action"] == "queued_for_drain"
     assert any("DEFERRED" in item.text for item in texts)
+
+
+@pytest.mark.asyncio
+async def test_store_busy_budget_defers_promptly_and_pending_flush_replays(tmp_path, monkeypatch):
+    """A held write lock must hit the bounded store budget, defer, and replay later."""
+    from brainlayer.mcp.store_handler import _flush_pending_stores, _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    attempts = 0
+
+    def held_write_lock_store_memory(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        time.sleep(0.075)
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "100")
+    monkeypatch.setattr("brainlayer.mcp.store_handler._retry_delay", 0.001)
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=MagicMock()),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=held_write_lock_store_memory),
+    ):
+        started = time.perf_counter()
+        texts, structured = await _store(
+            content="queued within busy budget",
+            memory_type="note",
+            project="test",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.22
+    assert attempts <= 2
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+    assert structured["deferred"]["queue_path"] == str(pending_path)
+    assert any("queued" in item.text.lower() for item in texts)
+
+    queued_event = json.loads(pending_path.read_text())
+    assert queued_event["chunk_id"] == structured["chunk_id"]
+    assert queued_event["content"] == "queued within busy budget"
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", return_value={"id": structured["chunk_id"], "related": []}) as replay,
+    ):
+        flushed = _flush_pending_stores(MagicMock(), MagicMock())
+
+    assert flushed == 1
+    assert not pending_path.exists()
+    assert replay.call_args.kwargs["chunk_id"] == structured["chunk_id"]
+    assert replay.call_args.kwargs["content"] == "queued within busy budget"
 
 
 @pytest.mark.asyncio

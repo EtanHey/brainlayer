@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,6 +28,22 @@ from ._shared import (
 _RETRY_MAX_ATTEMPTS = 4
 _retry_delay = 0.15  # base delay in seconds (exposed for test patching)
 _QUEUE_MAX_SIZE = 100
+_DEFAULT_STORE_BUSY_BUDGET_MS = 3_000
+_MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if value <= 0 or value > _MAX_APSW_BUSY_TIMEOUT_MS:
+        return default
+    return value
+
+
+def _store_busy_budget_ms() -> int:
+    return _positive_int_env("BRAINLAYER_STORE_BUSY_BUDGET_MS", _DEFAULT_STORE_BUSY_BUDGET_MS)
 
 
 def _is_lock_error(exc: BaseException) -> bool:
@@ -510,6 +527,25 @@ def _deferred_store_receipt(chunk_id: str, queue_path, *, reason: str = "DB_BUSY
     }
 
 
+def _connection_busy_timeout_ms(conn) -> int | None:
+    if conn is None:
+        return None
+    try:
+        row = conn.cursor().execute("PRAGMA busy_timeout").fetchone()
+        return int(row[0])
+    except Exception:
+        return None
+
+
+def _set_connection_busy_timeout(conn, timeout_ms: int | None) -> None:
+    if conn is None or timeout_ms is None:
+        return
+    try:
+        conn.setbusytimeout(max(1, min(timeout_ms, _MAX_APSW_BUSY_TIMEOUT_MS)))
+    except Exception:
+        logger.debug("Failed to set store busy timeout", exc_info=True)
+
+
 def _flush_pending_stores(store, embed_fn) -> int:
     """Flush pending-stores.jsonl (FIFO). Returns count flushed."""
     from ..store import store_memory
@@ -579,22 +615,48 @@ def _flush_pending_stores(store, embed_fn) -> int:
 
 async def _store_memory_with_retries(store_memory, **kwargs):
     last_err = None
-    for attempt in range(_RETRY_MAX_ATTEMPTS):
-        try:
-            return store_memory(**kwargs)
-        except Exception as exc:
-            if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
-                raise
-            last_err = exc
-            delay = _retry_delay * (2**attempt)
-            logger.warning(
-                "brain_store BusyError (attempt %d/%d), retrying in %.2fs",
-                attempt + 1,
-                _RETRY_MAX_ATTEMPTS,
-                delay,
-            )
-            await asyncio.sleep(delay)
-    raise last_err  # type: ignore[misc]
+    budget_ms = _store_busy_budget_ms()
+    deadline = time.monotonic() + (budget_ms / 1000)
+    conn = getattr(kwargs.get("store"), "conn", None)
+    original_busy_timeout_ms = _connection_busy_timeout_ms(conn)
+    try:
+        for attempt in range(_RETRY_MAX_ATTEMPTS):
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0 and last_err is not None:
+                raise last_err
+            _set_connection_busy_timeout(conn, remaining_ms)
+            try:
+                return store_memory(**kwargs)
+            except Exception as exc:
+                if not _is_lock_error(exc) or attempt >= _RETRY_MAX_ATTEMPTS - 1:
+                    raise
+                last_err = exc
+                remaining_ms = int((deadline - time.monotonic()) * 1000)
+                if remaining_ms <= 0:
+                    logger.warning(
+                        "brain_store BusyError exceeded %dms busy budget after attempt %d/%d; deferring",
+                        budget_ms,
+                        attempt + 1,
+                        _RETRY_MAX_ATTEMPTS,
+                    )
+                    raise
+                delay = _retry_delay * (2**attempt)
+                if int(delay * 1000) >= remaining_ms:
+                    logger.warning(
+                        "brain_store BusyError has %dms budget left before retry delay; deferring",
+                        remaining_ms,
+                    )
+                    raise
+                logger.warning(
+                    "brain_store BusyError (attempt %d/%d), retrying in %.2fs",
+                    attempt + 1,
+                    _RETRY_MAX_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise last_err  # type: ignore[misc]
+    finally:
+        _set_connection_busy_timeout(conn, original_busy_timeout_ms)
 
 
 async def _store(
