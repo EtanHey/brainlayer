@@ -793,7 +793,8 @@ async def _store(
         # If supersedes is set, mark the old chunk as superseded by the new one
         superseded_ok = None
         if supersedes:
-            superseded_ok = store.supersede_chunk(supersedes, chunk_id)
+            with _temporary_store_busy_timeout(getattr(store, "conn", None), deadline):
+                superseded_ok = store.supersede_chunk(supersedes, chunk_id)
 
         # Schedule background embedding + flush in a single daemon thread.
         # CRITICAL: must use a separate VectorStore connection — APSW enforces

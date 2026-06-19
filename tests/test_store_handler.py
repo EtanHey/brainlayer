@@ -341,6 +341,71 @@ async def test_store_busy_budget_covers_cold_vector_store_init(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_store_busy_budget_bounds_supersede_update(tmp_path, monkeypatch):
+    """The same store budget must bound the post-store supersede write."""
+    from brainlayer.mcp.store_handler import _store
+
+    pending_path = tmp_path / "pending-stores.jsonl"
+    real_sleep = time.sleep
+
+    class FakeCursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            assert sql == "PRAGMA busy_timeout"
+            return self
+
+        def fetchone(self):
+            return (self.conn.timeout_ms,)
+
+    class FakeConn:
+        def __init__(self):
+            self.timeout_ms = 250
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def setbusytimeout(self, timeout_ms):
+            self.timeout_ms = timeout_ms
+
+    store = MagicMock()
+    store.conn = FakeConn()
+
+    def successful_store_memory(**kwargs):
+        return {"id": kwargs["chunk_id"], "related": []}
+
+    def locked_supersede(_old_chunk_id, _new_chunk_id):
+        real_sleep(store.conn.timeout_ms / 1000)
+        raise apsw.BusyError("database is locked")
+
+    store.supersede_chunk.side_effect = locked_supersede
+
+    monkeypatch.setenv("BRAINLAYER_STORE_BUSY_BUDGET_MS", "80")
+
+    with (
+        patch("brainlayer.mcp.store_handler._get_vector_store", return_value=store),
+        patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
+        patch("brainlayer.queue_io.enqueue_store", side_effect=RuntimeError("force legacy pending queue")),
+        patch("brainlayer.mcp.store_handler._get_pending_store_path", return_value=pending_path),
+        patch("brainlayer.store.store_memory", side_effect=successful_store_memory),
+    ):
+        started = time.perf_counter()
+        _texts, structured = await _store(
+            content="supersede update must respect busy budget",
+            memory_type="note",
+            project="test",
+            supersedes="manual-old",
+        )
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.18
+    assert structured["status"] == "DEFERRED"
+    assert structured["deferred"]["action"] == "queued_for_replay"
+    assert json.loads(pending_path.read_text())["supersedes"] == "manual-old"
+
+
+@pytest.mark.asyncio
 async def test_store_preassigns_same_chunk_id_across_busy_retry(tmp_path, monkeypatch):
     """The MCP handler promises one chunk ID before the first write attempt."""
     from brainlayer.mcp.store_handler import _store
