@@ -9,6 +9,7 @@ import shlex
 import socket
 import sqlite3
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,19 @@ DEFAULT_CANARY_QUERY = "agentopology"
 DEFAULT_HOTLANE_LABEL = "com.brainlayer.hotlane-brainbar"
 DEFAULT_BRAINBAR_DAEMON_LABEL = "com.brainlayer.brainbar-daemon"
 DEFAULT_BACKLOG_BATCH = 128
+DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
+HEAL_MIN_CONSECUTIVE_FAILURES_ENV = "BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES"
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    return max(minimum, value)
 
 
 @dataclass(frozen=True)
@@ -42,6 +56,12 @@ class HealthCheckConfig:
     heal: bool = False
     socket_timeout_seconds: float = 5.0
     max_stalled_ticks: int = 2
+    heal_min_consecutive_failures: int = field(
+        default_factory=lambda: _env_int(
+            HEAL_MIN_CONSECUTIVE_FAILURES_ENV,
+            DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES,
+        )
+    )
 
 
 @dataclass
@@ -218,11 +238,60 @@ def _kickstart(label: str, command_runner: CommandRunner) -> str:
     return f"kickstart:{label}"
 
 
-def _kickstart_once(result: HealthCheckResult, label: str, command_runner: CommandRunner) -> None:
+def _kickstart_once(
+    result: HealthCheckResult,
+    label: str,
+    issue_code: str,
+    consecutive_failures: int,
+    command_runner: CommandRunner,
+) -> None:
     action = f"kickstart:{label}"
     if action in result.actions:
         return
+    print(
+        f"heal action label={label} issue={issue_code} consecutive_failures={consecutive_failures} action={action}",
+        file=sys.stderr,
+    )
     result.actions.append(_kickstart(label, command_runner))
+
+
+def _previous_heal_failures(state: dict[str, Any]) -> dict[str, int]:
+    raw_failures = state.get("heal_failures")
+    if not isinstance(raw_failures, dict):
+        return {}
+    failures: dict[str, int] = {}
+    for issue_code, count in raw_failures.items():
+        if not isinstance(issue_code, str) or not isinstance(count, int):
+            continue
+        failures[issue_code] = max(0, count)
+    return failures
+
+
+def _updated_heal_failures(
+    previous_failures: dict[str, int],
+    current_issue_codes: set[str],
+) -> dict[str, int]:
+    return {issue_code: previous_failures.get(issue_code, 0) + 1 for issue_code in sorted(current_issue_codes)}
+
+
+def _apply_heals(
+    *,
+    result: HealthCheckResult,
+    issue_labels: dict[str, str],
+    previous_failures: dict[str, int],
+    config: HealthCheckConfig,
+    command_runner: CommandRunner,
+) -> dict[str, int]:
+    current_issue_codes = {issue.code for issue in result.issues}
+    heal_failures = _updated_heal_failures(previous_failures, current_issue_codes)
+    if not config.heal:
+        return heal_failures
+    threshold = max(1, config.heal_min_consecutive_failures)
+    for issue_code, label in issue_labels.items():
+        consecutive_failures = heal_failures.get(issue_code, 0)
+        if consecutive_failures >= threshold:
+            _kickstart_once(result, label, issue_code, consecutive_failures, command_runner)
+    return heal_failures
 
 
 def run_health_check(
@@ -235,6 +304,9 @@ def run_health_check(
 ) -> HealthCheckResult:
     now = now_fn()
     result = HealthCheckResult(checked_at=now.isoformat(), ok=True)
+    state = _load_state(config.state_path)
+    previous_heal_failures = _previous_heal_failures(state)
+    heal_issue_labels: dict[str, str] = {}
 
     hotlane_processes = parse_hotlane_processes(ps_output_fn())
     result.hotlane_running = bool(hotlane_processes)
@@ -243,7 +315,7 @@ def run_health_check(
             HealthIssue("hotlane_dead", "critical", "hotlane BrainBar embedding daemon is not running")
         )
         if config.heal:
-            _kickstart_once(result, config.hotlane_label, command_runner)
+            heal_issue_labels["hotlane_dead"] = config.hotlane_label
     else:
         result.backlog_batch = min(process.backlog_batch for process in hotlane_processes)
         if any(process.backlog_batch <= 0 for process in hotlane_processes):
@@ -251,9 +323,8 @@ def run_health_check(
                 HealthIssue("hotlane_backlog_disabled", "critical", "--backlog-batch is 0; embeddings will not drain")
             )
             if config.heal:
-                _kickstart_once(result, config.hotlane_label, command_runner)
+                heal_issue_labels["hotlane_backlog_disabled"] = config.hotlane_label
 
-    state = _load_state(config.state_path)
     previous_missing = state.get("missing_vectors")
     result.previous_missing_vectors = int(previous_missing) if isinstance(previous_missing, int) else None
     try:
@@ -281,7 +352,7 @@ def run_health_check(
                 )
                 stalled_ticks = 0
                 if config.heal:
-                    _kickstart_once(result, config.hotlane_label, command_runner)
+                    heal_issue_labels["missing_embeddings_climbing"] = config.hotlane_label
             elif result.missing_vectors == result.previous_missing_vectors and result.missing_vectors > 0:
                 stalled_ticks = prior_stalled_ticks + 1
                 if stalled_ticks >= config.max_stalled_ticks:
@@ -293,17 +364,8 @@ def run_health_check(
                         )
                     )
                     if config.heal:
-                        _kickstart_once(result, config.hotlane_label, command_runner)
+                        heal_issue_labels["missing_embeddings_not_draining"] = config.hotlane_label
     result.stalled_ticks = stalled_ticks
-    if result.missing_vectors is not None:
-        _write_state(
-            config.state_path,
-            {
-                "missing_vectors": result.missing_vectors,
-                "stalled_ticks": result.stalled_ticks,
-                "ts": now.isoformat(),
-            },
-        )
 
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
@@ -320,14 +382,29 @@ def run_health_check(
                 )
             )
             if config.heal:
-                _kickstart_once(result, config.brainbar_daemon_label, command_runner)
+                heal_issue_labels[code] = config.brainbar_daemon_label
     except Exception as exc:
         result.canary_ok = False
         result.issues.append(
             HealthIssue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
         )
         if config.heal:
-            _kickstart_once(result, config.brainbar_daemon_label, command_runner)
+            heal_issue_labels["brain_search_canary_failed"] = config.brainbar_daemon_label
 
+    heal_failures = _apply_heals(
+        result=result,
+        issue_labels=heal_issue_labels,
+        previous_failures=previous_heal_failures,
+        config=config,
+        command_runner=command_runner,
+    )
+    if result.missing_vectors is not None or heal_failures:
+        state_payload: dict[str, Any] = dict(state)
+        state_payload["heal_failures"] = heal_failures
+        state_payload["ts"] = now.isoformat()
+        if result.missing_vectors is not None:
+            state_payload["missing_vectors"] = result.missing_vectors
+            state_payload["stalled_ticks"] = result.stalled_ticks
+        _write_state(config.state_path, state_payload)
     result.ok = not result.issues
     return result
